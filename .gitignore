@@ -4,3 +4,4 @@ coverage/
 .livewiki/
 *.log
 .env
+*.tsbuildinfo

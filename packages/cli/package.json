@@ -1,0 +1,26 @@
+{
+  "name": "@livewiki/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "livewiki": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/make-executable.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint:tsc": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@livewiki/core": "workspace:*",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.0.0"
+  }
+}

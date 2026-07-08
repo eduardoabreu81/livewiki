@@ -1,0 +1,26 @@
+{
+  "name": "livewiki",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Documentação viva de repositórios, ancorada no código e verificável. Veja VISION.md e SPEC.md.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:watch": "pnpm -r test:watch",
+    "test:coverage": "pnpm --filter @livewiki/core test:coverage",
+    "lint:tsc": "pnpm -r lint:tsc"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.0.0"
+  },
+  "dependencies": {
+    "@livewiki/cli": "workspace:*"
+  },
+  "packageManager": "pnpm@11.5.2"
+}
