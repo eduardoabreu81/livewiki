@@ -126,7 +126,7 @@ automaticamente para a nova chave e a dívida registra `detail` com o de/para.
 | Comando | Comportamento |
 |---|---|
 | `livewiki init` | cria `livewiki/` + `.livewiki/`, indexa o repo, gera `quickstart.md` + `structure.mmd` mínimos (sem LLM). Com `--batch` dispara o pipeline de documentação completa |
-| `livewiki index` | (re)indexa: varre arquivos (respeita `.gitignore` + ignores do config), extrai símbolos, atualiza hashes, gera eventos de dívida. Idempotente |
+| `livewiki index` | (re)indexa: varre arquivos (respeita `.gitignore` + ignores do config), extrai símbolos, atualiza hashes, gera eventos de dívida. Idempotente. `.livewiki/` ausente é auto-criado **sem aviso** (é cache derivado; reconstruí-lo é o fluxo normal pós-clone/handoff — nunca exigir `init`). Se a wiki `livewiki/` também não existe, indexa mesmo assim e emite nota informativa sugerindo `init` (exit 0) |
 | `livewiki status` | mostra: dívida aberta (por página/seção/evento), símbolos novos sem doc, batch pendente. `--json` para consumo por agente |
 | `livewiki update` | modo incremental: dado o diff desde `lastDocumentedCommit`, lista a dívida e (a) emite o "pacote de trabalho" para o agente em sessão documentar, ou (b) com `--llm` chama a API configurada para pagar a dívida |
 | `livewiki verify` | valida a wiki: âncoras apontam para símbolos existentes? assinaturas citadas batem? links internos ok? Sai com código ≠ 0 se falhar (CI-friendly) |
