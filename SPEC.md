@@ -174,7 +174,9 @@ Ao final: gera/atualiza `quickstart.md` e `architecture/overview.md`, grava mani
 
 ## Fases de implementação
 
-### Fase 0 — Scaffold ✅ critério: `npx . --help` funciona
+### Fase 0 — Scaffold ✅ critério: `pnpm build && pnpm exec livewiki --help` funciona no root do workspace
+(Nota: `npx livewiki` de atrito zero refere-se ao pacote publicado no npm, na
+fase de distribuição — não ao repo de desenvolvimento.)
 Estrutura do repo, TS/ESM/pnpm, vitest, CI local (`pnpm test && pnpm build`),
 CLI skeleton com todos os comandos registrados (stubs), `safe-io` implementado
 **primeiro e com testes** (é a regra 1).
