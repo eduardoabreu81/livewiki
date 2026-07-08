@@ -2,7 +2,12 @@ packages:
   - "packages/*"
 
 allowBuilds:
+  better-sqlite3: true
   esbuild: set this to true or false
+  tree-sitter-cli: true
+  tree-sitter-javascript: true
+  tree-sitter-python: true
+  tree-sitter-typescript: true
 
 # Fase 0: apenas `core` e `cli`. `packages/mcp` entra na Fase 4 (especificação
 # de MCP server) — não antecipar. Decisão alinhada com SPEC.md:
@@ -13,3 +18,4 @@ allowBuilds:
 # caminho canônico. Ver https://pnpm.io/settings#onlybuiltdependencies
 onlyBuiltDependencies:
   - esbuild
+  - better-sqlite3

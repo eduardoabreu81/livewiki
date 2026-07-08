@@ -13,9 +13,39 @@
     "./safe-io": {
       "types": "./dist/safe-io.d.ts",
       "import": "./dist/safe-io.js"
+    },
+    "./hashes": {
+      "types": "./dist/hashes.d.ts",
+      "import": "./dist/hashes.js"
+    },
+    "./walker": {
+      "types": "./dist/walker.d.ts",
+      "import": "./dist/walker.js"
+    },
+    "./parser": {
+      "types": "./dist/parser.d.ts",
+      "import": "./dist/parser.js"
+    },
+    "./symbols": {
+      "types": "./dist/symbols.d.ts",
+      "import": "./dist/symbols.js"
+    },
+    "./db": {
+      "types": "./dist/db.d.ts",
+      "import": "./dist/db.js"
+    },
+    "./indexer": {
+      "types": "./dist/indexer.d.ts",
+      "import": "./dist/indexer.js"
+    },
+    "./status": {
+      "types": "./dist/status.d.ts",
+      "import": "./dist/status.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
@@ -23,10 +53,20 @@
     "test:coverage": "vitest run --coverage",
     "lint:tsc": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "better-sqlite3": "^12.0.0",
+    "ignore": "^7.0.0",
+    "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-python": "^0.25.0",
+    "tree-sitter-typescript": "^0.23.0",
+    "web-tree-sitter": "^0.26.0"
+  },
   "devDependencies": {
-    "typescript": "^5.6.0",
-    "vitest": "^2.1.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^2.1.0",
-    "@types/node": "^22.0.0"
+    "tree-sitter-cli": "^0.26.10",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   }
 }
