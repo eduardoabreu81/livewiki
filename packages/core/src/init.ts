@@ -81,6 +81,15 @@ export interface InitResult {
     tasksDone: number;
     tasksFailed: number;
   };
+  /**
+   * Exit code POSIX a ser propagado pelo CLI quando --batch termina.
+   *   0 = completed
+   *   1 = completed_with_failures
+   *   2 = aborted
+   * Ausente (sem --batch ou --plan) → CLI usa exit 0 (sucesso de init).
+   * Cálculo delegado a core/batch.ts:statusToExitCode — fonte única de verdade.
+   */
+  batchExitCode?: 0 | 1 | 2;
 }
 
 /**
@@ -139,6 +148,24 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", quickstart);
   filesWritten.push("livewiki/quickstart.md");
 
+  // architecture/overview.md (P) — alvo do link `[m.id](architecture/overview.md#${m.id})`
+  // que o quickstart emite. Sem este arquivo, links do quickstart quebram e
+  // `verify` emite WARNs em run recém-completado (SPEC §"Pipeline batch":
+  // "Ao final: gera/atualiza quickstart.md e architecture/overview.md").
+  // Gerado em init base (com módulos heurísticos) — batch pode re-gravar depois
+  // com lista de pages adicionadas.
+  const overview = generateArchitectureOverview({
+    modules,
+    ordered,
+    filePaths,
+    totalSymbols,
+    totalFiles,
+    edges,
+    symbols,
+  });
+  await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
+  filesWritten.push("livewiki/architecture/overview.md");
+
   // manifest.json (snapshotHash + pendingBatch=null pra init sem batch)
   const snapshotHash = await computeSnapshotHash(absRoot);
   // FIX M (rev2): só listar manifest em filesWritten se ele foi REALMENTE
@@ -156,9 +183,10 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
 
   // 5. --batch: dispara pipeline LLM (delegado pro batch.ts)
   let batchSummary: InitResult["batchSummary"];
+  let batchExitCode: InitResult["batchExitCode"];
   if (opts.batch) {
     // Import dinâmico evita ciclo se batch.ts importa init.ts
-    const { runBatch } = await import("./batch.js");
+    const { runBatch, statusToExitCode } = await import("./batch.js");
     const result = await runBatch({
       repoRoot: absRoot,
       ...(opts.noRefine ? { noRefine: true } : {}),
@@ -172,6 +200,9 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
       tasksDone: result.byModule.length,
       tasksFailed: result.failures.length,
     };
+    // (O): propagar exit code do batch (antes fix: init --batch sempre
+    // retornava 0, escondendo completed_with_failures/aborted).
+    batchExitCode = statusToExitCode(result.status);
     // Atualiza manifest com pendingBatch se houve falhas (handoff)
     if (result.status === "completed_with_failures" || result.status === "aborted") {
       const totalsDone = result.byModule.reduce((a, m) => a + (m.costUsd !== null ? 1 : 0), 0);
@@ -196,7 +227,11 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     }
   }
 
-  return { filesWritten, ...(batchSummary ? { batchSummary } : {}) };
+  return {
+    filesWritten,
+    ...(batchSummary ? { batchSummary } : {}),
+    ...(batchExitCode !== undefined ? { batchExitCode } : {}),
+  };
 }
 
 async function buildPlan(absRoot: string): Promise<{
@@ -315,4 +350,137 @@ function generateQuickstartDeterministic(
   );
   lines.push("");
   return lines.join("\n");
+}
+
+/**
+ * (P) `architecture/overview.md` — alvo do link que o quickstart emite
+ * (`architecture/overview.md#${module.id}`).
+ *
+ * Sem este arquivo, links do quickstart quebram e `verify` emite WARNs em
+ * run recém-completado. SPEC §"Pipeline batch" explicita: "Ao final:
+ * gera/atualiza quickstart.md e architecture/overview.md, grava manifest."
+ *
+ * Conteúdo:
+ *   - Frontmatter `owner: generated` (regra dos diagramas: nunca envelhece)
+ *   - Resumo (files / symbols / modules / edges)
+ *   - Module index: anchor HTML inline (id exato) + links para diagram
+ *     de classes + link para page do módulo (livewiki/<id>.md, se existir)
+ *   - Diagrams: embed de structure.mmd e modules.mmd em code fence mermaid
+ *   - Per-file index (top N arquivos por número de símbolos) — ajuda a
+ *     encontrar entry points antes do batch gerar doc dedicada
+ *
+ * Anchor HTML inline (`<a id="auth"></a>`) é usado para garantir match
+ * EXATO com o link do quickstart, independente de como o renderer markdown
+ * slugifica headings (lowercase, remoção de punct, etc.).
+ */
+function generateArchitectureOverview(opts: {
+  modules: Module[];
+  ordered: Module[];
+  filePaths: string[];
+  totalSymbols: number;
+  totalFiles: number;
+  edges: Array<{ from: string; to: string }>;
+  symbols: SymbolRow[];
+}): string {
+  const { modules, ordered, filePaths, totalSymbols, totalFiles, edges, symbols } = opts;
+
+  // Top arquivos por número de símbolos (entry points heurísticos).
+  const symbolsByFile = new Map<string, number>();
+  for (const s of symbols) {
+    const p = s.key.split("#")[0]!;
+    symbolsByFile.set(p, (symbolsByFile.get(p) ?? 0) + 1);
+  }
+  const topFiles = [...symbolsByFile.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([path, count]) => ({ path, count }));
+
+  // Conta símbolos por módulo (top symbols por módulo pro resumo).
+  const symbolsByModule = new Map<string, number>();
+  for (const m of modules) symbolsByModule.set(m.id, m.symbolCount);
+
+  const lines: string[] = [];
+  lines.push("---");
+  lines.push("title: Architecture overview");
+  lines.push("owner: generated");
+  lines.push("---");
+  lines.push("");
+  lines.push("# Architecture overview");
+  lines.push("");
+  lines.push(
+    `This repository has **${totalFiles} files** indexed and **${totalSymbols} symbols** ` +
+      `extracted, organized into **${modules.length} modules** with **${edges.length} edges** ` +
+      `between them.`,
+  );
+  lines.push("");
+  lines.push("Diagrams in this section are deterministic (regenerated by `livewiki init` / `index`); " +
+    "the module pages they link to are written by the batch (`livewiki init --batch`) or " +
+    "manually.");
+  lines.push("");
+  lines.push("## Module index");
+  lines.push("");
+  lines.push("Ordered by prioritization (centrality + size). Each module links to its class " +
+    "diagram and (when available) to its generated page.");
+  lines.push("");
+  for (const m of ordered) {
+    // Anchor HTML inline garante match exato com o link `[id](overview.md#id)` do quickstart.
+    lines.push(`<a id="${escapeHtmlId(m.id)}"></a>`);
+    lines.push("");
+    const classDiagramPath = `../diagrams/${moduleSlug(m.id)}.classes.mmd`;
+    const pagePath = `../${m.id}.md`;
+    const parts: string[] = [];
+    parts.push(`**${m.symbolCount}** symbols across **${m.paths.length}** files`);
+    parts.push(`[class diagram](${classDiagramPath})`);
+    parts.push(`[page](${pagePath})`);
+    lines.push(`### ${m.id}`);
+    lines.push("");
+    lines.push(parts.join(" · "));
+    lines.push("");
+  }
+  lines.push("## Diagrams");
+  lines.push("");
+  lines.push("### Structure");
+  lines.push("");
+  lines.push("Organogram of files and directories.");
+  lines.push("");
+  lines.push("```mermaid");
+  lines.push("%% livewiki/architecture/structure.mmd");
+  lines.push("```");
+  lines.push("");
+  lines.push("Open the raw file: [structure.mmd](structure.mmd)");
+  lines.push("");
+  lines.push("### Module dependencies");
+  lines.push("");
+  lines.push("Import graph between modules.");
+  lines.push("");
+  lines.push("```mermaid");
+  lines.push("%% livewiki/architecture/modules.mmd");
+  lines.push("```");
+  lines.push("");
+  lines.push("Open the raw file: [modules.mmd](modules.mmd)");
+  lines.push("");
+  lines.push("## Top files by symbol count");
+  lines.push("");
+  lines.push("Heuristic entry points — most symbols per file.");
+  lines.push("");
+  for (const f of topFiles) {
+    lines.push(`- \`${f.path}\` (${f.count} symbols)`);
+  }
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  lines.push("Generated by `livewiki init`. Refresh with `livewiki index` + manual edits, " +
+    "or run `livewiki init --batch` to generate per-module documentation.");
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
+ * Escape de id para uso em anchor HTML (`<a id="...">`).
+ * Mantém alfanum + ponto + hífen + underscore. Qualquer outro vira `_`.
+ * Garante que o id seja válido como atributo HTML e idêntico ao que o
+ * quickstart emite no link (`#${m.id}`).
+ */
+function escapeHtmlId(s: string): string {
+  return s.replace(/[^A-Za-z0-9._-]/g, "_");
 }

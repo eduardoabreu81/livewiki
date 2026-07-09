@@ -891,3 +891,27 @@ function buildResult(
 }
 
 export type { BatchStatusReport, BatchRunSummary };
+
+/**
+ * Mapeia `BatchRunResult.status` → exit code POSIX.
+ *
+ *   completed               → 0
+ *   completed_with_failures → 1
+ *   aborted                 → 2
+ *
+ * Fonte: AGENTS.md §"Convenções adicionais" e batch.ts CLI (setExitCode
+ * existente). Exportado aqui para que init --batch propague o mesmo exit
+ * code que `batch status/resume/--only` já propagam — antes do fix (O),
+ * init --batch sempre retornava 0 mesmo em completed_with_failures/aborted,
+ * escondendo falha sistêmica do orquestrador atrás de exit success.
+ *
+ * Use com `process.exitCode = statusToExitCode(status)` (não `process.exit`)
+ * pra preservar o FIX L (rev2): deixar o event loop drenar antes de sair.
+ */
+export function statusToExitCode(
+  status: BatchRunResult["status"],
+): 0 | 1 | 2 {
+  if (status === "completed") return 0;
+  if (status === "completed_with_failures") return 1;
+  return 2; // aborted
+}

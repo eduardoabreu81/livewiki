@@ -326,6 +326,177 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   }, 60_000);
 
+  it("(O) init --batch aborted → exit code 2 (sem --json)", async () => {
+    // Antes do fix (O), init --batch SEMPRE retornava 0 mesmo quando o batch
+    // tinha aborted (circuit breaker) — escondia falha sistêmica do orquestrador.
+    // Aqui usamos SEM --json pra capturar o exit code real do processo.
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    await writeCode("src/utils/x.ts", "export function b() {}");
+    await writeCode("src/api/y.ts", "export function c() {}");
+    stub.setHandler(() => ({ status: 500, body: { error: "always fail" } }));
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-exit-aborted";
+    try {
+      const r = await runCli(["--repo", repoRoot, "init", "--batch"]);
+      expect(r.status, `init --batch aborted deveria exit 2; stderr=${r.stderr}`).toBe(2);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
+
+  it("(O) init --batch completed_with_failures → exit code 1 (sem --json)", async () => {
+    // Cenário: 3 módulos, falha só no 1º da etapa 4 → circuit breaker não
+    // dispara (1 < 3 consecutivas, < 50%), mas o run termina com N-1 done + 1
+    // failed → status=completed_with_failures → exit 1.
+    // Importante: NÃO falhar na etapa 2 (refine) — refine é opt-in/degradável
+    // (correção #5) e falha vira heurística sem afetar status do run.
+    // Diferenciamos por marker do prompt: etapa 4 tem `# Module: <id>`.
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    await writeCode("src/utils/x.ts", "export function b() {}");
+    await writeCode("src/api/y.ts", "export function c() {}");
+
+    stub.setHandler((req) => {
+      // Falha apenas na 1ª chamada de etapa 4 (módulos). Refine passa.
+      if (req.user.includes("# Module: auth")) {
+        return { status: 500, body: { error: "simulated transient failure" } };
+      }
+      return defaultHandler(req);
+    });
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-exit-cwf";
+    try {
+      const r = await runCli(["--repo", repoRoot, "init", "--batch"]);
+      expect(
+        r.status,
+        `init --batch completed_with_failures deveria exit 1; stderr=${r.stderr}; stdout=${r.stdout}`,
+      ).toBe(1);
+      // O output sem --json é humano; confirmamos que menciona o run id e exit code
+      expect(r.stdout).toMatch(/run #\d+: completed_with_failures/);
+      expect(r.stdout).toMatch(/exit code: 1/);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
+
+  it("(O) init --batch completed → exit code 0 (sanity do caminho feliz)", async () => {
+    await writeCode("src/auth/login.ts", "export function login() {}");
+    stub.setHandler((req) => defaultHandler(req));
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-exit-completed";
+    try {
+      const r = await runCli(["--repo", repoRoot, "init", "--batch"]);
+      expect(r.status, `init --batch completed deveria exit 0; stderr=${r.stderr}`).toBe(0);
+      expect(r.stdout).toMatch(/run #\d+: completed/);
+      expect(r.stdout).toMatch(/exit code: 0/);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
+
+  it("(O) init --batch --json sempre exit 0 (output estruturado)", async () => {
+    // Convenção batch CLI (setExitCode em packages/cli/src/commands/batch.ts):
+    // --json → exit 0 sempre, mesmo em failure. Mantém consistência.
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    await writeCode("src/utils/x.ts", "export function b() {}");
+    await writeCode("src/api/y.ts", "export function c() {}");
+    stub.setHandler(() => ({ status: 500, body: { error: "always fail" } }));
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-exit-json";
+    try {
+      const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      expect(r.status, r.stderr).toBe(0);
+      const report = JSON.parse(r.stdout);
+      expect(report.batchSummary.status).toBe("aborted");
+      // batchExitCode também é exposto no JSON para consumers
+      expect(report.batchExitCode).toBe(2);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
+
+  it("(P) init gera livewiki/architecture/overview.md (target dos links do quickstart)", async () => {
+    // Sem --batch: overview é gerado em init base com módulos heurísticos.
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    await writeCode("src/utils/x.ts", "export function b() {}");
+
+    const r = await runCli(["--json", "--repo", repoRoot, "init"]);
+    expect(r.status, r.stderr).toBe(0);
+
+    // Arquivo existe
+    const overviewPath = nodePath.join(repoRoot, "livewiki/architecture/overview.md");
+    const overview = await nodeFs.readFile(overviewPath, "utf8");
+    expect(overview).toMatch(/^---$/m);
+    expect(overview).toMatch(/owner: generated/);
+    expect(overview).toMatch(/Architecture overview/);
+    // Módulo "auth" presente
+    expect(overview).toMatch(/### auth/);
+    expect(overview).toMatch(/### utils/);
+    // Anchor HTML inline garante match exato com o link do quickstart
+    expect(overview).toMatch(/<a id="auth"><\/a>/);
+    expect(overview).toMatch(/<a id="utils"><\/a>/);
+    // Link para diagrama de classes
+    expect(overview).toMatch(/\[class diagram\]\(\.\.\/diagrams\/auth\.classes\.mmd\)/);
+    // Diagramas embedados (mermaid code fence)
+    expect(overview).toMatch(/```mermaid/);
+    expect(overview).toMatch(/%% livewiki\/architecture\/structure\.mmd/);
+    expect(overview).toMatch(/%% livewiki\/architecture\/modules\.mmd/);
+  });
+
+  it("(P) init --batch gera overview.md com pages dos módulos linkadas", async () => {
+    // Com --batch: overview é gerado junto com as pages geradas pelo LLM.
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    await writeCode("src/utils/x.ts", "export function b() {}");
+    stub.setHandler((req) => defaultHandler(req));
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-overview-batch";
+    try {
+      const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      expect(r.status, r.stderr).toBe(0);
+
+      const overview = await nodeFs.readFile(
+        nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
+        "utf8",
+      );
+      // Modules heurísticos
+      expect(overview).toMatch(/### auth/);
+      expect(overview).toMatch(/### utils/);
+      // Page link existe
+      expect(overview).toMatch(/\[page\]\(\.\.\/auth\.md\)/);
+      expect(overview).toMatch(/\[page\]\(\.\.\/utils\.md\)/);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
+
+  it("(P) links do quickstart para architecture/overview.md#<m.id> batem com anchors", async () => {
+    // Os links que o quickstart emite (`architecture/overview.md#auth`) precisam
+    // resolver para anchors reais no overview.md (definidos via `<a id="...">`).
+    // Sem isso, o verify emite WARNs e a navegação fica quebrada.
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    const r = await runCli(["--json", "--repo", repoRoot, "init"]);
+    expect(r.status, r.stderr).toBe(0);
+
+    const quickstart = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/quickstart.md"),
+      "utf8",
+    );
+    const overview = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
+      "utf8",
+    );
+
+    // Extrai todos os anchors que o quickstart linka
+    const linkMatches = [...quickstart.matchAll(/\(architecture\/overview\.md#([^)]+)\)/g)];
+    expect(linkMatches.length).toBeGreaterThan(0);
+    for (const m of linkMatches) {
+      const anchor = m[1];
+      if (anchor === undefined) continue; // TS narrow: matchAll pode devolver undefined em captura
+      // Cada anchor linkado deve existir como `<a id="X">` no overview
+      const re = new RegExp(`<a id="${anchor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}">`);
+      expect(overview, `quickstart linka #${anchor} mas overview não tem o anchor`).toMatch(re);
+    }
+  });
+
   it("init --plan funciona SEM config LLM (correção #5)", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     // SEM .livewiki/config.json — --plan não pode exigir LLM

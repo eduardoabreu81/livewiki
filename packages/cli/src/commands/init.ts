@@ -30,7 +30,7 @@ export function registerInit(program: Command): void {
     .option("--batch", "rodar pipeline LLM completo de documentação")
     .option("--plan", "mostrar plano de módulos (sem LLM, sem escrita)")
     .option("--no-refine", "pular refinamento LLM da etapa 2 (etapa 2 fica só com heurística)")
-    .action(async (_options: InitOptions, command: Command) => {
+.action(async (_options: InitOptions, command: Command) => {
       const opts = command.optsWithGlobals<InitOptions>();
       const json = Boolean(opts.json);
       const repoRoot = resolveRepoRoot(opts.repo);
@@ -49,9 +49,16 @@ export function registerInit(program: Command): void {
             plan: result.plan,
             filesWritten: result.filesWritten,
             batchSummary: result.batchSummary,
+            batchExitCode: result.batchExitCode,
           },
           formatHuman(result),
         );
+        // (O): propagar exit code do batch (statusToExitCode no core).
+        // --json preserva exit 0 (output estruturado, convenção do batch CLI).
+        // Sem --batch: sempre 0 (init base é sucesso).
+        if (!json && result.batchExitCode !== undefined) {
+          process.exitCode = result.batchExitCode;
+        }
       } catch (err) {
         process.stderr.write(`livewiki init: erro — ${(err as Error).message}\n`);
         // FIX L (rev2): usar `process.exitCode` em vez de `process.exit(1)`.
@@ -63,9 +70,9 @@ export function registerInit(program: Command): void {
         return;
       }
     });
-}
+  }
 
-function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number } }): string {
+function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number }; batchExitCode?: 0 | 1 | 2 }): string {
   const lines: string[] = [];
   if (result.plan) {
     lines.push(`livewiki init --plan (no writes, no LLM):`);
@@ -89,6 +96,9 @@ function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; ba
     lines.push("");
     lines.push(`  batch run #${result.batchSummary.runId}: ${result.batchSummary.status}`);
     lines.push(`    tasks: ${result.batchSummary.tasksDone} done, ${result.batchSummary.tasksFailed} failed`);
+    if (result.batchExitCode !== undefined) {
+      lines.push(`    exit code: ${result.batchExitCode}`);
+    }
   }
   return lines.join("\n");
 }
