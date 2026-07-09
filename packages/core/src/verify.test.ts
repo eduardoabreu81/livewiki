@@ -86,13 +86,13 @@ anchors:
 });
 
 describe("verify — link interno aponta para página fora do allowlist", () => {
-  it("link para ../../etc/passwd é aceito (verify não bloqueia; é só status)", async () => {
+  it("link relativo que escapa do namespace livewiki/ (../../etc/secrets.md) é reportado como broken (não bloqueia)", async () => {
     // SPEC §safe-io: escrita restrita. Mas verify é leitura — não bloqueia
-    // links que apontam para fora. Apenas reporta como broken_internal_link
-    // se a página não existe no doc_pages.
+    // links que apontam para fora. Apenas reporta como broken_internal_link.
+    // Q — fix: agora a resolução usa path.posix (resolve ".." corretamente)
+    // e o allowlist check (isInsideWiki) pega tentativas de escape.
     await writeCode("src/foo.ts", "export const x = 1");
-    await writeWiki("livewiki/index.md", "# Home\n\nVeja [Nada](nonexistent.md).");
-    await writeWiki("livewiki/foo.md", "# Foo");
+    await writeWiki("livewiki/index.md", "# Home\n\nVeja [Nada](../../etc/secrets.md).");
 
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
@@ -100,6 +100,9 @@ describe("verify — link interno aponta para página fora do allowlist", () => 
     const result = await runVerify(repoRoot);
     const broken = result.issues.filter((i) => i.code === "broken_internal_link");
     expect(broken.length).toBe(1);
+    expect(broken[0]?.severity).toBe("warning");
+    // detail mostra o wiki-path RESOLVIDO (sem ser livewiki/../etc/secrets.md)
+    expect(broken[0]?.detail).toMatch(/fora de livewiki/);
   });
 });
 
@@ -189,6 +192,48 @@ describe("verify — links internos", () => {
     const broken = result.issues.filter((i) => i.code === "broken_internal_link");
     expect(broken.length).toBe(1);
     expect(broken[0]?.detail).toContain("inexistente");
+  });
+
+  it("(Q) link relativo com '..' resolve corretamente para livewiki/ (overview → módulo)", async () => {
+    // Cenário do achado Q (revisão Fase 4): overview em livewiki/architecture/
+    // emite [page](../<modulo>.md) — antes do fix, verify normalizava como
+    // "livewiki/../auth.md" e reportava broken_internal_link. Agora deve
+    // resolver pra "livewiki/auth.md" e validar OK.
+    await writeCode("src/auth/login.ts", "export function login() {}");
+    await writeWiki(
+      "livewiki/architecture/overview.md",
+      `# Architecture overview
+
+See [auth page](../auth.md) and [class diag](../diagrams/auth.classes.mmd).
+`,
+    );
+    await writeWiki("livewiki/auth.md", "# auth\n");
+    await writeWiki("livewiki/diagrams/auth.classes.mmd", "classDiagram\n  class auth\n");
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const broken = result.issues.filter((i) => i.code === "broken_internal_link");
+    expect(broken).toEqual([]);
+  });
+
+  it("(Q) link relativo com '..' para página inexistente reporta broken (não false negative)", async () => {
+    // Garante que o fix não é "aceita qualquer '..'" — links relativos
+    // devem ser validados corretamente mesmo após resolução.
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki(
+      "livewiki/architecture/overview.md",
+      "# Architecture overview\n\nSee [Nada](../nope.md).",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const broken = result.issues.filter((i) => i.code === "broken_internal_link");
+    expect(broken.length).toBe(1);
+    expect(broken[0]?.detail).toContain("livewiki/nope.md");
   });
 });
 

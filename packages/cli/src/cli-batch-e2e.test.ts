@@ -224,6 +224,11 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/modules.mmd"), "utf8"),
       ).toContain("graph LR");
 
+      // Overview (P): gerado em init base + batch, target dos links do quickstart
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/overview.md"), "utf8"),
+      ).toMatch(/Architecture overview/);
+
       // Manifest
       const manifest = JSON.parse(
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/.manifest.json"), "utf8"),
@@ -245,6 +250,20 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       expect(report.byModule.length).toBeGreaterThanOrEqual(2);
       expect(report.run.status).toBe("completed");
 
+      // (Q) Verify limpo: exit 0 + zero issues de qualquer severity.
+      // Antes do fix, overview emitia [page](../auth.md) que verify normalizava
+      // pra "livewiki/../auth.md" → broken_internal_link warning. Critério
+      // ampliado: "batch completo" = verify 100% limpo (incluindo warnings).
+      const verifyR = runCli(["--json", "--repo", repoRoot, "verify"]);
+      const verify = await verifyR;
+      expect(verify.status, `verify falhou: ${verify.stderr}`).toBe(0);
+      const verifyReport = JSON.parse(verify.stdout);
+      expect(
+        verifyReport.issues.length,
+        `verify reportou ${verifyReport.issues.length} issue(s) (esperado 0):\n${JSON.stringify(verifyReport.issues, null, 2)}`,
+      ).toBe(0);
+      expect(verifyReport.ok).toBe(true);
+
       // Key-leak: NENHUMA string da chave aparece em nenhum arquivo gerado
       const allFiles = [
         "livewiki/auth.md",
@@ -252,6 +271,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         "livewiki/quickstart.md",
         "livewiki/architecture/structure.mmd",
         "livewiki/architecture/modules.mmd",
+        "livewiki/architecture/overview.md",
         "livewiki/.manifest.json",
       ];
       for (const f of allFiles) {
@@ -564,4 +584,59 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       delete process.env.ANTHROPIC_API_KEY;
     }
   });
+
+  it("(Q) critério 'batch completo' = verify exit 0 + zero issues (incluindo warnings)", async () => {
+    // Achado Q (revisão Fase 4): o P gerou overview.md mas os links internos
+    // ([page](../<modulo>.md)) eram normalizados pelo verify como
+    // "livewiki/../<modulo>.md" → broken_internal_link. 3 WARNs no verify
+    // após run completo. Critério ampliado: "batch completo" exige verify
+    // 100% limpo (zero issues de qualquer severity, não só errors).
+    //
+    // Cenário do repro: 3 módulos (auth/utils/api) com pages geradas.
+    // Overview emite [page](../auth.md), [page](../utils.md), [page](../api.md).
+    // Sem o fix, cada um vira "livewiki/../X.md" → 3 broken_internal_link.
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    await writeCode("src/utils/x.ts", "export function b() {}");
+    await writeCode("src/api/y.ts", "export function c() {}");
+    stub.setHandler((req) => defaultHandler(req));
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-Q";
+    try {
+      // 1. Batch completo
+      const initR = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      expect(initR.status, `init --batch falhou: ${initR.stderr}`).toBe(0);
+      const initReport = JSON.parse(initR.stdout);
+      expect(initReport.batchSummary.status).toBe("completed");
+
+      // 2. Overview.md existe com os links emitidos
+      const overview = await nodeFs.readFile(
+        nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
+        "utf8",
+      );
+      expect(overview).toMatch(/\[page\]\(\.\.\/auth\.md\)/);
+      expect(overview).toMatch(/\[page\]\(\.\.\/utils\.md\)/);
+      expect(overview).toMatch(/\[page\]\(\.\.\/api\.md\)/);
+
+      // 3. Verify limpo: exit 0 + zero issues
+      const verifyR = await runCli(["--json", "--repo", repoRoot, "verify"]);
+      expect(verifyR.status, `verify falhou: ${verifyR.stderr}`).toBe(0);
+      const verifyReport = JSON.parse(verifyR.stdout);
+      const broken = verifyReport.issues.filter(
+        (i: { code: string }) => i.code === "broken_internal_link",
+      );
+      expect(
+        broken.length,
+        `verify reportou ${broken.length} broken_internal_link (esperado 0):\n` +
+          broken.map((b: { detail: string }) => `  - ${b.detail}`).join("\n"),
+      ).toBe(0);
+      expect(
+        verifyReport.issues.length,
+        `verify reportou ${verifyReport.issues.length} issue(s) total (esperado 0):\n` +
+          JSON.stringify(verifyReport.issues, null, 2),
+      ).toBe(0);
+      expect(verifyReport.ok).toBe(true);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
 });

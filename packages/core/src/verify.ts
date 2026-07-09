@@ -165,30 +165,52 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
         const linkPathRaw = m[2];
         if (!linkPathRaw) continue;
         const linkSection = m[4];
-        // Normaliza: "foo.md" → "livewiki/foo.md"
-        let linkPath = linkPathRaw.replace(/^\.\//, "");
-        if (!linkPath.startsWith("livewiki/")) {
-          linkPath = `livewiki/${linkPath}`;
+        // Resolve o link contra o diretório da página wiki atual.
+        // 3 casos (Q — fix):
+        //   1. "livewiki/foo.md" ou "livewiki/" prefixo  → absoluto no namespace, usa como está
+        //   2. "/foo.md"                                 → absoluto a partir da raiz do repo
+        //   3. "./foo.md", "../foo.md", "foo.md"         → relativo ao diretório da página
+        //
+        // Antes do fix, o caso (3) era tratado como (1) com prepend "livewiki/"
+        // — o que quebrava QUALQUER link com "..". Ex.: architecture/overview.md
+        // emite "[page](../auth.md)" que virava "livewiki/../auth.md" = fora.
+        const resolved = resolveWikiLink(page.relPath, linkPathRaw);
+        if (!resolved) {
+          // Link malformado (não é wiki-path válido) — pula silenciosamente.
+          // Pode ser link externo ou absolute-path falso. Não bloqueia.
+          continue;
+        }
+        if (!isInsideWiki(resolved)) {
+          // Resolveu pra fora do namespace livewiki/ (ex.: "../../etc/passwd"
+          // → "../etc/passwd"). verify é só leitura — não bloqueia escrita, só
+          // reporta (mesma filosofia do teste legado).
+          issues.push({
+            severity: "warning",
+            code: "broken_internal_link",
+            wikiPath: page.relPath,
+            detail: `link para ${resolved}${linkSection ? `#${linkSection}` : ""} aponta para fora de livewiki/`,
+          });
+          continue;
         }
         // Verifica se a página alvo EXISTE no disco
-        const targetExists = sectionSlugsByPath.has(linkPath);
+        const targetExists = sectionSlugsByPath.has(resolved);
         if (!targetExists) {
           issues.push({
             severity: "warning",
             code: "broken_internal_link",
             wikiPath: page.relPath,
-            detail: `link para ${linkPath}${linkSection ? `#${linkSection}` : ""} aponta para página inexistente`,
+            detail: `link para ${resolved}${linkSection ? `#${linkSection}` : ""} aponta para página inexistente`,
           });
           continue;
         }
         if (linkSection) {
-          const slugs = sectionSlugsByPath.get(linkPath);
+          const slugs = sectionSlugsByPath.get(resolved);
           if (slugs && !slugs.has(linkSection)) {
             issues.push({
               severity: "warning",
               code: "broken_internal_link",
               wikiPath: page.relPath,
-              detail: `link para ${linkPath}#${linkSection} — seção não existe`,
+              detail: `link para ${resolved}#${linkSection} — seção não existe`,
             });
           }
         }
@@ -256,6 +278,49 @@ async function collectSectionSlugs(
     if (m[2]) out.add(slugify(m[2]));
   }
   return out;
+}
+
+/**
+ * Resolve um link markdown para um wiki-path (relativo a repoRoot) ou
+ * retorna null se o link não é wiki-válido (ex.: externo).
+ *
+ * Três formas aceitas:
+ *   1. "livewiki/foo.md" → "livewiki/foo.md" (absoluto no namespace — usa como está)
+ *   2. "/foo.md"        → "foo.md" (absoluto a partir da raiz do repo)
+ *   3. "foo.md" | "./foo.md" | "../foo.md" → relativo ao diretório de fromRelPath
+ *
+ * Não valida se o alvo existe — só resolve o path. Use `isInsideWiki()`
+ * pra checar se ficou dentro do namespace `livewiki/` (segurança contra
+ * `..` malicioso que escapa da wiki).
+ */
+function resolveWikiLink(fromRelPath: string, linkRaw: string): string | null {
+  // Strip do prefixo "./" (equivalente a nome puro no mesmo dir)
+  const cleaned = linkRaw.replace(/^\.\//, "");
+  if (cleaned.length === 0) return null;
+
+  // (1) Já é absoluto no namespace livewiki/
+  if (cleaned === "livewiki" || cleaned.startsWith("livewiki/")) {
+    return cleaned;
+  }
+
+  // (2) Absoluto a partir da raiz do repo
+  if (cleaned.startsWith("/")) {
+    return cleaned.replace(/^\/+/, "");
+  }
+
+  // (3) Relativo ao diretório da página wiki atual
+  const fromDir = nodePath.posix.dirname(fromRelPath);
+  return nodePath.posix.normalize(nodePath.posix.join(fromDir, cleaned));
+}
+
+/**
+ * True se o wiki-path está dentro do namespace `livewiki/` (a wiki) ou
+ * é exatamente `livewiki` (sem trailing). Usado como barreira de segurança
+ * após resolver links relativos — evita que `../../etc/passwd` (ou
+ * similar) seja interpretado como link válido pra fora.
+ */
+function isInsideWiki(wikiPath: string): boolean {
+  return wikiPath === "livewiki" || wikiPath.startsWith("livewiki/");
 }
 
 export function formatHuman(result: VerifyResult): string {
