@@ -64,6 +64,42 @@ describe("config.loadConfig", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/invalid provider/);
   });
 
+  it("carrega preset válido (Fase 5 step 5)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ preset: "minimax", model: "MiniMax-M3" }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.preset).toBe("minimax");
+    expect(cfg.model).toBe("MiniMax-M3");
+    expect(cfg.provider).toBeUndefined();
+  });
+
+  it("rejeita preset desconhecido", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ preset: "magic-llm-9000" }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/invalid preset/);
+  });
+
+  it("preset coexiste com provider (preset vence pra adapter)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        preset: "openai",
+        provider: "anthropic", // legacy field presente
+        model: "gpt-4o",
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.preset).toBe("openai");
+    expect(cfg.provider).toBe("anthropic"); // preservado
+  });
+
   it("ignora silenciosamente chaves desconhecidas (forward compat)", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),

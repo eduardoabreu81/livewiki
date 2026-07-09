@@ -17,6 +17,7 @@
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import type { PricingOverride } from "./pricing.js";
+import { isKnownPreset, resolvePreset, resolveProviderConfig, type PresetName } from "./presets.js";
 
 /** Provideres suportados pelo client LLM (Fase 3). */
 export type LlmProvider = "anthropic" | "openai-compat";
@@ -26,12 +27,32 @@ export type LlmProvider = "anthropic" | "openai-compat";
  * defaults são aplicados na hora de usar. `language` é o ÚNICO com default
  * explícito (`"en"`); os outros são deliberadamente indefinidos pra forçar
  * o usuário a escolher (sem fallback silencioso).
+ *
+ * Fase 5 step 5 adicionou `preset` — nome do preset da tabela embutida
+ * (anthropic, openai, openrouter, ...). Se set, expande em provider +
+ * baseUrl + envVar + pricing (cada um pode ser sobrescrito).
  */
 export interface LivewikiConfig {
-  /** Provider LLM. Sem default — batch sem isso falha com mensagem clara. */
+  /**
+   * Provider LLM (legacy, Fase 3). Sem default. Equivalente a setar
+   * `preset: "anthropic"` (adapter=anthropic, defaults) ou `preset: "openai"`
+   * (adapter=openai-compat). Mantido pra back-compat.
+   */
   provider?: LlmProvider;
-  /** Modelo dentro do provider. Sem default — idem. */
+  /**
+   * Modelo dentro do provider. Sem default — idem.
+   */
   model?: string;
+  /**
+   * Preset de provider (Fase 5 step 5). Nome da tabela embutida
+   * (`anthropic`, `openai`, `openrouter`, `deepseek`, `kimi`, `minimax`,
+   * `gemini`, `nvidia`, `ollama`, `lmstudio`). Se set, sobrescreve
+   * `provider` (adapter derivado do preset). Qualquer campo
+   * (`baseUrl`, `pricing`) pode ser sobrescrito individualmente.
+   *
+   * Ver `packages/core/src/presets.ts` pra tabela.
+   */
+  preset?: PresetName;
   /** Idioma da doc gerada (1 por repo). Default "en". Não afeta chaves/âncoras/diagramas. */
   language?: string;
   /** Base URL customizada (OpenRouter, LiteLLM, Ollama cloud). Opcional. */
@@ -104,6 +125,23 @@ export async function loadConfig(repoRoot: string): Promise<LivewikiConfig> {
   }
 }
 
+/**
+ * Helper: dado o config carregado, retorna a config PROVIDER final
+ * (preset expandido, overrides aplicados). Usado pelo LLM client factory.
+ *
+ * NÃO valida "model ausente" — isso fica em validateConfigForBatch.
+ */
+export function resolveProviderFromConfig(
+  config: LivewikiConfig,
+): ReturnType<typeof resolveProviderConfig> {
+  return resolveProviderConfig({
+    ...(config.preset !== undefined ? { preset: config.preset } : {}),
+    ...(config.provider !== undefined ? { provider: config.provider } : {}),
+    ...(config.baseUrl !== undefined ? { baseUrl: config.baseUrl } : {}),
+    ...(config.pricing !== undefined ? { pricing: config.pricing } : {}),
+  });
+}
+
 /** Grava config no disco via safe-io (allowlist). */
 export async function saveConfig(
   repoRoot: string,
@@ -140,6 +178,10 @@ export function validateConfigForBatch(repoRoot: string, config: LivewikiConfig)
 /** Resolve a base URL final (config sobrescreve default por provider). */
 export function resolveBaseUrl(config: LivewikiConfig): string {
   if (config.baseUrl) return config.baseUrl;
+  // Se preset set: usa a baseUrl do preset
+  if (config.preset) {
+    return resolvePreset(config.preset).baseUrl;
+  }
   // Só acessível se provider estiver set; caller garante isso via validateConfigForBatch
   const provider = config.provider as LlmProvider;
   return CONFIG_DEFAULTS.baseUrls[provider];
@@ -161,7 +203,18 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       out.provider = p;
     } else {
       throw new Error(
-        `invalid provider "${p}" — supported: "anthropic", "openai-compat"`,
+        `invalid provider "${p}" — supported: "anthropic", "openai-compat" ` +
+          `(or use "preset" with one of the 10 known providers)`,
+      );
+    }
+  }
+  if (typeof obj["preset"] === "string") {
+    const p = obj["preset"];
+    if (isKnownPreset(p)) {
+      out.preset = p;
+    } else {
+      throw new Error(
+        `invalid preset "${p}" — supported: see PRESET_TABLE in packages/core/src/presets.ts`,
       );
     }
   }

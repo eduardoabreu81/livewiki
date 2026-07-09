@@ -29,3 +29,4 @@ export * as init from "./init.js";
 export * as update from "./update.js";
 export * as updateMetrics from "./update-metrics.js";
 export * as pointer from "./pointer.js";
+export * as presets from "./presets.js";

@@ -17,7 +17,12 @@
  */
 
 import type { LivewikiConfig, LlmProvider } from "../config.js";
-import { validateConfigForBatch, resolveBaseUrl, MissingProviderConfigError } from "../config.js";
+import {
+  validateConfigForBatch,
+  resolveBaseUrl,
+  resolveProviderFromConfig,
+  MissingProviderConfigError,
+} from "../config.js";
 import type { GenerateRequest, GenerateResult } from "./types.js";
 import { AnthropicAdapter } from "./anthropic.js";
 import { OpenAiCompatAdapter } from "./openai-compat.js";
@@ -32,30 +37,38 @@ export interface LlmClient {
 /**
  * Cria o LLM client a partir do config validado + env var da API key.
  *
- * Throw chain (todos MissingProviderConfigError):
- *   - config.provider ausente
- *   - config.model ausente
- *   - env var da API key ausente (varia por provider)
+ * Resolução do provider:
+ *   1. config.preset (Fase 5 step 5) → expande em adapter/baseUrl/envVar/pricing
+ *   2. config.provider (Fase 3 legacy) → adapter + baseUrl default + envVar default
+ *   3. Sem nenhum → MissingProviderConfigError (validateConfigForBatch)
+ *
+ * Env var name:
+ *   - preset set: vem do preset (ex.: "minimax" → "MiniMax_API_KEY")
+ *   - provider set, sem preset: ANTHROPIC_API_KEY / OPENAI_API_KEY
+ *
+ * Throw chain:
+ *   - config.provider/preset ausente (validateConfigForBatch)
+ *   - config.model ausente (validateConfigForBatch)
+ *   - env var da API key ausente (resolveProviderFromConfig + MissingApiKeyError)
  */
 export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient {
   validateConfigForBatch(repoRoot, config);
-  // Após validateConfigForBatch, provider e model são garantidos string.
-  const provider = config.provider as LlmProvider;
+  // Após validateConfigForBatch, provider/preset e model são garantidos string.
+  const resolved = resolveProviderFromConfig(config);
   const model = config.model as string;
-  const baseUrl = resolveBaseUrl(config);
+  // baseUrl: prefer config explícita, senão preset baseUrl, senão default por provider
+  const baseUrl = resolved.baseUrl || resolveBaseUrl(config);
 
-  if (provider === "anthropic") {
-    const apiKey = process.env["ANTHROPIC_API_KEY"];
-    if (!apiKey) {
-      throw new MissingApiKeyError("anthropic", "ANTHROPIC_API_KEY");
-    }
+  // Lê a key da env var certa (vem do preset OU do adapter legacy)
+  const apiKey = process.env[resolved.envVar];
+  if (!apiKey) {
+    throw new MissingApiKeyError(resolved.adapter, resolved.envVar);
+  }
+
+  if (resolved.adapter === "anthropic") {
     return new AnthropicAdapter({ apiKey, baseUrl, model });
   }
   // openai-compat
-  const apiKey = process.env["OPENAI_API_KEY"];
-  if (!apiKey) {
-    throw new MissingApiKeyError("openai-compat", "OPENAI_API_KEY");
-  }
   return new OpenAiCompatAdapter({ apiKey, baseUrl, model });
 }
 

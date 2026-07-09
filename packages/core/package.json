@@ -81,6 +81,10 @@
     "./pointer": {
       "types": "./dist/pointer.d.ts",
       "import": "./dist/pointer.js"
+    },
+    "./presets": {
+      "types": "./dist/presets.d.ts",
+      "import": "./dist/presets.js"
     }
   },
   "files": [
