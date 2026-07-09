@@ -123,6 +123,14 @@ automaticamente para a nova chave e a dívida registra `detail` com o de/para.
 **Pré-requisito**: símbolos que somem de um arquivo *atualizado* também viram
 `status='deleted'` (nunca hard-delete) — sem a row antiga não há hash para casar
 o moved. Vale para update de arquivo, não só deleção de arquivo.
+**Supersessão ≠ moved**: par com `oldKey === newKey` é re-index do mesmo símbolo,
+nunca gera evento. Após o ledger, rows `deleted` cuja key tem row `active` são
+expurgadas (senão a tabela cresce uma row morta por símbolo a cada edit).
+**Onde a âncora é atualizada**: no **markdown** (frontmatter + marcadores), via
+safe-io — o banco é derivado (regra 3), atualizar só o DB se perde no rebuild.
+Ordem: rewrite markdown → update DB → criar dívida. Exceção (regra 6): âncora em
+bloco `lw:manual` ou página `owner: human` NÃO é reescrita — vira dívida `moved`
+com assignee=`human`.
 
 **Dedup de dívida**: não criar dívida nova se já existe dívida ABERTA
 (`resolved_at IS NULL`) para a mesma âncora + mesmo evento — senão cada
