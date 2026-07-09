@@ -120,6 +120,15 @@ meta(key PRIMARY KEY, value)                                  -- schema_version 
 Detecção de **moved**: símbolo some do arquivo A e aparece no arquivo B com o mesmo
 `content_hash` (ou nome+assinatura iguais) → evento `moved`, âncoras são atualizadas
 automaticamente para a nova chave e a dívida registra `detail` com o de/para.
+**Pré-requisito**: símbolos que somem de um arquivo *atualizado* também viram
+`status='deleted'` (nunca hard-delete) — sem a row antiga não há hash para casar
+o moved. Vale para update de arquivo, não só deleção de arquivo.
+
+**Dedup de dívida**: não criar dívida nova se já existe dívida ABERTA
+(`resolved_at IS NULL`) para a mesma âncora + mesmo evento — senão cada
+`index` re-flagra os mesmos itens e o ledger vira ruído. Dívida também deve
+carregar o `symbol_key` (em coluna ou `detail`), para não ficar órfã se a
+âncora for removida depois.
 
 ## Comandos CLI
 
@@ -129,7 +138,7 @@ automaticamente para a nova chave e a dívida registra `detail` com o de/para.
 | `livewiki index` | (re)indexa: varre arquivos (respeita `.gitignore` + ignores do config), extrai símbolos, atualiza hashes, gera eventos de dívida. Idempotente. `.livewiki/` ausente é auto-criado **sem aviso** (é cache derivado; reconstruí-lo é o fluxo normal pós-clone/handoff — nunca exigir `init`). Se a wiki `livewiki/` também não existe, indexa mesmo assim e emite nota informativa sugerindo `init` (exit 0) |
 | `livewiki status` | mostra: dívida aberta (por página/seção/evento), símbolos novos sem doc, batch pendente. `--json` para consumo por agente |
 | `livewiki update` | modo incremental: dado o diff desde `lastDocumentedCommit`, lista a dívida e (a) emite o "pacote de trabalho" para o agente em sessão documentar, ou (b) com `--llm` chama a API configurada para pagar a dívida |
-| `livewiki verify` | valida a wiki: âncoras apontam para símbolos existentes? assinaturas citadas batem? links internos ok? Sai com código ≠ 0 se falhar (CI-friendly) |
+| `livewiki verify` | valida a wiki: âncoras apontam para símbolos existentes? assinaturas citadas batem? links internos ok? Sai com código ≠ 0 se falhar (CI-friendly). **Parseia a wiki fresca do disco** — âncora em página nunca indexada TEM que ser pega (é a promessa anti-alucinação: doc recém-escrita por LLM é validável sem rodar `index` antes) |
 | `livewiki serve` | sobe o MCP server (stdio) |
 | `livewiki batch <run>` | continua/inspeciona um run de documentação completa (resume por task) |
 | `livewiki export <target>` | (fase 6) exporta a wiki para formato de wiki de repositório: `github-wiki`, `gitlab-wiki`, `generic` (diretório de md achatado). `--push <remote>` opcional |
