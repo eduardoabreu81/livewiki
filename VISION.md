@@ -1,212 +1,220 @@
-# livewiki — Visão do Produto
+# livewiki — Product Vision
 
-> Documento fundador. Define o que o livewiki é, por que existe e as decisões
-> de design já tomadas. A especificação executável do MVP está em [SPEC.md](SPEC.md).
-> Idioma de trabalho: PT-BR. Docs públicas do produto serão em inglês na fase de release.
+> Founding document. Defines what livewiki is, why it exists, and the design
+> decisions already made. The executable MVP spec lives in [SPEC.md](SPEC.md).
+> All durable project artifacts (docs, code comments, CLI strings, commit
+> messages) are in English; the maintainers' working conversation is in PT-BR.
 
-## O que é
+## What it is
 
-**livewiki** é uma ferramenta open source de **documentação viva de repositórios**:
-uma wiki em markdown, versionada no próprio repo, que se mantém consistente com o
-código através de um índice estrutural — e que serve como memória externa para
-qualquer LLM (ou humano) continuar o trabalho de onde a sessão anterior parou.
+**livewiki** is an open-source **living repository documentation** tool: a
+markdown wiki, versioned inside the repo itself, that stays consistent with the
+code through a structural index — and that serves as external memory for any
+LLM (or human) to pick up work where the previous session left off.
 
-Elevator pitch: *"documentação ancorada no código, verificável e sempre atual —
-gerada por quem fez a mudança, no momento em que fez."*
+Elevator pitch: *"documentation anchored to the code, verifiable and always
+current — written by whoever made the change, at the moment they made it."*
 
-## O problema
+## The problem
 
-1. **Documentação envelhece.** Toda wiki de repo está desatualizada 3 meses depois.
-   Ferramentas existentes regeneram tudo via LLM (caro) ou não detectam o que ficou obsoleto.
-2. **Handoff entre LLMs é perda de contexto.** Acabou a cota/sessão de um agente,
-   o próximo recomeça do zero ou engole 200KB de contexto.
-3. **LLMs alucinam documentação.** Doc gerada por LLM cita funções que não existem
-   ou comportamentos que o código não tem, e ninguém verifica.
-4. **Custo de token.** Jogar o repo inteiro no contexto para documentar (ou para
-   retomar trabalho) é o anti-padrão dominante.
+1. **Documentation rots.** Every repo wiki is out of date three months later.
+   Existing tools regenerate everything via LLM (expensive) or fail to detect
+   what became stale.
+2. **Handoff between LLMs loses context.** One agent's quota/session runs out,
+   and the next starts from scratch or swallows 200KB of context.
+3. **LLMs hallucinate documentation.** LLM-generated docs cite functions that
+   don't exist or behavior the code doesn't have, and nobody verifies it.
+4. **Token cost.** Dumping the whole repo into context to document (or to resume
+   work) is the dominant anti-pattern.
 
-## O quadrante vazio (posicionamento)
+## The empty quadrant (positioning)
 
-| Projeto | Estrutura (AST) | Conteúdo (doc) | Tempo real | Publicação | Handoff |
+| Project | Structure (AST) | Content (docs) | Real-time | Publishing | Handoff |
 |---|---|---|---|---|---|
-| codegraph | ✅ maduro | ❌ | ✅ watcher | ❌ | parcial |
-| OpenWiki (LangChain) | ❌ | ✅ | ❌ (git diff) | opcional | ✅ |
-| CodeWiki (Google) | ❌ | ✅ | parcial | ✅ cloud | ❌ |
+| codegraph | ✅ mature | ❌ | ✅ watcher | ❌ | partial |
+| OpenWiki (LangChain) | ❌ | ✅ | ❌ (git diff) | optional | ✅ |
+| CodeWiki (Google) | ❌ | ✅ | partial | ✅ cloud | ❌ |
 | DeepWiki (Cognition) | ❌ | ✅ | ❌ | ✅ cloud | ❌ |
-| agentmemory | ❌ | ❌ (memória) | ✅ hooks | ❌ | ✅ |
-| **livewiki** | **✅ (estreito)** | **✅** | **✅** | **✅ (fase 2)** | **✅** |
+| agentmemory | ❌ | ❌ (memory) | ✅ hooks | ❌ | ✅ |
+| **livewiki** | **✅ (narrow)** | **✅** | **✅** | **✅ (phase 6)** | **✅** |
 
-O diferencial técnico que nenhum concorrente tem: **staleness detectada em nível de
-seção, sem gastar token de LLM** — via âncoras entre doc e símbolos do código.
+The technical differentiator no competitor has: **staleness detected at the
+section level, without spending an LLM token** — via anchors between docs and
+code symbols.
 
-## Princípios não-negociáveis
+## Non-negotiable principles
 
-1. **Seguro por arquitetura**: o livewiki NUNCA escreve fora de `livewiki/` (a wiki)
-   e `.livewiki/` (estado interno). Allowlist de paths enforced em código, não promessa de prompt.
-2. **Econômico**: LLM só entra para *escrever* doc, nunca para *descobrir* o que
-   está desatualizado. Detecção de dívida é determinística (tree-sitter + hashes).
-3. **Tool-agnostic**: markdown plain como fonte da verdade. Qualquer LLM lê,
-   qualquer editor abre, `grep` funciona. Nada proprietário.
-4. **Local-first**: zero cloud obrigatória. Tudo roda na máquina do usuário.
-5. **Reconstruível**: o banco é índice derivado. Deletou `.livewiki/`? `reindex`
-   reconstrói tudo a partir do repo + wiki. O banco nunca é fonte de verdade.
+1. **Safe by architecture**: livewiki NEVER writes outside `livewiki/` (the wiki)
+   and `.livewiki/` (internal state). Path allowlist enforced in code, not a
+   prompt promise.
+2. **Economical**: the LLM only steps in to *write* docs, never to *discover*
+   what is stale. Debt detection is deterministic (tree-sitter + hashes).
+3. **Tool-agnostic**: plain markdown as the source of truth. Any LLM reads it,
+   any editor opens it, `grep` works. Nothing proprietary.
+4. **Local-first**: zero mandatory cloud. Everything runs on the user's machine.
+5. **Rebuildable**: the database is a derived index. Deleted `.livewiki/`?
+   `reindex` rebuilds everything from the repo + wiki. The DB is never the
+   source of truth.
 
-## Conceitos-chave
+## Key concepts
 
-### Âncoras (anchors)
-Cada página/seção da wiki declara a quais símbolos do código ela se refere
-(ex.: `src/auth/login.ts#validateToken`). O índice grava o hash do símbolo
-*no momento em que foi documentado*.
+### Anchors
+Each wiki page/section declares which code symbols it refers to
+(e.g. `src/auth/login.ts#validateToken`). The index records the symbol's hash
+*at the moment it was documented*.
 
-### Dívida de documentação (doc debt)
-Quando o código muda, o indexador (determinístico, milissegundos) compara hashes
-e produz eventos: `changed`, `moved`, `deleted`, `new`. Toda seção ancorada em
-símbolo afetado vira **dívida** registrada num ledger. A dívida é visível
-(`livewiki status`), acumulável e paga quando o agente/usuário decidir.
+### Documentation debt (doc debt)
+When code changes, the indexer (deterministic, milliseconds) compares hashes and
+produces events: `changed`, `moved`, `deleted`, `new`. Every section anchored to
+an affected symbol becomes **debt** recorded in a ledger. Debt is visible
+(`livewiki status`), accumulable, and paid off when the agent/user decides.
 
-### Verificação anti-alucinação
-Quando uma LLM escreve/atualiza doc, `livewiki verify` checa: as âncoras citadas
-existem? As assinaturas batem? Doc que referencia código inexistente é rejeitada/flagada.
+### Anti-hallucination verification
+When an LLM writes/updates docs, `livewiki verify` checks: do the cited anchors
+exist? Do the signatures match? Docs referencing nonexistent code are
+rejected/flagged.
 
-### Conteúdo humano é primeira classe (ownership)
-A wiki não é território exclusivo da ferramenta. O dev cria e edita páginas
-livremente — visão de negócio, contexto de produto, decisões. Cada página declara
-propriedade (`owner: generated | human | mixed`; blocos `lw:manual` em páginas
-mistas), e a regra é dura: **LLM nunca reescreve conteúdo humano** (enforced pelo
-`verify`, não por convenção). E doc de negócio também pode ter âncora: uma página
-`owner: human` ancorada na função que implementa a regra entra na dívida quando o
-código muda — mas em vez de ser reescrita, é **sinalizada para revisão humana**.
-Rastreabilidade negócio↔código de graça.
+### Human content is first-class (ownership)
+The wiki is not the tool's exclusive territory. The dev freely creates and edits
+pages — business vision, product context, decisions. Each page declares
+ownership (`owner: generated | human | mixed`; `lw:manual` blocks in mixed
+pages), and the rule is hard: **the LLM never rewrites human content** (enforced
+by `verify`, not by convention). And business docs can have anchors too: a page
+with `owner: human` anchored to the function that implements a rule enters debt
+when the code changes — but instead of being rewritten, it is **flagged for
+human review**. Business↔code traceability for free.
 
 ### Handoff
-A wiki + o manifest versionado (`livewiki/.manifest.json`) são o estado que viaja
-no git. Próxima LLM em qualquer máquina: lê o quickstart (baixo token), consulta a
-dívida, reconstrói o índice localmente se preciso, e continua — inclusive retomando
-um processo de documentação batch interrompido no meio.
+The wiki + the versioned manifest (`livewiki/.manifest.json`) are the state that
+travels in git. The next LLM on any machine: reads the quickstart (low token),
+consults the debt, rebuilds the index locally if needed, and continues —
+including resuming a batch documentation process interrupted midway.
 
-## Arquitetura em 3 camadas
+## Three-layer architecture
 
 ```
-repo-do-usuário/
-├── livewiki/                  # 1. WIKI — markdown, versionado. A VERDADE.
-│   ├── .manifest.json         #    último commit documentado + snapshot hash
-│   ├── quickstart.md          #    entry point de baixo token para agentes
-│   ├── architecture/          #    overview, módulos, diagramas
-│   ├── files/                 #    docs por arquivo/módulo (com âncoras)
-│   └── decisions/             #    changelog narrativo (handoff entre sessões)
-├── .livewiki/                 # 2. ÍNDICE — SQLite, gitignored. DERIVADO.
-│   └── index.db               #    símbolos, hashes, âncoras, dívida, pipeline
-└── AGENTS.md / CLAUDE.md      # 3. POINTER — 1 parágrafo apontando para a wiki
-                               #    (adicionado SÓ com consentimento explícito)
+user-repo/
+├── livewiki/                  # 1. WIKI — markdown, versioned. THE TRUTH.
+│   ├── .manifest.json         #    last documented commit + snapshot hash
+│   ├── quickstart.md          #    low-token entry point for agents
+│   ├── architecture/          #    overview, modules, diagrams
+│   ├── files/                 #    per-file/module docs (with anchors)
+│   └── decisions/             #    narrative changelog (handoff between sessions)
+├── .livewiki/                 # 2. INDEX — SQLite, gitignored. DERIVED.
+│   └── index.db               #    symbols, hashes, anchors, debt, pipeline
+└── AGENTS.md / CLAUDE.md      # 3. POINTER — 1 paragraph pointing to the wiki
+                               #    (added ONLY with explicit consent)
 ```
 
-## Modos de operação
+## Operating modes
 
-### Modo incremental (o coração)
-Ao fechar um commit/tarefa, um hook roda o check de staleness (sem LLM). Havendo
-dívida, o **agente em sessão** é avisado e documenta ele mesmo o que acabou de fazer —
-contexto fresco, custo extra de API zero, qualidade máxima. Opt-in por evento:
-o agente/usuário pode adiar; a dívida fica no ledger.
+### Incremental mode (the heart)
+On closing a commit/task, a hook runs the staleness check (no LLM). If there is
+debt, the **in-session agent** is notified and documents what it just did itself
+— fresh context, zero extra API cost, maximum quality. Opt-in per event: the
+agent/user can defer; the debt stays in the ledger.
 
-### Modo batch (documentação completa)
-`livewiki init` documenta um repo existente num pipeline de 4 etapas com checkpoint:
-**varredura → identificação de módulos → priorização → documentação coordenada**.
-Cada unidade de doc é uma task resumível: acabou a cota no meio, a próxima LLM
-continua da task 24/61. Quem gera a doc neste modo: LLM via API configurável
-(Anthropic/OpenAI/compatível) OU o próprio agente em sessão trabalhando a fila.
+### Batch mode (full documentation)
+`livewiki init` documents an existing repo through a 4-stage pipeline with
+checkpoints: **scan → module identification → prioritization → coordinated
+documentation**. Each doc unit is a resumable task: if the quota runs out
+midway, the next LLM continues from task 24/61. Who generates the docs in this
+mode: an LLM via configurable API (Anthropic/OpenAI-compatible) OR the in-session
+agent itself working the queue.
 
-## Superfícies (um core, quatro faces)
+## Surfaces (one core, four faces)
 
-| Superfície | Papel |
+| Surface | Role |
 |---|---|
 | **CLI** | `init`, `index`, `status`, `update`, `verify`, `serve`, `export` |
-| **MCP server** | tools de leitura/busca da wiki, consulta de dívida, escrita restrita a `livewiki/` |
-| **Skills** | ensinam o agente o fluxo: "terminou tarefa → cheque dívida → documente" |
-| **Hooks** | templates prontos: git post-commit + hooks de agentes (Claude Code etc.) |
+| **MCP server** | wiki read/search tools, debt queries, writes restricted to `livewiki/` |
+| **Skills** | teach the agent the flow: "finished a task → check debt → document" |
+| **Hooks** | ready-made templates: git post-commit + agent hooks (Claude Code, etc.) |
 
-## Decisões tomadas (com racional)
+## Decisions made (with rationale)
 
-| Decisão | Escolha | Por quê |
+| Decision | Choice | Why |
 |---|---|---|
-| Consumidor primário do MVP | **Agente** (handoff + economia) | quadrante vazio do mercado; export humano é transformação posterior |
-| Stack | **TypeScript/Node** | ecossistema MCP first-class; `npx` = atrito zero; um codebase, quatro superfícies |
-| Parsing | **web-tree-sitter (WASM)** | multi-linguagem sem compilação nativa; funciona liso em Windows/Mac/Linux |
-| Indexador | **próprio, estreito** | precisamos de inventário de símbolos + hashes + âncoras, não call-graph completo; codegraph é referência de design, não dependência |
-| Fonte da verdade | **markdown versionado** | tool-agnostic, git-diff friendly, sobrevive a qualquer ferramenta |
-| Índice | **SQLite gitignored, derivado** | queryable, rápido, reconstruível; nunca viaja no git |
-| Handoff cross-máquina | **manifest JSON versionado** | pequeno, viaja no git; o banco reconstrói localmente |
-| Quem gera doc | **agente em sessão (coração) + API (batch)** | quem fez a mudança documenta melhor e de graça; API cobre repo legado |
-| Detecção de staleness | **determinística, sem LLM** | economia radical: LLM só escreve, nunca procura |
-| Nome | **livewiki** | disponível no npm (verificado 08/07/2026); escopo `@livewiki/` para pacotes |
+| MVP primary consumer | **Agent** (handoff + economy) | empty market quadrant; human export is a later transformation |
+| Stack | **TypeScript/Node** | first-class MCP ecosystem; `npx` = zero friction; one codebase, four surfaces |
+| Parsing | **web-tree-sitter (WASM)** | multi-language without native compilation; runs smoothly on Windows/Mac/Linux |
+| Indexer | **own, narrow** | we need a symbol inventory + hashes + anchors, not a full call-graph; codegraph is a design reference, not a dependency |
+| Source of truth | **versioned markdown** | tool-agnostic, git-diff friendly, survives any tool |
+| Index | **gitignored SQLite, derived** | queryable, fast, rebuildable; never travels in git |
+| Cross-machine handoff | **versioned JSON manifest** | small, travels in git; the DB rebuilds locally |
+| Who generates docs | **in-session agent (heart) + API (batch)** | whoever made the change documents best and for free; API covers legacy repos |
+| Staleness detection | **deterministic, no LLM** | radical economy: the LLM only writes, never searches |
+| Name | **livewiki** | available on npm (verified 2026-07-08); `@livewiki/` scope for packages |
 
-## Pós-MVP já desenhado (fases 6 e 7 da SPEC)
+## Post-MVP already designed (SPEC phases 6 and 7)
 
-- **Export para wiki de repositório** (`livewiki export`): GitHub wiki, GitLab wiki
-  e qualquer host compatível com o formato (repo git de markdown). Transformação
-  com perdas e de mão única: achata namespace, reescreve links, remove marcadores
-  de âncora, adiciona aviso "gerado pelo livewiki". A fonte da verdade continua
-  sendo `livewiki/` no repo — a wiki publicada é produto gerado.
-- **Viewer local com templates** (`livewiki view`): site estático autocontido
-  (abre no browser sem servidor nem build), com navegação, busca client-side e
-  Mermaid renderizado. Templates são **dados** (layout + CSS + manifest), nunca
-  código executável — segurança primeiro. MVP de templates: `agent` (denso,
-  técnico) e `docs` (limpo, para humanos). Comunidade contribui com mais.
+- **Export to repository wiki** (`livewiki export`): GitHub wiki, GitLab wiki,
+  and any host compatible with the format (git markdown repo). Lossy, one-way
+  transformation: flattens the namespace, rewrites links, strips anchor markers,
+  adds a "generated by livewiki" notice. The source of truth stays `livewiki/`
+  in the repo — the published wiki is a generated product.
+- **Local viewer with templates** (`livewiki view`): self-contained static site
+  (opens in the browser with no server or build), with navigation, client-side
+  search, and rendered Mermaid. Templates are **data** (layout + CSS + manifest),
+  never executable code — security first. Template MVP: `agent` (dense,
+  technical) and `docs` (clean, for humans). The community contributes more.
 
-## Roadmap de produto (pós-validação)
+## Product roadmap (post-validation)
 
-- **Dashboard web local (Fase 8)**: kanban do ledger de dívida (detectada → em
-  progresso → paga → revisão humana), progresso de batch em tempo real e settings
-  (provider/modelo/language). Montado 100% sobre os contratos `--json` que já
-  existem — nenhum trabalho antecipado necessário; o `livewiki status` é o
-  dashboard do MVP, e a página "Status" do viewer (Fase 7) é o meio-termo.
-- **`livewiki compare` (pós-MVP)**: rodar o mesmo repo com N modelos e comparar
-  por métricas objetivas que o produto já produz (taxa de verify, cobertura de
-  âncoras, undocumented restante, **tokens como métrica primária**; USD só
-  como estimativa secundária — preço varia por rota/créditos). Custa N× tokens.
-- **Benchmark público multi-LLM (validação/lançamento)**: nós rodamos o compare
-  em repos reais e publicamos a tabela — o "aval de mundo real" do produto,
-  junto com o comparativo de tokens vs OpenWiki.
+- **Local web dashboard (Phase 8)**: kanban of the debt ledger (detected → in
+  progress → paid → human review), real-time batch progress, and settings
+  (provider/model/language). Built 100% on the `--json` contracts that already
+  exist — no upfront work needed; `livewiki status` is the MVP dashboard, and the
+  viewer's "Status" page (Phase 7) is the middle ground.
+- **`livewiki compare` (post-MVP)**: run the same repo with N models and compare
+  by objective metrics the product already produces (verify pass rate, anchor
+  coverage, remaining undocumented, **tokens as the primary metric**; USD only as
+  a secondary estimate — price varies by route/credits). Costs N× tokens.
+- **Public multi-LLM benchmark (validation/launch)**: we run the compare on real
+  repos and publish the table — the product's "real-world stamp", alongside the
+  token comparison vs OpenWiki.
 
-## Roadmap de integrações (pós-validação)
+## Integration roadmap (post-validation)
 
-Meta de lançamento: matriz "works with every agent" (referência: agentmemory).
-O truque: NÃO são N esforços de engenharia — é uma arquitetura em 4 tiers, e a
-matriz é empacotamento + doc por ferramenta:
+Launch goal: a "works with every agent" matrix (reference: agentmemory). The
+trick: these are NOT N engineering efforts — it's a 4-tier architecture, and the
+matrix is packaging + per-tool docs:
 
-| Tier | Entrega | Custo | Cobre |
+| Tier | Delivery | Cost | Covers |
 |---|---|---|---|
-| 1 — MCP server | Fase 4 | snippet de config por ferramenta (doc) | Cursor, Cline, Goose, Kilo Code, Roo Code, Windsurf, Claude Desktop, Gemini CLI, Copilot CLI, qualquer MCP client |
-| 2 — Hooks + skills | Fase 5 | template por ferramenta | Claude Code (nível "plugin nativo"), OpenCode, Codex CLI |
-| 3 — CLI | já existe | zero | Warp, CI, scripts, qualquer agente com shell |
-| 4 — REST API | pós-MVP, wrapper fino sobre o core | pequeno | Aider e agentes HTTP-only |
+| 1 — MCP server | Phase 4 | per-tool config snippet (docs) | Cursor, Cline, Goose, Kilo Code, Roo Code, Windsurf, Claude Desktop, Gemini CLI, Copilot CLI, any MCP client |
+| 2 — Hooks + skills | Phase 5 | per-tool template | Claude Code ("native plugin" level), OpenCode, Codex CLI |
+| 3 — CLI | already exists | zero | Warp, CI, scripts, any agent with a shell |
+| 4 — REST API | post-MVP, thin wrapper over the core | small | Aider and HTTP-only agents |
 
-Plugins de instalação dedicados (registram MCP + instalam skills/hooks +
-pointer opt-in): **Claude Code, Codex e Hermes** primeiro; demais conforme
-tração. Modelo default de LLM permanece em aberto — a config nasce pronta para
-os providers de mercado (presets na SPEC), o usuário escolhe.
+Dedicated install plugins (register the MCP server + install skills/hooks +
+opt-in pointer): **Claude Code, Codex, and Hermes** first; others as traction
+justifies. The default LLM model stays open — the config ships ready for the
+market's providers (presets in the SPEC), the user chooses.
 
-## Fora do escopo desenhado (avaliar depois)
+## Out of designed scope (evaluate later)
 
-- Embeddings locais + busca semântica (pluggável)
-- Call-graph de funções (exige resolução de chamadas cross-file; quando vier,
-  será por vizinhança de função, não repo inteiro) e diagramas de sequência
-  (exigem interpretação por LLM — extra opcional do batch, nunca verdade automática).
-  Nota: estrutura, dependências de módulos e classes JÁ saem determinísticos na
-  Fase 3 — ver SPEC.
-- README gerado a partir da wiki
-- Wikis multilíngues simultâneas (N idiomas sincronizados) — cada mudança viraria
-  N dívidas e `verify` não checa equivalência semântica entre línguas; se entrar,
-  será como export traduzido de mão única (Fase 6+), nunca N fontes da verdade.
-  (Idioma único configurável por repo JÁ está no MVP: `language` no config.)
-- Distribuição final (npm público, binário) — decidir na validação
+- Local embeddings + semantic search (pluggable)
+- Function call-graph (requires cross-file call resolution; when it comes, it
+  will be per-function neighborhood, not the whole repo) and sequence diagrams
+  (require LLM interpretation — an optional batch extra, never automatic truth).
+  Note: structure, module dependencies, and classes ALREADY ship deterministic
+  in Phase 3 — see SPEC.
+- README generated from the wiki
+- Simultaneous multilingual wikis (N synced languages) — each change would become
+  N debts and `verify` can't check semantic equivalence across languages; if it
+  ever ships, it'll be a one-way translated export (Phase 6+), never N sources of
+  truth. (Single configurable language per repo is ALREADY in the MVP: `language`
+  in the config.)
+- Final distribution (public npm, binary) — decide at validation
 
-## Decisões em aberto
+## Open decisions
 
-1. **Licença** (MIT vs Apache-2.0) — decidir antes do release público.
-2. **Critério de "validada" para abrir o código** — proposta: rodar bem em 3+ repos
-   reais do Eduardo + 1 repo externo grande, com dívida detectada corretamente e
-   handoff exercitado de verdade entre 2 LLMs diferentes.
-3. **Linguagens suportadas no MVP** — proposta: TS/JS, Python (gramáticas WASM
-   carregáveis; adicionar linguagem = adicionar gramática).
-4. **Granularidade de âncora por seção vs por página** — MVP implementa ambas
-   (frontmatter = página; marcador HTML = seção), avaliar na prática.
+1. **License** (MIT vs Apache-2.0) — decide before public release.
+2. **"Validated" criterion for open-sourcing** — proposal: run cleanly on 3+ of
+   Eduardo's real repos + 1 large external repo, with debt detected correctly and
+   handoff genuinely exercised between 2 different LLMs.
+3. **Languages supported in the MVP** — proposal: TS/JS, Python (loadable WASM
+   grammars; adding a language = adding a grammar).
+4. **Anchor granularity, per-section vs per-page** — MVP implements both
+   (frontmatter = page; HTML marker = section), evaluate in practice.
