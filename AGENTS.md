@@ -1,10 +1,9 @@
 # AGENTS.md — livewiki
 
 > Para LLMs/agents trabalhando neste repo. **Estado live em
-> `status`**: Fase 3 completa (init + batch + LLM client + diagrams +
-> contabilidade de tokens + circuit breaker + manifest) + rev2 empírica
-> (achados H–M corrigidos, cenário de subdiretórios coberto). Próxima
-> fase (4): MCP server.
+> `status`**: Fase 4 completa (MCP server + 6 tools + FTS5 + tests com
+> InMemoryTransport) + Fase 3 rev2 empírica + correções (O, P).
+> Próxima fase (5): skills, hooks, update incremental.
 
 ## TL;DR
 
@@ -12,6 +11,9 @@ livewiki é uma ferramenta de documentação técnica agent-first. O coração �
 **pipeline batch de 4 etapas** (varredura → módulos → priorização → documentação)
 que chama LLM pra gerar páginas Markdown âncoradas em símbolos do código,
 validando pós-escrita via `verify` (broken_anchor = chave fora do índice).
+O **MCP server (Fase 4)** expõe a wiki via 6 tools pra qualquer client MCP
+(Claude Code, Cursor, Codex, etc.) — busca FTS5, leitura, escrita
+validada e gestão de dívida.
 
 Estado do projeto:
 - **Fase 0** (scaffold + safe-io) ✅
@@ -19,8 +21,8 @@ Estado do projeto:
 - **Fase 2** (âncoras + dívida + verify) ✅
 - **Fase 3** (init + batch + LLM client + diagrams + contabilidade) ✅
 - **Fase 3 rev2** (correções empíricas H–M) ✅
-- **Fase 4** (MCP server) — próxima
-- **Fase 5** (skills + hooks + update incremental + pointer) — depois
+- **Fase 4** (MCP server: 6 tools + FTS5 + stdio) ✅
+- **Fase 5** (skills + hooks + update incremental + pointer) — próxima
 - **Fase 6** (export pra github-wiki/gitlab-wiki/generic) — pós-MVP
 - **Fase 7** (viewer local + templates) — pós-MVP
 
@@ -29,6 +31,11 @@ gera wiki completa; interromper no meio + `batch resume` continua da task certa;
 verify pega pelo menos um caso real de alucinação de doc. Rev2 empírica
 (commit ad87319) adiciona cenário de subdiretórios + NodeNext + openai-compat
 (coberto por `cli-batch-e2e-subdirs.test.ts` na CLI).
+
+Critério de aceite da Fase 4 (SPEC): conectado a um client MCP real;
+`livewiki_write_doc` rejeita path fora de `livewiki/` e conteúdo que não passa
+no verify. Coberto por `packages/mcp/src/server.test.ts` (12 cenários E2E com
+InMemoryTransport — não precisa de stdio real).
 
 ## Regras invioláveis (SPEC §"Regras invioláveis")
 
@@ -42,7 +49,7 @@ verify pega pelo menos um caso real de alucinação de doc. Rev2 empírica
    e download único de gramáticas WASM.
 5. **Testes**: vitest; cobertura mínima 80% no core. CLI/MCP podem ter
    cobertura menor, mas os fluxos principais têm teste de integração
-   (E2E via stub HTTP server).
+   (E2E via stub HTTP server / InMemoryTransport).
 6. **Conteúdo humano é intocável**: páginas `owner: human` e blocos
    `lw:manual` JAMAIS são modificados por escrita automatizada. `verify`
    compara blocos manuais byte a byte após update.
@@ -118,6 +125,20 @@ verify pega pelo menos um caso real de alucinação de doc. Rev2 empírica
   quickstart, independente do renderer markdown. Testado em
   `cli-batch-e2e.test.ts` (3 cenários novos: init base, init --batch,
   cross-check links↔anchors).
+- **FTS5 em DB separado** (Fase 4): `livewiki_search` usa `.livewiki/search.db`
+  (NÃO o `index.db` — evita mexer em schema v4/migrations). Rebuild
+  completo no startup do MCP server (rápido, idempotente); update
+  incremental via `indexPage()` no `write_doc`. Tokenizer porter (default
+  FTS5). Decisão em `packages/mcp/src/search.ts:doc`.
+- **MCP write_doc = 2 fases** (Fase 4): (1) `safe-io.writeText` (allowlist)
+  (2) `verify.run` no repo. Se verify reporta `error` issue na página,
+  rollback (apaga arquivo) + retorna `isError=true` com detalhe. `skipVerify`
+  é escape documentado pra páginas sem anchor (quickstart). Mesma
+  allowlist do regra #1 + mesma checagem do verify pós-batch.
+- **Windows + search.db**: better-sqlite3 abre o search.db com WAL
+  (search.db-shm / search.db-wal). Testes E2E MCP precisam fechar o
+  server (via `server.close()`) antes do afterEach rodar `rm` recursivo —
+  caso contrário EBUSY em Windows.
 
 ## Layout do repo
 
@@ -155,21 +176,27 @@ livewiki/
 │   │   │   ├── batch-status.ts # buildStatusReport (totals + byStage + byModule)
 │   │   │   └── init.ts         # livewiki init (layout determinístico + batch)
 │   │   └── package.json        # subpath exports pra cada módulo
-│   └── cli/                   # @livewiki/cli — thin wrapper
+│   ├── cli/                   # @livewiki/cli — thin wrapper
+│   │   └── src/
+│   │       ├── cli.ts          # commander setup + global flags
+│   │       └── commands/
+│   │           ├── init.ts     # livewiki init [--batch | --plan | --no-refine]
+│   │           ├── index.ts    # livewiki index
+│   │           ├── status.ts   # livewiki status
+│   │           ├── update.ts   # livewiki update (stub Fase 5)
+│   │           ├── verify.ts   # livewiki verify
+│   │           ├── batch.ts    # livewiki batch [status|resume|--only|list]
+│   │           ├── serve.ts    # livewiki serve (Fase 4 — agora redireciona pro mcp)
+│   │           ├── export.ts   # livewiki export (stub Fase 6)
+│   │           └── view.ts     # livewiki view (stub Fase 7)
+│   └── mcp/                   # @livewiki/mcp — Fase 4: MCP server
 │       └── src/
-│           ├── cli.ts          # commander setup + global flags
-│           └── commands/
-│               ├── init.ts     # livewiki init [--batch | --plan | --no-refine]
-│               ├── index.ts    # livewiki index
-│               ├── status.ts   # livewiki status
-│               ├── update.ts   # livewiki update (stub Fase 5)
-│               ├── verify.ts   # livewiki verify
-│               ├── batch.ts    # livewiki batch [status|resume|--only|list]
-│               ├── serve.ts    # livewiki serve (stub Fase 4)
-│               ├── export.ts   # livewiki export (stub Fase 6)
-│               └── view.ts     # livewiki view (stub Fase 7)
+│           ├── server.ts       # McpServer + 6 tools
+│           ├── search.ts       # FTS5 (.livewiki/search.db)
+│           └── index.ts        # entry point stdio (npx livewiki-mcp --repo)
 └── .livewiki/                 # cache derivado do repo (safe-io allowlist)
     ├── index.db               # SQLite schema v4
+    ├── search.db              # SQLite FTS5 (MCP, Fase 4)
     └── config.json            # config local do repo
 ```
 
@@ -190,13 +217,36 @@ livewiki/
   openai-compat. Cobre H (3 páginas geradas, não 0), I (refine
   modules:[] rejeitado), K (edges com NodeNext), M (filesWritten sem
   manifest idempotente), L (erro de config com exit limpo).
+- **MCP server (Fase 4)** — `packages/mcp/src/server.ts` define McpServer
+  com 6 tools; `packages/mcp/src/index.ts` é o entry point stdio
+  (`npx livewiki-mcp --repo <path>`). Configuração típica em Claude Code:
+  ```json
+  {
+    "mcpServers": {
+      "livewiki": {
+        "command": "npx",
+        "args": ["-y", "@livewiki/mcp", "--repo", "/path/to/repo"]
+      }
+    }
+  }
+  ```
+  Tools (todas documentadas no docstring do server.ts):
+  - `livewiki_quickstart` — retorna `livewiki/quickstart.md`
+  - `livewiki_read` — lê página da wiki (allowlist livewiki/)
+  - `livewiki_search` — busca full-text FTS5 (rebuilt no startup)
+  - `livewiki_debt` — dívida aberta (= `livewiki status --json`)
+  - `livewiki_write_doc` — escreve página (allowlist + verify pós-escrita)
+  - `livewiki_resolve_debt` — fecha dívidas por ID
+- **MCP E2E** — `packages/mcp/src/server.test.ts` cobre todos os 6 tools
+  + 6 cenários de erro/rejeição (12 testes). Usa `InMemoryTransport` do
+  SDK MCP — não precisa de stdio real nem de subprocess.
 
 ## Workflow de validação
 
-Antes de commitar qualquer mudança em Fase 2 ou 3:
+Antes de commitar qualquer mudança em Fase 2, 3 ou 4:
 
 ```bash
-pnpm -r build         # core + cli
+pnpm -r build         # core + cli + mcp
 pnpm -r test          # vitest em todos
 pnpm --filter @livewiki/cli test -- src/cli-batch-e2e.test.ts
                      # E2E crítico: init --batch end-to-end com stub server (anthropic)
@@ -204,6 +254,8 @@ pnpm --filter @livewiki/cli test -- src/cli-batch-e2e-subdirs.test.ts
                      # E2E rev2: subdiretórios + NodeNext + openai-compat (achados H–M)
 pnpm --filter @livewiki/core test -- src/key-leak.test.ts
                      # regressão CRÍTICA: key NUNCA pode aparecer em output
+pnpm --filter @livewiki/mcp test
+                     # Fase 4: 6 tools E2E (InMemoryTransport)
 ```
 
 Cobertura atual: **80.09% stmts / 80.1% branches / 93.1% funcs** (acima
@@ -228,6 +280,10 @@ explicitamente fora do `vitest` unit suite).
 - **Bug no circuit breaker / orchestrator** → `packages/core/src/batch.ts`,
   com testes em `batch.test.ts`. Atualizar `packages/cli/src/commands/batch.ts`
   pra novo exit code.
+- **Nova tool MCP** → adicionar `server.tool(name, desc, schema, handler)`
+  em `packages/mcp/src/server.ts`. Schema com `zod`. Se precisa de nova
+  operação no core, adicionar lá e importar aqui (não duplicar lógica).
+  Atualizar `server.test.ts` com cenário E2E.
 
 ## Gotchas específicos
 
@@ -240,6 +296,12 @@ explicitamente fora do `vitest` unit suite).
   `1 fail / 0 done = 100%` abortaria qualquer run com 1 task.
 - **`safeIo.resolveAndValidate` é async** (usa `realpath` async). Não
   existe versão sync — sempre `await`.
+- **MCP write_doc rollback** — se verify rejeitar após write, apaga o
+  arquivo que acabou de ser escrito (best-effort). Garante que estado
+  inconsistente não persiste (regra #3: disco é a verdade).
+- **MCP FTS5 rebuild no startup** — `openAndIndex` reindexa todas as
+  páginas markdown. Se você só adicionou uma página via `write_doc`,
+  ele já atualiza incrementalmente; não precisa reiniciar o server.
 - **Edit tool às vezes falha** com "Could not safely match oldString" em
   arquivos grandes. Workaround: Python one-off patch, rodar, deletar com
   `mavis-trash`. Não retry — gasta tokens.
@@ -250,25 +312,24 @@ explicitamente fora do `vitest` unit suite).
   `index.lock`, aguardar 2s e retry (geralmente o processo já liberou).
   Se persistir, `mavis-trash .git/index.lock` (NÃO use `rm`/`Remove-Item`).
 
-## Estado live (próxima fase: 4 — MCP server)
+## Estado live (próxima fase: 5 — skills + hooks + update)
 
 ```bash
-# Última validação (Fase 3 + fixes O/P):
-pnpm -r test  → 295 passed + 8 skipped (core 265 + cli 30)
-pnpm -r build → verde
+# Última validação (Fase 3 + Fase 4 + fixes O/P):
+pnpm -r test  → 307 passed + 8 skipped (core 265 + cli 30 + mcp 12)
+pnpm -r build → verde (core + cli + mcp)
 ```
 
 Próximos passos planejados:
-1. Fase 4: MCP server (`packages/mcp/`) com 6 tools — `livewiki_quickstart`,
-   `livewiki_read`, `livewiki_search` (FTS5), `livewiki_debt`, `livewiki_write_doc`
-   (com verify antes de aceitar), `livewiki_resolve_debt`.
-2. Fase 5: hooks (`post-commit`, `Stop` do Claude Code), skill
+1. Fase 5: hooks (`post-commit`, `Stop` do Claude Code), skill
    `document-as-you-go`, `livewiki update` (pacote de trabalho incremental),
    pointer opt-in em AGENTS.md/CLAUDE.md.
-3. **Presets de provider** (ad87319 — docs já na SPEC, código pra próximo
+2. **Presets de provider** (ad87319 — docs já na SPEC, código pra próximo
    ciclo): tabela embutida de anthropic/openai/openrouter/deepseek/kimi/
    minimax/gemini/nvidia/ollama/lmstudio com baseUrl + adapter + env var +
    pricing default. `config.json` referencia o preset e sobrescreve.
+3. Fase 6: export pra github-wiki/gitlab-wiki/generic.
+4. Fase 7: viewer local + templates.
 
 > **Lembrete do user**: validar doc/spec nova ANTES de codar. Quando Edu
 > adiciona algo à SPEC (via commit), comparar com implementação atual
