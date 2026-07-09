@@ -7,6 +7,12 @@ interface IndexOptions {
   json?: boolean;
   repo?: string;
   ignore?: string[];
+  /**
+   * `--quiet`: suprime output humano sem produzir JSON. Usado pelos hooks
+   * (Fase 5) e pelo post-commit template — detecta dívida sem spammar o
+   * terminal. Diferente de `--json`, que produz saída estruturada.
+   */
+  quiet?: boolean;
 }
 
 /**
@@ -27,23 +33,29 @@ export function registerIndex(program: Command): void {
     )
     .option("--ignore <pattern>", "padrão adicional a ignorar (pode repetir)", collectIgnore, [])
     .option("--no-ledger", "pular ledger (só indexar código)")
+    .option(
+      "--quiet",
+      "suprime output humano sem produzir JSON (usado pelos hooks — Fase 5)",
+    )
     .action(async (_options: IndexOptions, command: Command) => {
       const opts = command.optsWithGlobals<IndexOptions & { ledger?: boolean }>();
       const json = Boolean(opts.json);
+      const quiet = Boolean(opts.quiet);
       const repoRoot = path.resolve(process.cwd(), opts.repo ?? ".");
       try {
         const indexResult = await runIndexer(repoRoot, {
           ...(opts.ignore && opts.ignore.length > 0
             ? { extraIgnores: opts.ignore }
             : {}),
-          quiet: json,
+          // quiet = JSON ou --quiet (qualquer um suprime output humano)
+          quiet: json || quiet,
         });
         let ledgerResult: LedgerResult | null = null;
         // commander trata --no-ledger como `ledger: false`
         if (opts.ledger !== false) {
-          ledgerResult = await runLedger(repoRoot, { quiet: json });
+          ledgerResult = await runLedger(repoRoot, { quiet: json || quiet });
         }
-        emit(json, indexResult, ledgerResult);
+        emit(json, quiet, indexResult, ledgerResult);
       } catch (err) {
         process.stderr.write(`livewiki index: erro — ${(err as Error).message}\n`);
         process.exit(1);
@@ -57,9 +69,13 @@ function collectIgnore(value: string, previous: string[]): string[] {
 
 function emit(
   json: boolean,
+  quiet: boolean,
   indexResult: IndexResult,
   ledgerResult: LedgerResult | null,
 ): void {
+  // Quiet: nada no stdout. O hook só quer detecção de dívida (via `status --json`
+  // em chamada separada), não output. Stderr ainda carrega erros.
+  if (quiet && !json) return;
   if (json) {
     process.stdout.write(
       JSON.stringify({ ok: true, index: indexResult, ledger: ledgerResult }) + "\n",

@@ -58,8 +58,9 @@ export async function run(repoRoot: string, opts: IndexOptions = {}): Promise<In
   const absRoot = nodePath.resolve(repoRoot);
 
   // 1. Garante `.livewiki/` existe (sem aviso se `livewiki/` também existir).
-  //    Se nem `livewiki/` existe, emite nota informativa (não erro).
-  await ensureLivewikiDir(absRoot);
+  //    Se nem `livewiki/` existe, emite nota informativa (não erro) — mas só
+  //    se NÃO estiver em quiet (hooks da Fase 5 não devem spammar o terminal).
+  await ensureLivewikiDir(absRoot, Boolean(opts.quiet));
 
   // 2. Resolve dbPath via safe-io (revalida allowlist + symlinks).
   const dbPathRel = ".livewiki/index.db";
@@ -79,7 +80,7 @@ export async function run(repoRoot: string, opts: IndexOptions = {}): Promise<In
   }
 }
 
-async function ensureLivewikiDir(absRoot: string): Promise<void> {
+async function ensureLivewikiDir(absRoot: string, quiet: boolean): Promise<void> {
   // Cria `.livewiki/` (allowlist — safe-io). É cache derivado.
   try {
     await safeIo.mkdir(absRoot, ".livewiki");
@@ -91,11 +92,12 @@ async function ensureLivewikiDir(absRoot: string): Promise<void> {
   }
 
   // Nota informativa se a wiki também não existe (Fase 3 vai criá-la).
+  // Em quiet mode (hooks), suprime — o terminal fica limpo.
   const livewikiExists = await nodeFs
     .stat(nodePath.join(absRoot, "livewiki"))
     .then(() => true)
     .catch(() => false);
-  if (!livewikiExists) {
+  if (!livewikiExists && !quiet) {
     // eslint-disable-next-line no-console
     console.log(
       "[livewiki] nota: wiki livewiki/ ainda não existe — indexou mesmo assim. " +

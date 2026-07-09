@@ -1,0 +1,16 @@
+{
+  "_comment": "Livewiki Claude Code hook (template — Fase 5). Mesma semântica do git post-commit: roda index, notifica se há dívida, nunca bloqueia.",
+  "hooks": {
+    "Stop": [
+      {
+        "_comment": "Hook Stop: dispara quando o agente termina. Output é visível ao agente no transcript.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'set +e; L=$(command -v livewiki || echo \"\"); if [ -z \"$L\" ]; then exit 0; fi; $L index --quiet 2>/dev/null; S=$($L status --json 2>/dev/null); T=$(echo \"$S\" | grep -oE \"\\\"total\\\":[0-9]+\" | head -1 | grep -oE \"[0-9]+\" || echo 0); if [ -n \"$T\" ] && [ \"$T\" -gt 0 ] 2>/dev/null; then echo \"\" 1>&2; echo \"livewiki: $T documentation debt item(s) detected — run \\`livewiki status --json\\` to see details, or use the document-as-you-go skill.\" 1>&2; fi; exit 0'"
+          }
+        ]
+      }
+    ]
+  }
+}

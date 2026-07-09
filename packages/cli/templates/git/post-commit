@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# livewiki post-commit hook (template — Fase 5)
+#
+# Comportamento:
+#   1. Roda `livewiki index --quiet` (detecta dívida sem LLM, milissegundos)
+#   2. Se dívida nova > 0, imprime resumo no stderr (1 linha)
+#   3. SEMPRE exit 0 — NUNCA bloqueia o commit
+#
+# Instalação (opt-in via core.hooksPath — caminho recomendado):
+#   Copie este arquivo para <seu-repo>/.git/hooks-livewiki/post-commit
+#   (crie o diretório se não existir):
+#     mkdir -p .git/hooks-livewiki
+#     cp node_modules/@livewiki/cli/templates/git/post-commit .git/hooks-livewiki/post-commit
+#     chmod +x .git/hooks-livewiki/post-commit
+#     git config core.hooksPath .git/hooks-livewiki
+#
+#   Desinstalar:
+#     git config --unset core.hooksPath
+#     rm -rf .git/hooks-livewiki
+#
+# SPEC §"Skills e hooks (fase 5)":
+#   "Hook git post-commit (template, instalação opt-in via core.hooksPath):
+#    roda `livewiki index --quiet`; se dívida nova, imprime resumo no
+#    terminal (não bloqueia o commit)."
+
+# `set +e` em vez de `set -e` — garantimos exit 0 mesmo se livewiki falhar
+# (não queremos que uma falha do livewiki impeça commits futuros).
+set +e
+
+# Localiza o binário livewiki. Ordem:
+#   1. PATH (instalação global / devDep local com bin link)
+#   2. node_modules/.bin (pnpm/npm install local)
+#   3. npx fallback (download sob demanda — pode ser lento)
+LIVEWIKI=""
+if command -v livewiki >/dev/null 2>&1; then
+  LIVEWIKI="livewiki"
+elif [ -x "./node_modules/.bin/livewiki" ]; then
+  LIVEWIKI="./node_modules/.bin/livewiki"
+elif [ -x "./node_modules/.bin/livewiki.cmd" ]; then
+  # Windows (Git Bash): tenta o .cmd
+  LIVEWIKI="./node_modules/.bin/livewiki.cmd"
+else
+  # Sem livewiki no ambiente: sai silenciosamente. O hook não pode falhar.
+  exit 0
+fi
+
+# 1. Re-indexa (--quiet: suprime notas informativas). Custo: ms para um repo médio.
+"$LIVEWIKI" index --quiet 2>/dev/null
+# exit code ignorado de propósito
+
+# 2. Pega dívida total via --json. Grep no campo "total" do bloco "debt".
+#    Heurística simples: primeira ocorrência de '"total":<N>' onde N > 0.
+#    Mais robusto que parsear JSON em bash.
+SUMMARY=$("$LIVEWIKI" status --json 2>/dev/null)
+DEBT_TOTAL=$(echo "$SUMMARY" | grep -oE '"total":[0-9]+' | head -1 | grep -oE '[0-9]+' || echo "0")
+
+if [ -n "$DEBT_TOTAL" ] && [ "$DEBT_TOTAL" -gt 0 ] 2>/dev/null; then
+  # Imprime no stderr pra não poluir stdout (alguns tools capturam stdout do hook)
+  echo "" 1>&2
+  echo "livewiki: $DEBT_TOTAL documentation debt item(s) detected." 1>&2
+  echo "  Run \`livewiki status --json\` to see details, or use the document-as-you-go skill." 1>&2
+  echo "  (Hook does NOT block the commit. Document when convenient.)" 1>&2
+fi
+
+# Sempre exit 0 — regra do SPEC: hook NUNCA bloqueia o commit.
+exit 0
