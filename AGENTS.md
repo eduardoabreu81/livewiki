@@ -2,8 +2,9 @@
 
 > Para LLMs/agents trabalhando neste repo. **Estado live em
 > `status`**: Fase 3 completa (init + batch + LLM client + diagrams +
-> contabilidade de tokens + circuit breaker + manifest). Próxima fase
-> (4): MCP server.
+> contabilidade de tokens + circuit breaker + manifest) + rev2 empírica
+> (achados H–M corrigidos, cenário de subdiretórios coberto). Próxima
+> fase (4): MCP server.
 
 ## TL;DR
 
@@ -17,6 +18,7 @@ Estado do projeto:
 - **Fase 1** (indexador com web-tree-sitter) ✅
 - **Fase 2** (âncoras + dívida + verify) ✅
 - **Fase 3** (init + batch + LLM client + diagrams + contabilidade) ✅
+- **Fase 3 rev2** (correções empíricas H–M) ✅
 - **Fase 4** (MCP server) — próxima
 - **Fase 5** (skills + hooks + update incremental + pointer) — depois
 - **Fase 6** (export pra github-wiki/gitlab-wiki/generic) — pós-MVP
@@ -24,7 +26,9 @@ Estado do projeto:
 
 Critério de aceite da Fase 3 (SPEC): `livewiki init --batch` num repo médio
 gera wiki completa; interromper no meio + `batch resume` continua da task certa;
-verify pega pelo menos um caso real de alucinação de doc.
+verify pega pelo menos um caso real de alucinação de doc. Rev2 empírica
+(commit ad87319) adiciona cenário de subdiretórios + NodeNext + openai-compat
+(coberto por `cli-batch-e2e-subdirs.test.ts` na CLI).
 
 ## Regras invioláveis (SPEC §"Regras invioláveis")
 
@@ -58,15 +62,45 @@ verify pega pelo menos um caso real de alucinação de doc.
   `owner: generated` puros — nunca envelhecem.
 - **Manifest com snapshot hash** (correção #3): `livewiki/.manifest.json`,
   `snapshotHash = sha256(livewiki/ excluindo o próprio manifest)`. Só regrava
-  se conteúdo mudou (anti-loop CI).
+  se conteúdo mudou (anti-loop CI). `init.ts` NUNCA lista em `filesWritten`
+  um manifest que não foi regravado (FIX M rev2).
 - **Refinamento LLM da etapa 2 é opt-in/degradável** (correção #5):
   `--no-refine` pula; falha de LLM degrada pra heurística (não é falha de task).
+  Validação do refined (FIX I rev2): rejeita `{"modules": []}`, JSON malformado,
+  módulos duplicados/sem id, ou cobertura < 80% dos arquivos heurísticos.
+  Em qualquer rejeição, heurística vence e erro vai pro checkpoint do stage 2.
 - **Checkpoint shape**: `usageHistory: [{ attempt, usage, costUsd, finishedAt }]`
   desde attempt 1. Reporte agrega; "usage atual" = último item.
 - **Política de falha** (commit d274dd9): task failed → marca + motivo,
   SEGUE. Circuit breaker: 3 falhas CONSECUTIVAS OU (>50% com ≥3 tasks).
   Status: completed / completed_with_failures / aborted.
 - **Exit codes**: 0 = completed, 1 = completed_with_failures, 2 = aborted.
+- **Token-first no reporte** (ad87319): tokens são a métrica primária em
+  `livewiki batch status` (humano e JSON); USD aparece como linha secundária
+  marcada "estimado, tabela de <data>", omitida sem drama quando não há
+  pricing. `formatStatusHuman` e `formatResultHuman` em
+  `packages/cli/src/commands/batch.ts` lideram com tokens; USD só aparece
+  se `costUsd !== null` em algum stage.
+- **Checkpoint shape** (FIX J rev2): `batch_tasks.checkpoint_json` é JSON
+  puro. Módulos refinados vivem em `batch_runs.summary_json` (campo
+  `modulesRefined`), NUNCA concatenados no JSON da task (isso corrompia o
+  parse e zerava o usage do stage 2 no status). `BatchRunSummary` ganhou
+  `modulesRefined: Array<{id, paths}> | null`; `buildStatusReport` expõe
+  via `run.summary`.
+- **Guard de pipeline vazio** (FIX H rev2): se `ordered.length > 0` E
+  `tasksToRun.length === 0` (heurística achou módulos, batch tem 0 tasks),
+  `runBatch` joga `EmptyPipelineError` → status vira `completed_with_failures`
+  (exit 1), nunca `completed` (exit 0). Também: run com `cb.done === 0` E
+  `ordered.length > 0` é forçado a `completed_with_failures`.
+- **Imports NodeNext** (FIX K rev2): `modules.ts:resolveRelativeImport`
+  strip da extensão `.js`/`.jsx`/`.mjs`/`.cjs` antes de tentar candidatos.
+  `import x from "../utils/crypto.js"` agora resolve pra `crypto.ts` (ou
+  `.tsx`, `.js`, etc) e `index.js` é tratado como barrel.
+- **Cleanup de processo** (FIX L rev2): CLI usa `process.exitCode = N; return`
+  em vez de `process.exit(N)` nos catch de init/batch. Evita libuv assert
+  (STATUS_STACK_BUFFER_OVERRUN = exit -1073740791) quando há handles async
+  abertos (fetch, WAL do SQLite, watcher). Node drena o event loop antes
+  de sair.
 
 ## Layout do repo
 
@@ -134,6 +168,11 @@ livewiki/
 - **CLI `livewiki verify`** — Fase 2. Lê wiki do disco, valida âncoras.
   SEMPRE parseia do disco (Fix C) — âncora em página nunca indexada
   TEM que ser pega (anti-alucinação).
+- **E2E rev2** — `packages/cli/src/cli-batch-e2e-subdirs.test.ts` captura
+  o cenário empírico do revisor: 3 subdiretórios + imports NodeNext +
+  openai-compat. Cobre H (3 páginas geradas, não 0), I (refine
+  modules:[] rejeitado), K (edges com NodeNext), M (filesWritten sem
+  manifest idempotente), L (erro de config com exit limpo).
 
 ## Workflow de validação
 
@@ -143,13 +182,17 @@ Antes de commitar qualquer mudança em Fase 2 ou 3:
 pnpm -r build         # core + cli
 pnpm -r test          # vitest em todos
 pnpm --filter @livewiki/cli test -- src/cli-batch-e2e.test.ts
-                     # E2E crítico: init --batch end-to-end com stub server
+                     # E2E crítico: init --batch end-to-end com stub server (anthropic)
+pnpm --filter @livewiki/cli test -- src/cli-batch-e2e-subdirs.test.ts
+                     # E2E rev2: subdiretórios + NodeNext + openai-compat (achados H–M)
 pnpm --filter @livewiki/core test -- src/key-leak.test.ts
                      # regressão CRÍTICA: key NUNCA pode aparecer em output
 ```
 
-Cobertura atual: **92.1% stmts / 84.05% branches / 95.45% funcs** (acima
-do mínimo 80% da regra #5).
+Cobertura atual: **80.09% stmts / 80.1% branches / 93.1% funcs** (acima
+do mínimo 80% da regra #5; queda vs 92.1% da rev1 porque `init.ts` e
+`batch.ts` são cobertos via E2E/subprocess, não unit — esses arquivos
+explicitamente fora do `vitest` unit suite).
 
 ## Onde tocar pra cada tipo de mudança
 
@@ -193,8 +236,8 @@ do mínimo 80% da regra #5).
 ## Estado live (próxima fase: 4 — MCP server)
 
 ```bash
-# Última validação:
-pnpm -r test  → 283 passed + 8 skipped (15.4s)
+# Última validação (Fase 3 rev2):
+pnpm -r test  → 288 passed + 8 skipped (core 265 + cli 23)
 pnpm -r build → verde
 ```
 
@@ -205,6 +248,10 @@ Próximos passos planejados:
 2. Fase 5: hooks (`post-commit`, `Stop` do Claude Code), skill
    `document-as-you-go`, `livewiki update` (pacote de trabalho incremental),
    pointer opt-in em AGENTS.md/CLAUDE.md.
+3. **Presets de provider** (ad87319 — docs já na SPEC, código pra próximo
+   ciclo): tabela embutida de anthropic/openai/openrouter/deepseek/kimi/
+   minimax/gemini/nvidia/ollama/lmstudio com baseUrl + adapter + env var +
+   pricing default. `config.json` referencia o preset e sobrescreve.
 
 > **Lembrete do user**: validar doc/spec nova ANTES de codar. Quando Edu
 > adiciona algo à SPEC (via commit), comparar com implementação atual
