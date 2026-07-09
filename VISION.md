@@ -155,7 +155,11 @@ continua da task 24/61. Quem gera a doc neste modo: LLM via API configurável
 ## Fora do escopo desenhado (avaliar depois)
 
 - Embeddings locais + busca semântica (pluggável)
-- Diagramas Mermaid elaborados (sequência, classes); MVP tem só grafo de estrutura
+- Call-graph de funções (exige resolução de chamadas cross-file; quando vier,
+  será por vizinhança de função, não repo inteiro) e diagramas de sequência
+  (exigem interpretação por LLM — extra opcional do batch, nunca verdade automática).
+  Nota: estrutura, dependências de módulos e classes JÁ saem determinísticos na
+  Fase 3 — ver SPEC.
 - README gerado a partir da wiki
 - Distribuição final (npm público, binário) — decidir na validação
 

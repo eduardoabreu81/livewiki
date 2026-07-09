@@ -50,7 +50,10 @@ repo-alvo/
 │   ├── quickstart.md
 │   ├── architecture/
 │   │   ├── overview.md
-│   │   └── structure.mmd          # grafo Mermaid de diretórios/módulos
+│   │   ├── structure.mmd          # organograma Mermaid de diretórios/módulos
+│   │   └── modules.mmd            # grafo Mermaid de dependências (imports)
+│   ├── diagrams/
+│   │   └── <modulo>.classes.mmd   # classDiagram por módulo (quando há classes)
 │   ├── files/<slug-do-path>.md    # ex.: src-auth-login.md
 │   └── decisions/<data>-<slug>.md
 └── .livewiki/
@@ -224,6 +227,15 @@ diff de índice → eventos, `livewiki status` completo, `livewiki verify`.
 ### Fase 3 — Init e batch ✅ critério: `livewiki init --batch` num repo médio gera wiki completa; interromper no meio e rodar `batch resume` continua da task certa
 Estrutura da wiki, quickstart/structure.mmd sem LLM, cliente LLM (Anthropic +
 OpenAI-compat), pipeline 4 etapas com checkpoints, manifest + snapshot hash.
+
+**Diagramas determinísticos (sem LLM, regenerados a cada `index`/`init`)**:
+`structure.mmd` (organograma de diretórios/módulos), `modules.mmd` (grafo de
+dependências por imports — subproduto da etapa 2 do pipeline) e
+`diagrams/<modulo>.classes.mmd` (classDiagram Mermaid: classes/métodos/herança,
+direto da tabela `symbols`). São `owner: generated` puros: nunca envelhecem,
+nunca entram em dívida — quem muda é o gerador. Grafos grandes: diagrama por
+módulo, nunca um mega-diagrama do repo inteiro. Call-graph de funções e
+diagramas de sequência estão FORA (ver "Fora do escopo desenhado" na VISION).
 
 ### Fase 4 — MCP server ✅ critério: conectado ao Claude Code, as 6 tools funcionam; `livewiki_write_doc` rejeita path fora de `livewiki/` e conteúdo que não passa no verify
 FTS5 para search, server stdio, testes de integração com MCP inspector.
