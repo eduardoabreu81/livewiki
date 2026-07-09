@@ -77,6 +77,10 @@
     "./update-metrics": {
       "types": "./dist/update-metrics.d.ts",
       "import": "./dist/update-metrics.js"
+    },
+    "./pointer": {
+      "types": "./dist/pointer.d.ts",
+      "import": "./dist/pointer.js"
     }
   },
   "files": [

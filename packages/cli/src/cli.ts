@@ -10,6 +10,7 @@ import { registerServe } from "./commands/serve.js";
 import { registerBatch } from "./commands/batch.js";
 import { registerExport } from "./commands/export.js";
 import { registerView } from "./commands/view.js";
+import { registerPointer } from "./commands/pointer.js";
 
 /**
  * Versão lida do package.json do @livewiki/cli. Síncrona — o arquivo é estático
@@ -57,6 +58,7 @@ export function createProgram(): Command {
   registerBatch(program);
   registerExport(program);
   registerView(program);
+  registerPointer(program);
 
   return program;
 }

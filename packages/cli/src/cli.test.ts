@@ -1,22 +1,23 @@
 /**
- * Smoke tests do CLI — travam o scaffold da Fase 0.
+ * Smoke tests do CLI — travam o scaffold da Fase 0 + Fase 5.
  *
- * A Fase 0 promete que TODOS os 9 comandos da SPEC estão registrados (stubs).
- * Se alguém remover um sem querer, este teste falha. O critério de aceite da
- * Fase 0 é `pnpm exec livewiki --help` funcionar — este teste valida a
- * estrutura por baixo, sem precisar executar o binário.
+ * Fase 0 promete que todos os comandos principais da SPEC estão registrados.
+ * Fase 5 step 4 adicionou `pointer` (opt-in). Total: 10 comandos.
+ * Se alguém remover um sem querer, este teste falha. O critério de aceite
+ * é `pnpm exec livewiki --help` funcionar — este teste valida a estrutura
+ * por baixo, sem precisar executar o binário.
  */
 
 import { describe, it, expect } from "vitest";
 import { createProgram } from "./cli.js";
 
-describe("CLI scaffold (Fase 0)", () => {
+describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
   it("nome do programa é 'livewiki'", () => {
     const program = createProgram();
     expect(program.name()).toBe("livewiki");
   });
 
-  it("registra os 9 comandos da SPEC §'Comandos CLI'", () => {
+  it("registra os 10 comandos (9 da SPEC + pointer da Fase 5)", () => {
     const program = createProgram();
     const names = program.commands.map((c) => c.name());
     expect(names).toEqual([
@@ -29,6 +30,7 @@ describe("CLI scaffold (Fase 0)", () => {
       "batch",
       "export",
       "view",
+      "pointer",
     ]);
   });
 
@@ -68,6 +70,7 @@ describe("CLI scaffold (Fase 0)", () => {
       "batch",
       "export",
       "view",
+      "pointer",
     ]) {
       expect(captured).toContain(name);
     }
