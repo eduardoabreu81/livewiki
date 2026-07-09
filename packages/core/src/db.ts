@@ -277,9 +277,16 @@ export function openIndex(dbPath: string): Database.Database {
   } else {
     const stored = Number.parseInt(versionRow.value, 10);
     if (stored !== CURRENT_SCHEMA_VERSION) {
-      // Aplica migrações pendentes antes de continuar.
-      for (const sql of migrationsFor(stored, CURRENT_SCHEMA_VERSION)) {
-        db.exec(sql);
+      // Aplica migrações pendentes antes de continuar. `migrationsFor()` aceita
+      // `string | ((db) => void)` — discriminamos por tipo porque db.exec só
+      // aceita string (e funções precisam receber `db` direto, ver
+      // postV3Migrations()).
+      for (const migration of migrationsFor(stored, CURRENT_SCHEMA_VERSION)) {
+        if (typeof migration === "function") {
+          migration(db);
+        } else {
+          db.exec(migration);
+        }
       }
       // Migrações pós-v3 (funções JS pra idempotência em colunas).
       for (const fn of postV3Migrations(stored, CURRENT_SCHEMA_VERSION)) {
