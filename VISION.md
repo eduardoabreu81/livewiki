@@ -169,12 +169,21 @@ continua da task 24/61. Quem gera a doc neste modo: LLM via API configurável
 
 ## Roadmap de integrações (pós-validação)
 
-Plugins/integrações nativas com os players de agentes — **Claude Code, Codex e
-Hermes** primeiro (Cursor, Roo Code, Kilo Code, Gemini CLI etc. depois): pacote de instalação que
-registra o MCP server, instala skills/hooks no formato de cada ferramenta e
-configura o pointer opt-in. A Fase 5 já entrega Claude Code via skills/hooks;
-o plugin formaliza a distribuição. Modelo default de LLM permanece em aberto —
-a config nasce pronta para os providers de mercado, o usuário escolhe.
+Meta de lançamento: matriz "works with every agent" (referência: agentmemory).
+O truque: NÃO são N esforços de engenharia — é uma arquitetura em 4 tiers, e a
+matriz é empacotamento + doc por ferramenta:
+
+| Tier | Entrega | Custo | Cobre |
+|---|---|---|---|
+| 1 — MCP server | Fase 4 | snippet de config por ferramenta (doc) | Cursor, Cline, Goose, Kilo Code, Roo Code, Windsurf, Claude Desktop, Gemini CLI, Copilot CLI, qualquer MCP client |
+| 2 — Hooks + skills | Fase 5 | template por ferramenta | Claude Code (nível "plugin nativo"), OpenCode, Codex CLI |
+| 3 — CLI | já existe | zero | Warp, CI, scripts, qualquer agente com shell |
+| 4 — REST API | pós-MVP, wrapper fino sobre o core | pequeno | Aider e agentes HTTP-only |
+
+Plugins de instalação dedicados (registram MCP + instalam skills/hooks +
+pointer opt-in): **Claude Code, Codex e Hermes** primeiro; demais conforme
+tração. Modelo default de LLM permanece em aberto — a config nasce pronta para
+os providers de mercado (presets na SPEC), o usuário escolhe.
 
 ## Fora do escopo desenhado (avaliar depois)
 
