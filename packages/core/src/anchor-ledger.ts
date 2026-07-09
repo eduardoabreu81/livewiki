@@ -10,9 +10,15 @@
  *   - Atribui `assignee` baseado no `owner` da página (agent pra generated,
  *     human pra human). Página mixed vai pra agent (parte gerada vence).
  *
+ * Regra inviolável #3 (rev. achados F+G): quando um símbolo é detectado como
+ * `moved`, a rewrite da âncora acontece NO MARKDOWN (frontmatter e marcadores
+ * `<!-- lw:anchors ... -->`) via safe-io — não basta atualizar o DB, porque
+ * o markdown é fonte da verdade. Exceção (regra #6): âncora dentro de bloco
+ * `<!-- lw:manual -->` ou em página `owner: human` NÃO é reescrita — só gera
+ * dívida com assignee=human.
+ *
  * Regra inviolável #6: páginas `owner: human` e blocos `lw:manual` JAMAIS
- * são modificados por escrita automatizada. Ledger **nunca escreve** na
- * wiki — só lê e escreve no DB.
+ * são modificados por escrita automatizada de rewrite de anchor.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -264,15 +270,69 @@ async function orchestrate(
   const movedMap = new Map<string, string>(); // oldKey -> newKey
   detectMoves(deletedSymbols, existingSymbols, movedMap, result);
 
-  // Atualiza anchors que apontam pra symbol_key moved
+  // Fix G (achado revisão Fase 2): cache de anchors ANTES de atualizar o DB.
+  // Precisamos de wiki_path + in_manual_block + owner pra decidir:
+  //   - se reescrevemos o markdown (regra #6: manual/human NÃO)
+  //   - qual assignee da dívida (regra #6 + D)
+  // Sem esse cache, depois do UPDATE perderíamos o in_manual_block original.
+  interface MovedAnchorInfo {
+    anchorId: number;
+    wikiPath: string;
+    inManualBlock: boolean;
+    owner: Owner;
+    sectionSlug: string | null;
+  }
+  const anchorsByOldKey = new Map<string, MovedAnchorInfo[]>();
   if (movedMap.size > 0) {
+    const fetchAnchorsForKey = db.prepare(
+      "SELECT a.id, a.in_manual_block, a.section_slug, dp.wiki_path, dp.owner " +
+        "FROM anchors a JOIN doc_pages dp ON dp.id = a.doc_page_id " +
+        "WHERE a.symbol_key = ?",
+    );
+    for (const oldKey of movedMap.keys()) {
+      const rows = fetchAnchorsForKey.all(oldKey) as Array<{
+        id: number;
+        in_manual_block: number;
+        section_slug: string | null;
+        wiki_path: string;
+        owner: string;
+      }>;
+      anchorsByOldKey.set(
+        oldKey,
+        rows.map((r) => ({
+          anchorId: r.id,
+          wikiPath: r.wiki_path,
+          inManualBlock: r.in_manual_block === 1,
+          owner: r.owner as Owner,
+          sectionSlug: r.section_slug,
+        })),
+      );
+    }
+  }
+
+  // Fix G: para cada par moved, REESCREVE o markdown ANTES de atualizar o DB.
+  // Ordem importa: se a rewrite falhar, NÃO tocamos no DB — estado consistente.
+  // Para anchor dentro de manual block OU em página human (regra #6): NÃO
+  // reescreve; só registra dívida com assignee=human.
+  if (movedMap.size > 0) {
+    for (const [oldKey, newKey] of movedMap) {
+      const anchors = anchorsByOldKey.get(oldKey) ?? [];
+      for (const info of anchors) {
+        if (info.inManualBlock) continue; // regra #6
+        if (info.owner === "human") continue; // regra #6
+        await rewriteSymbolKeyInPage(absRoot, info.wikiPath, oldKey, newKey);
+      }
+    }
+
+    // Agora sim: atualizar anchors (symbol_key oldKey -> newKey) no DB.
     const updateAnchorKey = db.prepare(
       "UPDATE anchors SET symbol_key = ? WHERE symbol_key = ?",
     );
     for (const [oldKey, newKey] of movedMap) {
       updateAnchorKey.run(newKey, oldKey);
     }
-    // Atualiza in-memory map também
+    // Atualiza in-memory map também (steps seguintes usam ca.symbolKey pra
+    // achar o symbol ativo correspondente).
     for (const ca of currentAnchors) {
       const moved = movedMap.get(ca.symbolKey);
       if (moved) ca.symbolKey = moved;
@@ -333,17 +393,21 @@ async function orchestrate(
 
   // 6. Debt de MOVED — para cada par detected, registra evento
   //    Dedup por (anchor_id, "moved") também.
+  //
+  // Fix G: usa o cache de anchorsByOldKey (capturado ANTES do DB update) pra
+  // saber o in_manual_block + owner ORIGINAL. Sem isso, não conseguiríamos
+  // distinguir manual-block (assignee=human, sem rewrite) de normal
+  // (assignee=agent, com rewrite).
   for (const [oldKey, newKey] of movedMap) {
-    // Procura anchors que apontavam pra oldKey ANTES do update (acabamos de
-    // atualizar symbol_key). Para dedup, usamos a key antiga.
-    const movedAnchors = db
-      .prepare("SELECT id FROM anchors WHERE symbol_key = ?")
-      .all(newKey) as Array<{ id: number }>;
-    for (const a of movedAnchors) {
-      if (hasOpenDebt(db, a.id, "moved")) continue;
-      // Find a doc_page original (in_memory pode ter sido atualizada — pegar do DB).
+    const anchors = anchorsByOldKey.get(oldKey) ?? [];
+    for (const info of anchors) {
+      if (hasOpenDebt(db, info.anchorId, "moved")) continue;
+      // Regra #6: in_manual_block OU owner=human → assignee=human (sem rewrite
+      // do markdown — só sinaliza revisão humana).
+      // Caso contrário: assignee derivado do owner (agent pra generated/mixed).
+      const assignee = assigneeFor(info.owner, info.inManualBlock);
       const detail = JSON.stringify({ from: oldKey, to: newKey });
-      createDebt(db, a.id, "moved", "agent", detail, newKey);
+      createDebt(db, info.anchorId, "moved", assignee, detail, newKey);
       result.debtCreated++;
       result.debtByEvent.moved++;
     }
@@ -363,7 +427,20 @@ async function orchestrate(
   // 8. Undocumented: symbols active sem anchor correspondente
   upsertUndocumented(db, existingSymbols, currentAnchors, result);
 
-  // 9. Meta: timestamp do último ledger
+  // 9. Fix F (achado revisão Fase 2): expurgar rows dead que já têm replacement.
+  //    Cada edit a um arquivo soft-deleta seus símbolos e reinsere com mesma
+  //    key. Sem essa limpeza, a tabela `symbols` cresce indefinidamente — 1
+  //    row morta por símbolo por edit, pra sempre.
+  //    Só removemos rows COM replacement ativo (status='active'). Rows
+  //    realmente deletadas (sem replacement) ficam — podem ser úteis pra
+  //    auditoria ou pra histórico de moves antigos.
+  db.exec(
+    "DELETE FROM symbols " +
+      "WHERE status = 'deleted' " +
+      "AND key IN (SELECT key FROM symbols WHERE status = 'active')",
+  );
+
+  // 10. Meta: timestamp do último ledger
   db.prepare(
     "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_ledger_at', ?)",
   ).run(String(Date.now()));
@@ -514,6 +591,12 @@ function detectMoves(
       }
     }
     if (match && !movedMap.has(oldKey)) {
+      // Fix F (achado revisão Fase 2): pular pares oldKey === newKey — é
+      // supersessão de re-index (símbolo inalterado num arquivo editado: foi
+      // soft-deletado e re-inserido com mesma key + mesmo content_hash),
+      // não movimento real. Sem esse guard, todo edit gerava dívida moved
+      // espúria com from == to.
+      if (match.key === oldKey) continue;
       movedMap.set(oldKey, match.key);
       result.movedPairs.push({ from: oldKey, to: match.key });
     }
@@ -579,6 +662,63 @@ async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
     }
   }
   return out;
+}
+
+/**
+ * Fix G (achado revisão Fase 2): reescreve uma symbol_key específica no
+ * markdown da wiki. Atualiza tanto o frontmatter (`anchors: [key1, key2]`)
+ * quanto os marcadores `<!-- lw:anchors key1 key2 -->` no body.
+ *
+ * Restrições (regra #6):
+ *   - Caminho tem que estar na allowlist (livewiki/ + .livewiki/) — safe-io
+ *     garante isso. Erro de I/O aqui aborta o ledger (estado consistente:
+ *     DB não foi tocado ainda).
+ *   - Se a página sumiu do disco entre o index e este rewrite, retorna
+ *     silenciosamente — nada pra reescrever. O anchor já foi removido em
+ *     passo 7 (página sumida da wiki).
+ *
+ * Idempotente: rodar 2x com os mesmos args é no-op (não acha mais oldKey).
+ *
+ * @returns true se o arquivo foi modificado, false caso contrário.
+ */
+async function rewriteSymbolKeyInPage(
+  absRoot: string,
+  wikiPath: string,
+  oldKey: string,
+  newKey: string,
+): Promise<boolean> {
+  const source = await safeIo.readText(absRoot, wikiPath).catch(() => null);
+  if (source === null) return false; // página sumiu — sem o que fazer
+
+  const escapedOld = escapeRegex(oldKey);
+  let updated = source;
+
+  // 1. Frontmatter `anchors:` list — match `  - oldKey` no início da linha.
+  //    Captura indentação pra preservar formatação, e comentário trailing
+  //    (ex: `  - src/foo.ts#bar # legado`).
+  const fmRegex = new RegExp(`^(\\s*-\\s+)${escapedOld}(\\s*#[^\\n]*)?$`, "gm");
+  updated = updated.replace(fmRegex, (_match, prefix, comment) => {
+    return `${prefix}${newKey}${comment ?? ""}`;
+  });
+
+  // 2. Marcadores `<!-- lw:anchors ... -->` no body — substitui só as keys
+  //    iguais a oldKey, mantendo as outras intactas.
+  updated = updated.replace(
+    /<!--\s*lw:anchors\s+([^\s>][^>]*?)\s*-->/g,
+    (_match, group: string) => {
+      const keys = group.trim().split(/\s+/);
+      const replaced = keys.map((k) => (k === oldKey ? newKey : k));
+      return `<!-- lw:anchors ${replaced.join(" ")} -->`;
+    },
+  );
+
+  if (updated === source) return false;
+  await safeIo.writeText(absRoot, wikiPath, updated);
+  return true;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // Re-export for tests

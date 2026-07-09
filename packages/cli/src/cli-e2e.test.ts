@@ -17,6 +17,10 @@
  *   2. Mover função entre arquivos → moved + âncora atualizada + detail de/para
  *   3. Deletar função → deleted UMA única vez mesmo após 3 `index` seguidos
  *   4. Página nova com âncora fantasma, sem index → verify falha com broken_anchor
+ *   5. Mover função ancorada (regra #3): markdown no disco contém chave nova +
+ *      verify passa limpo em seguida (Fix G)
+ *   6. Mover função ancorada dentro de bloco lw:manual: markdown intocado +
+ *      dívida moved com assignee=human (Fix G + regra #6)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -211,5 +215,141 @@ anchors:
     const raw = ver.stdout;
     expect(raw).toMatch(/nonexistent\.ts/);
     expect(raw).toMatch(/phantom\.md/);
+  });
+
+  it("Cenário 5: mover símbolo ancorado reescreve o markdown (regra #3) e verify passa limpo (Fix G)", async () => {
+    // Setup: foo.ts com `bar`, página wiki com DOIS anchors no mesmo símbolo
+    // (frontmatter + section marker). O rewrite do markdown tem que atualizar
+    // AMBOS os locais, e gerar 1 dívida moved por anchor (= 2 dívidas total).
+    await writeCode("src/foo.ts", "export function bar() { return 42; }");
+    const wikiPath = "livewiki/foo.md";
+    await writeWiki(
+      wikiPath,
+      `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+
+## Detalhes
+<!-- lw:anchors src/foo.ts#bar -->
+Texto explicando o bar.
+`,
+    );
+
+    const r1 = runCli(["--json", "--repo", repoRoot, "index"]);
+    expect(r1.status).toBe(0);
+
+    // MOVE: deleta foo.ts, cria baz.ts com MESMO body (mesmo content_hash).
+    await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
+    await writeCode("src/baz.ts", "export function bar() { return 42; }");
+
+    const r2 = runCli(["--json", "--repo", repoRoot, "index"]);
+    expect(r2.status, `stdout=${r2.stdout}\nstderr=${r2.stderr}`).toBe(0);
+
+    // O ledger detectou via content_hash. 2 anchors → 2 dívidas moved
+    // (1 por anchor: frontmatter + section marker). movedPairs tem 1 entrada
+    // (dedup por oldKey dentro de detectMoves).
+    const after = JSON.parse(r2.stdout) as {
+      ledger: { debtByEvent: { moved: number; deleted: number; changed: number }; movedPairs: Array<{ from: string; to: string }> };
+    };
+    expect(after.ledger.debtByEvent.moved).toBe(2);
+    expect(after.ledger.movedPairs).toContainEqual({
+      from: "src/foo.ts#bar",
+      to: "src/baz.ts#bar",
+    });
+
+    // Fix G (regra #3): o .md no disco TEM que ter a chave nova — não só o DB.
+    // Lê o arquivo direto pra garantir que a rewrite foi pra disco, não só pro DB.
+    const mdAfter = await nodeFs.readFile(nodePath.join(repoRoot, wikiPath), "utf8");
+    expect(mdAfter).toMatch(/src\/baz\.ts#bar/); // frontmatter reescrito
+    expect(mdAfter).not.toMatch(/src\/foo\.ts#bar/); // nenhuma ocorrência da chave antiga
+    expect(mdAfter).toMatch(/<!-- lw:anchors src\/baz\.ts#bar -->/); // marker reescrito
+
+    // Verify lê do disco (Fix C). Sem a rewrite, veria a chave antiga `foo.ts#bar`
+    // → broken_anchor. Com a rewrite, tudo bate.
+    const ver = runCli(["--json", "--repo", repoRoot, "verify"]);
+    expect(ver.status, `verify deve passar limpo. stdout=${ver.stdout}\nstderr=${ver.stderr}`).toBe(0);
+    const vResult = JSON.parse(ver.stdout) as { ok: boolean };
+    expect(vResult.ok).toBe(true);
+
+    // Debt: 2 moved com assignee=agent (owner=generated, fora de manual block).
+    const statusR = JSON.parse(
+      runCli(["--json", "--repo", repoRoot, "status"]).stdout,
+    ) as {
+      debt: {
+        byEvent: { moved: number; changed: number; deleted: number };
+        byAssignee: { agent: number; human: number };
+        items: Array<{ event: string; assignee: string; symbol_key: string | null }>;
+      };
+    };
+    expect(statusR.debt.byEvent.moved).toBe(2);
+    expect(statusR.debt.byAssignee.agent).toBe(2);
+    expect(statusR.debt.byAssignee.human).toBe(0);
+    const movedItems = statusR.debt.items.filter((i) => i.event === "moved");
+    expect(movedItems).toHaveLength(2);
+    expect(movedItems.every((i) => i.assignee === "agent")).toBe(true);
+  });
+
+  it("Cenário 6: mover símbolo ancorado dentro de lw:manual → markdown intocado + dívida assignee=human (Fix G + regra #6)", async () => {
+    // Setup: foo.ts com `bar`, página wiki com anchor DENTRO de bloco manual.
+    await writeCode("src/foo.ts", "export function bar() { return 42; }");
+    const wikiPath = "livewiki/foo.md";
+    const wikiOriginal = `---
+title: Foo
+---
+
+## Notas manuais
+<!-- lw:manual -->
+<!-- lw:anchors src/foo.ts#bar -->
+Texto escrito por humano — agente nunca mexe.
+<!-- /lw:manual -->
+`;
+    await writeWiki(wikiPath, wikiOriginal);
+
+    const r1 = runCli(["--json", "--repo", repoRoot, "index"]);
+    expect(r1.status).toBe(0);
+
+    // Snapshot do markdown ANTES do move, pra comparar com DEPOIS.
+    const mdBefore = await nodeFs.readFile(nodePath.join(repoRoot, wikiPath), "utf8");
+
+    // MOVE: deleta foo.ts, cria baz.ts com mesmo body.
+    await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
+    await writeCode("src/baz.ts", "export function bar() { return 42; }");
+
+    const r2 = runCli(["--json", "--repo", repoRoot, "index"]);
+    expect(r2.status, `stdout=${r2.stdout}\nstderr=${r2.stderr}`).toBe(0);
+
+    const after = JSON.parse(r2.stdout) as {
+      ledger: { debtByEvent: { moved: number; deleted: number; changed: number }; movedPairs: Array<{ from: string; to: string }> };
+    };
+    expect(after.ledger.debtByEvent.moved).toBe(1);
+    expect(after.ledger.movedPairs).toContainEqual({
+      from: "src/foo.ts#bar",
+      to: "src/baz.ts#bar",
+    });
+
+    // Regra #6: markdown INTOCADO. A chave antiga continua lá, sem rewrite.
+    const mdAfter = await nodeFs.readFile(nodePath.join(repoRoot, wikiPath), "utf8");
+    expect(mdAfter).toBe(mdBefore);
+    expect(mdAfter).toMatch(/src\/foo\.ts#bar/);
+    expect(mdAfter).not.toMatch(/src\/baz\.ts#bar/);
+
+    // Dívida: assignee=human (regra #6 — manual block sempre humano).
+    const statusR = JSON.parse(
+      runCli(["--json", "--repo", repoRoot, "status"]).stdout,
+    ) as {
+      debt: {
+        byEvent: { moved: number; changed: number; deleted: number };
+        byAssignee: { agent: number; human: number };
+        items: Array<{ event: string; assignee: string }>;
+      };
+    };
+    expect(statusR.debt.byEvent.moved).toBe(1);
+    expect(statusR.debt.byAssignee.human).toBe(1);
+    expect(statusR.debt.byAssignee.agent).toBe(0);
+    const movedItems = statusR.debt.items.filter((i) => i.event === "moved");
+    expect(movedItems).toHaveLength(1);
+    expect(movedItems[0]?.assignee).toBe("human");
   });
 });
