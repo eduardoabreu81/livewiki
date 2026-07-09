@@ -152,6 +152,15 @@ continua da task 24/61. Quem gera a doc neste modo: LLM via API configurável
   código executável — segurança primeiro. MVP de templates: `agent` (denso,
   técnico) e `docs` (limpo, para humanos). Comunidade contribui com mais.
 
+## Roadmap de integrações (pós-validação)
+
+Plugins/integrações nativas com os players de agentes — **Claude Code, Codex e
+Hermes** primeiro (Cursor, Gemini CLI etc. depois): pacote de instalação que
+registra o MCP server, instala skills/hooks no formato de cada ferramenta e
+configura o pointer opt-in. A Fase 5 já entrega Claude Code via skills/hooks;
+o plugin formaliza a distribuição. Modelo default de LLM permanece em aberto —
+a config nasce pronta para os providers de mercado, o usuário escolhe.
+
 ## Fora do escopo desenhado (avaliar depois)
 
 - Embeddings locais + busca semântica (pluggável)

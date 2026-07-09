@@ -40,6 +40,10 @@
 - **CLI**: `commander` (ou similar minimalista); saída legível por humano E parseável (`--json` em todo comando)
 - **LLM (modo batch)**: cliente HTTP fino próprio, providers: Anthropic + OpenAI-compatível
   (base URL configurável cobre OpenRouter/LiteLLM/Ollama). Sem framework de agentes.
+  **Sem modelo default hardcoded**: batch sem config falha com mensagem clara
+  pedindo provider/modelo (ou pergunta interativamente). API key SÓ via env var
+  (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`); nunca em config.json, checkpoint_json,
+  logs ou erros — com teste garantindo.
 
 ## Layout gerado no repo-alvo
 
