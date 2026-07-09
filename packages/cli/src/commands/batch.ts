@@ -1,16 +1,195 @@
 import type { Command } from "commander";
-import { makeStubAction } from "./stub.js";
+import * as path from "node:path";
+import { runBatch, resumeBatch, runOnly } from "@livewiki/core/batch";
+import { buildStatusReport, listRuns } from "@livewiki/core/batch-status";
+import { emit } from "../output.js";
+import { resolveRepoRoot } from "../cli.js";
+
+interface BatchOptions {
+  json?: boolean;
+  repo?: string;
+  /** --only <target>: re-roda 1 task */
+  only?: string;
+  /** --no-refine: pula refinamento LLM da etapa 2 */
+  noRefine?: boolean;
+}
 
 /**
- * `livewiki batch <run>` — continua/inspeciona um run de documentação completa.
- * Resume por task (cada task fica `pending` até ser completada).
- * SPEC §"Comandos CLI" / Fase 3.
+ * `livewiki batch <run>` — Fase 3. Subcomandos:
+ *
+ *   batch status [<runId>]    (default) — reporte do run
+ *   batch resume <runId>      — continua tasks pending/failed
+ *   batch --only <target> <runId> — re-roda 1 task
+ *   batch list                — lista runs
+ *
+ * Exit codes:
+ *   0 = completed (success)
+ *   1 = completed_with_failures
+ *   2 = aborted (circuit breaker)
  */
 export function registerBatch(program: Command): void {
   program
-    .command("batch <run>")
+    .command("batch")
     .description(
-      "continuar ou inspecionar um run de documentação completa. Resume por task (Fase 3)",
+      "rodar/retomar/inspecionar batch de documentação completa (Fase 3). Use 'livewiki batch --help' para subcomandos",
     )
-    .action(makeStubAction({ name: "batch", phase: 3, planned: "pipeline 4 etapas com checkpoints: varredura → módulos → priorização → doc" }));
+    .option("--only <target>", "re-roda 1 task (módulo ou task-id)")
+    .option("--no-refine", "pular refinamento LLM da etapa 2")
+    .action(async (_options: BatchOptions, command: Command) => {
+      const opts = command.optsWithGlobals<BatchOptions & { args?: string[] }>();
+      const json = Boolean(opts.json);
+      const repoRoot = resolveRepoRoot(opts.repo);
+      const absRoot = path.resolve(process.cwd(), repoRoot);
+      const args = command.args ?? [];
+
+      try {
+        // Sem args: status do último run
+        if (args.length === 0) {
+          const report = await buildStatusReport(absRoot);
+          emit(json, report, formatStatusHuman(report));
+          return setExitCode(absRoot, report.run.status, json);
+        }
+
+        const sub = args[0];
+
+        // batch list
+        if (sub === "list") {
+          const runs = await listRuns(absRoot);
+          emit(json, { ok: true, runs }, formatListHuman(runs));
+          return;
+        }
+
+        // batch status [runId]
+        if (sub === "status") {
+          const runId = args[1] !== undefined ? parseInt(args[1], 10) : null;
+          if (runId !== null && Number.isNaN(runId)) {
+            throw new Error(`invalid runId: ${args[1]}`);
+          }
+          const report = await buildStatusReport(absRoot, runId);
+          emit(json, report, formatStatusHuman(report));
+          return setExitCode(absRoot, report.run.status, json);
+        }
+
+        // batch resume <runId>
+        if (sub === "resume") {
+          const runId = args[1] !== undefined ? parseInt(args[1], 10) : undefined;
+          if (runId === undefined || Number.isNaN(runId)) {
+            throw new Error("usage: livewiki batch resume <runId>");
+          }
+          const result = await resumeBatch({
+            repoRoot: absRoot,
+            ...(opts.noRefine ? { noRefine: true } : {}),
+          });
+          emit(json, result, formatResultHuman(result));
+          return setExitCode(absRoot, result.status, json);
+        }
+
+        // batch --only <target> <runId>
+        if (opts.only) {
+          const runIdStr = args[0];
+          if (runIdStr === undefined || Number.isNaN(parseInt(runIdStr, 10))) {
+            throw new Error("usage: livewiki batch --only <target> <runId>");
+          }
+          const result = await runOnly({
+            repoRoot: absRoot,
+            onlyTarget: opts.only,
+          });
+          emit(json, result, formatResultHuman(result));
+          return setExitCode(absRoot, result.status, json);
+        }
+
+        // batch <runId> — alias pra status
+        if (sub === undefined) {
+          throw new Error("missing subcommand");
+        }
+        const runId = parseInt(sub, 10);
+        if (Number.isNaN(runId)) {
+          throw new Error(
+            `unknown subcommand: ${sub}\n` +
+              `Usage: livewiki batch [status [<runId>] | resume <runId> | --only <target> <runId> | list]`,
+          );
+        }
+        const report = await buildStatusReport(absRoot, runId);
+        emit(json, report, formatStatusHuman(report));
+        return setExitCode(absRoot, report.run.status, json);
+      } catch (err) {
+        process.stderr.write(`livewiki batch: erro — ${(err as Error).message}\n`);
+        process.exit(1);
+      }
+    });
+}
+
+function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string {
+  const lines: string[] = [];
+  lines.push(`livewiki batch — run #${report.run.id} (${report.run.status})`);
+  lines.push(`  started: ${new Date(report.run.startedAt).toISOString()} (by ${report.run.startedBy})`);
+  if (report.run.finishedAt) {
+    lines.push(`  finished: ${new Date(report.run.finishedAt).toISOString()}`);
+  }
+  lines.push("");
+  lines.push(`Custos (estimado, tabela de ${report.pricingRefDate}):`);
+  const t = report.totals;
+  const costStr = t.costUsd !== null ? `$${t.costUsd.toFixed(4)}` : "(sem preço)";
+  lines.push(`  Total:        ${costStr}  (${t.inputTokens.toLocaleString()} input, ${t.outputTokens.toLocaleString()} output)`);
+  for (const [stage, u] of Object.entries(report.byStage)) {
+    const c = u.costUsd !== null ? `$${u.costUsd.toFixed(4)}` : "(sem preço)";
+    lines.push(`  Stage ${stage}:      ${c}  (${u.inputTokens.toLocaleString()} input, ${u.outputTokens.toLocaleString()} output)`);
+  }
+  if (report.byModule.length > 0) {
+    lines.push("");
+    lines.push("Por módulo:");
+    for (const m of report.byModule) {
+      const c = m.costUsd !== null ? `$${m.costUsd.toFixed(4)}` : "(sem preço)";
+      lines.push(`  ${m.module.padEnd(20)} ${c}  (${m.inputTokens.toLocaleString()} + ${m.outputTokens.toLocaleString()})`);
+    }
+  }
+  if (report.failures.length > 0) {
+    lines.push("");
+    lines.push(`Falhas (${report.failures.length}):`);
+    for (const f of report.failures) {
+      lines.push(`  [${f.error.code}] ${f.module}: ${f.error.message}`);
+      lines.push(`    retry: ${f.retryCommand}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string {
+  const lines: string[] = [];
+  lines.push(`livewiki batch — run #${result.runId} (${result.status})`);
+  lines.push(`  tasks done: ${result.byModule.length}`);
+  lines.push(`  failures: ${result.failures.length}`);
+  if (result.circuitBreakerTriggered) {
+    lines.push(`  circuit breaker: TRIGGERED`);
+  }
+  if (result.failures.length > 0) {
+    lines.push("");
+    lines.push("Falhas:");
+    for (const f of result.failures) {
+      lines.push(`  [${f.error.code}] ${f.module}: ${f.error.message}`);
+      lines.push(`    retry: ${f.retryCommand}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function formatListHuman(runs: Awaited<ReturnType<typeof listRuns>>): string {
+  const lines: string[] = [];
+  lines.push(`Batch runs:`);
+  if (runs.length === 0) {
+    lines.push("  (none)");
+    return lines.join("\n");
+  }
+  for (const r of runs) {
+    const finished = r.finishedAt !== null ? new Date(r.finishedAt).toISOString() : "(running)";
+    lines.push(`  #${r.id}  ${r.status.padEnd(25)}  started ${new Date(r.startedAt).toISOString()}  finished ${finished}`);
+  }
+  return lines.join("\n");
+}
+
+function setExitCode(repoRoot: string, status: string, json: boolean): void {
+  if (json) return; // --json sempre exit 0 (output estruturado)
+  if (status === "completed") process.exit(0);
+  if (status === "completed_with_failures") process.exit(1);
+  if (status === "aborted") process.exit(2);
 }

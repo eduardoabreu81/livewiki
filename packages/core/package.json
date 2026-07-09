@@ -81,6 +81,10 @@
     "./batch": {
       "types": "./dist/batch.d.ts",
       "import": "./dist/batch.js"
+    },
+    "./batch-status": {
+      "types": "./dist/batch-status.d.ts",
+      "import": "./dist/batch-status.js"
     }
   },
   "files": [

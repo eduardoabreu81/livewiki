@@ -24,4 +24,5 @@ export * as diagrams from "./diagrams.js";
 export * as prompts from "./prompts.js";
 export * as manifest from "./manifest.js";
 export * as batch from "./batch.js";
+export * as batchStatus from "./batch-status.js";
 export * as init from "./init.js";
