@@ -187,6 +187,13 @@ Todos os comandos: `--json`, `--repo <path>` (default cwd), exit codes consisten
    âncoras → `verify` → grava → checkpoint. Falhou/interrompeu? task fica `pending`,
    resume depois.
 
+**Política de falha do run**: task que falha no verify pós-escrita → marca `failed`
+com motivo no checkpoint e SEGUE para a próxima (falha isolada não custa o run;
+retry cirúrgico via `--only`). **Circuit breaker**: 3 falhas consecutivas ou >50%
+de falha no run → aborta com diagnóstico (falha em série = problema sistêmico;
+continuar queima token). Run terminado com falhas: status `completed_with_failures`,
+exit ≠ 0, reporte lista cada task falha com motivo + comando de retry pronto.
+
 Ao final: gera/atualiza `quickstart.md` e `architecture/overview.md`, grava manifest.
 
 ### Contabilidade de tokens (Fase 3)
