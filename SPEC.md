@@ -179,6 +179,19 @@ Todos os comandos: `--json`, `--repo <path>` (default cwd), exit codes consisten
 
 Ao final: gera/atualiza `quickstart.md` e `architecture/overview.md`, grava manifest.
 
+### Contabilidade de tokens (Fase 3)
+
+Economia é tese central do produto — então é medida, não estimada:
+- **Batch**: cada task grava no checkpoint o `usage` real da API (input/output
+  tokens + modelo). `livewiki batch <run>` reporta por módulo e acumulado, com
+  custo estimado em USD. Objetivo: comparação reproduzível com OpenWiki e afins.
+- **Incremental**: o `update` registra o tamanho (tokens estimados por tokenizer)
+  do pacote de trabalho emitido ao agente e da doc escrita de volta. Métricas em
+  tabela própria no `.livewiki/`, expostas via `status --json`.
+- A instrução de âncoras no prompt do batch é fechada: a LLM recebe a lista de
+  chaves canônicas do módulo (vindas do índice) e **distribui** essas chaves
+  pelas seções — nunca inventa chave. `verify` rejeita chave fora do índice.
+
 ## Skills e hooks (fase 5)
 
 - **Skill "document-as-you-go"** (markdown, formato Claude Code skills): instrui o
