@@ -148,4 +148,49 @@ describe("db.openIndex", () => {
       db.close();
     }
   });
+
+  it("migra v3 → v4: batch_runs ganha finished_at, started_by, summary_json + índices", () => {
+    // Simula DB com schema v3 — batch_runs SEM as colunas novas.
+    const Database = require("better-sqlite3");
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '3');
+      CREATE TABLE batch_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at INTEGER NOT NULL,
+        stage INTEGER NOT NULL,
+        config_json TEXT NOT NULL,
+        status TEXT NOT NULL
+      );
+    `);
+    legacyDb.close();
+
+    const db = openIndex(dbPath);
+    try {
+      // schema_version atualizado pra v4
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
+
+      // Colunas novas em batch_runs
+      const cols = db.prepare("PRAGMA table_info(batch_runs)").all() as Array<{ name: string }>;
+      const colNames = cols.map((c) => c.name);
+      expect(colNames).toContain("finished_at");
+      expect(colNames).toContain("started_by");
+      expect(colNames).toContain("summary_json");
+
+      // Índices novos
+      const idx = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_batch_%' ORDER BY name")
+        .all() as Array<{ name: string }>;
+      const idxNames = idx.map((i) => i.name);
+      expect(idxNames).toContain("idx_batch_runs_status");
+      expect(idxNames).toContain("idx_batch_tasks_run_id");
+      expect(idxNames).toContain("idx_batch_tasks_status");
+    } finally {
+      db.close();
+    }
+  });
 });

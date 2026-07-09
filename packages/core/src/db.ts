@@ -15,7 +15,7 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -25,6 +25,9 @@ export const SCHEMA_VERSION_KEY = "schema_version";
  * Schema v3 (commit 6183214) adiciona:
  *   - debt.symbol_key — sobrevive ao anchor ser removida (resolve órfão)
  *   - idx_debt_open — índice parcial pra dedup de dívida aberta por (anchor_id, event)
+ *
+ * Schema v4 (Fase 3 — contabilidade de tokens + batch resiliente):
+ *   - batch_runs.started_by, finished_at, summary_json — auditoria completa do run
  */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS files (
@@ -101,10 +104,15 @@ CREATE TABLE IF NOT EXISTS undocumented (
 CREATE TABLE IF NOT EXISTS batch_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  started_by TEXT NOT NULL DEFAULT 'cli',
   stage INTEGER NOT NULL,
   config_json TEXT NOT NULL,
-  status TEXT NOT NULL
+  status TEXT NOT NULL,
+  summary_json TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_batch_runs_status ON batch_runs(status);
 
 CREATE TABLE IF NOT EXISTS batch_tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +123,9 @@ CREATE TABLE IF NOT EXISTS batch_tasks (
   checkpoint_json TEXT,
   updated_at INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_batch_tasks_run_id ON batch_tasks(run_id);
+CREATE INDEX IF NOT EXISTS idx_batch_tasks_status ON batch_tasks(run_id, status);
 
 CREATE TABLE IF NOT EXISTS doc_pages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,12 +186,67 @@ CREATE INDEX IF NOT EXISTS idx_debt_open
 `;
 
 /**
- * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
- * Cada entry é o SQL pra aplicar quando o DB está em uma versão menor.
+ * Migração v3 → v4 (Fase 3): estende batch_runs com auditoria do run.
+ *   - finished_at: timestamp do término (null enquanto em andamento)
+ *   - started_by: 'cli' | 'agent' — quem disparou o run (auditoria/handoff)
+ *   - summary_json: snapshot agregado (totals, byStage, byModule) — populado
+ *     ao final do run pra servir o reporte sem precisar re-processar tasks.
+ *   - Índices em batch_runs.status e batch_tasks(run_id, status) — `batch
+ *     status <run>` fica O(1) mesmo com muitos runs antigos.
+ *
+ * batch_tasks.checkpoint_json é TEXT livre — o shape vive em `batch-state.ts`
+ * (TypeScript types) e em SPEC §"Contabilidade de tokens (Fase 3)".
+ *
+ * Por que função JS e não string SQL: o SCHEMA_SQL sempre roda com a versão
+ * ATUAL (v4), o que significa que um DB recriado do zero já tem as colunas
+ * novas. A migration precisa ser idempotente nesse caso — daí checar
+ * PRAGMA table_info antes de ALTER TABLE ADD COLUMN (SQLite não tem
+ * `ADD COLUMN IF NOT EXISTS`).
  */
-export function migrationsFor(fromVersion: number, toVersion: number): string[] {
-  const out: string[] = [];
+export function migrateV3ToV4(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(batch_runs)").all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map((c) => c.name));
+  if (!colNames.has("finished_at")) {
+    db.exec("ALTER TABLE batch_runs ADD COLUMN finished_at INTEGER");
+  }
+  if (!colNames.has("started_by")) {
+    db.exec("ALTER TABLE batch_runs ADD COLUMN started_by TEXT NOT NULL DEFAULT 'cli'");
+  }
+  if (!colNames.has("summary_json")) {
+    db.exec("ALTER TABLE batch_runs ADD COLUMN summary_json TEXT");
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_batch_runs_status ON batch_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_batch_tasks_run_id ON batch_tasks(run_id);
+    CREATE INDEX IF NOT EXISTS idx_batch_tasks_status ON batch_tasks(run_id, status);
+  `);
+}
+
+/**
+ * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
+ * Cada entry é o SQL (string) OU a função (db) => void pra aplicar quando o
+ * DB está em uma versão menor.
+ */
+export function migrationsFor(
+  fromVersion: number,
+  toVersion: number,
+): Array<string | ((db: Database.Database) => void)> {
+  const out: Array<string | ((db: Database.Database) => void)> = [];
   if (fromVersion < 3 && toVersion >= 3) out.push(MIGRATION_SQL_V3);
+  return out;
+}
+
+/**
+ * Migrações pós-v3 que precisam ser funções JS (idempotência em colunas).
+ * Separadas de migrationsFor() porque executamos funções e strings de forma
+ * diferente — e migrationsFor() precisa ser determinístico em testes.
+ */
+export function postV3Migrations(
+  fromVersion: number,
+  toVersion: number,
+): Array<(db: Database.Database) => void> {
+  const out: Array<(db: Database.Database) => void> = [];
+  if (fromVersion < 4 && toVersion >= 4) out.push(migrateV3ToV4);
   return out;
 }
 
@@ -214,6 +280,10 @@ export function openIndex(dbPath: string): Database.Database {
       // Aplica migrações pendentes antes de continuar.
       for (const sql of migrationsFor(stored, CURRENT_SCHEMA_VERSION)) {
         db.exec(sql);
+      }
+      // Migrações pós-v3 (funções JS pra idempotência em colunas).
+      for (const fn of postV3Migrations(stored, CURRENT_SCHEMA_VERSION)) {
+        fn(db);
       }
       db.prepare(
         "UPDATE meta SET value = ? WHERE key = ?",
