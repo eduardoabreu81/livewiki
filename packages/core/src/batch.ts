@@ -48,6 +48,7 @@ import {
 } from "./prompts.js";
 import { computeSnapshotHash, writeManifestIfChanged, buildManifest } from "./manifest.js";
 import { sha256 } from "./hashes.js";
+import { regenerateArchitectureOverview } from "./init.js";
 import type {
   BatchStatusReport,
   BatchRunSummary,
@@ -506,6 +507,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           pendingBatch,
         }),
       );
+    }
+
+    // (P) Fase 5: regenera `architecture/overview.md` com links pra pages
+    // de módulo recém-criadas. Sem isso, a overview gerada por init tem
+    // páginas faltando (init rodou antes do batch) → verify reporta
+    // broken_internal_link warnings (e `(Q)` falha).
+    if (cb.done > 0) {
+      await regenerateArchitectureOverview(absRoot);
     }
 
     return buildResult(

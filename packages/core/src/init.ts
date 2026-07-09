@@ -23,6 +23,7 @@
  */
 
 import * as nodePath from "node:path";
+import * as nodeFs from "node:fs/promises";
 import * as safeIo from "./safe-io.js";
 import { openIndex, type SymbolRow } from "./db.js";
 import { run as runIndexer } from "./indexer.js";
@@ -154,7 +155,8 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   // "Ao final: gera/atualiza quickstart.md e architecture/overview.md").
   // Gerado em init base (com módulos heurísticos) — batch pode re-gravar depois
   // com lista de pages adicionadas.
-  const overview = generateArchitectureOverview({
+  const overview = await generateArchitectureOverview({
+    absRoot,
     modules,
     ordered,
     filePaths,
@@ -373,7 +375,36 @@ function generateQuickstartDeterministic(
  * EXATO com o link do quickstart, independente de como o renderer markdown
  * slugifica headings (lowercase, remoção de punct, etc.).
  */
-function generateArchitectureOverview(opts: {
+/**
+ * Regenera APENAS o `architecture/overview.md` com base no estado atual da wiki.
+ *
+ * Usado tanto por `runInit` (após criar layout base) quanto por `batch`
+ * (após criar as pages dos módulos) — assim os links `[page](../m.id.md)`
+ * aparecem quando as páginas existem e somem quando ainda não existem
+ * (evita broken_internal_link warnings no `verify`).
+ *
+ * Idempotente. Lê o índice SQLite pra extrair símbolos/módulos.
+ */
+export async function regenerateArchitectureOverview(repoRoot: string): Promise<void> {
+  const absRoot = nodePath.resolve(repoRoot);
+  const { modules, edges, ordered, totalSymbols, totalFiles, symbols, filePaths } =
+    await buildPlan(absRoot);
+  const overview = await generateArchitectureOverview({
+    absRoot,
+    modules,
+    ordered,
+    filePaths,
+    totalSymbols,
+    totalFiles,
+    edges,
+    symbols,
+  });
+  await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
+}
+
+async function generateArchitectureOverview(opts: {
+  /** Repo root (abs path) — usado pra checar se páginas de módulo já existem. */
+  absRoot: string;
   modules: Module[];
   ordered: Module[];
   filePaths: string[];
@@ -381,8 +412,8 @@ function generateArchitectureOverview(opts: {
   totalFiles: number;
   edges: Array<{ from: string; to: string }>;
   symbols: SymbolRow[];
-}): string {
-  const { modules, ordered, filePaths, totalSymbols, totalFiles, edges, symbols } = opts;
+}): Promise<string> {
+  const { absRoot, modules, ordered, filePaths, totalSymbols, totalFiles, edges, symbols } = opts;
 
   // Top arquivos por número de símbolos (entry points heurísticos).
   const symbolsByFile = new Map<string, number>();
@@ -427,11 +458,21 @@ function generateArchitectureOverview(opts: {
     lines.push(`<a id="${escapeHtmlId(m.id)}"></a>`);
     lines.push("");
     const classDiagramPath = `../diagrams/${moduleSlug(m.id)}.classes.mmd`;
-    const pagePath = `../${m.id}.md`;
+    const pageRelPath = `${m.id}.md`;
+    // Page link só é emitido se a página EXISTE — senão vira broken_internal_link
+    // warning no `verify`. init roda ANTES do batch (que cria as pages), então
+    // omitir o link aqui é o correto. Re-rodar init após batch vai popular.
+    // (Fase 5 step E2E: critério é "verify zero issues" — sem isso, sempre falha.)
+    const pageExists = await nodeFs
+      .stat(nodePath.join(absRoot, "livewiki", pageRelPath))
+      .then(() => true)
+      .catch(() => false);
     const parts: string[] = [];
     parts.push(`**${m.symbolCount}** symbols across **${m.paths.length}** files`);
     parts.push(`[class diagram](${classDiagramPath})`);
-    parts.push(`[page](${pagePath})`);
+    if (pageExists) {
+      parts.push(`[page](../${pageRelPath})`);
+    }
     lines.push(`### ${m.id}`);
     lines.push("");
     lines.push(parts.join(" · "));
