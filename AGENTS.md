@@ -75,6 +75,8 @@ verify pega pelo menos um caso real de alucinação de doc. Rev2 empírica
   SEGUE. Circuit breaker: 3 falhas CONSECUTIVAS OU (>50% com ≥3 tasks).
   Status: completed / completed_with_failures / aborted.
 - **Exit codes**: 0 = completed, 1 = completed_with_failures, 2 = aborted.
+  Fonte única de verdade: `core/batch.ts:statusToExitCode()`. CLI usa
+  `process.exitCode = N` (nunca `process.exit(N)`) pra preservar FIX L.
 - **Token-first no reporte** (ad87319): tokens são a métrica primária em
   `livewiki batch status` (humano e JSON); USD aparece como linha secundária
   marcada "estimado, tabela de <data>", omitida sem drama quando não há
@@ -101,6 +103,21 @@ verify pega pelo menos um caso real de alucinação de doc. Rev2 empírica
   (STATUS_STACK_BUFFER_OVERRUN = exit -1073740791) quando há handles async
   abertos (fetch, WAL do SQLite, watcher). Node drena o event loop antes
   de sair.
+- **Exit code propagation init --batch** (O): `livewiki init --batch`
+  propaga o status do batch via `InitResult.batchExitCode` (calculado por
+  `statusToExitCode()`). Sem isso, abort/completed_with_failures saíam com
+  exit 0 e mascaravam falha sistêmica. `--json` sempre exit 0 (output
+  estruturado, convenção batch CLI). Testado em `cli-batch-e2e.test.ts`
+  (4 cenários novos: aborted/completed_with_failures/completed/--json).
+- **`architecture/overview.md` no init** (P): SPEC §"Pipeline batch" pede
+  "gera/atualiza quickstart.md e architecture/overview.md". Antes do fix,
+  quickstart linkava pra `#<m.id>` mas overview não existia — verify
+  emitia WARNs. Agora init gera `livewiki/architecture/overview.md` no
+  fluxo base (com módulos heurísticos) — batch re-gera com pages linkadas.
+  Anchors `<a id="...">` HTML inline garantem match exato com o link do
+  quickstart, independente do renderer markdown. Testado em
+  `cli-batch-e2e.test.ts` (3 cenários novos: init base, init --batch,
+  cross-check links↔anchors).
 
 ## Layout do repo
 
@@ -236,8 +253,8 @@ explicitamente fora do `vitest` unit suite).
 ## Estado live (próxima fase: 4 — MCP server)
 
 ```bash
-# Última validação (Fase 3 rev2):
-pnpm -r test  → 288 passed + 8 skipped (core 265 + cli 23)
+# Última validação (Fase 3 + fixes O/P):
+pnpm -r test  → 295 passed + 8 skipped (core 265 + cli 30)
 pnpm -r build → verde
 ```
 

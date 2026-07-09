@@ -45,13 +45,6 @@ describe("key-leak — API key nunca vaza", () => {
     await nodeFs.rm(repoRoot, { recursive: true, force: true });
   });
 
-  afterEach(async () => {
-    consoleLogSpy.mockRestore();
-    consoleWarnSpy.mockRestore();
-    consoleErrorSpy.mockRestore();
-    await nodeFs.rm(repoRoot, { recursive: true, force: true });
-  });
-
   function assertCanaryNotPresent(value: string, context: string): void {
     if (value.includes(CANARY_KEY)) {
       throw new Error(
