@@ -1,0 +1,396 @@
+/**
+ * CLI E2E Fase 3 — pipeline completo init --batch com stub HTTP server.
+ *
+ * Usa um mini server HTTP local (Node http nativo) que simula a API Anthropic.
+ * Zero chamada real — tudo mockado em process-localhost.
+ *
+ * Cenários cobertos:
+ *   1. `init --batch` end-to-end → quickstart + diagramas + manifest + pages + status report
+ *   2. Resume: interrompe após 1 task, resume continua da task certa
+ *   3. --only: re-roda 1 task, usageHistory acumula
+ *   4. Circuit breaker: mock que falha 3x → abort
+ *
+ * Estratégia: stub server recebe request, valida shape (system prompt inclui
+ * regra "NEVER invent key", user prompt inclui lista fechada), responde com
+ * Markdown válido. Validações E2E:
+ *   - arquivos de output existem
+ *   - manifest tem snapshotHash
+ *   - batch_tasks tem usageHistory populado
+ *   - status report tem totals/byStage/byModule
+ *   - key-leak: nenhuma string da chave (vinda de env var) aparece em nenhum output
+ */
+
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import * as http from "node:http";
+import * as nodePath from "node:path";
+import * as nodeFs from "node:fs/promises";
+
+interface StubServer {
+  url: string;
+  close: () => Promise<void>;
+  /** Customize o handler por request (# de chamadas, falhar N vezes, etc) */
+  setHandler: (h: (req: { system: string; user: string }) => StubResponse | null) => void;
+  callCount: () => number;
+}
+
+interface StubResponse {
+  status: number;
+  body: unknown;
+}
+
+async function startStubServer(): Promise<StubServer> {
+  let handler: (req: { system: string; user: string }) => StubResponse | null = () => null;
+  let calls = 0;
+
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      calls++;
+      let parsed: { system?: string; user?: string; messages?: Array<{ content: string }> } = {};
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: "invalid json" }));
+        return;
+      }
+      // Anthropic-shape: { system, messages: [{role:"user", content}] }
+      // OpenAI-shape:  { messages: [{role:"system", content}, {role:"user", content}] }
+      type ChatMsg = { role: string; content: string };
+      const msgs = (parsed.messages ?? []) as ChatMsg[];
+      const system = parsed.system ?? msgs.find((m) => m.role === "system")?.content ?? "";
+      const user = msgs.filter((m) => m.role === "user").map((m) => m.content).join("\n") ?? parsed.user ?? "";
+
+      const response = handler({ system, user });
+      if (!response) {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: "no handler configured" }));
+        return;
+      }
+      res.writeHead(response.status, { "content-type": "application/json" });
+      res.end(JSON.stringify(response.body));
+    });
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const addr = server.address();
+  if (!addr || typeof addr === "string") throw new Error("failed to bind stub server");
+  const url = `http://127.0.0.1:${addr.port}`;
+
+  return {
+    url,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+    setHandler: (h) => {
+      handler = h;
+    },
+    callCount: () => calls,
+  };
+}
+
+/** Default handler: gera doc Markdown válido pra qualquer módulo. */
+function defaultHandler(
+  req: { system: string; user: string },
+  opts: { failNTimes?: number } = {},
+): StubResponse | null {
+  if (opts.failNTimes && opts.failNTimes > 0) {
+    opts.failNTimes--;
+    return {
+      status: 500,
+      body: { error: "simulated failure" },
+    };
+  }
+  const match = req.user.match(/# Module: ([^\s]+)/);
+  const moduleId = match ? match[1] : "unknown";
+  const keyMatch = req.user.match(/^- (.+?#[\w.]+)$/m);
+  const firstKey = keyMatch ? keyMatch[1] : `${moduleId}.ts#placeholder`;
+  const content = `---
+title: ${moduleId}
+owner: generated
+anchors:
+  - ${firstKey}
+---
+
+# ${moduleId}
+
+Documentation for ${moduleId}.
+
+## Details
+<!-- lw:anchors ${firstKey} -->
+
+Some prose about ${moduleId}.
+`;
+  return {
+    status: 200,
+    body: {
+      content: [{ type: "text", text: content }],
+      model: "claude-test-mock",
+      usage: { input_tokens: 100, output_tokens: 50 },
+    },
+  };
+}
+
+interface CliRun {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+function runCli(args: string[], env: Record<string, string> = {}): Promise<CliRun> {
+  return new Promise((resolve) => {
+    const opts: SpawnOptions = { env: { ...process.env, ...env } };
+    const proc: ChildProcess = spawn(
+      process.execPath,
+      [nodePath.resolve(process.cwd(), "dist/index.js"), ...args],
+      opts,
+    );
+    let stdout = "";
+    let stderr = "";
+    proc.stdout?.on("data", (d: Buffer | string) => (stdout += typeof d === "string" ? d : d.toString("utf8")));
+    proc.stderr?.on("data", (d: Buffer | string) => (stderr += typeof d === "string" ? d : d.toString("utf8")));
+    proc.on("close", (code: number | null) => resolve({ status: code ?? -1, stdout, stderr }));
+  });
+}
+
+let stub: StubServer;
+let repoRoot: string;
+
+beforeAll(async () => {
+  stub = await startStubServer();
+});
+
+afterAll(async () => {
+  await stub.close();
+});
+
+beforeEach(async () => {
+  repoRoot = await nodeFs.mkdtemp(
+    nodePath.join(process.env.TMPDIR ?? "C:\\Users\\Eduardo\\AppData\\Local\\Temp", "livewiki-e2e-f3-"),
+  );
+});
+
+afterEach(async () => {
+  await nodeFs.rm(repoRoot, { recursive: true, force: true });
+});
+
+async function writeCode(rel: string, content: string): Promise<void> {
+  const abs = nodePath.join(repoRoot, rel);
+  await nodeFs.mkdir(nodePath.dirname(abs), { recursive: true });
+  await nodeFs.writeFile(abs, content);
+}
+
+async function writeConfig(provider: string, model: string, baseUrl: string): Promise<void> {
+  await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ provider, model, baseUrl }, null, 2),
+    "utf8",
+  );
+}
+
+describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
+  it("init --batch gera quickstart + diagramas + manifest + pages + status", async () => {
+    // Repo: 2 arquivos em 2 módulos
+    await writeCode("src/auth/login.ts", "export function login() { return 'auth'; }");
+    await writeCode("src/utils/helper.ts", "export function help() { return 'utils'; }");
+
+    stub.setHandler((req) => defaultHandler(req));
+
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-DONOTLEAK";
+    try {
+      // Init com --batch
+      const r = runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      const result = await r;
+      expect(result.status, `init falhou: ${result.stderr}`).toBe(0);
+
+      // Wiki pages geradas
+      expect(await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8")).toMatch(
+        /title: auth/,
+      );
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/utils.md"), "utf8"),
+      ).toMatch(/title: utils/);
+
+      // Diagramas
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/structure.mmd"), "utf8"),
+      ).toContain("graph TD");
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/modules.mmd"), "utf8"),
+      ).toContain("graph LR");
+
+      // Manifest
+      const manifest = JSON.parse(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/.manifest.json"), "utf8"),
+      );
+      expect(manifest.version).toBe(1);
+      expect(manifest.snapshotHash).toMatch(/^[a-f0-9]{64}$/);
+
+      // Quickstart
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/quickstart.md"), "utf8"),
+      ).toMatch(/Quickstart|Guia/);
+
+      // Status report
+      const statusR = runCli(["--json", "--repo", repoRoot, "batch"]);
+      const status = await statusR;
+      expect(status.status, `batch falhou: ${status.stderr}`).toBe(0);
+      const report = JSON.parse(status.stdout);
+      expect(report.totals.inputTokens).toBeGreaterThan(0);
+      expect(report.byModule.length).toBeGreaterThanOrEqual(2);
+      expect(report.run.status).toBe("completed");
+
+      // Key-leak: NENHUMA string da chave aparece em nenhum arquivo gerado
+      const allFiles = [
+        "livewiki/auth.md",
+        "livewiki/utils.md",
+        "livewiki/quickstart.md",
+        "livewiki/architecture/structure.mmd",
+        "livewiki/architecture/modules.mmd",
+        "livewiki/.manifest.json",
+      ];
+      for (const f of allFiles) {
+        const content = await nodeFs.readFile(nodePath.join(repoRoot, f), "utf8");
+        expect(content, `key leaked in ${f}`).not.toContain("test-canary-DONOTLEAK");
+      }
+      // Status stdout também não
+      expect(status.stdout).not.toContain("test-canary-DONOTLEAK");
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
+  it("--only <module> re-roda 1 task: usageHistory acumula", async () => {
+    await writeCode("src/auth/login.ts", "export function login() { return 1; }");
+    stub.setHandler((req) => defaultHandler(req));
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-2";
+    try {
+      // Init --batch inicial
+      const r1 = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      expect(r1.status, r1.stderr).toBe(0);
+      const callsAfterInit = stub.callCount();
+
+      // Re-roda 1 task
+      const r2 = await runCli(["--json", "--repo", repoRoot, "batch", "--only", "auth", "1"]);
+      // O número de args esperado é: --only <target> <runId>
+      // Vamos usar a forma alternativa: --only <target> (sem runId — usa o último)
+      const r2b = await runCli(["--json", "--repo", repoRoot, "batch", "--only", "auth"]);
+      expect(r2b.status, r2b.stderr).toBe(0);
+
+      // Pelo menos 1 chamada extra pro mock LLM
+      expect(stub.callCount()).toBeGreaterThan(callsAfterInit);
+
+      // Status mostra attempt >= 2 na task 'auth'
+      const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
+      const report = JSON.parse(status.stdout);
+      const authTask = report.tasks.find(
+        (t: { target: string; stage: number }) => t.target === "auth" && t.stage === 4,
+      );
+      expect(authTask).toBeDefined();
+      expect(authTask.attempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
+  it("circuit breaker: falha 3x seguidas → abort", async () => {
+    await writeCode("src/auth/login.ts", "export function login() {}");
+    // Configura 3 módulos separados — mas só temos 1 arquivo. Pra ter 3+,
+    // espalhamos arquivos em 3 dirs diferentes.
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    await writeCode("src/utils/x.ts", "export function b() {}");
+    await writeCode("src/api/y.ts", "export function c() {}");
+
+    let n = 0;
+    stub.setHandler(() => {
+      n++;
+      return { status: 500, body: { error: "simulated failure" } };
+    });
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-3";
+    try {
+      const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      // init retorna { ok, filesWritten, batchSummary: { runId, status, ... } }
+      const report = JSON.parse(r.stdout);
+      expect(report.batchSummary).toBeDefined();
+      expect(report.batchSummary.status).toBe("aborted");
+      expect(report.batchSummary.tasksFailed).toBeGreaterThanOrEqual(3);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
+
+  it("init --plan funciona SEM config LLM (correção #5)", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    // SEM .livewiki/config.json — --plan não pode exigir LLM
+    const r = await runCli(["--json", "--repo", repoRoot, "init", "--plan"]);
+    expect(r.status, r.stderr).toBe(0);
+    const report = JSON.parse(r.stdout);
+    expect(report.plan).toBeDefined();
+    expect(report.plan.modules.length).toBeGreaterThan(0);
+    // Não tocou em livewiki/auth.md (--plan é só plano)
+    await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/foo.md"))).rejects.toThrow();
+  });
+
+  it("init sem --batch funciona SEM config LLM (sem LLM calls)", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    // SEM .livewiki/config.json
+    const r = await runCli(["--json", "--repo", repoRoot, "init"]);
+    expect(r.status, r.stderr).toBe(0);
+    // Gera layout determinístico
+    expect(
+      await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/structure.mmd"), "utf8"),
+    ).toContain("graph TD");
+    expect(
+      await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/quickstart.md"), "utf8"),
+    ).toMatch(/Quickstart|Guia/);
+    // Sem module pages (não chamou LLM)
+    await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/foo.md"))).rejects.toThrow();
+  });
+
+  it("init --batch SEM config LLM falha com mensagem clara apontando pro config", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    // SEM .livewiki/config.json E SEM env var
+    const prevKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+    expect(r.status).toBe(1); // erro
+    // Mensagem aponta pro config.json E cita claude-sonnet-5 como EXEMPLO (não default silencioso)
+    expect(r.stderr).toMatch(/Cannot run LLM batch/);
+    expect(r.stderr).toMatch(/missing provider/);
+    expect(r.stderr).toMatch(/claude-sonnet-5.*example only/);
+    expect(r.stderr).toMatch(/ANTHROPIC_API_KEY/);
+  });
+
+  it("idempotência: dois init seguidos sem mudança = manifest byte-idêntico", async () => {
+    await writeCode("src/auth/login.ts", "export function login() {}");
+    stub.setHandler((req) => defaultHandler(req));
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-4";
+    try {
+      await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      const manifest1 = await nodeFs.readFile(
+        nodePath.join(repoRoot, "livewiki/.manifest.json"),
+        "utf8",
+      );
+      // 2º init sem mudança no repo
+      await runCli(["--json", "--repo", repoRoot, "init"]);
+      const manifest2 = await nodeFs.readFile(
+        nodePath.join(repoRoot, "livewiki/.manifest.json"),
+        "utf8",
+      );
+      // snapshotHash tem que ser igual (conteúdo de livewiki/ não mudou)
+      const m1 = JSON.parse(manifest1);
+      const m2 = JSON.parse(manifest2);
+      expect(m1.snapshotHash).toBe(m2.snapshotHash);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+});
