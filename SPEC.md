@@ -44,6 +44,15 @@
   pedindo provider/modelo (ou pergunta interativamente). API key SÓ via env var
   (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`); nunca em config.json, checkpoint_json,
   logs ou erros — com teste garantindo.
+  **Presets de provider** (dados, não código): tabela embutida de providers
+  conhecidos — anthropic, openai, openrouter, deepseek, kimi, minimax, gemini,
+  nvidia (NIM), ollama e lmstudio (local) — com baseUrl, adapter, nome da env
+  var e pricing default preenchidos. `config.json` referencia o preset e pode
+  sobrescrever qualquer campo. **Regra de adapter**: quando o provider oferece
+  endpoint Anthropic-compatível (ex.: minimax), o preset usa o adapter Anthropic
+  — leitura de cache otimizada (prompt caching). Ferramentas de agente (Codex,
+  Cursor, Roo Code, Kilo Code, VS Code etc.) NÃO são presets — são consumidores
+  via MCP/skills (roadmap de integrações).
 
 ## Layout gerado no repo-alvo
 
@@ -198,10 +207,16 @@ Ao final: gera/atualiza `quickstart.md` e `architecture/overview.md`, grava mani
 
 ### Contabilidade de tokens (Fase 3)
 
-Economia é tese central do produto — então é medida, não estimada:
+Economia é tese central do produto — então é medida, não estimada. **A métrica
+primária é TOKEN, não dinheiro**: o token é fato medido; USD é interpretação que
+varia por rota (mesmo modelo custa diferente direto vs via OpenRouter) e por
+créditos do usuário. Todo reporte lidera com tokens; USD aparece como estimativa
+secundária, sempre marcada "estimado, tabela de <data>", e omitida sem drama
+quando não há preço.
 - **Batch**: cada task grava no checkpoint o `usage` real da API (input/output
-  tokens + modelo). `livewiki batch <run>` reporta por módulo e acumulado, com
-  custo estimado em USD. Objetivo: comparação reproduzível com OpenWiki e afins.
+  tokens + modelo). `livewiki batch <run>` reporta tokens por módulo/stage e
+  acumulado; USD como linha secundária. Objetivo: comparação reproduzível com
+  OpenWiki e afins.
 - **Incremental**: o `update` registra o tamanho (tokens estimados por tokenizer)
   do pacote de trabalho emitido ao agente e da doc escrita de volta. Métricas em
   tabela própria no `.livewiki/`, expostas via `status --json`.

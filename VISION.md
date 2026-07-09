@@ -152,10 +152,25 @@ continua da task 24/61. Quem gera a doc neste modo: LLM via API configurável
   código executável — segurança primeiro. MVP de templates: `agent` (denso,
   técnico) e `docs` (limpo, para humanos). Comunidade contribui com mais.
 
+## Roadmap de produto (pós-validação)
+
+- **Dashboard web local (Fase 8)**: kanban do ledger de dívida (detectada → em
+  progresso → paga → revisão humana), progresso de batch em tempo real e settings
+  (provider/modelo/language). Montado 100% sobre os contratos `--json` que já
+  existem — nenhum trabalho antecipado necessário; o `livewiki status` é o
+  dashboard do MVP, e a página "Status" do viewer (Fase 7) é o meio-termo.
+- **`livewiki compare` (pós-MVP)**: rodar o mesmo repo com N modelos e comparar
+  por métricas objetivas que o produto já produz (taxa de verify, cobertura de
+  âncoras, undocumented restante, **tokens como métrica primária**; USD só
+  como estimativa secundária — preço varia por rota/créditos). Custa N× tokens.
+- **Benchmark público multi-LLM (validação/lançamento)**: nós rodamos o compare
+  em repos reais e publicamos a tabela — o "aval de mundo real" do produto,
+  junto com o comparativo de tokens vs OpenWiki.
+
 ## Roadmap de integrações (pós-validação)
 
 Plugins/integrações nativas com os players de agentes — **Claude Code, Codex e
-Hermes** primeiro (Cursor, Gemini CLI etc. depois): pacote de instalação que
+Hermes** primeiro (Cursor, Roo Code, Kilo Code, Gemini CLI etc. depois): pacote de instalação que
 registra o MCP server, instala skills/hooks no formato de cada ferramenta e
 configura o pointer opt-in. A Fase 5 já entrega Claude Code via skills/hooks;
 o plugin formaliza a distribuição. Modelo default de LLM permanece em aberto —
