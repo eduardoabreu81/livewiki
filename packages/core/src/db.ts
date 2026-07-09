@@ -15,11 +15,17 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
-/** Statements idempotentes — pode rodar em DB novo ou existente. */
+/**
+ * Statements idempotentes — pode rodar em DB novo ou existente.
+ *
+ * Schema v3 (commit 6183214) adiciona:
+ *   - debt.symbol_key — sobrevive ao anchor ser removida (resolve órfão)
+ *   - idx_debt_open — índice parcial pra dedup de dívida aberta por (anchor_id, event)
+ */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS files (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +41,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS symbols (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   file_id INTEGER NOT NULL REFERENCES files(id),
-  key TEXT NOT NULL UNIQUE,
+  key TEXT NOT NULL,
   name TEXT NOT NULL,
   kind TEXT NOT NULL,
   signature TEXT,
@@ -45,6 +51,11 @@ CREATE TABLE IF NOT EXISTS symbols (
   status TEXT NOT NULL DEFAULT 'active'
 );
 
+-- UNIQUE só em symbols ativos (Fix A — soft-delete em update preserva o
+-- content_hash antigo; sem partial index, INSERT do novo violaria UNIQUE
+-- porque o row antigo (mesmo key, status='deleted') ainda existe).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_symbols_active_key
+  ON symbols(key) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_symbols_status ON symbols(status);
 
@@ -68,10 +79,17 @@ CREATE TABLE IF NOT EXISTS debt (
   anchor_id INTEGER,
   event TEXT NOT NULL,
   assignee TEXT NOT NULL,
+  symbol_key TEXT,
   detail TEXT,
   detected_at INTEGER NOT NULL,
   resolved_at INTEGER
 );
+
+-- Dedup de dívida aberta por (anchor_id, event). Partial index WHERE
+-- resolved_at IS NULL é leve (só linhas abertas) e cobre a query de checagem
+-- usada pelo ledger em todo anchor.
+CREATE INDEX IF NOT EXISTS idx_debt_open
+  ON debt(anchor_id, event) WHERE resolved_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS undocumented (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,6 +137,54 @@ CREATE INDEX IF NOT EXISTS idx_manual_blocks_doc_page_id ON manual_blocks(doc_pa
 `;
 
 /**
+ * Migrações leves (v2 → v3): adiciona coluna `symbol_key` em `debt`, índice
+ * parcial de dívida aberta, e substitui o UNIQUE inline em symbols.key por
+ * um partial unique index (que respeita status='deleted').
+ *
+ * SQLite não permite `DROP INDEX` em índice UNIQUE inline (é parte do
+ * schema da tabela). Recriamos a tabela `symbols` sem o UNIQUE inline e
+ * adicionamos o índice parcial.
+ */
+export const MIGRATION_SQL_V3 = `
+ALTER TABLE debt ADD COLUMN symbol_key TEXT;
+
+CREATE TABLE symbols_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  signature TEXT,
+  start_line INTEGER NOT NULL,
+  end_line INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active'
+);
+INSERT INTO symbols_new (id, file_id, key, name, kind, signature, start_line, end_line, content_hash, status)
+  SELECT id, file_id, key, name, kind, signature, start_line, end_line, content_hash, status FROM symbols;
+DROP TABLE symbols;
+ALTER TABLE symbols_new RENAME TO symbols;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_symbols_active_key
+  ON symbols(key) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
+CREATE INDEX IF NOT EXISTS idx_symbols_status ON symbols(status);
+
+CREATE INDEX IF NOT EXISTS idx_debt_open
+  ON debt(anchor_id, event) WHERE resolved_at IS NULL;
+`;
+
+/**
+ * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
+ * Cada entry é o SQL pra aplicar quando o DB está em uma versão menor.
+ */
+export function migrationsFor(fromVersion: number, toVersion: number): string[] {
+  const out: string[] = [];
+  if (fromVersion < 3 && toVersion >= 3) out.push(MIGRATION_SQL_V3);
+  return out;
+}
+
+/**
  * Abre (ou cria) o banco de índice em `dbPath`. Roda migrations idempotentes
  * e grava `schema_version` em `meta`.
  *
@@ -145,13 +211,10 @@ export function openIndex(dbPath: string): Database.Database {
   } else {
     const stored = Number.parseInt(versionRow.value, 10);
     if (stored !== CURRENT_SCHEMA_VERSION) {
-      // Schema drift: por enquanto só aviso. Migrations vêm com a Fase 2+.
-      // Não vou falhar — Fase 1 é read-friendly (DB antigo pode ter Fase 1 schema).
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[livewiki] schema_version mismatch: stored=${stored}, expected=${CURRENT_SCHEMA_VERSION}. ` +
-          `Continuando — recrie o banco com \`rm .livewiki/index.db && livewiki index\` se algo parecer errado.`,
-      );
+      // Aplica migrações pendentes antes de continuar.
+      for (const sql of migrationsFor(stored, CURRENT_SCHEMA_VERSION)) {
+        db.exec(sql);
+      }
       db.prepare(
         "UPDATE meta SET value = ? WHERE key = ?",
       ).run(String(CURRENT_SCHEMA_VERSION), SCHEMA_VERSION_KEY);

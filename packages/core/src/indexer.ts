@@ -193,8 +193,12 @@ async function orchestrateIndex(
     const reactivateFile = db.prepare(
       "UPDATE files SET status = 'active', content_hash = ?, size = ?, mtime = ?, indexed_at = ? WHERE id = ?",
     );
-    const deleteSymbolsForFile = db.prepare(
-      "DELETE FROM symbols WHERE file_id = ?",
+    // SOFT-DELETE em vez de hard delete (Fix A — achado da revisão Fase 2):
+    // símbolos que somem de um arquivo ATUALIZADO precisam manter a row com
+    // content_hash antigo, para que o ledger possa detectar `moved` quando
+    // esse hash aparecer em outro arquivo.
+    const markSymbolsActiveDeleted = db.prepare(
+      "UPDATE symbols SET status = 'deleted' WHERE file_id = ? AND status = 'active'",
     );
     const insertSymbol = db.prepare(
       "INSERT INTO symbols (file_id, key, name, kind, signature, start_line, end_line, content_hash, status) " +
@@ -211,7 +215,9 @@ async function orchestrateIndex(
       const prev = existingFiles.get(plan.entry.path);
       let fileId: number;
       if (prev) {
-        deleteSymbolsForFile.run(prev.id);
+        // Marca os antigos como deleted (mantém content_hash no DB) antes de
+        // inserir os novos. O ledger lê os deletados pra detectar moved.
+        markSymbolsActiveDeleted.run(prev.id);
         updateFile.run(
           plan.entry.lang,
           plan.hash,

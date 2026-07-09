@@ -280,28 +280,46 @@ async function orchestrate(
   }
 
   // 5. Diff por anchor: changed / deleted / OK
+  //
+  // Fix B (achado revisão Fase 2): dedup — só criar dívida se NÃO existe
+  // dívida ABERTA (resolved_at IS NULL) para a mesma (anchor_id, event).
+  // Sem isso, cada `index` re-flagra os mesmos itens.
+  //
+  // Fix D (achado revisão Fase 2): in_manual_block → assignee=human, mesmo
+  // em página generated/mixed. SPEC §"Schema": assignee é derivado do owner
+  // E do bloco manual.
+  //
+  // Fix E (achado revisão Fase 2): gravar symbol_key em debt.symbol_key —
+  // sobrevive ao anchor ser removida (resolve órfão).
   const seenAnchorIds = new Set<number>();
   for (const ca of currentAnchors) {
     const anchorKey = `${ca.docPageId}|${ca.sectionSlug ?? ""}`;
     const prev = existingAnchors.get(anchorKey);
     const sym = existingSymbols.get(ca.symbolKey);
 
+    const assignee = assigneeFor(ca.owner, ca.inManualBlock);
+
     if (!sym) {
       // symbol sumiu do código (não está no índice)
       // Se for o resultado de um moved, sym exists com novo nome — mas ca.symbolKey já foi atualizado
-      createDebt(db, prev?.id ?? null, "deleted", assigneeFor(ca.owner), null, ca.symbolKey);
-      result.debtCreated++;
-      result.debtByEvent.deleted++;
+      const anchorId = prev?.id ?? null;
+      if (anchorId !== null && hasOpenDebt(db, anchorId, "deleted")) {
+        // dedup — não recriar dívida já aberta
+      } else {
+        createDebt(db, anchorId, "deleted", assignee, null, ca.symbolKey);
+        result.debtCreated++;
+        result.debtByEvent.deleted++;
+      }
       continue;
     }
 
     // symbol existe — checa hash
-    // upsertAnchor grava o hash atual na criação, então prev sempre tem hash
-    // real (não '') a partir da primeira run.
     if (prev && prev.symbol_hash_at_doc !== sym.content_hash) {
-      createDebt(db, prev.id, "changed", assigneeFor(ca.owner), null, ca.symbolKey);
-      result.debtCreated++;
-      result.debtByEvent.changed++;
+      if (!hasOpenDebt(db, prev.id, "changed")) {
+        createDebt(db, prev.id, "changed", assignee, null, ca.symbolKey);
+        result.debtCreated++;
+        result.debtByEvent.changed++;
+      }
     }
     // atualiza hash pra próxima run
     if (prev) {
@@ -314,13 +332,21 @@ async function orchestrate(
   }
 
   // 6. Debt de MOVED — para cada par detected, registra evento
+  //    Dedup por (anchor_id, "moved") também.
   for (const [oldKey, newKey] of movedMap) {
-    // Find doc_pages que apontavam pra oldKey (já atualizados, mas podemos pegar
-    // o assignee original via in-memory). Para simplicidade: assignee = "agent"
-    // (mudança de path é trabalho de reorganização, automatizável).
-    createDebt(db, null, "moved", "agent", JSON.stringify({ from: oldKey, to: newKey }), newKey);
-    result.debtCreated++;
-    result.debtByEvent.moved++;
+    // Procura anchors que apontavam pra oldKey ANTES do update (acabamos de
+    // atualizar symbol_key). Para dedup, usamos a key antiga.
+    const movedAnchors = db
+      .prepare("SELECT id FROM anchors WHERE symbol_key = ?")
+      .all(newKey) as Array<{ id: number }>;
+    for (const a of movedAnchors) {
+      if (hasOpenDebt(db, a.id, "moved")) continue;
+      // Find a doc_page original (in_memory pode ter sido atualizada — pegar do DB).
+      const detail = JSON.stringify({ from: oldKey, to: newKey });
+      createDebt(db, a.id, "moved", "agent", detail, newKey);
+      result.debtCreated++;
+      result.debtByEvent.moved++;
+    }
   }
 
   // 7. Doc_pages sumidos da wiki: marcar anchors como órfãos?
@@ -432,12 +458,31 @@ function createDebt(
   detail: string | null,
   symbolKey: string,
 ): void {
+  // Fix E (achado revisão Fase 2): symbol_key gravado em coluna própria.
+  // Sobrevive ao anchor ser removida, evitando dívida órfã sem referência.
   db.prepare(
-    "INSERT INTO debt (anchor_id, event, assignee, detail, detected_at) VALUES (?, ?, ?, ?, ?)",
-  ).run(anchorId, event, assignee, detail, Date.now());
-  // symbol_key aqui só pra log — não há coluna, fica em detail se relevante
-  // (já incluído pelo caller se quiser)
-  void symbolKey;
+    "INSERT INTO debt (anchor_id, event, assignee, symbol_key, detail, detected_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(anchorId, event, assignee, symbolKey, detail, Date.now());
+}
+
+/**
+ * Fix B (achado revisão Fase 2): dedup de dívida.
+ * Retorna true se já existe dívida ABERTA (resolved_at IS NULL) para a
+ * (anchor_id, event). Usado para evitar que cada `index` re-flagre os mesmos
+ * itens. O índice parcial `idx_debt_open` torna essa query O(1).
+ */
+function hasOpenDebt(
+  db: import("better-sqlite3").Database,
+  anchorId: number,
+  event: DebtEvent,
+): boolean {
+  const row = db
+    .prepare(
+      "SELECT 1 AS hit FROM debt WHERE anchor_id = ? AND event = ? " +
+        "AND resolved_at IS NULL LIMIT 1",
+    )
+    .get(anchorId, event) as { hit: number } | undefined;
+  return row !== undefined;
 }
 
 function detectMoves(
@@ -498,7 +543,15 @@ function upsertUndocumented(
   result.undocumentedSymbols = count;
 }
 
-function assigneeFor(owner: Owner): Assignee {
+/**
+ * Fix D (achado revisão Fase 2): assignee é derivado do owner E do bloco
+ * manual. Anchor dentro de `<!-- lw:manual -->...<!-- /lw:manual -->` SEMPRE
+ * vai pra humano — a regra #6 diz que LLMs não tocam nesses blocos. Mesmo
+ * em página `generated` ou `mixed`, a porção dentro de manual block
+ * precisa de revisão humana.
+ */
+function assigneeFor(owner: Owner, inManualBlock: boolean): Assignee {
+  if (inManualBlock) return "human";
   return owner === "human" ? "human" : "agent";
 }
 

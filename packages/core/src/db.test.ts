@@ -89,22 +89,61 @@ describe("db.openIndex", () => {
   });
 
   it("atualiza schema_version se CURRENT_SCHEMA_VERSION mudou (migration leve)", () => {
-    // Simula DB antigo com schema_version = 0
+    // Simula DB com schema v2 (sem a coluna symbol_key em debt, sem partial
+    // unique index em symbols, sem idx_debt_open). openIndex deve aplicar
+    // a migração v2→v3.
     const Database = require("better-sqlite3");
     const legacyDb = new Database(dbPath);
     legacyDb.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      INSERT INTO meta VALUES ('schema_version', '0');
+      INSERT INTO meta VALUES ('schema_version', '2');
+      CREATE TABLE debt (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        anchor_id INTEGER,
+        event TEXT NOT NULL,
+        assignee TEXT NOT NULL,
+        detail TEXT,
+        detected_at INTEGER NOT NULL,
+        resolved_at INTEGER
+      );
+      CREATE TABLE symbols (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL,
+        key TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        signature TEXT,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
+      );
     `);
     legacyDb.close();
 
-    // Reabrir com openIndex: deve detectar mismatch e atualizar
     const db = openIndex(dbPath);
     try {
+      // schema_version atualizado
       const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
         | { value: string }
         | undefined;
       expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
+
+      // Migração v3 aplicada: debt.symbol_key existe
+      const debtCols = db.prepare("PRAGMA table_info(debt)").all() as Array<{ name: string }>;
+      expect(debtCols.some((c) => c.name === "symbol_key")).toBe(true);
+
+      // idx_debt_open existe
+      const indexes = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_debt_open'")
+        .all() as Array<{ name: string }>;
+      expect(indexes.length).toBe(1);
+
+      // idx_symbols_active_key existe
+      const symIdx = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbols_active_key'")
+        .all() as Array<{ name: string }>;
+      expect(symIdx.length).toBe(1);
     } finally {
       db.close();
     }

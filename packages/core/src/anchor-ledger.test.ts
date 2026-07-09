@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs/promises";
+import * as nodeFsSync from "node:fs";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
 
@@ -340,6 +341,151 @@ anchors:
 
     const r2 = await runLedger(repoRoot, { quiet: true });
     expect(r2.debtCreated).toBe(0);
+  });
+});
+
+describe("anchor-ledger — dedup de dívida (Fix B)", () => {
+  it("deletar função 3x seguidas: gera apenas 1 deleted", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // Deleta o código 3x (cada vez roda index+ledger). As iterações 2 e 3
+    // têm rm que falha (foo.ts já não existe) — esperado.
+    for (let i = 0; i < 3; i++) {
+      await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts")).catch(() => {});
+      await runIndexer(repoRoot, { quiet: true });
+      await runLedger(repoRoot, { quiet: true });
+    }
+
+    const debts = nodeSqliteQuery(
+      repoRoot,
+      "SELECT event, COUNT(*) as n FROM debt WHERE resolved_at IS NULL GROUP BY event",
+    );
+    // Apenas 1 dívida deleted, não 3 (dedup via hasOpenDebt).
+    expect(debts).toEqual([{ event: "deleted", n: 1 }]);
+  });
+
+it("editar função 3x: dedup mantém 1 changed aberta até ser resolvida", async () => {
+    // Mudanças consecutivas do mesmo símbolo (sem a doc ter sido atualizada)
+    // resultam em UMA única dívida "changed" aberta — Fix B dedup via hasOpenDebt.
+    // Resolução só acontece quando o author da wiki atualiza o anchor (manual ou
+    // via livewiki_write_doc na Fase 4).
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/foo.ts", "export function bar() { return 3; }");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const debts = nodeSqliteQuery(
+      repoRoot,
+      "SELECT event, COUNT(*) as n FROM debt WHERE resolved_at IS NULL GROUP BY event",
+    );
+    // 3 edições consecutivas, mesma anchor, sem resolução → 1 changed aberta.
+    expect(debts).toEqual([{ event: "changed", n: 1 }]);
+  });
+});
+
+describe("anchor-ledger — debt.symbol_key (Fix E)", () => {
+  it("dívida carrega symbol_key mesmo depois do anchor ser removida", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // Agora remove a página da wiki — anchor órfã some
+    await nodeFs.rm(nodePath.join(repoRoot, "livewiki/foo.md"));
+    await runLedger(repoRoot, { quiet: true });
+
+    const debts = nodeSqliteQuery(repoRoot, "SELECT event, symbol_key FROM debt");
+    // symbol_key preservado mesmo sem anchor (evita órfão sem referência)
+    expect(debts).toContainEqual({ event: "deleted", symbol_key: "src/foo.ts#bar" });
+  });
+});
+
+describe("anchor-ledger — in_manual_block → assignee=human (Fix D)", () => {
+  it("anchor dentro de lw:manual em página generated: assignee=human", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: generated
+---
+
+## Section
+<!-- lw:manual -->
+<!-- lw:anchors src/foo.ts#bar -->
+texto manual
+<!-- /lw:manual -->
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    const r = await runLedger(repoRoot, { quiet: true });
+
+    // Sem mudança no código, não gera debt.
+    expect(r.debtCreated).toBe(0);
+
+    // Edita o código — anchor dentro de manual block gera debt com assignee=human
+    await writeCode("src/foo.ts", "export function bar(): void {}");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const debts = nodeSqliteQuery(
+      repoRoot,
+      "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
+    );
+    expect(debts).toContainEqual({ event: "changed", assignee: "human" });
+  });
+
+  it("anchor fora de manual block em página mixed: assignee=agent", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: mixed
+---
+
+## Section
+<!-- lw:anchors src/foo.ts#bar -->
+Fora do bloco manual.
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/foo.ts", "export function bar(): void {}");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const debts = nodeSqliteQuery(
+      repoRoot,
+      "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
+    );
+    // owner=mixed mas fora de manual block → assignee=agent
+    expect(debts).toContainEqual({ event: "changed", assignee: "agent" });
   });
 });
 
