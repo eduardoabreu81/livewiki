@@ -14,6 +14,7 @@ describe("status.formatHuman", () => {
         items: [],
       },
       undocumented: { total: 0, sample: [] },
+      metrics: null,
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);
@@ -65,6 +66,15 @@ describe("status.formatHuman", () => {
         ],
       },
       undocumented: { total: 5, sample: [{ symbol_key: "src/x.ts#y" }] },
+      metrics: {
+        packagesEmitted: 5,
+        totalPackageTokens: 4000,
+        writesReceived: 5,
+        totalWriteTokens: 2000,
+        efficiencyRatio: 0.5,
+        lastPackage: null,
+        lastWrite: null,
+      },
       meta: {
         schemaVersion: 2,
         lastIndexedAt: 1700000000000,
@@ -108,6 +118,7 @@ describe("status.formatHuman", () => {
         items: [],
       },
       undocumented: { total: 0, sample: [] },
+      metrics: null,
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);

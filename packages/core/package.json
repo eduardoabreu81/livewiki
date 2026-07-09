@@ -69,6 +69,14 @@
     "./batch-status": {
       "types": "./dist/batch-status.d.ts",
       "import": "./dist/batch-status.js"
+    },
+    "./update": {
+      "types": "./dist/update.d.ts",
+      "import": "./dist/update.js"
+    },
+    "./update-metrics": {
+      "types": "./dist/update-metrics.d.ts",
+      "import": "./dist/update-metrics.js"
     }
   },
   "files": [

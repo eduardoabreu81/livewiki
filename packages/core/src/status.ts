@@ -13,6 +13,7 @@
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
+import { snapshotMetrics, type UpdateMetricsSnapshot } from "./update-metrics.js";
 
 export interface StatusOptions {
   /** Quantos arquivos mostrar no top-N (default 10). */
@@ -49,6 +50,13 @@ export interface StatusReport {
     total: number;
     sample: Array<{ symbol_key: string }>;
   };
+  /**
+   * Contabilidade incremental (Fase 5 — SPEC §"Contabilidade de tokens"):
+   * mostra quantos tokens foram emitidos em pacotes `update` e quantos
+   * foram escritos de volta. Tese do produto: eficiência = write/package.
+   * null se nunca houve update (estado inicial).
+   */
+  metrics: UpdateMetricsSnapshot | null;
   meta: {
     schemaVersion: number;
     lastIndexedAt: number | null;
@@ -65,7 +73,14 @@ export async function run(
   const dbPath = await safeIo.resolveAndValidate(absRoot, dbPathRel);
   const db = openIndex(dbPath);
   try {
-    return collect(db, opts.topN ?? 10);
+    const report = collect(db, opts.topN ?? 10);
+    // Métricas incrementais (best-effort — falha aqui não quebra status)
+    try {
+      report.metrics = await snapshotMetrics(absRoot);
+    } catch {
+      report.metrics = null;
+    }
+    return report;
   } finally {
     db.close();
   }
@@ -173,6 +188,8 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
       total: undocRows.length,
       sample: undocRows.slice(0, 20),
     },
+    // metrics é setado por run() após collect (precisa repoRoot, não db)
+    metrics: null,
     meta: {
       schemaVersion: versionRow ? Number.parseInt(versionRow.value, 10) : 0,
       lastIndexedAt: lastIndexRow ? Number.parseInt(lastIndexRow.value, 10) : null,
