@@ -161,6 +161,10 @@ continua da task 24/61. Quem gera a doc neste modo: LLM via API configurável
   Nota: estrutura, dependências de módulos e classes JÁ saem determinísticos na
   Fase 3 — ver SPEC.
 - README gerado a partir da wiki
+- Wikis multilíngues simultâneas (N idiomas sincronizados) — cada mudança viraria
+  N dívidas e `verify` não checa equivalência semântica entre línguas; se entrar,
+  será como export traduzido de mão única (Fase 6+), nunca N fontes da verdade.
+  (Idioma único configurável por repo JÁ está no MVP: `language` no config.)
 - Distribuição final (npm público, binário) — decidir na validação
 
 ## Decisões em aberto

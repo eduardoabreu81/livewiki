@@ -58,7 +58,10 @@ repo-alvo/
 │   └── decisions/<data>-<slug>.md
 └── .livewiki/
     ├── index.db
-    └── config.json                # config local (provider, linguagens, ignores)
+    └── config.json                # config local (provider, linguagens, ignores,
+                                   # language: idioma da doc gerada — 1 por repo,
+                                   # default "en"; afeta só prompts/skills, nunca
+                                   # chaves/âncoras/diagramas)
 ```
 
 ### `.manifest.json` (versionado — é o que faz handoff cross-máquina)
