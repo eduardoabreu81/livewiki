@@ -1,8 +1,10 @@
 /**
- * status — relatório do índice.
+ * status — relatório completo do estado da wiki + índice.
  *
  * Fase 1: arquivos indexados, símbolos por kind, breakdown por linguagem,
- * top-N arquivos com mais símbolos. Dívida + undocumented entram na Fase 2.
+ *         top-N arquivos com mais símbolos.
+ * Fase 2: dívida aberta (changed/moved/deleted) por assignee,
+ *         undocumented symbols.
  *
  * Modo human: texto multi-linha.
  * Modo JSON: objeto completo (estruturado pra agentes).
@@ -17,6 +19,16 @@ export interface StatusOptions {
   topN?: number;
 }
 
+export interface DebtItem {
+  id: number;
+  event: "changed" | "moved" | "deleted";
+  assignee: "agent" | "human";
+  symbol_key: string | null;
+  wiki_path: string | null;
+  detail: string | null;
+  detected_at: number;
+}
+
 export interface StatusReport {
   files: {
     total: number;
@@ -27,9 +39,20 @@ export interface StatusReport {
     total: number;
     byKind: Record<string, number>;
   };
+  debt: {
+    total: number;
+    byEvent: { changed: number; moved: number; deleted: number };
+    byAssignee: { agent: number; human: number };
+    items: DebtItem[];
+  };
+  undocumented: {
+    total: number;
+    sample: Array<{ symbol_key: string }>;
+  };
   meta: {
     schemaVersion: number;
     lastIndexedAt: number | null;
+    lastLedgerAt: number | null;
   };
 }
 
@@ -48,8 +71,21 @@ export async function run(
   }
 }
 
+interface DebtRow {
+  id: number;
+  anchor_id: number | null;
+  event: string;
+  assignee: string;
+  detail: string | null;
+  detected_at: number;
+  symbol_key: string | null;
+  wiki_path: string | null;
+}
+
 function collect(db: import("better-sqlite3").Database, topN: number): StatusReport {
-  const files = db.prepare("SELECT * FROM files").all() as FileRow[];
+  const files = db
+    .prepare("SELECT * FROM files WHERE status = 'active'")
+    .all() as FileRow[];
   const symbols = db.prepare(
     "SELECT * FROM symbols WHERE status = 'active'",
   ).all() as SymbolRow[];
@@ -60,7 +96,6 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
   const byKind: Record<string, number> = {};
   for (const s of symbols) byKind[s.kind] = (byKind[s.kind] ?? 0) + 1;
 
-  // Top-N arquivos por #símbolos ativos
   const symbolsByFile = new Map<number, number>();
   for (const s of symbols) {
     symbolsByFile.set(s.file_id, (symbolsByFile.get(s.file_id) ?? 0) + 1);
@@ -75,26 +110,73 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
     .sort((a, b) => b.symbols - a.symbols)
     .slice(0, topN);
 
+  // Debt
+  const debtRows = db
+    .prepare(
+      "SELECT d.id, d.anchor_id, d.event, d.assignee, d.detail, d.detected_at, " +
+        "a.symbol_key, dp.wiki_path " +
+        "FROM debt d LEFT JOIN anchors a ON a.id = d.anchor_id " +
+        "LEFT JOIN doc_pages dp ON dp.id = a.doc_page_id " +
+        "WHERE d.resolved_at IS NULL " +
+        "ORDER BY d.detected_at ASC",
+    )
+    .all() as DebtRow[];
+
+  const debtByEvent = { changed: 0, moved: 0, deleted: 0 };
+  const debtByAssignee = { agent: 0, human: 0 };
+  const debtItems: DebtItem[] = [];
+  for (const r of debtRows) {
+    const ev = r.event as "changed" | "moved" | "deleted";
+    if (ev in debtByEvent) {
+      debtByEvent[ev as keyof typeof debtByEvent]++;
+    }
+    const asg = r.assignee as "agent" | "human";
+    if (asg in debtByAssignee) {
+      debtByAssignee[asg as keyof typeof debtByAssignee]++;
+    }
+    debtItems.push({
+      id: r.id,
+      event: ev,
+      assignee: asg,
+      symbol_key: r.symbol_key,
+      wiki_path: r.wiki_path,
+      detail: r.detail,
+      detected_at: r.detected_at,
+    });
+  }
+
+  // Undocumented
+  const undocRows = db
+    .prepare("SELECT symbol_key FROM undocumented WHERE dismissed = 0")
+    .all() as Array<{ symbol_key: string }>;
+
   const versionRow = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
     | { value: string }
     | undefined;
   const lastIndexRow = db.prepare("SELECT value FROM meta WHERE key = 'last_indexed_at'").get() as
     | { value: string }
     | undefined;
+  const lastLedgerRow = db.prepare("SELECT value FROM meta WHERE key = 'last_ledger_at'").get() as
+    | { value: string }
+    | undefined;
 
   return {
-    files: {
-      total: files.length,
-      byLang,
-      top,
+    files: { total: files.length, byLang, top },
+    symbols: { total: symbols.length, byKind },
+    debt: {
+      total: debtRows.length,
+      byEvent: debtByEvent,
+      byAssignee: debtByAssignee,
+      items: debtItems,
     },
-    symbols: {
-      total: symbols.length,
-      byKind,
+    undocumented: {
+      total: undocRows.length,
+      sample: undocRows.slice(0, 20),
     },
     meta: {
       schemaVersion: versionRow ? Number.parseInt(versionRow.value, 10) : 0,
       lastIndexedAt: lastIndexRow ? Number.parseInt(lastIndexRow.value, 10) : null,
+      lastLedgerAt: lastLedgerRow ? Number.parseInt(lastLedgerRow.value, 10) : null,
     },
   };
 }
@@ -124,10 +206,33 @@ export function formatHuman(report: StatusReport): string {
     }
     lines.push("");
   }
+  lines.push(`Dívida aberta: ${report.debt.total}`);
   lines.push(
-    `schema_version: ${report.meta.schemaVersion}  |  last_indexed_at: ${
-      report.meta.lastIndexedAt ? new Date(report.meta.lastIndexedAt).toISOString() : "nunca"
-    }`,
+    `  by event:   changed=${report.debt.byEvent.changed} ` +
+      `moved=${report.debt.byEvent.moved} deleted=${report.debt.byEvent.deleted}`,
+  );
+  lines.push(
+    `  by assignee: agent=${report.debt.byAssignee.agent} ` +
+      `human=${report.debt.byAssignee.human}`,
+  );
+  for (const item of report.debt.items) {
+    const target = item.symbol_key ?? item.wiki_path ?? "(?)";
+    lines.push(`  [${item.event}] ${item.assignee.padEnd(5)} ${target}`);
+    if (item.detail) lines.push(`         ${item.detail}`);
+  }
+  lines.push("");
+  lines.push(`Undocumented: ${report.undocumented.total}`);
+  for (const u of report.undocumented.sample) {
+    lines.push(`  ${u.symbol_key}`);
+  }
+  lines.push("");
+  lines.push(
+    `schema_version: ${report.meta.schemaVersion}  |  ` +
+      `last_indexed_at: ${
+        report.meta.lastIndexedAt ? new Date(report.meta.lastIndexedAt).toISOString() : "nunca"
+      }  |  last_ledger_at: ${
+        report.meta.lastLedgerAt ? new Date(report.meta.lastLedgerAt).toISOString() : "nunca"
+      }`,
   );
   return lines.join("\n");
 }

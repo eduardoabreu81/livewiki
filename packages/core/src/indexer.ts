@@ -85,7 +85,7 @@ async function ensureLivewikiDir(absRoot: string): Promise<void> {
     await safeIo.mkdir(absRoot, ".livewiki");
   } catch {
     // Se falhou por motivo diferente de "já existe", re-lança.
-    if (!(await nodeFs.stat(".livewiki").catch(() => null))) {
+    if (!(await nodeFs.stat(nodePath.join(absRoot, ".livewiki")).catch(() => null))) {
       throw new Error("failed to create .livewiki/");
     }
   }
@@ -187,7 +187,11 @@ async function orchestrateIndex(
       "INSERT INTO files (path, lang, content_hash, size, mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?)",
     );
     const updateFile = db.prepare(
-      "UPDATE files SET lang = ?, content_hash = ?, size = ?, mtime = ?, indexed_at = ? WHERE id = ?",
+      "UPDATE files SET lang = ?, content_hash = ?, size = ?, mtime = ?, indexed_at = ?, status = 'active' WHERE id = ?",
+    );
+    // Reativar arquivo que estava deleted: limpa symbols antigos e reinsere.
+    const reactivateFile = db.prepare(
+      "UPDATE files SET status = 'active', content_hash = ?, size = ?, mtime = ?, indexed_at = ? WHERE id = ?",
     );
     const deleteSymbolsForFile = db.prepare(
       "DELETE FROM symbols WHERE file_id = ?",
@@ -197,9 +201,11 @@ async function orchestrateIndex(
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
     );
     const markSymbolDeleted = db.prepare(
-      "UPDATE symbols SET status = 'deleted' WHERE file_id = ?",
+      "UPDATE symbols SET status = 'deleted' WHERE file_id = ? AND status = 'active'",
     );
-    const deleteFile = db.prepare("DELETE FROM files WHERE id = ?");
+    const markFileDeleted = db.prepare(
+      "UPDATE files SET status = 'deleted' WHERE id = ?",
+    );
 
     for (const plan of plans) {
       const prev = existingFiles.get(plan.entry.path);
@@ -243,16 +249,18 @@ async function orchestrateIndex(
       }
     }
 
-    // Arquivos que existiam no DB mas não no walk → marca symbols como deleted
-    // e remove a file row.
+    // Arquivos que existiam no DB mas não no walk → marca como deleted (file + symbols)
+// SEM deletar a file row. Isso preserva histórico para detecção de moved na
+// Fase 2 (precisamos dos symbols deletados com content_hash para matching).
     for (const [prevPath, prevRow] of existingFiles) {
       if (!seenPaths.has(prevPath)) {
-        markSymbolDeleted.run(prevRow.id);
+        // Conta ANTES do UPDATE (senão o WHERE filtra o que acabou de mudar).
         const oldSyms = db
-          .prepare("SELECT id FROM symbols WHERE file_id = ?")
+          .prepare("SELECT id FROM symbols WHERE file_id = ? AND status = 'active'")
           .all(prevRow.id) as { id: number }[];
+        markSymbolDeleted.run(prevRow.id);
         result.symbolsDeleted += oldSyms.length;
-        deleteFile.run(prevRow.id);
+        markFileDeleted.run(prevRow.id);
         result.filesDeleted++;
       }
     }

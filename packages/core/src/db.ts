@@ -15,7 +15,7 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -28,12 +28,13 @@ CREATE TABLE IF NOT EXISTS files (
   content_hash TEXT NOT NULL,
   size INTEGER NOT NULL,
   mtime INTEGER NOT NULL,
-  indexed_at INTEGER NOT NULL
+  indexed_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active'
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  file_id INTEGER NOT NULL REFERENCES files(id),
   key TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   kind TEXT NOT NULL,
@@ -104,6 +105,17 @@ CREATE TABLE IF NOT EXISTS doc_pages (
   content_hash TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS manual_blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_page_id INTEGER NOT NULL REFERENCES doc_pages(id) ON DELETE CASCADE,
+  start_offset INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_manual_blocks_doc_page_id ON manual_blocks(doc_page_id);
 `;
 
 /**

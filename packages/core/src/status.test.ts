@@ -7,12 +7,21 @@ describe("status.formatHuman", () => {
     const report: StatusReport = {
       files: { total: 0, byLang: {}, top: [] },
       symbols: { total: 0, byKind: {} },
-      meta: { schemaVersion: 1, lastIndexedAt: null },
+      debt: {
+        total: 0,
+        byEvent: { changed: 0, moved: 0, deleted: 0 },
+        byAssignee: { agent: 0, human: 0 },
+        items: [],
+      },
+      undocumented: { total: 0, sample: [] },
+      meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);
     expect(out).toContain("livewiki status");
     expect(out).toContain("Arquivos indexados: 0");
     expect(out).toContain("Símbolos extraídos (active): 0");
+    expect(out).toContain("Dívida aberta: 0");
+    expect(out).toContain("Undocumented: 0");
     expect(out).toContain("last_indexed_at: nunca");
   });
 
@@ -30,7 +39,37 @@ describe("status.formatHuman", () => {
         total: 200,
         byKind: { function: 100, class: 30, method: 50, export: 20 },
       },
-      meta: { schemaVersion: 1, lastIndexedAt: 1700000000000 },
+      debt: {
+        total: 3,
+        byEvent: { changed: 2, moved: 1, deleted: 0 },
+        byAssignee: { agent: 2, human: 1 },
+        items: [
+          {
+            id: 1,
+            event: "changed",
+            assignee: "agent",
+            symbol_key: "src/foo.ts#bar",
+            wiki_path: "livewiki/foo.md",
+            detail: null,
+            detected_at: 1700000000000,
+          },
+          {
+            id: 2,
+            event: "moved",
+            assignee: "agent",
+            symbol_key: "src/new.ts#bar",
+            wiki_path: null,
+            detail: '{"from":"src/foo.ts#bar","to":"src/new.ts#bar"}',
+            detected_at: 1700000000001,
+          },
+        ],
+      },
+      undocumented: { total: 5, sample: [{ symbol_key: "src/x.ts#y" }] },
+      meta: {
+        schemaVersion: 2,
+        lastIndexedAt: 1700000000000,
+        lastLedgerAt: 1700000000001,
+      },
     };
     const out = formatHuman(report);
     expect(out).toContain("Arquivos indexados: 100");
@@ -42,6 +81,11 @@ describe("status.formatHuman", () => {
     expect(out).toContain("Top 2 arquivos");
     expect(out).toContain("42");
     expect(out).toContain("src/big.ts");
+    expect(out).toContain("Dívida aberta: 3");
+    expect(out).toContain("changed=2");
+    expect(out).toContain("[changed] agent src/foo.ts#bar");
+    expect(out).toContain("[moved] agent");
+    expect(out).toContain("Undocumented: 5");
     // Formato ISO 8601 (toISOString() → "YYYY-MM-DDTHH:MM:SS.sssZ")
     expect(out).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
@@ -57,7 +101,14 @@ describe("status.formatHuman", () => {
         ],
       },
       symbols: { total: 15, byKind: { function: 15 } },
-      meta: { schemaVersion: 1, lastIndexedAt: null },
+      debt: {
+        total: 0,
+        byEvent: { changed: 0, moved: 0, deleted: 0 },
+        byAssignee: { agent: 0, human: 0 },
+        items: [],
+      },
+      undocumented: { total: 0, sample: [] },
+      meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);
     expect(out).toContain("Top 2 arquivos");
