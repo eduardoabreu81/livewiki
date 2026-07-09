@@ -158,7 +158,7 @@ carregar o `symbol_key` (em coluna ou `detail`), para não ficar órfã se a
 | `livewiki update` | modo incremental: dado o diff desde `lastDocumentedCommit`, lista a dívida e (a) emite o "pacote de trabalho" para o agente em sessão documentar, ou (b) com `--llm` chama a API configurada para pagar a dívida |
 | `livewiki verify` | valida a wiki: âncoras apontam para símbolos existentes? assinaturas citadas batem? links internos ok? Sai com código ≠ 0 se falhar (CI-friendly). **Parseia a wiki fresca do disco** — âncora em página nunca indexada TEM que ser pega (é a promessa anti-alucinação: doc recém-escrita por LLM é validável sem rodar `index` antes) |
 | `livewiki serve` | sobe o MCP server (stdio) |
-| `livewiki batch <run>` | continua/inspeciona um run de documentação completa (resume por task) |
+| `livewiki batch <run>` | continua/inspeciona um run de documentação completa (resume por task). `--only <task-id\|módulo>` re-roda 1 task (mesma interface que o modo em-sessão usa para trabalhar a fila); regeneração preserva blocos `lw:manual` byte a byte, recusa página `owner: human`, e soma o novo `usage` no checkpoint (retry custa token e aparece no reporte) |
 | `livewiki export <target>` | (fase 6) exporta a wiki para formato de wiki de repositório: `github-wiki`, `gitlab-wiki`, `generic` (diretório de md achatado). `--push <remote>` opcional |
 | `livewiki view` | (fase 7) gera site estático autocontido em `.livewiki/site/` e abre no browser. `--template <agent\|docs>`, `--out <dir>` para publicar |
 
