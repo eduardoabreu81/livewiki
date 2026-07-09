@@ -36,6 +36,7 @@ interface RunRow {
   finished_at: number | null;
   started_by: string;
   status: string;
+  summary_json: string | null;
 }
 
 /**
@@ -134,6 +135,9 @@ export async function buildStatusReport(
         startedAt: run.started_at,
         finishedAt: run.finished_at,
         startedBy: run.started_by,
+        // FIX J (rev2): expõe summary_json (com modulesRefined) no reporte.
+        // Tolerante a null/JSON inválido — report nunca quebra por causa disso.
+        summary: parseRunSummary(run.summary_json),
       },
       totals,
       byStage,
@@ -234,6 +238,15 @@ function safeJsonParse<T>(s: string): T | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Parse tolerante do `summary_json` de um run. Retorna null se ausente ou
+ * corrompido — o reporte NUNCA quebra por causa disso (achado J da rev2).
+ */
+function parseRunSummary(raw: string | null): BatchRunSummary | null {
+  if (!raw) return null;
+  return safeJsonParse<BatchRunSummary>(raw);
 }
 
 export type { BatchStatusReport, BatchRunSummary };

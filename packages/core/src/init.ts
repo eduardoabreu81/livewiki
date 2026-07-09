@@ -141,7 +141,10 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
 
   // manifest.json (snapshotHash + pendingBatch=null pra init sem batch)
   const snapshotHash = await computeSnapshotHash(absRoot);
-  await writeManifestIfChanged(
+  // FIX M (rev2): só listar manifest em filesWritten se ele foi REALMENTE
+  // regravado. `writeManifestIfChanged` é idempotente (anti-loop CI) —
+  // se nada mudou, retorna false e não devemos fingir que escreveu.
+  const wroteManifest = await writeManifestIfChanged(
     absRoot,
     buildManifest({
       lastDocumentedCommit: null,
@@ -149,7 +152,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
       pendingBatch: null,
     }),
   );
-  filesWritten.push("livewiki/.manifest.json");
+  if (wroteManifest) filesWritten.push("livewiki/.manifest.json");
 
   // 5. --batch: dispara pipeline LLM (delegado pro batch.ts)
   let batchSummary: InitResult["batchSummary"];

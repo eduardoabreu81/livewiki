@@ -114,12 +114,18 @@ export function registerBatch(program: Command): void {
         return setExitCode(absRoot, report.run.status, json);
       } catch (err) {
         process.stderr.write(`livewiki batch: erro — ${(err as Error).message}\n`);
-        process.exit(1);
+        // FIX L (rev2): ver init.ts. `process.exit(1)` abrupto pode crashar
+        // o libuv no Windows se algum handle async ficou aberto.
+        process.exitCode = 1;
+        return;
       }
     });
 }
 
 function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string {
+  // token-first (ad87319): tokens são a métrica primária, USD é secundário e
+  // omitido sem drama quando não há pricing. Cada linha de stage/module
+  // começa com tokens; USD aparece como linha separada marcada "estimado".
   const lines: string[] = [];
   lines.push(`livewiki batch — run #${report.run.id} (${report.run.status})`);
   lines.push(`  started: ${new Date(report.run.startedAt).toISOString()} (by ${report.run.startedBy})`);
@@ -127,20 +133,42 @@ function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>
     lines.push(`  finished: ${new Date(report.run.finishedAt).toISOString()}`);
   }
   lines.push("");
-  lines.push(`Custos (estimado, tabela de ${report.pricingRefDate}):`);
+  lines.push("Tokens (métrica primária):");
   const t = report.totals;
-  const costStr = t.costUsd !== null ? `$${t.costUsd.toFixed(4)}` : "(sem preço)";
-  lines.push(`  Total:        ${costStr}  (${t.inputTokens.toLocaleString()} input, ${t.outputTokens.toLocaleString()} output)`);
+  lines.push(
+    `  Total:        ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output` +
+      (t.models.length > 0 ? `  (${t.models.join(", ")})` : ""),
+  );
   for (const [stage, u] of Object.entries(report.byStage)) {
-    const c = u.costUsd !== null ? `$${u.costUsd.toFixed(4)}` : "(sem preço)";
-    lines.push(`  Stage ${stage}:      ${c}  (${u.inputTokens.toLocaleString()} input, ${u.outputTokens.toLocaleString()} output)`);
+    lines.push(
+      `  Stage ${stage}:      ${u.inputTokens.toLocaleString()} input + ${u.outputTokens.toLocaleString()} output`,
+    );
+  }
+  // USD como linha secundária, sempre marcada "estimado" — omitida sem drama
+  // se o modelo não tem pricing.
+  const hasAnyUsd = t.costUsd !== null
+    || Object.values(report.byStage).some((u) => u.costUsd !== null);
+  if (hasAnyUsd) {
+    lines.push("");
+    lines.push(`USD (estimado, tabela de ${report.pricingRefDate}):`);
+    const totalStr = t.costUsd !== null ? `$${t.costUsd.toFixed(4)}` : "(sem preço)";
+    lines.push(`  Total:        ${totalStr}`);
+    for (const [stage, u] of Object.entries(report.byStage)) {
+      const c = u.costUsd !== null ? `$${u.costUsd.toFixed(4)}` : "(sem preço)";
+      lines.push(`  Stage ${stage}:      ${c}`);
+    }
+  } else {
+    lines.push("");
+    lines.push(`USD: omitido (nenhum modelo com pricing na tabela de ${report.pricingRefDate})`);
   }
   if (report.byModule.length > 0) {
     lines.push("");
-    lines.push("Por módulo:");
+    lines.push("Por módulo (tokens):");
     for (const m of report.byModule) {
-      const c = m.costUsd !== null ? `$${m.costUsd.toFixed(4)}` : "(sem preço)";
-      lines.push(`  ${m.module.padEnd(20)} ${c}  (${m.inputTokens.toLocaleString()} + ${m.outputTokens.toLocaleString()})`);
+      const usd = m.costUsd !== null ? `  ~$${m.costUsd.toFixed(4)}` : "";
+      lines.push(
+        `  ${m.module.padEnd(20)} ${m.inputTokens.toLocaleString()} + ${m.outputTokens.toLocaleString()}${usd}`,
+      );
     }
   }
   if (report.failures.length > 0) {
@@ -155,8 +183,20 @@ function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>
 }
 
 function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string {
+  // token-first (ad87319): totals tokens primeiro, USD estimado em linha
+  // secundária quando há pricing.
   const lines: string[] = [];
   lines.push(`livewiki batch — run #${result.runId} (${result.status})`);
+  const t = result.totals;
+  lines.push(
+    `  tokens: ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output` +
+      (t.models.length > 0 ? `  (${t.models.join(", ")})` : ""),
+  );
+  if (t.costUsd !== null) {
+    lines.push(`  USD (estimado): $${t.costUsd.toFixed(4)}`);
+  } else if (t.inputTokens + t.outputTokens > 0) {
+    lines.push(`  USD: omitido (modelo sem pricing)`);
+  }
   lines.push(`  tasks done: ${result.byModule.length}`);
   lines.push(`  failures: ${result.failures.length}`);
   if (result.circuitBreakerTriggered) {

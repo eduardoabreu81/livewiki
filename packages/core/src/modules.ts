@@ -131,6 +131,14 @@ export function resolveModuleEdges(
 /**
  * Resolve "./foo" ou "../bar" relativo a `fromFile` pra um path absoluto
  * (forward-slash). Retorna null se não achar em knownFiles.
+ *
+ * FIX K (rev2): NodeNext (e bundlers em geral) obrigam imports com extensão
+ * explícita: `import x from "../utils/crypto.js"` resolve pra `crypto.ts`
+ * (ou `.tsx`, `.js`, etc). O resolver antigo tentava `../utils/crypto.js`
+ * + sufixos colados (`../utils/crypto.js.ts`), o que nunca batia.
+ *
+ * Agora strip da extensão `.js`/`.jsx` ANTES de gerar os candidatos, e também
+ * trata `index.js` → `index.ts/tsx/js/jsx` (mapeamento de barrels).
  */
 function resolveRelativeImport(
   fromFile: string,
@@ -147,8 +155,11 @@ function resolveRelativeImport(
     }
     parts.push(seg);
   }
-  // Tenta com .ts, .tsx, .js, .jsx, .py, /index.ts, etc.
-  const base = parts.join("/");
+  // Strip de extensões NodeNext-style pra achar o source real.
+  // "../utils/crypto.js" → "../utils/crypto" (depois testamos .ts/.tsx/...)
+  // "../utils/index.js"  → "../utils/index" (e testamos como barrel)
+  const joined = parts.join("/");
+  const base = stripNodeNextExtension(joined);
   const candidates = [
     base,
     `${base}.ts`,
@@ -156,6 +167,7 @@ function resolveRelativeImport(
     `${base}.js`,
     `${base}.jsx`,
     `${base}.py`,
+    // Barrels: o base já é "index" se import era ".../index.js" ou ".../index"
     `${base}/index.ts`,
     `${base}/index.tsx`,
     `${base}/index.js`,
@@ -166,6 +178,28 @@ function resolveRelativeImport(
     if (knownFiles.has(c)) return c;
   }
   return null;
+}
+
+/**
+ * Remove extensão NodeNext-style do final de um path: ".js" ou ".jsx" ou
+ * ".mjs"/".cjs". Se o basename for `index.{js,jsx,...}`, também strip
+ * (tratado como barrel — o caller vai testar `${base}/index.*`).
+ *
+ * "src/utils/crypto.js"  → "src/utils/crypto"
+ * "src/utils/index.js"   → "src/utils/index"
+ * "src/foo.ts"           → "src/foo"  (idempotente, mas só roda se terminar em .js/.jsx/etc)
+ * "src/bar"              → "src/bar"  (sem extensão, no-op)
+ */
+function stripNodeNextExtension(p: string): string {
+  const idx = p.lastIndexOf("/");
+  const base = idx === -1 ? p : p.slice(idx + 1);
+  const dotIdx = base.lastIndexOf(".");
+  if (dotIdx <= 0) return p;
+  const ext = base.slice(dotIdx + 1);
+  if (ext === "js" || ext === "jsx" || ext === "mjs" || ext === "cjs") {
+    return p.slice(0, p.length - (base.length - dotIdx));
+  }
+  return p;
 }
 
 /**

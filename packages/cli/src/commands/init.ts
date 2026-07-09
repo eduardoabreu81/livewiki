@@ -54,7 +54,13 @@ export function registerInit(program: Command): void {
         );
       } catch (err) {
         process.stderr.write(`livewiki init: erro — ${(err as Error).message}\n`);
-        process.exit(1);
+        // FIX L (rev2): usar `process.exitCode` em vez de `process.exit(1)`.
+        // O `process.exit` abrupto pode dar libuv assert (STATUS_STACK_BUFFER_OVERRUN
+        // = 0xC0000409, exit code -1073740791 no Windows) se o Node tiver
+        // handles async abertos (ex.: fetch em vôo, WAL do SQLite, watcher).
+        // Setar `exitCode` deixa o event loop drenar antes de sair.
+        process.exitCode = 1;
+        return;
       }
     });
 }

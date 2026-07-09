@@ -132,6 +132,11 @@ export interface FailureReportItem {
 /**
  * Snapshot agregado gravado em batch_runs.summary_json ao final do run.
  * Permite o reporte sem precisar re-processar todas as tasks.
+ *
+ * `modulesRefined` é a lista final de módulos que o stage 4 usou — pode
+ * diferir da heurística se o refinamento LLM (opt-in) entrou em ação.
+ * Guardado AQUI (e não no `checkpoint_json` de uma task) porque é uma
+ * propriedade do RUN, não da task de stage 2 (achado J da rev2).
  */
 export interface BatchRunSummary {
   totals: StageUsage;
@@ -140,6 +145,14 @@ export interface BatchRunSummary {
   tasksDone: number;
   tasksFailed: number;
   tasksPending: number;
+  /** Lista final de módulos (pós-refinamento). Null se ainda não foi gravado. */
+  modulesRefined: Array<{ id: string; paths: string[] }> | null;
+}
+
+/** Módulo lightweight (sem symbolCount) pra serializar no summary_json. */
+export interface RefinedModuleSnapshot {
+  id: string;
+  paths: string[];
 }
 
 /** Shape completo do `livewiki batch status --json`. */
@@ -150,6 +163,12 @@ export interface BatchStatusReport {
     startedAt: number;
     finishedAt: number | null;
     startedBy: string;
+    /**
+     * Summary agregado gravado em batch_runs.summary_json (módulos refinados +
+     * totais por stage). Null se o run ainda está em andamento OU se o
+     * summary_json foi corrompido por uma versão antiga do livewiki.
+     */
+    summary: BatchRunSummary | null;
   };
   totals: StageUsage;
   byStage: Record<string, StageUsage>;
