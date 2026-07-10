@@ -221,9 +221,14 @@ market's providers (presets in the SPEC), the user chooses.
 - README generated from the wiki
 - Simultaneous multilingual wikis (N synced languages) — each change would become
   N debts and `verify` can't check semantic equivalence across languages; if it
-  ever ships, it'll be a one-way translated export (Phase 6+), never N sources of
-  truth. (Single configurable language per repo is ALREADY in the MVP: `language`
-  in the config.)
+  ever ships, it must be **optional**, with an explicit user warning that
+  maintenance cost and token usage grow with each concurrent language, and it
+  should remain a one-way translated export (Phase 6+) rather than N sources of
+  truth. **MVP today:** single configurable language per repo (`language` in
+  config, default `en` / en-US). The user chooses the language when documenting;
+  generated pages stay in that language (sticky) — livewiki does not rewrite
+  prose into another language on later runs unless the user deliberately
+  regenerates with a new setting.
 - Final distribution (public npm, binary) — decide at validation
 
 ## Open decisions

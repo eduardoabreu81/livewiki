@@ -10,15 +10,24 @@
 
 ## Language policy
 
-**All durable artifacts of this repo are written in English** — docs,
-code comments, CLI strings and messages, error messages, commit
-messages. PT-BR only in conversation with the maintainer (Eduardo).
-This is a working convention effective immediately, not just for
-release. See SPEC.md §"Stack" and VISION.md §"Out of scope" for the
-authoritative statement.
+**All durable artifacts of this repo (livewiki product) are written in
+English** — docs, code comments, CLI strings and messages, error
+messages, commit messages. PT-BR only in conversation with the
+maintainer (Eduardo). See SPEC.md and VISION.md for the authoritative
+product statement.
 
-If you're reading older commits you may see PT-BR mixed in — those are
-pre-policy. New code and edits must follow English.
+**User wiki language (orthogonal):** generated documentation for a
+*user's* repo defaults to `en` (en-US) via `.livewiki/config.json`
+`language`. The user may set another BCP-47 language when documenting.
+Pages remain in the language they were written in (sticky); do not
+silently retranslate on later batch/update runs. Future multi-language
+support is optional only, with an explicit cost warning (more concurrent
+languages ⇒ more debt work and token use). See VISION.md §"Out of
+designed scope".
+
+If you're reading older commits you may see PT-BR mixed in product
+code — those are pre-policy. New product code and edits must follow
+English.
 
 **Working tree hygiene:** do NOT revert uncommitted `.md` files that
 appear in the working tree — they may be reviewer's work. If in doubt,

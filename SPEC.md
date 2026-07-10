@@ -78,8 +78,10 @@ target-repo/
 └── .livewiki/
     ├── index.db
     └── config.json                # local config (provider, languages, ignores,
-                                   # language: generated-doc language — 1 per repo,
-                                   # default "en"; affects only prompts/skills, never
+                                   # language: wiki prose language — 1 per repo,
+                                   # default "en" (en-US). Set when documenting;
+                                   # pages keep the language they were written in
+                                   # (sticky). Affects only prompts/skills, never
                                    # keys/anchors/diagrams)
 ```
 
