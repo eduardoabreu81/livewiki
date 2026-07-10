@@ -21,42 +21,40 @@ interface UpdateOptions {
 }
 
 /**
- * `livewiki update` — Fase 5 (coração do produto, modo incremental).
+ * `livewiki update` — Phase 5 (heart of the product, incremental mode).
  *
- * Sem flags: emite o pacote de trabalho (debt + snippets + validAnchors +
- * tokens estimados) pra agente em sessão pagar a dívida. Com `--llm`,
- * delega ao batch (modo completo, não incremental — Fase 3).
+ * Without flags: emits the work package (debt + snippets + validAnchors +
+ * estimated tokens) for the in-session agent to pay the debt. With `--llm`,
+ * delegates to batch (full mode, not incremental — Phase 3).
  *
- * SPEC §"Comandos CLI" (Fase 5):
- *   "modo incremental: dado o diff desde lastDocumentedCommit, lista a
- *    dívida e (a) emite o pacote de trabalho para o agente em sessão
- *    documentar, ou (b) com --llm chama a API configurada para pagar a
- *    dívida."
+ * SPEC §"CLI commands" (Phase 5):
+ *   "incremental mode: given the diff since lastDocumentedCommit, list the
+ *    debt and (a) emit the work package for the in-session agent to document,
+ *    or (b) with --llm call the configured API to pay the debt."
  *
- * SPEC §"Contabilidade de tokens (Fase 3)":
- *   "Incremental: o `update` registra o tamanho (tokens estimados por
- *    tokenizer) do pacote de trabalho emitido ao agente e da doc escrita
- *    de volta. Métricas em tabela própria no .livewiki/, expostas via
- *    status --json."
+ * SPEC §"Token accounting (Phase 3)":
+ *   "Incremental: `update` records the size (tokens estimated via tokenizer)
+ *    of the work package emitted to the agent and of the doc written back.
+ *    Metrics in their own table in `.livewiki/`, exposed via `status --json`."
  *
- * Exit codes (mesmo padrão de init/batch):
- *   0 = sucesso (pacote emitido, ou write registrado)
- *   1 = erro de uso ou estado (repo não inicializado)
+ * Exit codes (same pattern as init/batch):
+ *   0 = success (package emitted, or write recorded)
+ *   1 = usage or state error (repo not initialized)
  */
 export function registerUpdate(program: Command): void {
   program
     .command("update")
     .description(
-      "modo incremental (Fase 5): emite pacote de trabalho (debt + snippets + validAnchors + tokens). Com --llm chama API pra pagar dívida. Com --record-write <tokens> contabiliza doc escrita de volta",
+      "incremental mode (Phase 5): emits a work package (debt + snippets + validAnchors + tokens). With --llm calls the API to pay debt. With --record-write <tokens> accounts for doc written back",
     )
-    .option("--llm", "pagar dívida via API configurada (delega ao batch)")
+    .option("--llm", "pay debt via the configured API (delegates to batch)")
     .option(
       "--record-write <tokens>",
-      "registra que N tokens foram escritos de volta (economia: write/package)",
+      "record that N tokens were written back (economy: write/package)",
     )
     .option(
       "--snippet-window <lines>",
-      "janela de snippet por âncora (default 20)",
+      "snippet window per anchor (default 20)",
       "20",
     )
     .action(async (_options: UpdateOptions, command: Command) => {
@@ -65,18 +63,18 @@ export function registerUpdate(program: Command): void {
       const repoRoot = path.resolve(process.cwd(), resolveRepoRoot(opts.repo));
 
       try {
-        // (1) --record-write: registra métrica e sai (não emite pacote)
+        // (1) --record-write: records metric and exits (does not emit a package)
         if (opts.recordWrite !== undefined) {
           const tokens = Number.parseInt(opts.recordWrite, 10);
           if (Number.isNaN(tokens) || tokens < 0) {
             process.stderr.write(
-              `livewiki update: --record-write exige número inteiro positivo de tokens (recebido: ${opts.recordWrite})\n`,
+              `livewiki update: --record-write requires a non-negative integer (received: ${opts.recordWrite})\n`,
             );
             process.exitCode = 1;
             return;
           }
           const { recordDocWrittenBack } = await import("@livewiki/core/update");
-          // bytes não temos aqui (vem do CLI caller); estimamos 4 chars/token
+          // bytes not available here (come from CLI caller); estimate 4 chars/token
           const bytes = tokens * 4;
           await recordDocWrittenBack(repoRoot, {
             wikiPath: "(manual)",
@@ -91,17 +89,17 @@ export function registerUpdate(program: Command): void {
           return;
         }
 
-        // (2) --llm: delega ao batch (modo completo, Fase 3)
+        // (2) --llm: delegate to batch (full mode, Phase 3)
         if (opts.llm) {
           process.stderr.write(
-            "livewiki update --llm: delega ao batch orchestrator (modo completo, Fase 3). " +
-              "Use `livewiki batch resume <runId>` se há run pendente, ou `livewiki init --batch` para começar.\n",
+            "livewiki update --llm: delegates to the batch orchestrator (full mode, Phase 3). " +
+              "Use `livewiki batch resume <runId>` if there's a pending run, or `livewiki init --batch` to start one.\n",
           );
           process.exitCode = 1;
           return;
         }
 
-        // (3) Default: emite o pacote de trabalho
+        // (3) Default: emit the work package
         const snippetWindow = Number.parseInt(opts.snippetWindow ?? "20", 10);
         const pkg = await loadWorkPackage(repoRoot, {
           ...(Number.isFinite(snippetWindow) && snippetWindow > 0
@@ -109,8 +107,8 @@ export function registerUpdate(program: Command): void {
             : {}),
         });
 
-        // Tese do produto em 1 linha: economia do update vs. reler repo
-        // (estimado: ~50KB de source médio = ~12500 tokens).
+        // Product thesis in 1 line: update economy vs. re-reading the repo
+        // (estimated: ~50KB of medium source = ~12500 tokens).
         const estimatedFullReadTokens = 12500;
         const economy = Math.max(
           0,
@@ -128,9 +126,9 @@ export function registerUpdate(program: Command): void {
 
         emit(json, summary, formatHuman(pkg));
       } catch (err) {
-        process.stderr.write(`livewiki update: erro — ${(err as Error).message}\n`);
-        // FIX L (rev2): process.exitCode, não process.exit (libuv assert em
-        // handles async abertos — fetch/WAL/watcher).
+        process.stderr.write(`livewiki update: error — ${(err as Error).message}\n`);
+        // FIX L (rev2): process.exitCode, not process.exit (libuv assert on
+        // open async handles — fetch/WAL/watcher).
         process.exitCode = 1;
         return;
       }
@@ -141,7 +139,7 @@ function formatHuman(pkg: Awaited<ReturnType<typeof loadWorkPackage>>): string {
   const lines: string[] = [];
   lines.push("livewiki update — work package:");
   if (!pkg.manifest) {
-    lines.push("  (manifest ausente — rode `livewiki init` primeiro)");
+    lines.push("  (manifest missing — run `livewiki init` first)");
   } else {
     lines.push(
       `  lastDocumentedCommit: ${pkg.manifest.lastDocumentedCommit ?? "(none)"}`,
@@ -155,20 +153,20 @@ function formatHuman(pkg: Awaited<ReturnType<typeof loadWorkPackage>>): string {
       lines.push(`  pendingBatch: run #${pb.runId} (${pb.done}/${pb.total})`);
     }
   }
-  lines.push(`  debt: ${pkg.debt.length} item(ns)`);
+  lines.push(`  debt: ${pkg.debt.length} item(s)`);
   for (const d of pkg.debt.slice(0, 5)) {
     lines.push(
       `    [${d.event}] ${d.symbol_key ?? "?"} (assignee=${d.assignee}, wiki=${d.wiki_path ?? "—"})`,
     );
   }
-  if (pkg.debt.length > 5) lines.push(`    ... +${pkg.debt.length - 5} mais`);
-  lines.push(`  snippets: ${pkg.snippets.length} (janela por âncora)`);
+  if (pkg.debt.length > 5) lines.push(`    ... +${pkg.debt.length - 5} more`);
+  lines.push(`  snippets: ${pkg.snippets.length} (window per anchor)`);
   lines.push(`  validAnchors: ${pkg.validAnchors.length}`);
   lines.push("");
-  lines.push(`Tokens estimados: ${pkg.tokensEstimated} (~${pkg.bytes} bytes)`);
-  lines.push("Tese: pacote focado vs reler repo (~12500 tokens) = economia.");
+  lines.push(`Estimated tokens: ${pkg.tokensEstimated} (~${pkg.bytes} bytes)`);
+  lines.push("Thesis: focused package vs re-reading repo (~12500 tokens) = economy.");
   return lines.join("\n");
 }
 
-// Re-uso do runStatus pra export se necessário em outros commands
+// Re-use runStatus so other commands can import it
 export { runStatus };

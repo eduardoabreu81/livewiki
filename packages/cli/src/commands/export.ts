@@ -2,16 +2,16 @@ import type { Command } from "commander";
 import { makeStubAction } from "./stub.js";
 
 /**
- * `livewiki export <target>` — exportar wiki para formato de wiki de repo:
- * github-wiki, gitlab-wiki, generic (diretório de md achatado). --push opcional.
- * SPEC §"Comandos CLI" / Fase 6.
+ * `livewiki export <target>` — export wiki to a repo-wiki format:
+ * github-wiki, gitlab-wiki, generic (flattened md directory). --push optional.
+ * SPEC §"CLI commands" / Phase 6.
  */
 export function registerExport(program: Command): void {
   program
     .command("export <target>")
     .description(
-      "exportar wiki para formato de wiki de repositório (github-wiki/gitlab-wiki/generic). --push publica (Fase 6)",
+      "export wiki to a repository-wiki format (github-wiki/gitlab-wiki/generic). --push publishes (Phase 6)",
     )
-    .option("--push <remote>", "remote git para publicar")
-    .action(makeStubAction({ name: "export", phase: 6, planned: "transformação de mão única: achata namespace, reescreve links, remove frontmatter de âncoras" }));
+    .option("--push <remote>", "git remote to publish to")
+    .action(makeStubAction({ name: "export", phase: 6, planned: "one-way transformation: flatten namespace, rewrite links, strip anchor frontmatter" }));
 }

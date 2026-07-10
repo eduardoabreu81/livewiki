@@ -238,14 +238,14 @@ See [auth page](../auth.md) and [class diag](../diagrams/auth.classes.mmd).
 });
 
 describe("formatHuman", () => {
-  it("formata resultado OK", () => {
+  it("formats OK result", () => {
     const out = formatHuman({ ok: true, pagesChecked: 3, issues: [] });
     expect(out).toContain("OK");
-    expect(out).toContain("3 páginas");
-    expect(out).toContain("nenhum problema");
+    expect(out).toContain("3 pages");
+    expect(out).toContain("no issues");
   });
 
-  it("formata resultado com errors e warnings", () => {
+  it("formats result with errors and warnings", () => {
     const out = formatHuman({
       ok: false,
       pagesChecked: 2,
@@ -254,9 +254,9 @@ describe("formatHuman", () => {
         { severity: "warning", code: "broken_internal_link", wikiPath: "livewiki/bar.md", detail: "link" },
       ],
     });
-    expect(out).toContain("FALHOU");
-    expect(out).toContain("1 erros");
-    expect(out).toContain("1 avisos");
+    expect(out).toContain("FAILED");
+    expect(out).toContain("1 errors");
+    expect(out).toContain("1 warnings");
     expect(out).toContain("ERROR");
     expect(out).toContain("WARN");
   });

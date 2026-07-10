@@ -9,18 +9,18 @@ interface StatusOptions {
 }
 
 /**
- * `livewiki status` — relatório do índice (Fase 1: arquivos + símbolos).
- * Dívida + undocumented entram na Fase 2.
+ * `livewiki status` — index report (Phase 1: files + symbols).
+ * Debt + undocumented enter in Phase 2.
  */
 export function registerStatus(program: Command): void {
   program
     .command("status")
     .description(
-      "mostrar dívida aberta, símbolos novos sem doc, batch pendente (Fase 1/2)",
+      "show open debt, undocumented symbols, pending batch (Phase 1/2)",
     )
-    .option("--top <n>", "quantos arquivos mostrar no top (default 10)", "10")
+    .option("--top <n>", "how many files to show in the top list (default 10)", "10")
     .action(async (_options: StatusOptions, command: Command) => {
-      // commander 12 não passa opções globais no 1º arg do action.
+      // commander 12 does not pass global options in the 1st action arg.
       const opts = command.optsWithGlobals<StatusOptions>();
       const json = Boolean(opts.json);
       const repoRoot = path.resolve(process.cwd(), opts.repo ?? ".");
@@ -33,7 +33,7 @@ export function registerStatus(program: Command): void {
           process.stdout.write(formatStatusHuman(report) + "\n");
         }
       } catch (err) {
-        process.stderr.write(`livewiki status: erro — ${(err as Error).message}\n`);
+        process.stderr.write(`livewiki status: error — ${(err as Error).message}\n`);
         process.exit(1);
       }
     });

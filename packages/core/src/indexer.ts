@@ -91,8 +91,8 @@ async function ensureLivewikiDir(absRoot: string, quiet: boolean): Promise<void>
     }
   }
 
-  // Nota informativa se a wiki também não existe (Fase 3 vai criá-la).
-  // Em quiet mode (hooks), suprime — o terminal fica limpo.
+  // Info note if the wiki also doesn't exist (Phase 3 will create it).
+  // In quiet mode (hooks), suppress — the terminal stays clean.
   const livewikiExists = await nodeFs
     .stat(nodePath.join(absRoot, "livewiki"))
     .then(() => true)
@@ -100,8 +100,8 @@ async function ensureLivewikiDir(absRoot: string, quiet: boolean): Promise<void>
   if (!livewikiExists && !quiet) {
     // eslint-disable-next-line no-console
     console.log(
-      "[livewiki] nota: wiki livewiki/ ainda não existe — indexou mesmo assim. " +
-        "Rode `livewiki init` (Fase 3) para gerar quickstart e layout completo.",
+      "[livewiki] note: wiki livewiki/ does not exist yet — indexed anyway. " +
+        "Run `livewiki init` (Phase 3) to generate quickstart and full layout.",
     );
   }
 }
@@ -297,14 +297,14 @@ export { listSupportedGrammars };
 
 export function formatHuman(result: IndexResult): string {
   const lines: string[] = [];
-  lines.push(`livewiki index: OK em ${result.durationMs}ms`);
+  lines.push(`livewiki index: OK in ${result.durationMs}ms`);
   lines.push(
-    `  arquivos: ${result.filesScanned} varridos  ` +
-      `+${result.filesAdded} novos  ~${result.filesUpdated} atualizados  ` +
-      `=${result.filesUnchanged} inalterados  -${result.filesDeleted} removidos`,
+    `  files: ${result.filesScanned} scanned  ` +
+      `+${result.filesAdded} new  ~${result.filesUpdated} updated  ` +
+      `=${result.filesUnchanged} unchanged  -${result.filesDeleted} removed`,
   );
   lines.push(
-    `  símbolos: +${result.symbolsAdded} extraídos  -${result.symbolsDeleted} marcados deleted`,
+    `  symbols: +${result.symbolsAdded} extracted  -${result.symbolsDeleted} marked deleted`,
   );
   return lines.join("\n");
 }

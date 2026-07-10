@@ -13,9 +13,9 @@ import { registerView } from "./commands/view.js";
 import { registerPointer } from "./commands/pointer.js";
 
 /**
- * Versão lida do package.json do @livewiki/cli. Síncrona — o arquivo é estático
- * no momento do build e o caller (`run`) já é uma função async.
- * Caminho: src/cli.ts → ../../package.json. Em build: dist/cli.js → mesmo path.
+ * Version read from @livewiki/cli's package.json. Synchronous — the file is
+ * static at build time and the caller (`run`) is already async.
+ * Path: src/cli.ts → ../../package.json. Built: dist/cli.js → same path.
  */
 function readVersion(): string {
   const here = new URL(import.meta.url);
@@ -34,21 +34,21 @@ export function createProgram(): Command {
   program
     .name("livewiki")
     .description(
-      "Documentação viva de repositórios, ancorada no código e verificável. " +
-        "Veja VISION.md e SPEC.md para o que cada comando faz e em que fase entra.",
+      "Living repository documentation, anchored to code and verifiable. " +
+        "See VISION.md and SPEC.md for what each command does and what phase it belongs to.",
     )
     .version(readVersion());
 
-  // ── Flags globais ────────────────────────────────────────────────────────
-  // --json: saída parseável (todos os comandos) — regra da SPEC.
-  // --repo: diretório do repo-alvo (default: cwd).
+  // ── Global flags ────────────────────────────────────────────────────────
+  // --json: parseable output (all commands) — SPEC rule.
+  // --repo: target repo directory (default: cwd).
   program
-    .option("--json", "emitir saída em JSON (parseável por agentes)")
-    .option("--repo <path>", "caminho do repo-alvo", ".");
+    .option("--json", "emit JSON output (parseable by agents)")
+    .option("--repo <path>", "path to the target repo", ".");
 
-  // ── Subcomandos (todos stubs da Fase 0; implementados em fases posteriores) ──
-  // Spec §"Comandos CLI" lista 9 comandos. Todos registrados aqui desde o scaffold
-  // para que `--help` já mostre a superfície completa.
+  // ── Subcommands (Phase 0 stubs; implemented in later phases) ───────────
+  // Spec §"CLI commands" lists the full surface. All registered here from the
+  // scaffold so `--help` shows the complete picture.
   registerInit(program);
   registerIndex(program);
   registerStatus(program);
@@ -69,8 +69,8 @@ export async function run(argv: readonly string[]): Promise<void> {
 }
 
 /**
- * Resolve repoRoot a partir de --repo (relativo a cwd). Usado pelos comandos
- * para construir o CommandContext.
+ * Resolve repoRoot from --repo (relative to cwd). Used by commands to
+ * construct the CommandContext.
  */
 export function resolveRepoRoot(repoOpt: string | undefined): string {
   return nodePath.resolve(process.cwd(), repoOpt ?? ".");

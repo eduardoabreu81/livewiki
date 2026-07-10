@@ -198,32 +198,32 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
   };
 }
 
-/** Format human-readable (texto). */
+/** Format human-readable (text). */
 export function formatHuman(report: StatusReport): string {
   const lines: string[] = [];
   lines.push("livewiki status");
   lines.push("==============");
   lines.push("");
-  lines.push(`Arquivos indexados: ${report.files.total}`);
+  lines.push(`Indexed files: ${report.files.total}`);
   if (Object.keys(report.files.byLang).length > 0) {
     for (const [lang, n] of Object.entries(report.files.byLang).sort()) {
       lines.push(`  ${lang.padEnd(12)} ${n}`);
     }
   }
   lines.push("");
-  lines.push(`Símbolos extraídos (active): ${report.symbols.total}`);
+  lines.push(`Extracted symbols (active): ${report.symbols.total}`);
   for (const [kind, n] of Object.entries(report.symbols.byKind).sort()) {
     lines.push(`  ${kind.padEnd(12)} ${n}`);
   }
   lines.push("");
   if (report.files.top.length > 0) {
-    lines.push(`Top ${report.files.top.length} arquivos por # símbolos:`);
+    lines.push(`Top ${report.files.top.length} files by # symbols:`);
     for (const f of report.files.top) {
       lines.push(`  ${String(f.symbols).padStart(4)}  ${f.path}`);
     }
     lines.push("");
   }
-  lines.push(`Dívida aberta: ${report.debt.total}`);
+  lines.push(`Open debt: ${report.debt.total}`);
   lines.push(
     `  by event:   changed=${report.debt.byEvent.changed} ` +
       `moved=${report.debt.byEvent.moved} deleted=${report.debt.byEvent.deleted}`,
@@ -246,9 +246,9 @@ export function formatHuman(report: StatusReport): string {
   lines.push(
     `schema_version: ${report.meta.schemaVersion}  |  ` +
       `last_indexed_at: ${
-        report.meta.lastIndexedAt ? new Date(report.meta.lastIndexedAt).toISOString() : "nunca"
+        report.meta.lastIndexedAt ? new Date(report.meta.lastIndexedAt).toISOString() : "never"
       }  |  last_ledger_at: ${
-        report.meta.lastLedgerAt ? new Date(report.meta.lastLedgerAt).toISOString() : "nunca"
+        report.meta.lastLedgerAt ? new Date(report.meta.lastLedgerAt).toISOString() : "never"
       }`,
   );
   return lines.join("\n");

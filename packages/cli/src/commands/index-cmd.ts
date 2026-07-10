@@ -16,26 +16,26 @@ interface IndexOptions {
 }
 
 /**
- * `livewiki index` — (re)indexa o repo + sincroniza âncoras. Idempotente. Incremental.
+ * `livewiki index` — (re)indexes the repo + syncs anchors. Idempotent. Incremental.
  *
- * SPEC §"Comandos CLI" (commit 300ad58): `.livewiki/` ausente é auto-criado
- * **sem aviso**. Se a wiki `livewiki/` também não existe, emite nota informativa
- * (sugerindo `init`, Fase 3). Nunca exige `init` antes.
+ * SPEC §"CLI commands" (commit 300ad58): missing `.livewiki/` is auto-created
+ * **without warning**. If `livewiki/` is also missing, emits an info note
+ * (suggesting `init`, Phase 3). Never requires `init` first.
  *
- * Fase 2 encadeia o anchor-ledger depois do indexer — assim `livewiki index`
- * (re)detecta changed/moved/deleted junto com o reindex.
+ * Phase 2 chains the anchor-ledger after the indexer — so `livewiki index`
+ * (re)detects changed/moved/deleted along with the reindex.
  */
 export function registerIndex(program: Command): void {
   program
     .command("index")
     .description(
-      "(re)indexar repo: extrai símbolos, atualiza hashes, gera dívida de âncoras (Fase 1+2)",
+      "(re)index repo: extracts symbols, updates hashes, generates anchor debt (Phase 1+2)",
     )
-    .option("--ignore <pattern>", "padrão adicional a ignorar (pode repetir)", collectIgnore, [])
-    .option("--no-ledger", "pular ledger (só indexar código)")
+    .option("--ignore <pattern>", "additional pattern to ignore (repeatable)", collectIgnore, [])
+    .option("--no-ledger", "skip ledger (index code only)")
     .option(
       "--quiet",
-      "suprime output humano sem produzir JSON (usado pelos hooks — Fase 5)",
+      "suppress human output without producing JSON (used by hooks — Phase 5)",
     )
     .action(async (_options: IndexOptions, command: Command) => {
       const opts = command.optsWithGlobals<IndexOptions & { ledger?: boolean }>();
@@ -47,17 +47,17 @@ export function registerIndex(program: Command): void {
           ...(opts.ignore && opts.ignore.length > 0
             ? { extraIgnores: opts.ignore }
             : {}),
-          // quiet = JSON ou --quiet (qualquer um suprime output humano)
+          // quiet = JSON or --quiet (either suppresses human output)
           quiet: json || quiet,
         });
         let ledgerResult: LedgerResult | null = null;
-        // commander trata --no-ledger como `ledger: false`
+        // commander treats --no-ledger as `ledger: false`
         if (opts.ledger !== false) {
           ledgerResult = await runLedger(repoRoot, { quiet: json || quiet });
         }
         emit(json, quiet, indexResult, ledgerResult);
       } catch (err) {
-        process.stderr.write(`livewiki index: erro — ${(err as Error).message}\n`);
+        process.stderr.write(`livewiki index: error — ${(err as Error).message}\n`);
         process.exit(1);
       }
     });
@@ -73,8 +73,8 @@ function emit(
   indexResult: IndexResult,
   ledgerResult: LedgerResult | null,
 ): void {
-  // Quiet: nada no stdout. O hook só quer detecção de dívida (via `status --json`
-  // em chamada separada), não output. Stderr ainda carrega erros.
+  // Quiet: nothing on stdout. The hook only wants debt detection (via
+  // `status --json` in a separate call), not output. Stderr still carries errors.
   if (quiet && !json) return;
   if (json) {
     process.stdout.write(
@@ -91,10 +91,10 @@ function emit(
 function formatLedgerHuman(r: LedgerResult): string {
   const lines: string[] = [];
   lines.push(`livewiki ledger: OK`);
-  lines.push(`  páginas: ${r.pagesProcessed} processadas, ${r.pagesSkipped} puladas`);
-  lines.push(`  âncoras: ${r.anchorsUpserted} upsert`);
+  lines.push(`  pages: ${r.pagesProcessed} processed, ${r.pagesSkipped} skipped`);
+  lines.push(`  anchors: ${r.anchorsUpserted} upsert`);
   lines.push(
-    `  dívida: +${r.debtByEvent.changed} changed +${r.debtByEvent.moved} moved +${r.debtByEvent.deleted} deleted`,
+    `  debt: +${r.debtByEvent.changed} changed +${r.debtByEvent.moved} moved +${r.debtByEvent.deleted} deleted`,
   );
   lines.push(`  undocumented: ${r.undocumentedSymbols}`);
   if (r.movedPairs.length > 0) {

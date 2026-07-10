@@ -13,23 +13,23 @@ interface InitOptions {
 }
 
 /**
- * `livewiki init` (Fase 3 — real): cria livewiki/ + .livewiki/, indexa, gera
- * layout determinístico (quickstart + diagramas + manifest). Sem LLM.
+ * `livewiki init` (Phase 3 — real): creates livewiki/ + .livewiki/, indexes,
+ * generates deterministic layout (quickstart + diagrams + manifest). No LLM.
  *
  * Flags:
- *   --batch: dispara pipeline LLM completo (etapas 1-4)
- *   --plan: mostra plano de módulos (heurística, SEM LLM, sem escrita)
- *   --no-refine: pula refinamento LLM da etapa 2 (só com --batch)
+ *   --batch: triggers full LLM pipeline (stages 1-4)
+ *   --plan: shows module plan (heuristic, NO LLM, no writes)
+ *   --no-refine: skips LLM refinement of stage 2 (only with --batch)
  */
 export function registerInit(program: Command): void {
   program
     .command("init")
     .description(
-      "inicializa livewiki: cria livewiki/ + .livewiki/, indexa, gera layout (Fase 3). --batch dispara pipeline LLM. --plan mostra plano sem escrever",
+      "initialize livewiki: creates livewiki/ + .livewiki/, indexes, generates layout (Phase 3). --batch triggers full LLM pipeline. --plan shows plan without writing",
     )
-    .option("--batch", "rodar pipeline LLM completo de documentação")
-    .option("--plan", "mostrar plano de módulos (sem LLM, sem escrita)")
-    .option("--no-refine", "pular refinamento LLM da etapa 2 (etapa 2 fica só com heurística)")
+    .option("--batch", "run the full LLM documentation pipeline")
+    .option("--plan", "show the module plan (no LLM, no writes)")
+    .option("--no-refine", "skip LLM refinement of stage 2 (stage 2 stays heuristic-only)")
 .action(async (_options: InitOptions, command: Command) => {
       const opts = command.optsWithGlobals<InitOptions>();
       const json = Boolean(opts.json);
@@ -53,19 +53,19 @@ export function registerInit(program: Command): void {
           },
           formatHuman(result),
         );
-        // (O): propagar exit code do batch (statusToExitCode no core).
-        // --json preserva exit 0 (output estruturado, convenção do batch CLI).
-        // Sem --batch: sempre 0 (init base é sucesso).
+        // (O): propagate the batch exit code (statusToExitCode in core).
+        // --json preserves exit 0 (structured output, batch CLI convention).
+        // Without --batch: always 0 (base init is success).
         if (!json && result.batchExitCode !== undefined) {
           process.exitCode = result.batchExitCode;
         }
       } catch (err) {
-        process.stderr.write(`livewiki init: erro — ${(err as Error).message}\n`);
-        // FIX L (rev2): usar `process.exitCode` em vez de `process.exit(1)`.
-        // O `process.exit` abrupto pode dar libuv assert (STATUS_STACK_BUFFER_OVERRUN
-        // = 0xC0000409, exit code -1073740791 no Windows) se o Node tiver
-        // handles async abertos (ex.: fetch em vôo, WAL do SQLite, watcher).
-        // Setar `exitCode` deixa o event loop drenar antes de sair.
+        process.stderr.write(`livewiki init: error — ${(err as Error).message}\n`);
+        // FIX L (rev2): use `process.exitCode` instead of `process.exit(1)`.
+        // Abrupt `process.exit` can trigger libuv assert (STATUS_STACK_BUFFER_OVERRUN
+        // = 0xC0000409, exit code -1073740791 on Windows) if Node has async
+        // handles open (e.g.: in-flight fetch, SQLite WAL, watcher).
+        // Setting `exitCode` lets the event loop drain before exit.
         process.exitCode = 1;
         return;
       }

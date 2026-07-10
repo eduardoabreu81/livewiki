@@ -3,7 +3,7 @@ import { formatHuman } from "./status.js";
 import type { StatusReport } from "./status.js";
 
 describe("status.formatHuman", () => {
-  it("formata relatório vazio", () => {
+  it("formats empty report", () => {
     const report: StatusReport = {
       files: { total: 0, byLang: {}, top: [] },
       symbols: { total: 0, byKind: {} },
@@ -19,14 +19,14 @@ describe("status.formatHuman", () => {
     };
     const out = formatHuman(report);
     expect(out).toContain("livewiki status");
-    expect(out).toContain("Arquivos indexados: 0");
-    expect(out).toContain("Símbolos extraídos (active): 0");
-    expect(out).toContain("Dívida aberta: 0");
+    expect(out).toContain("Indexed files: 0");
+    expect(out).toContain("Extracted symbols (active): 0");
+    expect(out).toContain("Open debt: 0");
     expect(out).toContain("Undocumented: 0");
-    expect(out).toContain("last_indexed_at: nunca");
+    expect(out).toContain("last_indexed_at: never");
   });
 
-  it("formata relatório populado", () => {
+  it("formats populated report", () => {
     const report: StatusReport = {
       files: {
         total: 100,
@@ -82,25 +82,25 @@ describe("status.formatHuman", () => {
       },
     };
     const out = formatHuman(report);
-    expect(out).toContain("Arquivos indexados: 100");
+    expect(out).toContain("Indexed files: 100");
     expect(out).toContain("typescript");
     expect(out).toContain("python");
-    expect(out).toContain("Símbolos extraídos (active): 200");
+    expect(out).toContain("Extracted symbols (active): 200");
     expect(out).toContain("function");
     expect(out).toContain("class");
-    expect(out).toContain("Top 2 arquivos");
+    expect(out).toContain("Top 2 files");
     expect(out).toContain("42");
     expect(out).toContain("src/big.ts");
-    expect(out).toContain("Dívida aberta: 3");
+    expect(out).toContain("Open debt: 3");
     expect(out).toContain("changed=2");
     expect(out).toContain("[changed] agent src/foo.ts#bar");
     expect(out).toContain("[moved] agent");
     expect(out).toContain("Undocumented: 5");
-    // Formato ISO 8601 (toISOString() → "YYYY-MM-DDTHH:MM:SS.sssZ")
+    // ISO 8601 format (toISOString() → "YYYY-MM-DDTHH:MM:SS.sssZ")
     expect(out).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
-  it("top-N respeitado (mesmo com mais arquivos no array)", () => {
+  it("top-N respected (even with more files in the array)", () => {
     const report: StatusReport = {
       files: {
         total: 50,
@@ -122,7 +122,7 @@ describe("status.formatHuman", () => {
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);
-    expect(out).toContain("Top 2 arquivos");
+    expect(out).toContain("Top 2 files");
     expect(out).not.toContain("Top 50");
   });
 });

@@ -108,10 +108,10 @@ export function calculateCostUsd(
 }
 
 /**
- * Formata custo pro reporte humano. Se custo for null, retorna string
- * "(sem preço p/ modelo X)" pra deixar explícito que é ausência de dado.
+ * Formats cost for the human report. If cost is null, returns the string
+ * "(no price for model X)" to make the absence of data explicit.
  */
 export function formatCost(cost: { total: number } | null, model: string): string {
-  if (cost === null) return `(sem preço p/ modelo ${model})`;
+  if (cost === null) return `(no price for model ${model})`;
   return `$${cost.total.toFixed(4)}`;
 }

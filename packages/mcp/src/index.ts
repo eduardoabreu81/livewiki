@@ -1,11 +1,11 @@
 /**
- * @livewiki/mcp — entry point stdio (Fase 4).
+ * @livewiki/mcp — stdio entry point (Phase 4).
  *
- * Lê --repo da CLI (default cwd), cria o server e conecta no
- * StdioServerTransport. O processo fica vivo enquanto o client MCP
- * estiver conectado.
+ * Reads --repo from CLI (default cwd), creates the server and connects it
+ * to the StdioServerTransport. The process stays alive while the MCP client
+ * is connected.
  *
- * Uso típico (Claude Code):
+ * Typical usage (Claude Code):
  *   {
  *     "mcpServers": {
  *       "livewiki": {
@@ -16,8 +16,8 @@
  *   }
  *
  * Exit:
- *   - 0: shutdown limpo
- *   - 1: erro de setup (repo inválido, etc)
+ *   - 0: clean shutdown
+ *   - 1: setup error (invalid repo, etc)
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // Graceful shutdown — fecha o server (que fecha o índice FTS5).
+  // Graceful shutdown — closes the server (which closes the FTS5 index).
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     process.stderr.write(`[livewiki-mcp] received ${signal}, shutting down...\n`);
     try {

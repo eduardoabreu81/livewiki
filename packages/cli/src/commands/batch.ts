@@ -15,12 +15,12 @@ interface BatchOptions {
 }
 
 /**
- * `livewiki batch <run>` — Fase 3. Subcomandos:
+ * `livewiki batch <run>` — Phase 3. Subcommands:
  *
- *   batch status [<runId>]    (default) — reporte do run
- *   batch resume <runId>      — continua tasks pending/failed
- *   batch --only <target> <runId> — re-roda 1 task
- *   batch list                — lista runs
+ *   batch status [<runId>]    (default) — run report
+ *   batch resume <runId>      — continue pending/failed tasks
+ *   batch --only <target> <runId> — re-run 1 task
+ *   batch list                — list runs
  *
  * Exit codes:
  *   0 = completed (success)
@@ -31,10 +31,10 @@ export function registerBatch(program: Command): void {
   program
     .command("batch")
     .description(
-      "rodar/retomar/inspecionar batch de documentação completa (Fase 3). Use 'livewiki batch --help' para subcomandos",
+      "run/resume/inspect a full-documentation batch (Phase 3). Use `livewiki batch --help` for subcommands",
     )
-    .option("--only <target>", "re-roda 1 task (módulo ou task-id)")
-    .option("--no-refine", "pular refinamento LLM da etapa 2")
+    .option("--only <target>", "re-run 1 task (module or task-id)")
+    .option("--no-refine", "skip LLM refinement of stage 2")
     .action(async (_options: BatchOptions, command: Command) => {
       const opts = command.optsWithGlobals<BatchOptions & { args?: string[] }>();
       const json = Boolean(opts.json);
@@ -43,7 +43,7 @@ export function registerBatch(program: Command): void {
       const args = command.args ?? [];
 
       try {
-        // Sem args: status do último run
+        // No args: status of the last run
         if (args.length === 0) {
           const report = await buildStatusReport(absRoot);
           emit(json, report, formatStatusHuman(report));
@@ -98,7 +98,7 @@ export function registerBatch(program: Command): void {
           return setExitCode(absRoot, result.status, json);
         }
 
-        // batch <runId> — alias pra status
+        // batch <runId> — alias for status
         if (sub === undefined) {
           throw new Error("missing subcommand");
         }
@@ -113,9 +113,9 @@ export function registerBatch(program: Command): void {
         emit(json, report, formatStatusHuman(report));
         return setExitCode(absRoot, report.run.status, json);
       } catch (err) {
-        process.stderr.write(`livewiki batch: erro — ${(err as Error).message}\n`);
-        // FIX L (rev2): ver init.ts. `process.exit(1)` abrupto pode crashar
-        // o libuv no Windows se algum handle async ficou aberto.
+        process.stderr.write(`livewiki batch: error — ${(err as Error).message}\n`);
+        // FIX L (rev2): see init.ts. Abrupt `process.exit(1)` can crash
+        // libuv on Windows if any async handle is still open.
         process.exitCode = 1;
         return;
       }
@@ -123,9 +123,9 @@ export function registerBatch(program: Command): void {
 }
 
 function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string {
-  // token-first (ad87319): tokens são a métrica primária, USD é secundário e
-  // omitido sem drama quando não há pricing. Cada linha de stage/module
-  // começa com tokens; USD aparece como linha separada marcada "estimado".
+  // Token-first (ad87319): tokens are the primary metric, USD is secondary
+  // and omitted without drama when no pricing exists. Each stage/module line
+  // starts with tokens; USD appears as a separate "estimated" line.
   const lines: string[] = [];
   lines.push(`livewiki batch — run #${report.run.id} (${report.run.status})`);
   lines.push(`  started: ${new Date(report.run.startedAt).toISOString()} (by ${report.run.startedBy})`);
@@ -133,7 +133,7 @@ function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>
     lines.push(`  finished: ${new Date(report.run.finishedAt).toISOString()}`);
   }
   lines.push("");
-  lines.push("Tokens (métrica primária):");
+  lines.push("Tokens (primary metric):");
   const t = report.totals;
   lines.push(
     `  Total:        ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output` +
@@ -144,26 +144,26 @@ function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>
       `  Stage ${stage}:      ${u.inputTokens.toLocaleString()} input + ${u.outputTokens.toLocaleString()} output`,
     );
   }
-  // USD como linha secundária, sempre marcada "estimado" — omitida sem drama
-  // se o modelo não tem pricing.
+  // USD as a secondary line, always marked "estimated" — omitted without drama
+  // when the model has no pricing.
   const hasAnyUsd = t.costUsd !== null
     || Object.values(report.byStage).some((u) => u.costUsd !== null);
   if (hasAnyUsd) {
     lines.push("");
-    lines.push(`USD (estimado, tabela de ${report.pricingRefDate}):`);
-    const totalStr = t.costUsd !== null ? `$${t.costUsd.toFixed(4)}` : "(sem preço)";
+    lines.push(`USD (estimated, table as of ${report.pricingRefDate}):`);
+    const totalStr = t.costUsd !== null ? `$${t.costUsd.toFixed(4)}` : "(no price)";
     lines.push(`  Total:        ${totalStr}`);
     for (const [stage, u] of Object.entries(report.byStage)) {
-      const c = u.costUsd !== null ? `$${u.costUsd.toFixed(4)}` : "(sem preço)";
+      const c = u.costUsd !== null ? `$${u.costUsd.toFixed(4)}` : "(no price)";
       lines.push(`  Stage ${stage}:      ${c}`);
     }
   } else {
     lines.push("");
-    lines.push(`USD: omitido (nenhum modelo com pricing na tabela de ${report.pricingRefDate})`);
+    lines.push(`USD: omitted (no model with pricing in table as of ${report.pricingRefDate})`);
   }
   if (report.byModule.length > 0) {
     lines.push("");
-    lines.push("Por módulo (tokens):");
+    lines.push("Per module (tokens):");
     for (const m of report.byModule) {
       const usd = m.costUsd !== null ? `  ~$${m.costUsd.toFixed(4)}` : "";
       lines.push(
@@ -173,7 +173,7 @@ function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>
   }
   if (report.failures.length > 0) {
     lines.push("");
-    lines.push(`Falhas (${report.failures.length}):`);
+    lines.push(`Failures (${report.failures.length}):`);
     for (const f of report.failures) {
       lines.push(`  [${f.error.code}] ${f.module}: ${f.error.message}`);
       lines.push(`    retry: ${f.retryCommand}`);
@@ -183,8 +183,8 @@ function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>
 }
 
 function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string {
-  // token-first (ad87319): totals tokens primeiro, USD estimado em linha
-  // secundária quando há pricing.
+  // Token-first (ad87319): totals tokens first, USD estimated in a
+  // secondary line when pricing exists.
   const lines: string[] = [];
   lines.push(`livewiki batch — run #${result.runId} (${result.status})`);
   const t = result.totals;
@@ -193,9 +193,9 @@ function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string
       (t.models.length > 0 ? `  (${t.models.join(", ")})` : ""),
   );
   if (t.costUsd !== null) {
-    lines.push(`  USD (estimado): $${t.costUsd.toFixed(4)}`);
+    lines.push(`  USD (estimated): $${t.costUsd.toFixed(4)}`);
   } else if (t.inputTokens + t.outputTokens > 0) {
-    lines.push(`  USD: omitido (modelo sem pricing)`);
+    lines.push(`  USD: omitted (model without pricing)`);
   }
   lines.push(`  tasks done: ${result.byModule.length}`);
   lines.push(`  failures: ${result.failures.length}`);
@@ -204,7 +204,7 @@ function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string
   }
   if (result.failures.length > 0) {
     lines.push("");
-    lines.push("Falhas:");
+    lines.push("Failures:");
     for (const f of result.failures) {
       lines.push(`  [${f.error.code}] ${f.module}: ${f.error.message}`);
       lines.push(`    retry: ${f.retryCommand}`);
@@ -228,7 +228,7 @@ function formatListHuman(runs: Awaited<ReturnType<typeof listRuns>>): string {
 }
 
 function setExitCode(repoRoot: string, status: string, json: boolean): void {
-  if (json) return; // --json sempre exit 0 (output estruturado)
+  if (json) return; // --json always exit 0 (structured output)
   if (status === "completed") process.exit(0);
   if (status === "completed_with_failures") process.exit(1);
   if (status === "aborted") process.exit(2);

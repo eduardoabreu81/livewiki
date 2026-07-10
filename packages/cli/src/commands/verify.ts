@@ -8,16 +8,16 @@ interface VerifyOptions {
 }
 
 /**
- * `livewiki verify` — valida wiki contra índice: âncoras quebradas, manual
- * blocks alterados, links internos.
+ * `livewiki verify` — validates wiki against index: broken anchors, altered
+ * manual blocks, internal links.
  *
- * SPEC §"Comandos CLI": "Sai com código ≠ 0 se falhar (CI-friendly)".
+ * SPEC §"CLI commands": "Exits with non-zero on failure (CI-friendly)".
  */
 export function registerVerify(program: Command): void {
   program
     .command("verify")
     .description(
-      "validar wiki: âncoras + manual blocks + links internos. Exit ≠ 0 se falhar (Fase 2, CI-friendly)",
+      "validate wiki: anchors + manual blocks + internal links. Exit ≠ 0 on failure (Phase 2, CI-friendly)",
     )
     .action(async (_options: VerifyOptions, command: Command) => {
       const opts = command.optsWithGlobals<VerifyOptions>();
@@ -27,7 +27,7 @@ export function registerVerify(program: Command): void {
       try {
         result = await runVerify(repoRoot);
       } catch (err) {
-        process.stderr.write(`livewiki verify: erro — ${(err as Error).message}\n`);
+        process.stderr.write(`livewiki verify: error — ${(err as Error).message}\n`);
         process.exit(1);
         return;
       }
@@ -36,7 +36,7 @@ export function registerVerify(program: Command): void {
       } else {
         process.stdout.write(formatVerifyHuman(result) + "\n");
       }
-      // CI-friendly: exit code != 0 se houver errors
+      // CI-friendly: exit code != 0 if there are errors
       if (!result.ok) process.exit(1);
     });
 }

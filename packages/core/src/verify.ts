@@ -325,14 +325,14 @@ function isInsideWiki(wikiPath: string): boolean {
 
 export function formatHuman(result: VerifyResult): string {
   const lines: string[] = [];
-  lines.push(`livewiki verify: ${result.ok ? "OK" : "FALHOU"} (${result.pagesChecked} páginas)`);
+  lines.push(`livewiki verify: ${result.ok ? "OK" : "FAILED"} (${result.pagesChecked} pages)`);
   if (result.issues.length === 0) {
-    lines.push("  nenhum problema.");
+    lines.push("  no issues.");
     return lines.join("\n");
   }
   const errs = result.issues.filter((i) => i.severity === "error");
   const warns = result.issues.filter((i) => i.severity === "warning");
-  lines.push(`  ${errs.length} erros, ${warns.length} avisos`);
+  lines.push(`  ${errs.length} errors, ${warns.length} warnings`);
   for (const i of errs) {
     lines.push(`  ERROR ${i.wikiPath}: [${i.code}] ${i.detail}`);
   }

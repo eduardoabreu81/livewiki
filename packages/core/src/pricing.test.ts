@@ -93,6 +93,6 @@ describe("pricing.formatCost", () => {
   });
 
   it("marca ausência de preço sem inventar", () => {
-    expect(formatCost(null, "gpt-9999")).toBe("(sem preço p/ modelo gpt-9999)");
+    expect(formatCost(null, "gpt-9999")).toBe("(no price for model gpt-9999)");
   });
 });
