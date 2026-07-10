@@ -64,29 +64,29 @@ export interface LivewikiConfig {
   /** Patterns extra pra ignorar (além de .gitignore). Default []. */
   ignores?: string[];
   /**
-   * Phase-5 plan (X): número de chamadas corretivas permitidas por task do
-   * stage 4, após a chamada inicial. Default 2 → uma task pode fazer no
-   * MÁXIMO 1 inicial + 2 reparos = 3 chamadas LLM.
+   * Phase-5 plan (X): number of corrective calls allowed per stage-4 task
+   * after the initial call. Default 2 → a task may make at most
+   * 1 initial + 2 repairs = 3 LLM calls.
    *
-   * Deve ser um inteiro ≥ 0. Validado por `validateConfigShape` (rejeita
-   * floats, NaN, strings, negativos).
+   * Must be an integer ≥ 0. Validated by `validateConfigShape` (rejects
+   * floats, NaN, strings, negatives).
    */
   maxRepairAttempts?: number;
 }
 
-/** Defaults aplicados em runtime, NÃO gravados no config. */
+/** Defaults applied at runtime, NOT written into the config file. */
 export const CONFIG_DEFAULTS = {
   language: "en",
   languages: ["ts", "tsx", "js", "jsx", "py"],
-  /** Base URL default por provider — só usada se config.baseUrl ausente. */
+  /** Default base URL per provider — only used if config.baseUrl is absent. */
   baseUrls: {
     anthropic: "https://api.anthropic.com",
     "openai-compat": "https://api.openai.com",
   } as Record<LlmProvider, string>,
   /**
-   * Phase-5 plan (X): default de reparos por task. Plan exige 2.
-   * Inteiro não-negativo. Sobrescrito por `config.maxRepairAttempts`
-   * ou por `BatchOptions.maxRepairAttempts` (testes, override CLI).
+   * Phase-5 plan (X): default repairs per task. Plan requires 2.
+   * Non-negative integer. Overridden by `config.maxRepairAttempts`
+   * or by `BatchOptions.maxRepairAttempts` (tests, CLI override).
    */
   maxRepairAttempts: 2,
 } as const;
@@ -258,9 +258,9 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
     }
     out.pricing = outPricing;
   }
-  // Phase-5 plan (X): maxRepairAttempts — inteiro não-negativo. Floats,
-  // NaN, strings e negativos são rejeitados (em vez de silenciosamente
-  // cair pro default) pra que configs corrompidos não escondam bugs.
+  // Phase-5 plan (X): maxRepairAttempts — non-negative integer. Floats,
+  // NaN, strings, and negatives are rejected (instead of silently falling
+  // back to the default) so corrupted configs cannot hide bugs.
   if (obj["maxRepairAttempts"] !== undefined) {
     const v = obj["maxRepairAttempts"];
     if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {

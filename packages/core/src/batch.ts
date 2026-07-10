@@ -122,12 +122,12 @@ export async function resumeBatch(opts: BatchOptions): Promise<BatchRunResult> {
 }
 
 /**
- * Re-roda 1 task específica (--only). Incrementa attempt, soma usage.
- * Guardrails (regra #6): preserva lw:manual byte-a-byte, recusa owner: human.
+ * Re-runs 1 specific task (--only). Increments attempt, accumulates usage.
+ * Guardrails (rule #6): preserves lw:manual byte-for-byte, refuses owner: human.
  */
 export async function runOnly(opts: BatchOptions): Promise<BatchRunResult> {
   if (!opts.onlyTarget) {
-    throw new Error("onlyTarget é obrigatório para runOnly");
+    throw new Error("onlyTarget is required for runOnly");
   }
   return orchestrate({ ...opts, mode: "only" });
 }
@@ -446,14 +446,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         taskError = {
           code: "refused_human_page",
           message:
-            `module "${module.id}" is on a page with owner: human — refuses to rewrite (regra #6). ` +
+            `module "${module.id}" is on a page with owner: human — refuses to rewrite (rule #6). ` +
             `Operator must manually change owner to "generated" or "mixed" if a re-run is desired.`,
         };
       } else if (preOwner === "untrusted") {
         taskError = {
           code: "refused_human_page",
           message:
-            `module "${module.id}" is on a page with a missing or invalid \`owner:\` line — refuses to rewrite (regra #6). ` +
+            `module "${module.id}" is on a page with a missing or invalid \`owner:\` line — refuses to rewrite (rule #6). ` +
             `Operator must manually set owner to "generated" or "mixed" if a re-run is desired.`,
         };
       } else if (preOwner === "unparseable") {
@@ -461,7 +461,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           code: "refused_unparseable_page",
           message:
             `module "${module.id}" is on a page whose frontmatter did not parse (LF/CRLF/BOM-safe check). ` +
-            `Refusing to rewrite untrusted content (regra #6 — operator must repair the page manually).`,
+            `Refusing to rewrite untrusted content (rule #6 — operator must repair the page manually).`,
         };
       } else {
         // Loop bounded: 1 initial + maxRepairAttempts repairs.
@@ -475,9 +475,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           // Reviewer revision (finding #5): the `attemptNumber` passed
           // to the LLM call is the GLOBAL COUNTER (started from `task.attempt`
           // persisted and incremented at every attempt). NEVER `i + 1`
-          // (que resetaria a cada nova execução de run/--only). Com isso,
-          // usageHistory[].attempt is monotonic: 1, 2, 3, 4, ... over
-          // longo de múltiplos --only/resume.
+          // (which would reset on every run/--only execution). With that,
+          // usageHistory[].attempt is monotonic: 1, 2, 3, 4, ... across
+          // multiple --only/resume calls.
           const attemptResult = await attemptStage4Generation({
             attemptNumber: attempt,
             module,
@@ -530,7 +530,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             continue;
           }
 
-          // Artifact válido → try write + verify
+          // Valid artifact → try write + verify
           const writeResult = await tryWriteAndVerify(
             absRoot,
             wikiPath,
@@ -560,7 +560,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             break;
           } else {
             // Verify failed → restore/remove the candidate (already done inside
-            // de tryWriteAndVerify). Prepare the next attempt for repair.
+            // tryWriteAndVerify). Prepare the next attempt for repair.
             // The "prior candidate" for repair is what was rejected.
             priorCandidate = attemptResult.artifact;
             priorErrors = verifyIssuesToValidationErrors(writeResult.issues ?? []);
@@ -570,7 +570,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 
         if (!attemptDone) {
           // Review finding #10: repair_exhausted PRESERVES the last
-          // diagnóstico estruturado (validation errors ou verify issues)
+          // structured diagnostic (validation errors or verify issues)
           // so the operator knows exactly what failed. Without this,
           // the report only said "exhausted N calls" and the user had to
           // look at raw logs.
@@ -632,7 +632,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       }
 
       // Circuit breaker check: 3 CONSECUTIVE failures, OR >50% with at least
-      // 3 tasks já tentadas.
+      // 3 tasks already attempted.
       const totalAttempted = cb.done + cb.fails;
       if (
         cb.consecutive >= 3 ||
@@ -991,28 +991,28 @@ async function collectAllImports(
  * `---` opening. Used to refuse the re-generation BEFORE calling the LLM
  * (rule #6).
  *
- * Retorna:
- *   - `null`: file does not exist (true new page) → does not check
- *   - `"generated"`: frontmatter válido com `owner: generated` → pode regerar
- *   - `"mixed"`: frontmatter válido com `owner: mixed` → pode regerar
+ * Returns:
+ *   - `null`: file does not exist (true new page) → skip the check
+ *   - `"generated"`: valid frontmatter with `owner: generated` → may regenerate
+ *   - `"mixed"`: valid frontmatter with `owner: mixed` → may regenerate
  *     (revision: manual blocks are preserved byte-for-byte by
- *     `tryWriteAndVerify`; o LLM re-gera só a parte generated)
+ *     `tryWriteAndVerify`; the LLM rewrites only the generated part)
  *   - `"human"`: valid frontmatter with `owner: human` → REFUSES to regenerate
  *     (rule #6: human is untouchable, the LLM cannot overwrite)
  *   - `"untrusted"`: frontmatter present but no valid `owner`
  *     (missing or non-string value) → REFUSES to regenerate
  *   - `"unparseable"`: frontmatter present but failed to parse → REFUSES
- *     (operador precisa revisar manualmente)
+ *     (operator must repair the page manually)
  */
 type PreOwnerCheck = "generated" | "mixed" | "human" | "untrusted" | "unparseable" | null;
 
 function readOwnerFromFrontmatter(content: string | null): PreOwnerCheck {
   if (content === null) return null;
-  // Strip BOM se presente (0xFEFF).
+  // Strip BOM if present (0xFEFF).
   let s = content;
   if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
   // Frontmatter opening: accepts LF or CRLF after `---`. Defense
-  // contra geradores que salvam com line endings diferentes (Windows,
+  // against generators that save with different line endings (Windows,
   // git autocrlf, etc).
   if (!s.startsWith("---\n") && !s.startsWith("---\r\n")) return null;
   // Normalize CRLF → LF for the parser.
@@ -1189,12 +1189,12 @@ function injectManualBlocksBySection(existing: string, newContent: string): stri
     return { endOffset: newContent.length };
   }
 
-  // Collects insertions: (offset, text). Sorts DESCENDING to not
-  // invalidar offsets subsequentes.
+  // Collect insertions: (offset, text). Sort DESCENDING so later inserts
+  // do not invalidate earlier offsets.
   const insertions: Array<{ offset: number; text: string }> = [];
   for (const [sectionSlug, blocks] of blocksBySection.entries()) {
     if (sectionSlug === null) {
-      // Blocks sem heading anterior: vão pro final do new.
+      // Blocks with no preceding heading: go to the end of the new page.
       insertions.push({
         offset: newContent.length,
         text: "\n\n" + blocks.join("\n\n") + "\n",
@@ -1230,11 +1230,11 @@ function injectManualBlocksBySection(existing: string, newContent: string): stri
 
 /**
  * Phase-5 plan (X): wiki page write transaction. Algorithm:
- *   1. Se `existing !== null`, extrai blocos `<!-- lw:manual -->` deles
- *      com a posição aproximada por seção e os reinsere em `newContent`
- *      in the same section (byte-for-byte; review finding #7b).
- *   2. Escreve `finalContent` via safe-io.
- *   3. Roda `runVerify` no repo.
+ *   1. If `existing !== null`, extract `<!-- lw:manual -->` blocks from it
+ *      with approximate position by section and reinsert them into
+ *      `newContent` in the same section (byte-for-byte; review finding #7b).
+ *   2. Write `finalContent` via safe-io.
+ *   3. Run `runVerify` on the repo.
  *   4. If there's an error-level issue touching this page: rollback (remove if
  *      it was new, restore if it was a rewrite). Review finding #4: if the
  *      rollback fails, this is TERMINAL — we return `rollback_failed`
@@ -1356,9 +1356,9 @@ function verifyIssuesToValidationErrors(
  */
 interface Stage4AttemptResult {
   /**
-   * `usageHistory` entry a ser gravada. SEMPRE presente:
-   *   - real usage se o LLM retornou um resultado
-   *   - zero-usage se o LLM call lançou (rede, 5xx, etc)
+   * `usageHistory` entry to record. ALWAYS present:
+   *   - real usage if the LLM returned a result
+   *   - zero-usage if the LLM call threw (network, 5xx, etc)
    */
   usageEntry: UsageAttempt;
   /**
@@ -1371,9 +1371,9 @@ interface Stage4AttemptResult {
    * If valid, it is the content to write.
    */
   artifact: string | null;
-  /** Erros de artifact validation (vazio se artifact !== null). */
+  /** Artifact validation errors (empty if artifact !== null). */
   validationErrors: ArtifactValidationError[];
-  /** Se o LLM call falhou, aqui está o erro. */
+  /** If the LLM call failed, the error lives here. */
   llmError: { code: string; message: string } | null;
 }
 

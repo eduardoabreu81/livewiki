@@ -50,25 +50,25 @@ describe("prompts — todos em inglês (templates)", () => {
 });
 
 // === U — prompt hardening (Phase-5 plan) ===
-// Achado 1 do baseline: o system prompt continha `<!-- lw:anchors key1 key2 -->`
-// como exemplo copiável. LLM copiava isso verbatim pra página → anchor
-// fantasma. Aqui garantimos que NENHUM system prompt do stage 4 ou repair
-// traga anchor literal copiável.
-describe("prompts U — hardening (sem fake anchors copiáveis)", () => {
-  it("stage 4 system prompt NÃO contém a string 'key1' ou 'key2' como placeholders", () => {
+// Baseline finding 1: the system prompt contained `<!-- lw:anchors key1 key2 -->`
+// as a copyable example. The LLM copied that verbatim into the page → phantom
+// anchor. Here we guarantee that NO stage-4 or repair system prompt ships a
+// copyable literal anchor.
+describe("prompts U — hardening (no copyable fake anchors)", () => {
+  it("stage 4 system prompt does NOT contain the string 'key1' or 'key2' as placeholders", () => {
     const r = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "sym", "code");
     expect(r.system).not.toMatch(/\bkey1\b/);
     expect(r.system).not.toMatch(/\bkey2\b/);
   });
 
-  it("stage 4 system prompt NÃO contém marker lw:anchors literal com keys placeholder", () => {
+  it("stage 4 system prompt does NOT contain a literal lw:anchors marker with placeholder keys", () => {
     const r = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "sym", "code");
-    // Se aparecer, deve ser prosa explicando o que o marker faz, NUNCA
-    // uma string copiável.
+    // If it appears, it must be prose explaining the marker — NEVER a
+    // copyable string.
     expect(r.system).not.toMatch(/lw:anchors\s+[a-z]+\s+[a-z]+/);
   });
 
-  it("repair prompt NÃO contém 'key1' ou 'key2' como placeholders", () => {
+  it("repair prompt does NOT contain 'key1' or 'key2' as placeholders", () => {
     const r = buildRepairPrompt(
       sampleModule,
       ["src/auth.ts#login"],
@@ -84,7 +84,7 @@ describe("prompts U — hardening (sem fake anchors copiáveis)", () => {
     expect(r.user).not.toMatch(/\bkey2\b/);
   });
 
-  it("repair prompt recebe a closed key list verbatim e os erros estruturados", () => {
+  it("repair prompt receives the closed key list verbatim and the structured errors", () => {
     const closed = ["src/auth.ts#login", "src/auth.ts#logout"];
     const errors: import("./prompts.js").ArtifactValidationError[] = [
       { code: "wrong_owner", message: "owner must be generated", location: "frontmatter" },
@@ -98,7 +98,7 @@ describe("prompts U — hardening (sem fake anchors copiáveis)", () => {
     expect(r.user).toContain("fake-key");
   });
 
-  it("repair prompt recebe o prior candidate (truncado) e instrui sem prose de reasoning", () => {
+  it("repair prompt receives the prior candidate (truncated) and instructs no reasoning prose", () => {
     const r = buildRepairPrompt(
       sampleModule,
       ["k"],

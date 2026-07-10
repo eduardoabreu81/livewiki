@@ -211,7 +211,7 @@ describe("modules W — makeUniqueDeterministicIds", () => {
     const out = makeUniqueDeterministicIds(mods);
     const ids = out.map((m) => m.id).sort();
     // First: "dup-src" (path slug); second: "dup-src-<hash>-1" (path slug +
-    // hash + counter, já que o base está taken).
+    // hash + counter, since the base is already taken).
     expect(ids[0]).toBe("dup-src");
     expect(ids[1]).toMatch(/^dup-src-[0-9a-f]{8}-1$/);
     expect(ids[0]).not.toBe(ids[1]);
@@ -350,10 +350,10 @@ describe("modules W — path→id mapping table (revision #1)", () => {
     const out = makeUniqueDeterministicIds(mods);
     const byPath = new Map(out.map((m) => [m.paths[0]!, m.id]));
     // m1: segments ["src","auth"]; level 0 "auth" colide, level 1
-    // tail="auth" (dup, skip), level 2 tail="src-auth" — único.
+    // tail="auth" (dup, skip), level 2 tail="src-auth" — unique.
     expect(byPath.get("src/auth/login.ts")).toBe("src-auth");
-    // m2: segments ["packages","auth","src"]; level 0 "auth" colide,
-    // level 1 tail="src" — único.
+    // m2: segments ["packages","auth","src"]; level 0 "auth" collides,
+    // level 1 tail="src" — unique.
     expect(byPath.get("packages/auth/src/x.ts")).toBe("src");
   });
 
@@ -403,13 +403,13 @@ describe("modules W — path→id mapping table (revision #1)", () => {
     const mods = [
       { id: "x", paths: ["a/b/x.ts"], symbolCount: 0 },
       { id: "y", paths: ["a/b/y.ts"], symbolCount: 0 },
-      { id: "x", paths: ["a/b/x.ts"], symbolCount: 0 }, // mesmo id + path do 1st
+      { id: "x", paths: ["a/b/x.ts"], symbolCount: 0 }, // same id + path as 1st
     ];
     const out = makeUniqueDeterministicIds(mods);
     const ids = new Set(out.map((m) => m.id));
-    expect(ids.size).toBe(3); // TODOS únicos
-    // Verifica que o algoritmo encontrou IDs distintos (mesmo que o
-    // esperado exato dependa do hash, sabemos que são 3 distintos)
+    expect(ids.size).toBe(3); // ALL unique
+    // Algorithm found distinct IDs (even if the exact fallback depends
+    // on the hash, we know there are 3 distinct ones)
     for (const m of out) {
       const dupes = out.filter((other) => other.id === m.id);
       expect(dupes.length).toBe(1);
@@ -432,7 +432,7 @@ describe("modules W — path→id mapping table (revision #1)", () => {
     //
     // Without the `taken.has(c)` guard in the wave, B would lock at
     // "core-src" at level 2 — colliding with A. The fix is exactly
-    // "SÓ lock se indices.length === 1 && !taken.has(c)".
+    // "ONLY lock if indices.length === 1 && !taken.has(c)".
     const mods: Array<{ id: string; paths: string[]; symbolCount: number }> = [
       { id: "x", paths: ["tools/core-src/x.ts"], symbolCount: 1 },
       { id: "x", paths: ["packages/core/src/x.ts"], symbolCount: 1 },

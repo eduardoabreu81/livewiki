@@ -195,23 +195,23 @@ describe("config.resolveBaseUrl", () => {
 });
 
 // === X — maxRepairAttempts (Phase-5 plan) ===
-// Plan exige default 2, com override validado como inteiro não-negativo.
+// Plan requires default 2, with override validated as a non-negative integer.
 describe("config X — maxRepairAttempts", () => {
-  it("applyDefaults preenche default 2 quando config não tem o campo", () => {
+  it("applyDefaults fills default 2 when config omits the field", () => {
     expect(applyDefaults({}).maxRepairAttempts).toBe(2);
     expect(applyDefaults({ provider: "anthropic", model: "x" }).maxRepairAttempts).toBe(2);
   });
 
-  it("applyDefaults NÃO sobrescreve valor explícito do config", () => {
+  it("applyDefaults does NOT overwrite an explicit config value", () => {
     expect(applyDefaults({ maxRepairAttempts: 5 }).maxRepairAttempts).toBe(5);
     expect(applyDefaults({ maxRepairAttempts: 0 }).maxRepairAttempts).toBe(0);
   });
 
-  it("CONFIG_DEFAULTS.maxRepairAttempts === 2 (conforme plan)", () => {
+  it("CONFIG_DEFAULTS.maxRepairAttempts === 2 (per plan)", () => {
     expect(CONFIG_DEFAULTS.maxRepairAttempts).toBe(2);
   });
 
-  it("loadConfig aceita maxRepairAttempts: 0 (reparo desabilitado)", async () => {
+  it("loadConfig accepts maxRepairAttempts: 0 (repair disabled)", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({
@@ -225,7 +225,7 @@ describe("config X — maxRepairAttempts", () => {
     expect(cfg.maxRepairAttempts).toBe(0);
   });
 
-  it("loadConfig aceita maxRepairAttempts: 5", async () => {
+  it("loadConfig accepts maxRepairAttempts: 5", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({
@@ -239,7 +239,7 @@ describe("config X — maxRepairAttempts", () => {
     expect(cfg.maxRepairAttempts).toBe(5);
   });
 
-  it("loadConfig REJEITA float (não cai pro default silenciosamente)", async () => {
+  it("loadConfig REJECTS float (does not silently fall back to default)", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({
@@ -252,7 +252,7 @@ describe("config X — maxRepairAttempts", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/maxRepairAttempts/);
   });
 
-  it("loadConfig REJEITA negativo", async () => {
+  it("loadConfig REJECTS negative", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({
@@ -265,7 +265,7 @@ describe("config X — maxRepairAttempts", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/maxRepairAttempts/);
   });
 
-  it("loadConfig REJEITA string", async () => {
+  it("loadConfig REJECTS string", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({
@@ -278,7 +278,7 @@ describe("config X — maxRepairAttempts", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/maxRepairAttempts/);
   });
 
-  it("loadConfig REJEITA null", async () => {
+  it("loadConfig REJECTS null", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({

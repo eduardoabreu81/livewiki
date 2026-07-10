@@ -32,20 +32,20 @@ export const DEFAULT_CONTEXT_TOKEN_BUDGET = 30_000;
 export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
 
 /**
- * Stage 4 — geração da página do módulo.
+ * Stage 4 — generate the module page.
  *
- * Princípios:
- *   - System prompt em INGLÊS, define persona + regras (incluindo a da
- *     lista fechada de chaves).
- *   - User prompt passa módulo + chaves canônicas + tabela de símbolos +
- *     código (truncado pelo caller por orçamento).
- *   - ${language} aparece na instrução do system e na do user (instrução
- *     explícita pra escrever no idioma).
+ * Principles:
+ *   - System prompt in ENGLISH: persona + rules (including the closed
+ *     canonical key list).
+ *   - User prompt passes module + canonical keys + symbol table +
+ *     code (truncated by the caller to the token budget).
+ *   - ${language} appears in both system and user instructions (explicit
+ *     instruction to write the doc in that language).
  *
- * Phase-5 plan (U): o system prompt NUNCA traz âncoras fictícias copiáveis
- * (ex.: "key1 key2"). Qualquer ilustração de sintaxe usa prosa neutra
- * ("a key from the list below") ou os próprios placeholders de expressão
- * (ex.: "keyN"). A regra fechada é reforçada nos REJECTION CRITERIA.
+ * Phase-5 plan (U): the system prompt NEVER includes copyable fake anchors
+ * (e.g. "key1 key2"). Any syntax illustration uses neutral prose
+ * ("a key from the list below") or expression placeholders
+ * (e.g. "keyN"). The closed-list rule is reinforced in REJECTION CRITERIA.
  */
 export function buildStage4Prompt(
   module: Module,
@@ -112,7 +112,7 @@ export function buildStage4Prompt(
     truncatedSource,
     "```",
     ``,
-    `# FORBIDDEN: never emit a \`<!-- lw:manual -->...<!-- /lw:manual -->\` block. Manual blocks are sacred (regra #6) and are reserved for human content. If you write one, the artifact will be rejected.`,
+    `# FORBIDDEN: never emit a \`<!-- lw:manual -->...<!-- /lw:manual -->\` block. Manual blocks are sacred (rule #6) and are reserved for human content. If you write one, the artifact will be rejected.`,
     ``,
     `# Output: complete Markdown page for livewiki/${module.id}.md`,
   ].join("\n");
@@ -121,12 +121,12 @@ export function buildStage4Prompt(
 }
 
 /**
- * Repair prompt — usado quando a validação do artefato OU o verify pós-escrita
- * falha após uma chamada LLM. Recebe a lista fechada de chaves, os erros
- * estruturados e o candidato anterior (truncado) pra correção.
+ * Repair prompt — used when artifact validation OR post-write verify
+ * fails after an LLM call. Receives the closed key list, structured
+ * errors, and the prior candidate (truncated) for correction.
  *
- * Phase-5 plan (X): bounded corrective call. O caller controla quantas vezes
- * invoca este prompt; o default é 2.
+ * Phase-5 plan (X): bounded corrective call. The caller controls how many
+ * times this prompt is invoked; the default is 2.
  */
 export function buildRepairPrompt(
   module: Module,
@@ -147,7 +147,7 @@ export function buildRepairPrompt(
     `- Frontmatter: title, owner: generated, anchors list.`,
     `- Every anchor key in the page MUST be in the closed list. NEVER invent a key.`,
     `- Valid Markdown (frontmatter between --- blocks).`,
-    `- NEVER emit a \`<!-- lw:manual -->\` block in your output. Manual blocks are reserved for human content (regra #6); the orchestrator preserves them byte-for-byte from the previous version.`,
+    `- NEVER emit a \`<!-- lw:manual -->\` block in your output. Manual blocks are reserved for human content (rule #6); the orchestrator preserves them byte-for-byte from the previous version.`,
     ``,
     `Do NOT wrap your output in code fences. Do NOT include reasoning prose. Output the raw Markdown page only.`,
   ].join("\n");
@@ -192,7 +192,7 @@ export function buildRepairPrompt(
   return { system, user };
 }
 
-/** Códigos estruturados de erro produzidos pela validação do artefato. */
+/** Structured error codes produced by artifact validation. */
 export type ArtifactValidationCode =
   | "empty_after_normalize"        // nothing left after think/fence strip
   | "unclosed_reasoning"            // <think> without matching </think>
@@ -204,9 +204,9 @@ export type ArtifactValidationCode =
   | "anchor_outside_closed_list"    // anchor in frontmatter or section marker
   | "empty_body"                    // frontmatter ok, but body is empty/whitespace
   | "model_invented_manual"         // LLM wrote a <!-- lw:manual --> block (forbidden)
-  // Phase-5 plan (X): codes usados pelo ORQUESTRADOR pra alimentar o
-  // repair prompt quando o problema NÃO é o artifact (LLM call failed ou
-  // verify rejected). O repair prompt trata todos da mesma forma.
+  // Phase-5 plan (X): codes used by the ORCHESTRATOR to feed the repair
+  // prompt when the problem is NOT the artifact shape (LLM call failed or
+  // verify rejected). The repair prompt treats all of them the same way.
   | "llm_error"                     // LLM call threw (network, 5xx, etc)
   | "verify_failed";                // repository-wide verify rejected the page
 

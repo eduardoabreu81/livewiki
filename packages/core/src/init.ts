@@ -267,15 +267,15 @@ async function buildPlan(absRoot: string): Promise<{
       const p = s.key.split("#")[0]!;
       symbolCountByPath.set(p, (symbolCountByPath.get(p) ?? 0) + 1);
     }
-    // Review finding #2: aplica o W gate (plan-wide uniqueness) ANTES de
-  // resolver edges e priorizar — assim a identidade dos módulos é a mesma
-  // em todos os artefatos derivados (modules.mmd, quickstart.md, overview.md,
-  // regenerator, e batch_tasks.target).
-  const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath);
-  const modules = makeUniqueDeterministicIds(heuristicModules);
-  assertUniqueModuleIds(modules);
+    // Review finding #2: apply the W gate (plan-wide uniqueness) BEFORE
+    // resolving edges and prioritizing — so module identity is the same
+    // across all derived artifacts (modules.mmd, quickstart.md, overview.md,
+    // regenerator, and batch_tasks.target).
+    const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath);
+    const modules = makeUniqueDeterministicIds(heuristicModules);
+    assertUniqueModuleIds(modules);
 
-    // Coleta imports pra montar o grafo
+    // Collect imports to build the graph
     const importsByFile = new Map<string, Awaited<ReturnType<typeof collectImports>>>();
     const nodeFs = await import("node:fs/promises");
     for (const p of filePaths) {

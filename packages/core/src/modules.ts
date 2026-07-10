@@ -342,8 +342,8 @@ export function makeUniqueDeterministicIds(modules: Module[]): Module[] {
 
 /**
  * Full path slug of the module (segments joined by `-`). Used as
- * base for the stable fallback: represents the module in the absence of a
- * m.id único disponível.
+ * base for the stable fallback: represents the module when no unique
+ * `m.id` is available.
  */
 function pathSlugOf(m: Module): string {
   const segments = pathSegmentsFor(m);
@@ -352,8 +352,8 @@ function pathSlugOf(m: Module): string {
 
 /**
  * Sequence of candidates for a module. The FIRST candidate is
- * `m.id` (preserves refined IDs). The subsequent ones are expansions
- * right-to-left do path (leaf, parent+leaf, grandparent+parent+leaf...).
+ * `m.id` (preserves refined IDs). The subsequent ones are right-to-left
+ * path expansions (leaf, parent+leaf, grandparent+parent+leaf...).
  * Each candidate is added only if different from the previous one.
  *
  *   modules/id="src"          path="packages/core/src"   → ["src", "core-src", "packages-core-src"]
