@@ -1,0 +1,13 @@
+graph LR
+  cli_src["cli-src"]
+  commands["commands"]
+  cli_src --> commands
+  commands["commands"]
+  cli_src["cli-src"]
+  commands --> cli_src
+  core_src["core-src"]
+  llm["llm"]
+  core_src --> llm
+  llm["llm"]
+  core_src["core-src"]
+  llm --> core_src

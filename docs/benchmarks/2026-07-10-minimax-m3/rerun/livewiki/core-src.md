@@ -1,0 +1,265 @@
+---
+title: core-src
+owner: generated
+anchors:
+  - packages/core/src/anchor-ledger.test.ts#nodeSqliteQuery
+  - packages/core/src/anchor-ledger.test.ts#writeCode
+  - packages/core/src/anchor-ledger.test.ts#writeWiki
+  - packages/core/src/anchor-ledger.ts#AnchorParseError
+  - packages/core/src/anchor-ledger.ts#AnchorParseError.constructor
+  - packages/core/src/anchor-ledger.ts#assigneeFor
+  - packages/core/src/anchor-ledger.ts#collectWikiPages
+  - packages/core/src/anchor-ledger.ts#createDebt
+  - packages/core/src/anchor-ledger.ts#detectMoves
+  - packages/core/src/anchor-ledger.ts#escapeRegex
+  - packages/core/src/anchor-ledger.ts#hasOpenDebt
+  - packages/core/src/anchor-ledger.ts#hashContent
+  - packages/core/src/anchor-ledger.ts#orchestrate
+  - packages/core/src/anchor-ledger.ts#rewriteSymbolKeyInPage
+  - packages/core/src/anchor-ledger.ts#run
+  - packages/core/src/anchor-ledger.ts#upsertAnchor
+  - packages/core/src/anchor-ledger.ts#upsertDocPage
+  - packages/core/src/anchor-ledger.ts#upsertUndocumented
+  - packages/core/src/anchors.ts#extractAnchors
+  - packages/core/src/anchors.ts#isInsideAny
+  - packages/core/src/anchors.ts#slugify
+  - packages/core/src/artifact.ts#err
+  - packages/core/src/artifact.ts#lastHeadingBefore
+  - packages/core/src/artifact.ts#normalizeStage4Artifact
+  - packages/core/src/artifact.ts#slugifyHeading
+  - packages/core/src/artifact.ts#validateStage4Artifact
+  - packages/core/src/batch-repair.test.ts#ProgrammableMockLlm
+  - packages/core/src/batch-repair.test.ts#ProgrammableMockLlm.generate
+  - packages/core/src/batch-repair.test.ts#makeValidPage
+  - packages/core/src/batch-review.test.ts#MockLlm
+  - packages/core/src/batch-review.test.ts#MockLlm.generate
+  - packages/core/src/batch-status.ts#aggregateUsageFromCheckpoint
+  - packages/core/src/batch-status.ts#buildStatusReport
+  - packages/core/src/batch-status.ts#emptyStageUsage
+  - packages/core/src/batch-status.ts#listRuns
+  - packages/core/src/batch-status.ts#mergeStageUsage
+  - packages/core/src/batch-status.ts#parseRunSummary
+  - packages/core/src/batch-status.ts#safeJsonParse
+  - packages/core/src/batch.test.ts#MockLlm
+  - packages/core/src/batch.test.ts#MockLlm.generate
+  - packages/core/src/batch.ts#EmptyPipelineError
+  - packages/core/src/batch.ts#EmptyPipelineError.constructor
+  - packages/core/src/batch.ts#TaskError
+  - packages/core/src/batch.ts#TaskError.constructor
+  - packages/core/src/batch.ts#accumulateUsage
+  - packages/core/src/batch.ts#aggregateTotals
+  - packages/core/src/batch.ts#attemptStage4Generation
+  - packages/core/src/batch.ts#buildModuleDocContext
+  - packages/core/src/batch.ts#buildResult
+  - packages/core/src/batch.ts#collectAllImports
+  - packages/core/src/batch.ts#computeCostFromUsage
+  - packages/core/src/batch.ts#createOrGetTask
+  - packages/core/src/batch.ts#emptyUsage
+  - packages/core/src/batch.ts#extractManualBlocksBySection
+  - packages/core/src/batch.ts#finalizeRun
+  - packages/core/src/batch.ts#forceOwnerInFrontmatter
+  - packages/core/src/batch.ts#getFileIdsForModule
+  - packages/core/src/batch.ts#getOrCreateTask
+  - packages/core/src/batch.ts#injectManualBlocksBySection
+  - packages/core/src/batch.ts#orchestrate
+  - packages/core/src/batch.ts#readOwnerFromFrontmatter
+  - packages/core/src/batch.ts#resumeBatch
+  - packages/core/src/batch.ts#runBatch
+  - packages/core/src/batch.ts#runOnly
+  - packages/core/src/batch.ts#safeJsonParse
+  - packages/core/src/batch.ts#sectionRangeOf
+  - packages/core/src/batch.ts#slugifyHeadingText
+  - packages/core/src/batch.ts#statusToExitCode
+  - packages/core/src/batch.ts#tryWriteAndVerify
+  - packages/core/src/batch.ts#validateRefinedModules
+  - packages/core/src/batch.ts#verifyIssuesToValidationErrors
+  - packages/core/src/config.ts#CONFIG_DEFAULTS
+  - packages/core/src/config.ts#CONFIG_FILENAME
+  - packages/core/src/config.ts#CONFIG_PATH
+  - packages/core/src/config.ts#MissingProviderConfigError
+  - packages/core/src/config.ts#MissingProviderConfigError.constructor
+  - packages/core/src/config.ts#applyDefaults
+  - packages/core/src/config.ts#loadConfig
+  - packages/core/src/config.ts#resolveBaseUrl
+  - packages/core/src/config.ts#resolveProviderFromConfig
+  - packages/core/src/config.ts#saveConfig
+  - packages/core/src/config.ts#validateConfigForBatch
+  - packages/core/src/config.ts#validateConfigShape
+  - packages/core/src/db.ts#CURRENT_SCHEMA_VERSION
+  - packages/core/src/db.ts#MIGRATION_SQL_V3
+  - packages/core/src/db.ts#SCHEMA_SQL
+  - packages/core/src/db.ts#SCHEMA_VERSION_KEY
+  - packages/core/src/db.ts#migrateV3ToV4
+  - packages/core/src/db.ts#migrationsFor
+  - packages/core/src/db.ts#openIndex
+  - packages/core/src/db.ts#postV3Migrations
+  - packages/core/src/diagrams.ts#escapeLabel
+  - packages/core/src/diagrams.ts#generateClassDiagram
+  - packages/core/src/diagrams.ts#generateModulesGraph
+  - packages/core/src/diagrams.ts#generateStructure
+  - packages/core/src/diagrams.ts#mermaidId
+  - packages/core/src/diagrams.ts#moduleSlug
+  - packages/core/src/frontmatter.ts#FrontmatterParseError
+  - packages/core/src/frontmatter.ts#FrontmatterParseError.constructor
+  - packages/core/src/frontmatter.ts#getAnchors
+  - packages/core/src/frontmatter.ts#getOwner
+  - packages/core/src/frontmatter.ts#parseFrontmatter
+  - packages/core/src/frontmatter.ts#parseYamlBlock
+  - packages/core/src/frontmatter.ts#stripComment
+  - packages/core/src/gitignore.ts#ensureGitignoreEntries
+  - packages/core/src/gitignore.ts#extractManagedBlock
+  - packages/core/src/gitignore.ts#mergeBlockLines
+  - packages/core/src/gitignore.ts#readGitignore
+  - packages/core/src/gitignore.ts#renderBlock
+  - packages/core/src/gitignore.ts#replaceManagedBlock
+  - packages/core/src/hashes.ts#sha256
+  - packages/core/src/hashes.ts#sha256Slice
+  - packages/core/src/imports.ts#collectImports
+  - packages/core/src/imports.ts#extractImportsFromTree
+  - packages/core/src/indexer.ts#ensureLivewikiDir
+  - packages/core/src/indexer.ts#formatHuman
+  - packages/core/src/indexer.ts#orchestrateIndex
+  - packages/core/src/indexer.ts#run
+  - packages/core/src/init.ts#buildPlan
+  - packages/core/src/init.ts#escapeHtmlId
+  - packages/core/src/init.ts#generateArchitectureOverview
+  - packages/core/src/init.ts#generateQuickstartDeterministic
+  - packages/core/src/init.ts#regenerateArchitectureOverview
+  - packages/core/src/init.ts#runInit
+  - packages/core/src/key-leak.test.ts#assertCanaryNotPresent
+  - packages/core/src/manifest.test.ts#writeLivewikiFile
+  - packages/core/src/manifest.ts#MANIFEST_REL_PATH
+  - packages/core/src/manifest.ts#MANIFEST_VERSION
+  - packages/core/src/manifest.ts#buildManifest
+  - packages/core/src/manifest.ts#computeSnapshotHash
+  - packages/core/src/manifest.ts#listFiles
+  - packages/core/src/manifest.ts#manifestsEqual
+  - packages/core/src/manifest.ts#pendingBatchEqual
+  - packages/core/src/manifest.ts#readManifest
+  - packages/core/src/manifest.ts#writeManifestIfChanged
+  - packages/core/src/modules.test.ts#idFor
+  - packages/core/src/modules.ts#DuplicateModuleIdError
+  - packages/core/src/modules.ts#DuplicateModuleIdError.constructor
+  - packages/core/src/modules.ts#assertUniqueModuleIds
+  - packages/core/src/modules.ts#candidateIdSequence
+  - packages/core/src/modules.ts#dirToModuleId
+  - packages/core/src/modules.ts#identifyModulesHeuristic
+  - packages/core/src/modules.ts#makeUniqueDeterministicIds
+  - packages/core/src/modules.ts#pathSegmentsFor
+  - packages/core/src/modules.ts#pathSlugOf
+  - packages/core/src/modules.ts#prioritizeModules
+  - packages/core/src/modules.ts#resolveModuleEdges
+  - packages/core/src/modules.ts#resolveRelativeImport
+  - packages/core/src/modules.ts#slugifySegment
+  - packages/core/src/modules.ts#stripNodeNextExtension
+  - packages/core/src/parser.ts#_grammarToExtensionForTest
+  - packages/core/src/parser.ts#grammarForExtension
+  - packages/core/src/parser.ts#grammarsDir
+  - packages/core/src/parser.ts#initParser
+  - packages/core/src/parser.ts#listSupportedGrammars
+  - packages/core/src/parser.ts#loadLanguage
+  - packages/core/src/parser.ts#parseSource
+  - packages/core/src/pointer.ts#POINTER_END
+  - packages/core/src/pointer.ts#POINTER_FILES
+  - packages/core/src/pointer.ts#POINTER_START
+  - packages/core/src/pointer.ts#_internal
+  - packages/core/src/pointer.ts#applyPointerRemove
+  - packages/core/src/pointer.ts#applyPointerReplace
+  - packages/core/src/pointer.ts#buildPointerBlock
+  - packages/core/src/pointer.ts#ensurePointerFile
+  - packages/core/src/pointer.ts#findPointerBlock
+  - packages/core/src/pointer.ts#insertPointer
+  - packages/core/src/pointer.ts#pickPointerFile
+  - packages/core/src/pointer.ts#readPointerStatus
+  - packages/core/src/pointer.ts#removePointer
+  - packages/core/src/presets.ts#AVAILABLE_PRESETS
+  - packages/core/src/presets.ts#PRESET_TABLE
+  - packages/core/src/presets.ts#UnknownPresetError
+  - packages/core/src/presets.ts#UnknownPresetError.constructor
+  - packages/core/src/presets.ts#isKnownPreset
+  - packages/core/src/presets.ts#resolvePreset
+  - packages/core/src/presets.ts#resolveProviderConfig
+  - packages/core/src/pricing.ts#PRICING_REFERENCE_DATE
+  - packages/core/src/pricing.ts#PRICING_TABLE
+  - packages/core/src/pricing.ts#calculateCostUsd
+  - packages/core/src/pricing.ts#formatCost
+  - packages/core/src/pricing.ts#lookupPricing
+  - packages/core/src/prompts.ts#DEFAULT_CONTEXT_TOKEN_BUDGET
+  - packages/core/src/prompts.ts#DEFAULT_OUTPUT_TOKEN_BUDGET
+  - packages/core/src/prompts.ts#buildOverviewPrompt
+  - packages/core/src/prompts.ts#buildQuickstartPrompt
+  - packages/core/src/prompts.ts#buildRepairPrompt
+  - packages/core/src/prompts.ts#buildStage2RefinePrompt
+  - packages/core/src/prompts.ts#buildStage4Prompt
+  - packages/core/src/safe-io.test.ts#detectSymlinkSupport
+  - packages/core/src/safe-io.ts#ALLOWED_DIRS
+  - packages/core/src/safe-io.ts#InvalidRelativePathError
+  - packages/core/src/safe-io.ts#InvalidRelativePathError.constructor
+  - packages/core/src/safe-io.ts#PathOutsideAllowlistError
+  - packages/core/src/safe-io.ts#PathOutsideAllowlistError.constructor
+  - packages/core/src/safe-io.ts#allowedAbs
+  - packages/core/src/safe-io.ts#allowlistFor
+  - packages/core/src/safe-io.ts#exists
+  - packages/core/src/safe-io.ts#findDeepestExisting
+  - packages/core/src/safe-io.ts#isInsideAllowlist
+  - packages/core/src/safe-io.ts#mkdir
+  - packages/core/src/safe-io.ts#readText
+  - packages/core/src/safe-io.ts#remove
+  - packages/core/src/safe-io.ts#resolveAndValidate
+  - packages/core/src/safe-io.ts#validateDeclared
+  - packages/core/src/safe-io.ts#writeText
+  - packages/core/src/status.ts#collect
+  - packages/core/src/status.ts#formatHuman
+  - packages/core/src/status.ts#run
+  - packages/core/src/symbols.test.ts#parse
+  - packages/core/src/symbols.ts#extractSymbols
+  - packages/core/src/symbols.ts#makeRecord
+  - packages/core/src/symbols.ts#signatureFor
+  - packages/core/src/symbols.ts#walkNode
+  - packages/core/src/update-metrics.ts#clearMetricsForTests
+  - packages/core/src/update-metrics.ts#metricsPath
+  - packages/core/src/update-metrics.ts#readMetrics
+  - packages/core/src/update-metrics.ts#recordUpdateMetric
+  - packages/core/src/update-metrics.ts#snapshotMetrics
+  - packages/core/src/update-metrics.ts#writeMetrics
+  - packages/core/src/update.test.ts#setupWithAnchor
+  - packages/core/src/update.test.ts#writeCode
+  - packages/core/src/update.test.ts#writeWiki
+  - packages/core/src/update.ts#CHARS_PER_TOKEN
+  - packages/core/src/update.ts#loadWorkPackage
+  - packages/core/src/update.ts#lookupSymbol
+  - packages/core/src/update.ts#recordDocWrittenBack
+  - packages/core/src/update.ts#snippetForSymbol
+  - packages/core/src/verify.test.ts#writeCode
+  - packages/core/src/verify.test.ts#writeWiki
+  - packages/core/src/verify.ts#collectSectionSlugs
+  - packages/core/src/verify.ts#collectWikiPages
+  - packages/core/src/verify.ts#formatHuman
+  - packages/core/src/verify.ts#isInsideWiki
+  - packages/core/src/verify.ts#resolveWikiLink
+  - packages/core/src/verify.ts#run
+  - packages/core/src/walker.test.ts#write
+  - packages/core/src/walker.ts#EXTENSION_LANG
+  - packages/core/src/walker.ts#buildIgnore
+  - packages/core/src/walker.ts#walkRepo
+---
+
+# `core-src` — núcleo do livewiki
+
+Este módulo agrega o código-fonte TypeScript que implementa o pipeline do
+livewiki: indexação, ledger de âncoras, batch de geração, verificação,
+diagramas, init, presets, pricing, I/O seguro e utilitários. É o pacote
+runtime consumido pela CLI exposta em outro módulo.
+
+## Helpers de teste
+
+Funções utilitárias compartilhadas entre os arquivos `*.test.ts` (escrita de
+arquivos de código e wiki, mocks de LLM, asserts canário, queries SQLite
+inline).
+
+<!-- lw:anchors packages/core/src/anchor-ledger.test.ts#nodeSqliteQuery packages/core/src/anchor-ledger.test.ts#writeCode packages/core/src/anchor-ledger.test.ts#writeWiki packages/core/src/batch-repair.test.ts#ProgrammableMockLlm packages/core/src/batch-repair.test.ts#ProgrammableMockLlm.generate packages/core/src/batch-repair.test.ts#makeValidPage packages/core/src/batch-review.test.ts#MockLlm packages/core/src/batch-review.test.ts#MockLlm.generate packages/core/src/batch.test.ts#MockLlm packages/core/src/batch.test.ts#MockLlm.generate packages/core/src/key-leak.test.ts#assertCanaryNotPresent packages/core/src/manifest.test.ts#writeLivewikiFile packages/core/src/modules.test.ts#idFor packages/core/src/safe-io.test.ts#detectSymlinkSupport packages/core/src/symbols.test.ts#parse packages/core/src/update.test.ts#setupWithAnchor packages/core/src/update.test.ts#writeCode packages/core/src/update.test.ts#writeWiki packages/core/src/verify.test.ts#writeCode packages/core/src/verify.test.ts#writeWiki packages/core/src/walker.test.ts#write -->
+
+## `anchor-ledger.ts` — sincronização âncora ↔ código
+
+Sincroniza as âncoras declaradas nas páginas `.md` de `livewiki/` com o
+índice SQLite e gera linhas em `debt` para os eventos `changed`, `moved`

@@ -1,8 +1,13 @@
 # MiniMax-M3 livewiki rerun (post U–X)
 
-> Status: **ready to execute when the maintainer authorizes a paid run**.
-> This file is the runbook only. Do **not** claim a public winner until
-> quality review of both outputs is done.
+> Status: **clean bootstrap executed 2026-07-10** — see `rerun-clean/notes.md`.
+> First `rerun/` attempt mixed Sonnet dogfooding pages; **do not use it** for
+> A/B tables. Do **not** claim a public winner until quality review vs
+> `raw/openwiki/` is done.
+
+**Required target hygiene:** delete any pre-existing `livewiki/` (including
+committed dogfooding) before `init --batch`, or the verify result mixes old
+and new pages.
 
 ## Why
 

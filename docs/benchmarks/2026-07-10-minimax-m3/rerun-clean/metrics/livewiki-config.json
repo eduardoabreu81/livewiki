@@ -1,0 +1,7 @@
+{
+  "language": "en",
+  "model": "MiniMax-M3",
+  "maxRepairAttempts": 2,
+  "baseUrl": "http://127.0.0.1:8900/v1",
+  "provider": "openai-compat"
+}

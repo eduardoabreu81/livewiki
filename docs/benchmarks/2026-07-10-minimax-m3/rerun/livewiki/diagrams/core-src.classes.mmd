@@ -1,0 +1,39 @@
+classDiagram
+  class AnchorParseError {
+    constructor(wikiPath: string, cause: Error) {
+  }
+  class ProgrammableMockLlm {
+    async generate(req: import(\"./llm/types.js\").GenerateRequest): Promise<GenerateResult> {
+  }
+  class MockLlm {
+    async generate(req: import(\"./llm/types.js\").GenerateRequest): Promise<GenerateResult> {
+    async generate(req: import(\"./llm/types.js\").GenerateRequest): Promise<GenerateResult> {
+  }
+  class MockLlm {
+    async generate(req: import(\"./llm/types.js\").GenerateRequest): Promise<GenerateResult> {
+    async generate(req: import(\"./llm/types.js\").GenerateRequest): Promise<GenerateResult> {
+  }
+  class EmptyPipelineError {
+    constructor(message: string) {
+  }
+  class TaskError {
+    constructor(code: string, message: string) {
+  }
+  class MissingProviderConfigError {
+    constructor(repoRoot: string, missingFields: Array<\"provider\" | \"model\">) {
+  }
+  class FrontmatterParseError {
+    constructor(message: string, line: number) {
+  }
+  class DuplicateModuleIdError {
+    constructor(message: string) {
+  }
+  class UnknownPresetError {
+    constructor(name: string, available: readonly string[]) {
+  }
+  class PathOutsideAllowlistError {
+    constructor(repoRoot: string, attempted: string, allowlist: readonly string[]) {
+  }
+  class InvalidRelativePathError {
+    constructor(relPath: string, reason: string) {
+  }
