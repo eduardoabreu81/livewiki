@@ -174,6 +174,24 @@ agent itself working the queue.
   repos and publish the table — the product's "real-world stamp", alongside the
   token comparison vs OpenWiki.
 
+### User-informed backlog (mined from OpenWiki issues + ecosystem scan — see [docs/market-research.md](docs/market-research.md))
+
+- **Monorepo support** (their 2nd most-upvoted request): per-package scoping vs
+  a single wiki with package sections — deserves explicit design.
+- **File-level anchoring for unparsed text files** (Terraform/HCL pain): unknown
+  *text* files become anchorable at file level (no symbols) — documentable and
+  hash-tracked without a parser; plus demand-driven grammar expansion.
+- **`HTTP_PROXY`/`HTTPS_PROXY` support** in the LLM client (corporate environments).
+- **Configurable wiki directory** (evaluate carefully — touches the safe-io allowlist).
+- **CI / PR-bot recipe**: documented GitHub Action — `index` + `status`, pay debt
+  via API, open a docs PR. A recipe over existing pieces, not a feature.
+- **Adapter hardening**: tolerate DeepSeek-style reasoning blocks in
+  OpenAI-compat message history (becomes an adapter test).
+- **`openwiki/` format bridge (hypothesis, not decided)**: the OpenWiki on-disk
+  layout is becoming a de-facto convention (two independent adopters in a week);
+  an `export openwiki-compat` and/or an `import` of existing `openwiki/` folders
+  would be a painless on-ramp for that user base. Post-MVP evaluation.
+
 ## Integration roadmap (post-validation)
 
 Launch goal: a "works with every agent" matrix (reference: agentmemory). The
@@ -183,7 +201,7 @@ matrix is packaging + per-tool docs:
 | Tier | Delivery | Cost | Covers |
 |---|---|---|---|
 | 1 — MCP server | Phase 4 | per-tool config snippet (docs) | Cursor, Cline, Goose, Kilo Code, Roo Code, Windsurf, Claude Desktop, Gemini CLI, Copilot CLI, any MCP client |
-| 2 — Hooks + skills | Phase 5 | per-tool template | Claude Code ("native plugin" level), OpenCode, Codex CLI |
+| 2 — Hooks + skills | Phase 5 | per-tool template | Claude Code ("native plugin" level), OpenCode, Codex CLI, OpenHands (plugin + skill system) |
 | 3 — CLI | already exists | zero | Warp, CI, scripts, any agent with a shell |
 | 4 — REST API | post-MVP, thin wrapper over the core | small | Aider and HTTP-only agents |
 
