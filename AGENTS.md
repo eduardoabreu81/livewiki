@@ -440,10 +440,11 @@ pnpm -r build → green (core + cli + mcp)
 ```
 
 Next planned steps:
-1. Push U–X when maintainer authorizes (no force-push).
-2. Optional: improve token proxy + rerun livewiki only on frozen MiniMax
-   snapshot; quality-compare with preserved OpenWiki output (no winner
-   claim until review).
+1. MiniMax livewiki-only **rerun** when maintainer authorizes paid API:
+   runbook `docs/benchmarks/2026-07-10-minimax-m3/RERUN.md`; proxy
+   records per-call cache/reasoning/timestamps/status/errors.
+2. Quality review vs frozen OpenWiki under `raw/` (no public winner claim
+   until then).
 3. Phase 6: export to github-wiki/gitlab-wiki/generic.
 4. Phase 7: local viewer + templates.
 
