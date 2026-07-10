@@ -30,6 +30,16 @@ pre-policy. New code and edits must follow English.
 appear in the working tree — they may be reviewer's work. If in doubt,
 ask.
 
+**NEVER run `git clean -fdx` in this working tree.** The tree is
+shared with the reviewer, and that command destroys uncommitted work
+from both sides (we lost an entire new module that way during the
+Fase 5 close-out). To clean build artifacts, delete explicitly:
+```bash
+Remove-Item -Recurse -Force packages/core/dist, packages/cli/dist, packages/mcp/dist
+Remove-Item -Force packages/*/*.tsbuildinfo, packages/*/dist/*.tsbuildinfo
+```
+(or the PowerShell-equivalent). Never `-fdx`.
+
 ## TL;DR
 
 livewiki is an agent-first technical documentation tool. The core is the
