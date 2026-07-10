@@ -15,6 +15,12 @@ LLM (or human) to pick up work where the previous session left off.
 Elevator pitch: *"documentation anchored to the code, verifiable and always
 current — written by whoever made the change, at the moment they made it."*
 
+**Two content layers (direction):** (A) structural wiki for agents — directories,
+symbols, import links, verifiable anchors; (B) later human/product narrative
+(what the project enables, stack, dashboards) generated from A. Layer A is
+the MVP engine; B is a subsequent pass so human-written repos with zero docs
+still get a map first, then a story.
+
 ## The problem
 
 1. **Documentation rots.** Every repo wiki is out of date three months later.

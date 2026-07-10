@@ -130,6 +130,60 @@ describe("OpenAiCompatAdapter", () => {
     expect(calledUrl).toBe("https://proxy.example.com/v1/chat/completions");
   });
 
+  it("sends thinking.disabled and max_completion_tokens for MiniMax-M3 defaults", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      expect(body.thinking).toEqual({ type: "disabled" });
+      expect(body.max_completion_tokens).toBe(8000);
+      expect(body.max_tokens).toBeUndefined();
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "ok" } }],
+          model: "MiniMax-M3",
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const adapter = new OpenAiCompatAdapter({
+      apiKey: "k",
+      baseUrl: "http://127.0.0.1:8900/v1",
+      model: "MiniMax-M3",
+      fetchImpl,
+      thinkingDefault: "omit", // model heuristic still disables for MiniMax-M3
+      preferMaxCompletionTokens: true,
+    });
+    await adapter.generate({ system: "s", user: "u", maxTokens: 8000 });
+    expect(fetchImpl).toHaveBeenCalled();
+  });
+
+  it("omits thinking for plain openai models", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      expect(body.thinking).toBeUndefined();
+      expect(body.max_tokens).toBe(4096);
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "ok" } }],
+          model: "gpt-4o",
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const adapter = new OpenAiCompatAdapter({
+      apiKey: "k",
+      baseUrl: "https://api.openai.com",
+      model: "gpt-4o",
+      fetchImpl,
+      thinkingDefault: "omit",
+      preferMaxCompletionTokens: false,
+    });
+    await adapter.generate({ system: "s", user: "u" });
+  });
+
   it("normaliza prompt_tokens → inputTokens, completion_tokens → outputTokens", async () => {
     const fetchImpl = fakeFetch({
       status: 200,

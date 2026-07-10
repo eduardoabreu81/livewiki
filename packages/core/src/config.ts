@@ -72,6 +72,29 @@ export interface LivewikiConfig {
    * floats, NaN, strings, negatives).
    */
   maxRepairAttempts?: number;
+  /**
+   * Max output tokens for stage-4 (and repair) generation.
+   * Default 8192. Override per repo or via BatchOptions.
+   */
+  stage4MaxOutputTokens?: number;
+  /**
+   * Split modules with more than this many files before stage 4.
+   * Default 12. Set 0 to disable file-count splitting.
+   */
+  maxModuleFiles?: number;
+  /**
+   * Split modules with more than this many symbols before stage 4.
+   * Default 80. Set 0 to disable symbol-count splitting.
+   */
+  maxModuleSymbols?: number;
+  /**
+   * Thinking control for openai-compat providers that support it.
+   * - disabled: send thinking off (MiniMax-M3)
+   * - adaptive: allow thinking
+   * - omit: do not send the field
+   * Default: derived from preset / MiniMax model heuristic.
+   */
+  thinking?: "disabled" | "adaptive" | "omit";
 }
 
 /** Defaults applied at runtime, NOT written into the config file. */
@@ -89,6 +112,11 @@ export const CONFIG_DEFAULTS = {
    * or by `BatchOptions.maxRepairAttempts` (tests, CLI override).
    */
   maxRepairAttempts: 2,
+  /** Stage-4 completion budget (tokens). Raised from 4k after MiniMax bench. */
+  stage4MaxOutputTokens: 8192,
+  /** Structural split thresholds for oversized modules. */
+  maxModuleFiles: 12,
+  maxModuleSymbols: 80,
 } as const;
 
 /**
@@ -172,6 +200,9 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     language: CONFIG_DEFAULTS.language,
     languages: [...CONFIG_DEFAULTS.languages],
     maxRepairAttempts: CONFIG_DEFAULTS.maxRepairAttempts,
+    stage4MaxOutputTokens: CONFIG_DEFAULTS.stage4MaxOutputTokens,
+    maxModuleFiles: CONFIG_DEFAULTS.maxModuleFiles,
+    maxModuleSymbols: CONFIG_DEFAULTS.maxModuleSymbols,
     ...config,
   };
 }
@@ -269,6 +300,42 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       );
     }
     out.maxRepairAttempts = v;
+  }
+  if (obj["stage4MaxOutputTokens"] !== undefined) {
+    const v = obj["stage4MaxOutputTokens"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 256) {
+      throw new Error(
+        `invalid stage4MaxOutputTokens: must be an integer >= 256, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.stage4MaxOutputTokens = v;
+  }
+  if (obj["maxModuleFiles"] !== undefined) {
+    const v = obj["maxModuleFiles"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `invalid maxModuleFiles: must be a non-negative integer, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.maxModuleFiles = v;
+  }
+  if (obj["maxModuleSymbols"] !== undefined) {
+    const v = obj["maxModuleSymbols"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `invalid maxModuleSymbols: must be a non-negative integer, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.maxModuleSymbols = v;
+  }
+  if (obj["thinking"] !== undefined) {
+    const v = obj["thinking"];
+    if (v !== "disabled" && v !== "adaptive" && v !== "omit") {
+      throw new Error(
+        `invalid thinking: must be "disabled" | "adaptive" | "omit", got ${JSON.stringify(v)}`,
+      );
+    }
+    out.thinking = v;
   }
   return out;
 }

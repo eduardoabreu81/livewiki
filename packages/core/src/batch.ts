@@ -41,6 +41,7 @@ import {
   resolveModuleEdges,
   prioritizeModules,
   makeUniqueDeterministicIds,
+  splitOversizedModules,
   assertUniqueModuleIds,
   DuplicateModuleIdError,
   type Module,
@@ -95,6 +96,13 @@ export interface BatchOptions {
    * `0` disables repair (one single call per task).
    */
   maxRepairAttempts?: number;
+  /** Stage-4 max output tokens (default from config / 8192). */
+  stage4MaxOutputTokens?: number;
+  /** Override thinking mode for openai-compat (MiniMax-M3 etc.). */
+  thinking?: "disabled" | "adaptive" | "omit";
+  /** Module split thresholds (0 = disable that axis). */
+  maxModuleFiles?: number;
+  maxModuleSymbols?: number;
 }
 
 export interface BatchRunResult {
@@ -161,6 +169,15 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         `invalid maxRepairAttempts: must be a non-negative integer, got ${JSON.stringify(maxRepairAttempts)}`,
       );
     }
+    const stage4MaxOutputTokens =
+      opts.stage4MaxOutputTokens ??
+      resolvedConfig.stage4MaxOutputTokens ??
+      8192;
+    const thinkingMode = opts.thinking ?? resolvedConfig.thinking;
+    const maxModuleFiles =
+      opts.maxModuleFiles ?? resolvedConfig.maxModuleFiles ?? 12;
+    const maxModuleSymbols =
+      opts.maxModuleSymbols ?? resolvedConfig.maxModuleSymbols ?? 80;
 
     // Cria LLM client se não injetado (lazy — só erra se o batch precisar)
     let llmClient = opts.llmClient;
@@ -308,6 +325,13 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // as `aborted` (terminal status) — never `running` — before
     // re-throwing.
     try {
+      // Split oversized modules (structural) so stage-4 pages can complete.
+      modules = splitOversizedModules(modules, {
+        maxFiles: maxModuleFiles === 0 ? Number.MAX_SAFE_INTEGER : maxModuleFiles,
+        maxSymbols:
+          maxModuleSymbols === 0 ? Number.MAX_SAFE_INTEGER : maxModuleSymbols,
+        symbolCountByPath,
+      });
       modules = makeUniqueDeterministicIds(modules);
       assertUniqueModuleIds(modules);
     } catch (err) {
@@ -491,6 +515,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             absRoot,
             // Review finding #5: pricing override preserved in repairs.
             pricing: resolvedConfig.pricing,
+            maxTokens: stage4MaxOutputTokens,
+            thinking: thinkingMode,
           });
           usageHistory.push(attemptResult.usageEntry);
           moduleUsageEntry = accumulateUsage(
@@ -1393,6 +1419,8 @@ interface AttemptOpts {
    * embedded table, losing the user's override in `config.json`.
    */
   pricing: import("./pricing.js").PricingOverride | undefined;
+  maxTokens: number;
+  thinking?: "disabled" | "adaptive" | "omit" | undefined;
 }
 
 /**
@@ -1439,7 +1467,8 @@ async function attemptStage4Generation(
     const result = await opts.llmClient.generate({
       system: prompt.system,
       user: prompt.user,
-      maxTokens: 4_000,
+      maxTokens: opts.maxTokens,
+      ...(opts.thinking ? { thinking: opts.thinking } : {}),
     });
     raw = result.content;
     usage = result.usage;

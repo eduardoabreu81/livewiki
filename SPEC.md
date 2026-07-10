@@ -195,12 +195,20 @@ All commands: `--json`, `--repo <path>` (default cwd), consistent exit codes.
 
 1. **Scan**: full `index`; symbol snapshot.
 2. **Module identification**: grouping by directory + import graph (deterministic
-   heuristic; an LLM may refine module names/boundaries — 1 call). Module IDs
-   are deterministic, stable slugs. A unique directory leaf keeps its short ID;
-   colliding leaves use the shortest unique path suffix (`core-src`, `cli-src`,
-   `mcp-src`, expanding only when necessary). Duplicate IDs are a hard pipeline
-   error before stage-4 tasks, LLM calls, or page writes: one module ID maps to
-   exactly one task target and one `livewiki/<id>.md` page.
+   heuristic; an LLM may refine module names/boundaries — 1 call). Oversized
+   modules are **split** into smaller units (by subdirectory, else stable file
+   chunks) so each stage-4 page can complete successfully under the model
+   output budget — thresholds: `maxModuleFiles` / `maxModuleSymbols` in config
+   (defaults 12 / 80). Module IDs are deterministic, stable slugs. A unique
+   directory leaf keeps its short ID; colliding leaves use the shortest unique
+   path suffix (`core-src`, `cli-src`, `mcp-src`, expanding only when necessary).
+   Duplicate IDs are a hard pipeline error before stage-4 tasks, LLM calls, or
+   page writes: one module ID maps to exactly one task target and one
+   `livewiki/<id>.md` page.
+
+   **Two content layers (roadmap):** (A) structural/agent pages (dirs, symbols,
+   import links, anchors — verifiable); (B) optional later human/product
+   narrative synthesized from A. Batch today targets layer A.
 3. **Prioritization**: orders modules by centrality (how many others depend on
    them) and size; the user can reorder/exclude (`--plan` shows the plan before
    running).
@@ -230,6 +238,12 @@ repair prompt receives the structured errors, the exact closed key list, and
 the prior candidate needed to correct the artifact. A repaired task is `done`
 and does not increment circuit-breaker failures. Only exhaustion becomes one
 final task failure.
+
+Stage-4 output budget defaults to `stage4MaxOutputTokens` **8192** (config
+override allowed). Provider presets carry market defaults; **where an API can
+disable thinking/reasoning for documentation, livewiki disables it by default**
+(e.g. MiniMax-M3 Chat Completions: `thinking: { "type": "disabled" }` — omitting
+the field enables thinking on that API).
 
 Candidate writes are transactional. Before retry or final failure, livewiki
 restores an existing page byte-for-byte or removes a newly-created page through

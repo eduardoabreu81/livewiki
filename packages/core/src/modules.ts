@@ -93,6 +93,143 @@ function dirToModuleId(dir: string, paths: string[], totalDirs: number): string 
   return segments[segments.length - 1]!;
 }
 
+/** Defaults for oversized-module splitting (structural, completion-oriented). */
+export const MODULE_SPLIT_DEFAULTS = {
+  /** Split when a module has more files than this. */
+  maxFiles: 12,
+  /** Split when total symbols exceed this (even with fewer files). */
+  maxSymbols: 80,
+} as const;
+
+export interface SplitOversizedOptions {
+  maxFiles?: number;
+  maxSymbols?: number;
+  /** Optional map path → symbol count (defaults to 0 per file if missing). */
+  symbolCountByPath?: Map<string, number>;
+}
+
+/**
+ * Split modules that are too large for a single stage-4 LLM page into
+ * smaller units that still complete with valid frontmatter + verify.
+ *
+ * Strategy (in order):
+ * 1. Group by next path segment under a common parent (structural).
+ * 2. If still flat and oversized, chunk sorted paths by maxFiles with
+ *    stable ids derived from the first file stem in each chunk.
+ *
+ * Does not guarantee global id uniqueness — call makeUniqueDeterministicIds after.
+ */
+export function splitOversizedModules(
+  modules: Module[],
+  opts: SplitOversizedOptions = {},
+): Module[] {
+  const maxFiles = opts.maxFiles ?? MODULE_SPLIT_DEFAULTS.maxFiles;
+  const maxSymbols = opts.maxSymbols ?? MODULE_SPLIT_DEFAULTS.maxSymbols;
+  const symbolCountByPath = opts.symbolCountByPath ?? new Map<string, number>();
+
+  const out: Module[] = [];
+  for (const m of modules) {
+    out.push(...splitOneModule(m, maxFiles, maxSymbols, symbolCountByPath));
+  }
+  return out;
+}
+
+function countSymbols(paths: string[], map: Map<string, number>): number {
+  return paths.reduce((acc, p) => acc + (map.get(p) ?? 0), 0);
+}
+
+function splitOneModule(
+  m: Module,
+  maxFiles: number,
+  maxSymbols: number,
+  symbolCountByPath: Map<string, number>,
+): Module[] {
+  const sc =
+    m.symbolCount > 0 ? m.symbolCount : countSymbols(m.paths, symbolCountByPath);
+  if (m.paths.length <= maxFiles && sc <= maxSymbols) {
+    return [{ ...m, symbolCount: sc, paths: [...m.paths].sort() }];
+  }
+
+  // Structural: group by immediate child segment under the common directory prefix.
+  const bySeg = groupPathsByNextSegment(m.paths);
+  if (bySeg.size > 1) {
+    const parts: Module[] = [];
+    for (const [seg, paths] of [...bySeg.entries()].sort((a, b) =>
+      a[0].localeCompare(b[0]),
+    )) {
+      const id = `${m.id}-${slugifyIdSegment(seg)}`;
+      const symbolCount = countSymbols(paths, symbolCountByPath);
+      parts.push(
+        ...splitOneModule(
+          { id, paths, symbolCount },
+          maxFiles,
+          maxSymbols,
+          symbolCountByPath,
+        ),
+      );
+    }
+    return parts;
+  }
+
+  // Flat oversized directory: chunk sorted paths.
+  const sorted = [...m.paths].sort();
+  const chunks: Module[] = [];
+  for (let i = 0; i < sorted.length; i += maxFiles) {
+    const paths = sorted.slice(i, i + maxFiles);
+    const stem = fileStem(paths[0]!);
+    const id = `${m.id}-${slugifyIdSegment(stem)}`;
+    chunks.push({
+      id,
+      paths,
+      symbolCount: countSymbols(paths, symbolCountByPath),
+    });
+  }
+  return chunks;
+}
+
+/**
+ * Group paths by the path segment after their longest common directory prefix.
+ * Example: packages/core/src/a.ts + packages/core/src/llm/b.ts →
+ *   common "packages/core/src", groups "a.ts" vs "llm".
+ * If all files share the same next segment, returns size 1 (not useful).
+ */
+function groupPathsByNextSegment(paths: string[]): Map<string, string[]> {
+  if (paths.length === 0) return new Map();
+  const split = paths.map((p) => p.split("/"));
+  const minLen = Math.min(...split.map((s) => s.length));
+  let prefixLen = 0;
+  for (let i = 0; i < minLen - 1; i++) {
+    const seg = split[0]![i];
+    if (split.every((s) => s[i] === seg)) prefixLen++;
+    else break;
+  }
+  const map = new Map<string, string[]>();
+  for (let i = 0; i < paths.length; i++) {
+    const segs = split[i]!;
+    const key = segs[prefixLen] ?? fileStem(paths[i]!);
+    const arr = map.get(key) ?? [];
+    arr.push(paths[i]!);
+    map.set(key, arr);
+  }
+  return map;
+}
+
+function fileStem(path: string): string {
+  const base = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
+function slugifyIdSegment(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "part";
+}
+
 /**
  * Resolve imports pra edges no grafo de módulos. Apenas edges entre módulos
  * DIFERENTES (self-loops são descartados).

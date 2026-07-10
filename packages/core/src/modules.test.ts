@@ -6,6 +6,7 @@ import {
   makeUniqueDeterministicIds,
   assertUniqueModuleIds,
   DuplicateModuleIdError,
+  splitOversizedModules,
 } from "./modules.js";
 import type { ExtractedImport } from "./imports.js";
 
@@ -144,6 +145,53 @@ describe("modules.prioritizeModules", () => {
 // (packages/core/src, packages/cli/src, packages/mcp/src, ...) received
 // the same module ID. They shared one batch_task, overwrote
 // livewiki/src.md and corrupted accounting.
+describe("modules — splitOversizedModules", () => {
+  it("leaves small modules unchanged", () => {
+    const mods = [
+      { id: "auth", paths: ["src/auth/a.ts", "src/auth/b.ts"], symbolCount: 4 },
+    ];
+    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.id).toBe("auth");
+  });
+
+  it("chunks a flat oversized directory by maxFiles with stable stems", () => {
+    const paths = Array.from({ length: 25 }, (_, i) =>
+      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
+    );
+    const mods = [{ id: "core-src", paths, symbolCount: 25 }];
+    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
+    expect(out.length).toBeGreaterThan(1);
+    expect(out.every((m) => m.paths.length <= 12)).toBe(true);
+    const allPaths = out.flatMap((m) => m.paths).sort();
+    expect(allPaths).toEqual([...paths].sort());
+    // ids are distinct prefixes of core-src-
+    const ids = new Set(out.map((m) => m.id));
+    expect(ids.size).toBe(out.length);
+    for (const m of out) expect(m.id.startsWith("core-src-")).toBe(true);
+  });
+
+  it("splits by next path segment when structure exists", () => {
+    const mods = [
+      {
+        id: "pkg",
+        paths: [
+          "pkg/a/x.ts",
+          "pkg/a/y.ts",
+          "pkg/b/z.ts",
+          "pkg/b/w.ts",
+          "pkg/b/v.ts",
+        ],
+        symbolCount: 5,
+      },
+    ];
+    const out = splitOversizedModules(mods, { maxFiles: 2, maxSymbols: 80 });
+    expect(out.length).toBeGreaterThan(1);
+    // each sub-group further chunked if needed
+    expect(out.every((m) => m.paths.length <= 2)).toBe(true);
+  });
+});
+
 describe("modules W — makeUniqueDeterministicIds", () => {
   it("unique leaf is preserved", () => {
     const mods = [

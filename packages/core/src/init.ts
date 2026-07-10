@@ -34,6 +34,7 @@ import {
   resolveModuleEdges,
   prioritizeModules,
   makeUniqueDeterministicIds,
+  splitOversizedModules,
   assertUniqueModuleIds,
   type Module,
 } from "./modules.js";
@@ -272,7 +273,8 @@ async function buildPlan(absRoot: string): Promise<{
     // across all derived artifacts (modules.mmd, quickstart.md, overview.md,
     // regenerator, and batch_tasks.target).
     const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath);
-    const modules = makeUniqueDeterministicIds(heuristicModules);
+    const split = splitOversizedModules(heuristicModules, { symbolCountByPath });
+    const modules = makeUniqueDeterministicIds(split);
     assertUniqueModuleIds(modules);
 
     // Collect imports to build the graph

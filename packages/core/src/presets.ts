@@ -61,6 +61,20 @@ export interface ProviderPreset {
    * a key, NÃO inclui URL de billing — só contexto operacional.
    */
   readonly notes: string;
+  /**
+   * Default thinking/reasoning policy for batch documentation.
+   * Where the API allows turning thinking off, we disable by default
+   * (more reliable structured Markdown, lower cost).
+   * - disabled: send explicit off (MiniMax-M3 chat)
+   * - adaptive: allow thinking
+   * - omit: do not send the field (Anthropic Messages, most OpenAI chat models)
+   * - n/a: provider cannot disable (e.g. some reasoner-only models) — treat as omit
+   */
+  readonly thinkingDefault?: "disabled" | "adaptive" | "omit" | "n/a";
+  /** Prefer max_completion_tokens over max_tokens when true. */
+  readonly preferMaxCompletionTokens?: boolean;
+  /** Suggested stage-4 max output tokens for this provider family. */
+  readonly defaultMaxOutputTokens?: number;
 }
 
 /** Tipo da chave da tabela. Literal union pra autocomplete em IDE. */
@@ -110,6 +124,9 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "claude-haiku-4": { input: 0.8, output: 4 },
     },
     notes: "API oficial Anthropic Messages. Models: claude-opus-4-5, claude-sonnet-5, claude-haiku-4.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
   },
   openai: {
     name: "openai",
@@ -121,6 +138,9 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "gpt-4o-mini": { input: 0.15, output: 0.6 },
     },
     notes: "API oficial OpenAI Chat Completions.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: true,
+    defaultMaxOutputTokens: 8192,
   },
   openrouter: {
     name: "openrouter",
@@ -135,6 +155,9 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "google/gemini-2.0-flash": { input: 0.1, output: 0.4 },
     },
     notes: "Agregador (openai-compat). Modelos prefixados (ex.: anthropic/claude-sonnet-4-5).",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: true,
+    defaultMaxOutputTokens: 8192,
   },
   deepseek: {
     name: "deepseek",
@@ -145,7 +168,10 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "deepseek-chat": { input: 0.27, output: 1.1 },
       "deepseek-reasoner": { input: 0.55, output: 2.19 },
     },
-    notes: "DeepSeek API (openai-compat). Reasoner é modelo de raciocínio.",
+    notes: "DeepSeek API (openai-compat). Prefer deepseek-chat for docs; reasoner keeps reasoning on.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
   },
   kimi: {
     name: "kimi",
@@ -159,6 +185,9 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "moonshot-v1-128k": { input: 6, output: 6 },
     },
     notes: "Moonshot Kimi (openai-compat). Variantes por janela de contexto.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
   },
   minimax: {
     name: "minimax",
@@ -177,7 +206,10 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "music-2.6": { input: 0, output: 0 }, // música — pricing por faixa
       "hailuo-2.3": { input: 0, output: 0 }, // vídeo — pricing por segundo
     },
-    notes: "MiniMax via endpoint Anthropic-compatível (prompt caching ativado). Models: MiniMax-M2/M2.7/M3 + speech-2.8, image-01, music-2.6, hailuo-2.3.",
+    notes: "MiniMax Anthropic-compat (caching). OpenAI-compat chat: thinking disabled via model heuristic.",
+    thinkingDefault: "disabled",
+    preferMaxCompletionTokens: true,
+    defaultMaxOutputTokens: 8192,
   },
   gemini: {
     name: "gemini",
@@ -191,6 +223,9 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "gemini-2.5-flash": { input: 0.3, output: 2.5 },
     },
     notes: "Google Gemini via openai-compat endpoint (v1beta).",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
   },
   nvidia: {
     name: "nvidia",
@@ -204,6 +239,9 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "nvidia/nemotron-4-340b-instruct": { input: 4.2, output: 4.2 },
     },
     notes: "NVIDIA NIM (openai-compat). Modelos Meta Llama, NVIDIA Nemotron etc.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
   },
   ollama: {
     name: "ollama",
@@ -218,6 +256,9 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "qwen2.5-coder:32b": { input: 0, output: 0 },
     },
     notes: "Ollama local (openai-compat). Sem custo de API. Roda em localhost:11434.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
   },
   lmstudio: {
     name: "lmstudio",
@@ -228,6 +269,9 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
       "local-model": { input: 0, output: 0 },
     },
     notes: "LM Studio local (openai-compat). Sem custo de API. Roda em localhost:1234.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
   },
 };
 
@@ -269,6 +313,9 @@ export interface ResolvedProviderConfig {
   pricing: PricingTable;
   /** Notas do preset (info, não usado em runtime). */
   notes: string;
+  thinkingDefault: "disabled" | "adaptive" | "omit" | "n/a";
+  preferMaxCompletionTokens: boolean;
+  defaultMaxOutputTokens: number;
 }
 
 /**
@@ -302,6 +349,9 @@ export function resolveProviderConfig(args: {
       envVar: p.envVar,
       pricing: { ...p.pricing, ...(args.pricing ?? {}) },
       notes: p.notes,
+      thinkingDefault: p.thinkingDefault ?? "omit",
+      preferMaxCompletionTokens: p.preferMaxCompletionTokens ?? false,
+      defaultMaxOutputTokens: p.defaultMaxOutputTokens ?? 8192,
     };
   }
   // Caminho 2: back-compat — só provider set
@@ -317,6 +367,10 @@ export function resolveProviderConfig(args: {
       envVar: args.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
       pricing: args.pricing ?? {},
       notes: "(no preset — using legacy provider field)",
+      // openai-compat without preset: MiniMax model names still get thinking disabled in the adapter.
+      thinkingDefault: "omit",
+      preferMaxCompletionTokens: args.provider === "openai-compat",
+      defaultMaxOutputTokens: 8192,
     };
   }
   // Nenhum: caller vai falhar em validateConfigForBatch

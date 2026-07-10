@@ -21,12 +21,27 @@ export interface LlmUsage {
   model: string;
 }
 
+/**
+ * Thinking / reasoning control for providers that support it.
+ * - `disabled` — request no thinking (e.g. MiniMax-M3 chat `thinking.type=disabled`)
+ * - `adaptive` — allow provider thinking
+ * - `omit` — do not send the field (provider default)
+ */
+export type ThinkingMode = "disabled" | "adaptive" | "omit";
+
 /** Request canônica — única forma que adapters aceitam. */
 export interface GenerateRequest {
   system: string;
   user: string;
   maxTokens?: number;
   temperature?: number;
+  /** When set, openai-compat may map this to provider-specific fields. */
+  thinking?: ThinkingMode;
+  /**
+   * Prefer `max_completion_tokens` over legacy `max_tokens` (MiniMax/OpenAI
+   * newer APIs). Default false for broad compatibility.
+   */
+  preferMaxCompletionTokens?: boolean;
 }
 
 /** Response canônica — única forma que adapters retornam. */

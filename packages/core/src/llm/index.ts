@@ -68,8 +68,14 @@ export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmCl
   if (resolved.adapter === "anthropic") {
     return new AnthropicAdapter({ apiKey, baseUrl, model });
   }
-  // openai-compat
-  return new OpenAiCompatAdapter({ apiKey, baseUrl, model });
+  // openai-compat — pass preset defaults for thinking / token field name
+  return new OpenAiCompatAdapter({
+    apiKey,
+    baseUrl,
+    model,
+    thinkingDefault: resolved.thinkingDefault,
+    preferMaxCompletionTokens: resolved.preferMaxCompletionTokens,
+  });
 }
 
 /**
