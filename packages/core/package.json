@@ -85,6 +85,10 @@
     "./presets": {
       "types": "./dist/presets.d.ts",
       "import": "./dist/presets.js"
+    },
+    "./gitignore": {
+      "types": "./dist/gitignore.d.ts",
+      "import": "./dist/gitignore.js"
     }
   },
   "files": [

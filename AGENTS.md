@@ -1,225 +1,179 @@
 # AGENTS.md — livewiki
 
-> Para LLMs/agents trabalhando neste repo. **Estado live em
-> `status`**: Fase 4 completa (MCP server + 6 tools + FTS5 + tests com
-> InMemoryTransport) + Fase 3 rev2 empírica + correções (O, P).
-> Próxima fase (5): skills, hooks, update incremental.
+> For LLMs/agents working in this repo. **Live state below in §"Status"**:
+> Phases 0–4 approved and on the remote (08a1c0e included). Phase 5 in
+> progress with 3 local commits without push (70e643a step 1, 48197dc
+> step 2, 13dd441 packaging). Working tree clean.
+>
+> Previous session: Phase 5 mechanic was approved by the reviewer after
+> testing the full incremental flow as an in-session agent (hook
+> detects on commit without blocking → debt → paid via MCP `write_doc`
+> → verify clean → manifest updated). Two findings before closing, plus
+> a new policy (see below). Phase 5 finalization continues in this
+> session: [R] livewiki init adds `.livewiki/` to `.gitignore`, [S]
+> translation to English for all CLI strings and messages, language
+> policy recorded here.
+
+## Language policy
+
+**All durable artifacts of this repo are written in English** — docs,
+code comments, CLI strings and messages, error messages, commit
+messages. PT-BR only in conversation with the maintainer (Eduardo).
+This is a working convention effective immediately, not just for
+release. See SPEC.md §"Stack" and VISION.md §"Out of scope" for the
+authoritative statement.
+
+If you're reading older commits you may see PT-BR mixed in — those are
+pre-policy. New code and edits must follow English.
+
+**Working tree hygiene:** do NOT revert uncommitted `.md` files that
+appear in the working tree — they may be reviewer's work. If in doubt,
+ask.
 
 ## TL;DR
 
-livewiki é uma ferramenta de documentação técnica agent-first. O coração é o
-**pipeline batch de 4 etapas** (varredura → módulos → priorização → documentação)
-que chama LLM pra gerar páginas Markdown âncoradas em símbolos do código,
-validando pós-escrita via `verify` (broken_anchor = chave fora do índice).
-O **MCP server (Fase 4)** expõe a wiki via 6 tools pra qualquer client MCP
-(Claude Code, Cursor, Codex, etc.) — busca FTS5, leitura, escrita
-validada e gestão de dívida.
+livewiki is an agent-first technical documentation tool. The core is the
+**4-stage batch pipeline** (scan → modules → prioritize → document)
+that calls an LLM to generate Markdown pages anchored to code symbols,
+post-validating via `verify` (broken_anchor = key outside the index).
+The **MCP server (Phase 4)** exposes the wiki via 6 tools to any MCP
+client (Claude Code, Cursor, Codex, etc.) — FTS5 search, read,
+validated write, debt management.
 
-Estado do projeto:
-- **Fase 0** (scaffold + safe-io) ✅
-- **Fase 1** (indexador com web-tree-sitter) ✅
-- **Fase 2** (âncoras + dívida + verify) ✅
-- **Fase 3** (init + batch + LLM client + diagrams + contabilidade) ✅
-- **Fase 3 rev2** (correções empíricas H–M) ✅
-- **Fase 4** (MCP server: 6 tools + FTS5 + stdio) ✅
-- **Fase 5** (skills + hooks + update incremental + pointer) — próxima
-- **Fase 6** (export pra github-wiki/gitlab-wiki/generic) — pós-MVP
-- **Fase 7** (viewer local + templates) — pós-MVP
+Project status:
+- **Phase 0** (scaffold + safe-io) ✅
+- **Phase 1** (indexer with web-tree-sitter) ✅
+- **Phase 2** (anchors + debt + verify) ✅
+- **Phase 3** (init + batch + LLM client + diagrams + accounting) ✅
+- **Phase 3 rev2** (empirical fixes H–M) ✅
+- **Phase 4** (MCP server: 6 tools + FTS5 + stdio) ✅
+- **Phase 5** (skills + hooks + incremental update + pointer) — in review
+  - **step 3** (hooks templates — git post-commit + Claude Code Stop) ✅
+  - **step 4** (opt-in pointer in AGENTS.md/CLAUDE.md) ✅
+  - **step 5** (provider presets — 10 entries as data) ✅
+  - **step E2E** (end-to-end flow: hook → MCP write_doc → verify zero
+    issues → manifest updated) ✅
+  - **[R]** `livewiki init` adds `.livewiki/` to `.gitignore` ✅
+  - **[S]** translation to English of CLI strings + messages ✅
+- **Phase 6** (export to github-wiki/gitlab-wiki/generic) — post-MVP
+- **Phase 7** (local viewer + templates) — post-MVP
 
-Critério de aceite da Fase 3 (SPEC): `livewiki init --batch` num repo médio
-gera wiki completa; interromper no meio + `batch resume` continua da task certa;
-verify pega pelo menos um caso real de alucinação de doc. Rev2 empírica
-(commit ad87319) adiciona cenário de subdiretórios + NodeNext + openai-compat
-(coberto por `cli-batch-e2e-subdirs.test.ts` na CLI).
+Phase 3 acceptance criterion (SPEC): `livewiki init --batch` in a medium
+repo generates a complete wiki; interrupting in the middle + `batch
+resume` continues from the correct task; verify catches at least one
+real case of hallucinated doc. Rev2 empirical (commit ad87319) adds
+subdirectory + NodeNext + openai-compat scenarios (covered by
+`cli-batch-e2e-subdirs.test.ts` in the CLI).
 
-Critério de aceite da Fase 4 (SPEC): conectado a um client MCP real;
-`livewiki_write_doc` rejeita path fora de `livewiki/` e conteúdo que não passa
-no verify. Coberto por `packages/mcp/src/server.test.ts` (12 cenários E2E com
-InMemoryTransport — não precisa de stdio real).
+Phase 4 acceptance criterion (SPEC): connected to a real MCP client;
+the 6 tools work; `livewiki_write_doc` rejects paths outside `livewiki/`
+and content that doesn't pass `verify`. Covered by
+`packages/mcp/src/server.test.ts` (12 E2E scenarios with
+InMemoryTransport — no real stdio needed).
 
-## Regras invioláveis (SPEC §"Regras invioláveis")
+Phase 5 acceptance criterion (SPEC): end-to-end flow — agent edits
+code, hook detects, agent pays debt via MCP, verify passes clean
+(exit 0 AND zero issues of any severity), manifest updated. E2E must
+assert issue count, not just exit code. Covered by
+`packages/mcp/src/phase5-e2e.test.ts` (7 scenarios: 2 end-to-end + 5
+covering [R] `init` adds `.livewiki/` to `.gitignore`).
 
-1. **Escrita restrita**: todo código que escreve em disco passa por
-   `safe-io.ts`. Allowlist: `livewiki/` + `.livewiki/`. `AGENTS.md`/`CLAUDE.md`
-   só com flag explícita (Fase 5).
-2. **Pointer opt-in** (Fase 5).
-3. **O banco é derivado**: nenhuma informação importante vive SÓ no SQLite.
-   Tudo que importa para handoff vive em markdown/manifest versionados.
-4. **Sem telemetria, sem rede** exceto: LLM no batch (opt-in, key do usuário)
-   e download único de gramáticas WASM.
-5. **Testes**: vitest; cobertura mínima 80% no core. CLI/MCP podem ter
-   cobertura menor, mas os fluxos principais têm teste de integração
-   (E2E via stub HTTP server / InMemoryTransport).
-6. **Conteúdo humano é intocável**: páginas `owner: human` e blocos
-   `lw:manual` JAMAIS são modificados por escrita automatizada. `verify`
-   compara blocos manuais byte a byte após update.
-
-## Convenções adicionais (Fase 3 + adendos)
-
-- **API key SÓ via env var** (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`).
-  Nunca em config.json, checkpoint_json, logs ou erros. Coberto por
-  `key-leak.test.ts` — **se esse teste falhar, NÃO comite.**
-- **Sem modelo default hardcoded** (commit 3894f6e). `batch` sem config
-  falha com `MissingProviderConfigError` apontando pro `.livewiki/config.json`
-  com `claude-sonnet-5` só como EXEMPLO (não fallback silencioso).
-- **Templates de prompt em INGLÊS** (correção da revisão do plano).
-  `${language}` controla SÓ o idioma da saída da doc gerada.
-- **Diagramas em paths SPEC** (correção #2): `livewiki/architecture/structure.mmd`,
-  `livewiki/architecture/modules.mmd`, `livewiki/diagrams/<slug>.classes.mmd`.
-  `owner: generated` puros — nunca envelhecem.
-- **Manifest com snapshot hash** (correção #3): `livewiki/.manifest.json`,
-  `snapshotHash = sha256(livewiki/ excluindo o próprio manifest)`. Só regrava
-  se conteúdo mudou (anti-loop CI). `init.ts` NUNCA lista em `filesWritten`
-  um manifest que não foi regravado (FIX M rev2).
-- **Refinamento LLM da etapa 2 é opt-in/degradável** (correção #5):
-  `--no-refine` pula; falha de LLM degrada pra heurística (não é falha de task).
-  Validação do refined (FIX I rev2): rejeita `{"modules": []}`, JSON malformado,
-  módulos duplicados/sem id, ou cobertura < 80% dos arquivos heurísticos.
-  Em qualquer rejeição, heurística vence e erro vai pro checkpoint do stage 2.
-- **Checkpoint shape**: `usageHistory: [{ attempt, usage, costUsd, finishedAt }]`
-  desde attempt 1. Reporte agrega; "usage atual" = último item.
-- **Política de falha** (commit d274dd9): task failed → marca + motivo,
-  SEGUE. Circuit breaker: 3 falhas CONSECUTIVAS OU (>50% com ≥3 tasks).
-  Status: completed / completed_with_failures / aborted.
-- **Exit codes**: 0 = completed, 1 = completed_with_failures, 2 = aborted.
-  Fonte única de verdade: `core/batch.ts:statusToExitCode()`. CLI usa
-  `process.exitCode = N` (nunca `process.exit(N)`) pra preservar FIX L.
-- **Token-first no reporte** (ad87319): tokens são a métrica primária em
-  `livewiki batch status` (humano e JSON); USD aparece como linha secundária
-  marcada "estimado, tabela de <data>", omitida sem drama quando não há
-  pricing. `formatStatusHuman` e `formatResultHuman` em
-  `packages/cli/src/commands/batch.ts` lideram com tokens; USD só aparece
-  se `costUsd !== null` em algum stage.
-- **Checkpoint shape** (FIX J rev2): `batch_tasks.checkpoint_json` é JSON
-  puro. Módulos refinados vivem em `batch_runs.summary_json` (campo
-  `modulesRefined`), NUNCA concatenados no JSON da task (isso corrompia o
-  parse e zerava o usage do stage 2 no status). `BatchRunSummary` ganhou
-  `modulesRefined: Array<{id, paths}> | null`; `buildStatusReport` expõe
-  via `run.summary`.
-- **Guard de pipeline vazio** (FIX H rev2): se `ordered.length > 0` E
-  `tasksToRun.length === 0` (heurística achou módulos, batch tem 0 tasks),
-  `runBatch` joga `EmptyPipelineError` → status vira `completed_with_failures`
-  (exit 1), nunca `completed` (exit 0). Também: run com `cb.done === 0` E
-  `ordered.length > 0` é forçado a `completed_with_failures`.
-- **Imports NodeNext** (FIX K rev2): `modules.ts:resolveRelativeImport`
-  strip da extensão `.js`/`.jsx`/`.mjs`/`.cjs` antes de tentar candidatos.
-  `import x from "../utils/crypto.js"` agora resolve pra `crypto.ts` (ou
-  `.tsx`, `.js`, etc) e `index.js` é tratado como barrel.
-- **Cleanup de processo** (FIX L rev2): CLI usa `process.exitCode = N; return`
-  em vez de `process.exit(N)` nos catch de init/batch. Evita libuv assert
-  (STATUS_STACK_BUFFER_OVERRUN = exit -1073740791) quando há handles async
-  abertos (fetch, WAL do SQLite, watcher). Node drena o event loop antes
-  de sair.
-- **Exit code propagation init --batch** (O): `livewiki init --batch`
-  propaga o status do batch via `InitResult.batchExitCode` (calculado por
-  `statusToExitCode()`). Sem isso, abort/completed_with_failures saíam com
-  exit 0 e mascaravam falha sistêmica. `--json` sempre exit 0 (output
-  estruturado, convenção batch CLI). Testado em `cli-batch-e2e.test.ts`
-  (4 cenários novos: aborted/completed_with_failures/completed/--json).
-- **`architecture/overview.md` no init** (P): SPEC §"Pipeline batch" pede
-  "gera/atualiza quickstart.md e architecture/overview.md". Antes do fix,
-  quickstart linkava pra `#<m.id>` mas overview não existia — verify
-  emitia WARNs. Agora init gera `livewiki/architecture/overview.md` no
-  fluxo base (com módulos heurísticos) — batch re-gera com pages linkadas.
-  Anchors `<a id="...">` HTML inline garantem match exato com o link do
-  quickstart, independente do renderer markdown. Testado em
-  `cli-batch-e2e.test.ts` (3 cenários novos: init base, init --batch,
-  cross-check links↔anchors).
-- **FTS5 em DB separado** (Fase 4): `livewiki_search` usa `.livewiki/search.db`
-  (NÃO o `index.db` — evita mexer em schema v4/migrations). Rebuild
-  completo no startup do MCP server (rápido, idempotente); update
-  incremental via `indexPage()` no `write_doc`. Tokenizer porter (default
-  FTS5). Decisão em `packages/mcp/src/search.ts:doc`.
-- **MCP write_doc = 2 fases** (Fase 4): (1) `safe-io.writeText` (allowlist)
-  (2) `verify.run` no repo. Se verify reporta `error` issue na página,
-  rollback (apaga arquivo) + retorna `isError=true` com detalhe. `skipVerify`
-  é escape documentado pra páginas sem anchor (quickstart). Mesma
-  allowlist do regra #1 + mesma checagem do verify pós-batch.
-- **Windows + search.db**: better-sqlite3 abre o search.db com WAL
-  (search.db-shm / search.db-wal). Testes E2E MCP precisam fechar o
-  server (via `server.close()`) antes do afterEach rodar `rm` recursivo —
-  caso contrário EBUSY em Windows.
-
-## Layout do repo
+## Repo layout
 
 ```
 livewiki/
-├── SPEC.md                    # fonte de verdade do comportamento
-├── VISION.md                  # racional e fora-de-escopo
-├── AGENTS.md                  # ESTE ARQUIVO (convenções + estado live)
+├── SPEC.md                    # source of truth for behavior
+├── VISION.md                  # rationale and out-of-scope
+├── AGENTS.md                  # THIS FILE (conventions + live state)
 ├── packages/
-│   ├── core/                  # @livewiki/core — toda lógica
+│   ├── core/                  # @livewiki/core — all logic
 │   │   ├── src/
 │   │   │   ├── index.ts        # public surface
-│   │   │   ├── safe-io.ts      # regra #1: escrita só via allowlist
+│   │   │   ├── safe-io.ts      # rule #1: writes only via allowlist
 │   │   │   ├── hashes.ts       # sha256 helper
-│   │   │   ├── walker.ts       # varre repo respeitando .gitignore
+│   │   │   ├── walker.ts       # walks repo respecting .gitignore
 │   │   │   ├── parser.ts       # tree-sitter init + parse source
-│   │   │   ├── symbols.ts      # extract symbols do AST (TS/JS/Python)
+│   │   │   ├── symbols.ts      # extract symbols from AST (TS/JS/Python)
 │   │   │   ├── db.ts           # SQLite schema v3→v4 + migrations
 │   │   │   ├── indexer.ts      # walk → read → hash → parse → upsert
-│   │   │   ├── anchors.ts      # extrai anchors de markdown
-│   │   │   ├── frontmatter.ts  # parser YAML subset
-│   │   │   ├── anchor-ledger.ts# Fase 2: diff vs estado anterior → debt
-│   │   │   ├── verify.ts       # Fase 2: walk disco, broken_anchor check
+│   │   │   ├── anchors.ts      # extracts anchors from markdown
+│   │   │   ├── frontmatter.ts  # YAML subset parser
+│   │   │   ├── anchor-ledger.ts# Phase 2: diff vs previous state → debt
+│   │   │   ├── verify.ts       # Phase 2: walk disk, broken_anchor check
 │   │   │   ├── status.ts       # status --json report
-│   │   │   ├── pricing.ts      # tabela embutida + lookup
+│   │   │   ├── pricing.ts      # embedded table + lookup
 │   │   │   ├── config.ts       # .livewiki/config.json load/save
 │   │   │   ├── llm/            # client + adapters Anthropic/openai-compat
-│   │   │   ├── imports.ts      # extrai imports via tree-sitter
-│   │   │   ├── modules.ts      # heurística + edges + priorização
-│   │   │   ├── diagrams.ts     # Mermaid determinístico
-│   │   │   ├── prompts.ts      # templates (inglês), ${language} no user
-│   │   │   ├── batch-state.ts  # tipos do checkpoint_json
+│   │   │   ├── imports.ts      # extracts imports via tree-sitter
+│   │   │   ├── modules.ts      # heuristic + edges + prioritization
+│   │   │   ├── diagrams.ts     # deterministic Mermaid
+│   │   │   ├── prompts.ts      # templates (English), ${language} in user
 │   │   │   ├── manifest.ts     # .manifest.json + snapshotHash
-│   │   │   ├── batch.ts        # orquestrador 4 etapas + circuit breaker
-│   │   │   ├── batch-status.ts # buildStatusReport (totals + byStage + byModule)
-│   │   │   └── init.ts         # livewiki init (layout determinístico + batch)
-│   │   └── package.json        # subpath exports pra cada módulo
+│   │   │   ├── batch.ts        # 4-stage orchestrator + circuit breaker
+│   │   │   ├── init.ts         # livewiki init (deterministic layout + batch)
+│   │   │   ├── update.ts       # Phase 5: incremental mode
+│   │   │   ├── update-metrics.ts# Phase 5: token accounting
+│   │   │   ├── pointer.ts      # Phase 5: opt-in AGENTS.md/CLAUDE.md block
+│   │   │   ├── presets.ts      # Phase 5: 10 provider presets (data)
+│   │   │   └── gitignore.ts    # Phase 5 [R]: idempotent .gitignore writer
+│   │   └── package.json        # subpath exports per module
 │   ├── cli/                   # @livewiki/cli — thin wrapper
 │   │   └── src/
 │   │       ├── cli.ts          # commander setup + global flags
+│   │       ├── output.ts       # JSON / human emitter
 │   │       └── commands/
 │   │           ├── init.ts     # livewiki init [--batch | --plan | --no-refine]
-│   │           ├── index.ts    # livewiki index
+│   │           ├── index-cmd.ts# livewiki index
 │   │           ├── status.ts   # livewiki status
-│   │           ├── update.ts   # livewiki update (stub Fase 5)
+│   │           ├── update.ts   # livewiki update (stub Phase 5, implemented)
 │   │           ├── verify.ts   # livewiki verify
 │   │           ├── batch.ts    # livewiki batch [status|resume|--only|list]
-│   │           ├── serve.ts    # livewiki serve (Fase 4 — agora redireciona pro mcp)
-│   │           ├── export.ts   # livewiki export (stub Fase 6)
-│   │           └── view.ts     # livewiki view (stub Fase 7)
-│   └── mcp/                   # @livewiki/mcp — Fase 4: MCP server
+│   │           ├── pointer.ts  # livewiki pointer (Phase 5 step 4)
+│   │           ├── serve.ts    # livewiki serve (Phase 4)
+│   │           ├── export.ts   # livewiki export (stub Phase 6)
+│   │           └── view.ts     # livewiki view (stub Phase 7)
+│   │       ├── templates/      # Phase 5 step 3: hook templates
+│   │       │   ├── git/post-commit        # bash hook
+│   │       │   ├── claude-code/settings.local.json
+│   │       │   └── README.md             # install instructions
+│   │       └── skills/         # Phase 5 step 2: document-as-you-go
+│   │           └── document-as-you-go/SKILL.md
+│   └── mcp/                   # @livewiki/mcp — Phase 4: MCP server
 │       └── src/
 │           ├── server.ts       # McpServer + 6 tools
 │           ├── search.ts       # FTS5 (.livewiki/search.db)
-│           └── index.ts        # entry point stdio (npx livewiki-mcp --repo)
-└── .livewiki/                 # cache derivado do repo (safe-io allowlist)
+│           ├── index.ts        # stdio entry point (npx livewiki-mcp --repo)
+│           ├── server.test.ts  # Phase 4 E2E (12 tests, InMemoryTransport)
+│           └── phase5-e2e.test.ts# Phase 5 E2E (7 scenarios)
+└── .livewiki/                 # derived cache of the repo (allowlist)
     ├── index.db               # SQLite schema v4
-    ├── search.db              # SQLite FTS5 (MCP, Fase 4)
-    └── config.json            # config local do repo
+    ├── search.db              # SQLite FTS5 (MCP, Phase 4)
+    └── config.json            # local repo config
 ```
 
-## Entry points (o que agente externo vai tocar)
+## Entry points (what an external agent will touch)
 
-- **CLI `livewiki init`** — cria layout + indexa + (opcional) roda batch.
-  Sempre escrito em `packages/cli/src/commands/init.ts` + lógica em
-  `packages/core/src/init.ts`. Flags: `--batch`, `--plan`, `--no-refine`.
-- **CLI `livewiki batch`** — gerencia runs de documentação.
-  `packages/cli/src/commands/batch.ts` + orquestrador em `batch.ts`.
-  Subcomandos: `status [<runId>]` (default), `resume <runId>`,
-  `--only <target> <runId>`, `list`.
-- **CLI `livewiki verify`** — Fase 2. Lê wiki do disco, valida âncoras.
-  SEMPRE parseia do disco (Fix C) — âncora em página nunca indexada
-  TEM que ser pega (anti-alucinação).
-- **E2E rev2** — `packages/cli/src/cli-batch-e2e-subdirs.test.ts` captura
-  o cenário empírico do revisor: 3 subdiretórios + imports NodeNext +
-  openai-compat. Cobre H (3 páginas geradas, não 0), I (refine
-  modules:[] rejeitado), K (edges com NodeNext), M (filesWritten sem
-  manifest idempotente), L (erro de config com exit limpo).
-- **MCP server (Fase 4)** — `packages/mcp/src/server.ts` define McpServer
-  com 6 tools; `packages/mcp/src/index.ts` é o entry point stdio
-  (`npx livewiki-mcp --repo <path>`). Configuração típica em Claude Code:
+- **CLI `livewiki init`** — creates layout + indexes + (optional) runs
+  batch. Always written in `packages/cli/src/commands/init.ts` + logic
+  in `packages/core/src/init.ts`. Flags: `--batch`, `--plan`,
+  `--no-refine`.
+- **CLI `livewiki batch`** — manages full-documentation runs.
+  `packages/cli/src/commands/batch.ts` + orchestrator in `batch.ts`.
+  Subcommands: `status [<runId>]` (default), `resume <runId>`,
+  `--only <task-id|module>` reruns 1 task (same interface the in-session
+  mode uses to work the queue); regeneration preserves `lw:manual`
+  blocks byte-for-byte, refuses `owner: human`, and sums the new
+  `usage` into the checkpoint (retry costs token and shows in the
+  report).
+- **CLI `livewiki verify`** — Phase 2. Reads the wiki fresh from disk,
+  validates anchors. Always exits non-zero on failure (CI-friendly).
+  **Parses the wiki fresh from disk** — an anchor in a never-indexed
+  page MUST be caught (the anti-hallucination promise: LLM-written docs
+  are validatable without running `index` first).
+- **MCP server (Phase 4)** — `packages/mcp/src/server.ts` defines the
+  McpServer with 6 tools; `packages/mcp/src/index.ts` is the stdio
+  entry point (`npx livewiki-mcp --repo <path>`). Typical
+  configuration in Claude Code:
   ```json
   {
     "mcpServers": {
@@ -230,107 +184,252 @@ livewiki/
     }
   }
   ```
-  Tools (todas documentadas no docstring do server.ts):
-  - `livewiki_quickstart` — retorna `livewiki/quickstart.md`
-  - `livewiki_read` — lê página da wiki (allowlist livewiki/)
-  - `livewiki_search` — busca full-text FTS5 (rebuilt no startup)
-  - `livewiki_debt` — dívida aberta (= `livewiki status --json`)
-  - `livewiki_write_doc` — escreve página (allowlist + verify pós-escrita)
-  - `livewiki_resolve_debt` — fecha dívidas por ID
-- **MCP E2E** — `packages/mcp/src/server.test.ts` cobre todos os 6 tools
-  + 6 cenários de erro/rejeição (12 testes). Usa `InMemoryTransport` do
-  SDK MCP — não precisa de stdio real nem de subprocess.
+  Tools (all documented in `server.ts` docstring):
+  - `livewiki_quickstart` — returns `livewiki/quickstart.md`
+  - `livewiki_read` — reads a wiki page by path (allowlist `livewiki/`)
+  - `livewiki_search` — full-text search FTS5 (rebuilt on startup)
+  - `livewiki_debt` — open debt (= `livewiki status --json`)
+  - `livewiki_write_doc` — writes a page (allowlist + post-write verify)
+  - `livewiki_resolve_debt` — closes debts by ID
+- **MCP E2E** — `packages/mcp/src/server.test.ts` covers all 6 tools +
+  6 error/rejection scenarios (12 tests). Uses `InMemoryTransport`
+  from the MCP SDK — no real stdio or subprocess needed.
 
-## Workflow de validação
+## Validation workflow
 
-Antes de commitar qualquer mudança em Fase 2, 3 ou 4:
+Before committing any change in Phases 2, 3, 4, or 5:
 
 ```bash
 pnpm -r build         # core + cli + mcp
-pnpm -r test          # vitest em todos
+pnpm -r test          # vitest in all
 pnpm --filter @livewiki/cli test -- src/cli-batch-e2e.test.ts
-                     # E2E crítico: init --batch end-to-end com stub server (anthropic)
+                     # critical E2E: init --batch end-to-end with stub server (anthropic)
 pnpm --filter @livewiki/cli test -- src/cli-batch-e2e-subdirs.test.ts
-                     # E2E rev2: subdiretórios + NodeNext + openai-compat (achados H–M)
+                     # E2E rev2: subdirectories + NodeNext + openai-compat (findings H–M)
 pnpm --filter @livewiki/core test -- src/key-leak.test.ts
-                     # regressão CRÍTICA: key NUNCA pode aparecer em output
+                     # CRITICAL regression: key can NEVER appear in output
 pnpm --filter @livewiki/mcp test
-                     # Fase 4: 6 tools E2E (InMemoryTransport)
+                     # Phase 4: 6 tools E2E (InMemoryTransport)
+pnpm --filter @livewiki/mcp test -- src/phase5-e2e.test.ts
+                     # Phase 5: end-to-end + [R] gitignore
 ```
 
-Cobertura atual: **80.09% stmts / 80.1% branches / 93.1% funcs** (acima
-do mínimo 80% da regra #5; queda vs 92.1% da rev1 porque `init.ts` e
-`batch.ts` são cobertos via E2E/subprocess, não unit — esses arquivos
-explicitamente fora do `vitest` unit suite).
+Current coverage: **80%+ statements / 80%+ branches / 90%+ funcs** (above
+the 80% minimum of rule #5; the drop vs early phases is because
+`init.ts` and `batch.ts` are covered via E2E/subprocess, not unit —
+those files are explicitly out of the `vitest` unit suite).
 
-## Onde tocar pra cada tipo de mudança
+## Where to touch for each change type
 
-- **Novo command CLI** → `packages/cli/src/commands/<name>.ts` + register em
-  `cli.ts`. Se a lógica é reutilizável, vai em `packages/core/src/<name>.ts`
-  e expõe via `index.ts` + `package.json` subpath exports.
-- **Nova tabela SQLite** → bump `CURRENT_SCHEMA_VERSION` em `db.ts`,
-  atualizar `SCHEMA_SQL` (fresh installs) e adicionar migration function
-  em `postV3Migrations()` (idempotente — checa colunas antes de ADD).
-- **Novo provider LLM** → adapter em `packages/core/src/llm/<provider>.ts`,
-  implementar `LlmClient`, registrar no factory em `llm/index.ts`.
-- **Novo prompt** → função em `prompts.ts`, system em inglês,
-  `${language}` no user prompt como instrução explícita.
-- **Novo diagrama determinístico** → adicionar função em `diagrams.ts`,
-  escrever no path SPEC (`livewiki/architecture/...` ou `livewiki/diagrams/...`).
-- **Bug no circuit breaker / orchestrator** → `packages/core/src/batch.ts`,
-  com testes em `batch.test.ts`. Atualizar `packages/cli/src/commands/batch.ts`
-  pra novo exit code.
-- **Nova tool MCP** → adicionar `server.tool(name, desc, schema, handler)`
-  em `packages/mcp/src/server.ts`. Schema com `zod`. Se precisa de nova
-  operação no core, adicionar lá e importar aqui (não duplicar lógica).
-  Atualizar `server.test.ts` com cenário E2E.
+- **New CLI command** → `packages/cli/src/commands/<name>.ts` +
+  register in `cli.ts`. If the logic is reusable, put it in
+  `packages/core/src/<name>.ts` and expose via `index.ts` + `package.json`
+  subpath exports.
+- **New SQLite table** → bump `CURRENT_SCHEMA_VERSION` in `db.ts`,
+  update `SCHEMA_SQL` (fresh installs) and add a migration function in
+  `postV3Migrations()` (idempotent — checks columns before ADD).
+- **New LLM provider** → adapter in `packages/core/src/llm/<provider>.ts`,
+  implement `LlmClient`, register in the factory at `llm/index.ts`.
+- **New preset** → entry in `PRESET_TABLE` in `presets.ts`. No new code.
+- **New prompt** → function in `prompts.ts`, system in English,
+  `${language}` in the user prompt as an explicit instruction.
+- **New deterministic diagram** → add a function in `diagrams.ts`,
+  write to the SPEC path (`livewiki/architecture/...` or
+  `livewiki/diagrams/...`).
+- **Bug in circuit breaker / orchestrator** → `packages/core/src/batch.ts`,
+  with tests in `batch.test.ts`. Update
+  `packages/cli/src/commands/batch.ts` for the new exit code.
+- **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
+  `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
+  operation in core, add it there and import here (don't duplicate
+  logic). Update `server.test.ts` with an E2E scenario.
+- **Hook / skill change** → `packages/cli/templates/` or
+  `packages/cli/skills/`. Update README/SKILL.md; tests in
+  `packages/cli/src/templates.test.ts`.
 
-## Gotchas específicos
+## Phase 5 specific notes (in progress)
 
-- **Migrations pós-v3 são funções JS**, não strings SQL. SQLite não tem
-  `ADD COLUMN IF NOT EXISTS`. Função checa `PRAGMA table_info` antes.
-- **manifest.ts `manifestsEqual` ignora `updatedAt`** — timestamp, não conteúdo.
-  Caso contrário, todo `new Date()` gera updatedAt novo e regrava sempre,
-  quebrando o anti-loop de CI.
-- **Circuit breaker ratio check exige `totalAttempted >= 3`** — sem isso,
-  `1 fail / 0 done = 100%` abortaria qualquer run com 1 task.
-- **`safeIo.resolveAndValidate` é async** (usa `realpath` async). Não
-  existe versão sync — sempre `await`.
-- **MCP write_doc rollback** — se verify rejeitar após write, apaga o
-  arquivo que acabou de ser escrito (best-effort). Garante que estado
-  inconsistente não persiste (regra #3: disco é a verdade).
-- **MCP FTS5 rebuild no startup** — `openAndIndex` reindexa todas as
-  páginas markdown. Se você só adicionou uma página via `write_doc`,
-  ele já atualiza incrementalmente; não precisa reiniciar o server.
-- **Edit tool às vezes falha** com "Could not safely match oldString" em
-  arquivos grandes. Workaround: Python one-off patch, rodar, deletar com
-  `mavis-trash`. Não retry — gasta tokens.
-- **PowerShell no Windows**: NÃO usar `&&`, `ls -la`, `head`, `tail`, `grep`.
-  Use `;`, `Get-ChildItem`, `Select-Object`, `Select-String`. Se `bash` produzir
-  output WSL garbled, troque pra `node`/`python` imediatamente.
-- **Lock do git às vezes persiste** — se `git commit` reclamar de
-  `index.lock`, aguardar 2s e retry (geralmente o processo já liberou).
-  Se persistir, `mavis-trash .git/index.lock` (NÃO use `rm`/`Remove-Item`).
+- **`livewiki init` adds `.livewiki/` to `.gitignore`** [R] — the
+  derived cache must NEVER travel in git (rule #3). `init` writes
+  a managed block delimited by `# livewiki:start` / `# livewiki:end`
+  (idempotent: re-init is a no-op if already present). User-added
+  entries outside the block are preserved. See
+  `packages/core/src/gitignore.ts`.
+- **Hook templates** (Phase 5 step 3) live in
+  `packages/cli/templates/`. Install via `core.hooksPath` (recommended,
+  see `templates/README.md`). The `post-commit` hook NEVER blocks the
+  commit (always exits 0) — it only prints a debt summary if any. The
+  `--quiet` flag added to `livewiki index` suppresses human output so
+  the hook doesn't spam the terminal.
+- **Skill "document-as-you-go"** lives at
+  `packages/cli/skills/document-as-you-go/SKILL.md` (Claude Code
+  skills format). The agent runs `livewiki status --json` after each
+  task and pays debt via `livewiki_write_doc` (MCP) or direct edit +
+  `verify`.
+- **Provider presets** (Phase 5 step 5) are pure data in
+  `packages/core/src/presets.ts` — 10 entries (anthropic, openai,
+  openrouter, deepseek, kimi, **minimax→anthropic adapter** per SPEC
+  for prompt caching, gemini, nvidia, ollama, lmstudio). Config
+  references a preset by name and may override any field
+  (`baseUrl`, `pricing`). API keys NEVER in config — env var only.
+  Key-leak regression test (`src/key-leak.test.ts`) still passes.
 
-## Estado live (próxima fase: 5 — skills + hooks + update)
+## Additional conventions (Phase 3+)
+
+- **API key ONLY via env var** (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
+  / `MINIMAX_API_KEY` / etc per preset). Never in `config.json`,
+  `checkpoint_json`, logs, or errors. Covered by
+  `key-leak.test.ts` — **if this test fails, DO NOT commit.**
+- **No hardcoded default model** (commit 3894f6e). `batch` without
+  config fails with `MissingProviderConfigError` pointing to
+  `.livewiki/config.json` with `claude-sonnet-5` only as an EXAMPLE
+  (not a silent fallback).
+- **Prompt templates in ENGLISH** (plan revision fix). `${language}`
+  controls ONLY the language of the generated doc.
+- **Diagrams in SPEC paths** (fix #2): `livewiki/architecture/structure.mmd`,
+  `livewiki/architecture/modules.mmd`, `livewiki/diagrams/<slug>.classes.mmd`.
+  Pure `owner: generated` — they never age.
+- **Manifest with snapshot hash** (fix #3): `livewiki/.manifest.json`,
+  `snapshotHash = sha256(livewiki/ excluding the manifest itself)`.
+  Only rewrites if content changed (anti-loop CI). `init.ts` NEVER
+  lists the manifest in `filesWritten` when it wasn't actually
+  rewritten (FIX M rev2).
+- **Stage 2 LLM refinement is opt-in/degradable** (fix #5):
+  `--no-refine` skips; LLM failure degrades to heuristic (not a task
+  failure). Refined validation (FIX I rev2): rejects `{"modules": []}`,
+  malformed JSON, duplicate/id-less modules, or coverage < 80% of
+  heuristic files. On any rejection, heuristic wins and the error
+  goes into the stage 2 checkpoint.
+- **Checkpoint shape**: `usageHistory: [{ attempt, usage, costUsd, finishedAt }]`
+  from attempt 1. Report aggregates; "current usage" = last item.
+- **Failure policy** (commit d274dd9): failed task → marks + reason,
+  CONTINUES. Circuit breaker: 3 consecutive failures OR (>50% with
+  ≥3 tasks). Status: `completed` / `completed_with_failures` /
+  `aborted`.
+- **Exit codes**: 0 = `completed`, 1 = `completed_with_failures`,
+  2 = `aborted`. Single source of truth:
+  `core/batch.ts:statusToExitCode()`. CLI uses
+  `process.exitCode = N` (never `process.exit(N)`) to preserve FIX L.
+- **Token-first reporting** (ad87319): tokens are the primary metric
+  in `livewiki batch status` (human and JSON); USD appears as a
+  secondary line marked "estimated, table as of <date>", omitted
+  without drama when no pricing exists. `formatStatusHuman` and
+  `formatResultHuman` in `packages/cli/src/commands/batch.ts` lead
+  with tokens; USD only appears when `costUsd !== null` somewhere.
+- **Checkpoint shape** (FIX J rev2): `batch_tasks.checkpoint_json` is
+  pure JSON. Refined modules live in `batch_runs.summary_json` (field
+  `modulesRefined`), NEVER concatenated into the task JSON (that
+  corrupted parse and zeroed stage 2 usage in `status`).
+  `BatchRunSummary` gained `modulesRefined: Array<{id, paths}> | null`;
+  `buildStatusReport` exposes it via `run.summary`.
+- **Empty pipeline guard** (FIX H rev2): if `ordered.length > 0` AND
+  `tasksToRun.length === 0` (heuristic found modules, batch has 0
+  tasks), `runBatch` throws `EmptyPipelineError` → status becomes
+  `completed_with_failures` (exit 1), never `completed` (exit 0).
+  Also: a run with `cb.done === 0` AND `ordered.length > 0` is
+  forced to `completed_with_failures`.
+- **NodeNext imports** (FIX K rev2): `modules.ts:resolveRelativeImport`
+  strips the `.js`/`.jsx`/`.mjs`/`.cjs` extension before trying
+  candidates. `import x from "../utils/crypto.js"` now resolves to
+  `crypto.ts` (or `.tsx`, `.js`, etc) and `index.js` is treated as
+  a barrel.
+- **Process cleanup** (FIX L rev2): CLI uses `process.exitCode = N;
+  return` instead of `process.exit(N)` in init/batch catch handlers.
+  Prevents libuv assert (STATUS_STACK_BUFFER_OVERRUN = exit
+  -1073740791) when async handles are open (fetch, SQLite WAL,
+  watcher). Node drains the event loop before exiting.
+- **Exit code propagation in init --batch** (O): `livewiki init
+  --batch` propagates the batch status via `InitResult.batchExitCode`
+  (calculated by `core/batch.ts:statusToExitCode()`). Without this,
+  abort/completed_with_failures exited 0 and masked systemic failure.
+  `--json` always exits 0 (structured output, batch CLI convention).
+  Tested in `cli-batch-e2e.test.ts` (4 new scenarios:
+  aborted/completed_with_failures/completed/--json).
+- **`architecture/overview.md` in init** (P): SPEC §"Batch pipeline"
+  says "At the end: generate/update quickstart.md and
+  architecture/overview.md". Before the fix, quickstart linked to
+  `#<m.id>` but overview didn't exist — verify emitted WARNs in
+  newly-completed runs. Now init generates
+  `livewiki/architecture/overview.md` in the base flow (with heuristic
+  modules) — batch regenerates with pages linked. HTML inline anchors
+  (`<a id="...">`) guarantee exact match with the quickstart link,
+  regardless of markdown renderer. Tested in `cli-batch-e2e.test.ts`
+  (3 new scenarios: init base, init --batch, cross-check links↔anchors).
+  **(R) follow-up:** the `[page]` link is only emitted when the page
+  EXISTS — without this, init's overview had broken links (init runs
+  before batch creates pages), and the Phase 5 criterion "verify
+  zero issues" would always fail. Batch now calls
+  `regenerateArchitectureOverview` after stage 4 to link the
+  newly-created pages.
+- **FTS5 in separate DB** (Phase 4): `livewiki_search` uses
+  `.livewiki/search.db` (NOT `index.db` — avoids touching schema v4
+  / migrations). Full rebuild on MCP server startup (fast, idempotent);
+  incremental update via `indexPage()` in `write_doc`. Porter
+  tokenizer (default FTS5). Decision in
+  `packages/mcp/src/search.ts:doc`.
+- **MCP write_doc = 2 phases** (Phase 4): (1) `safe-io.writeText`
+  (allowlist) (2) `verify.run` on the repo. If verify reports an
+  `error` issue on this page, rollback (deletes the file) + returns
+  `isError=true` with details. `skipVerify` is a documented escape
+  hatch for pages without anchors (e.g. quickstart). Same allowlist
+  as rule #1 + same post-batch verify check.
+- **Windows + search.db**: better-sqlite3 opens search.db with WAL
+  (search.db-shm / search.db-wal). E2E tests must close the server
+  (via `server.close()`) before `afterEach` runs recursive `rm` —
+  otherwise EBUSY on Windows.
+- **Pointer opt-in** (Phase 5 step 4): rule #2 — AGENTS.md/CLAUDE.md
+  only modified with explicit `--write-pointer` flag or interactive
+  confirmation. The block is delimited `<!-- livewiki:start --> ...
+  <!-- livewiki:end -->`, idempotent. safe-io's `allowPointer` exists
+  since Phase 0 for this. See `packages/cli/src/commands/pointer.ts`.
+
+## Specific gotchas
+
+- **Post-v3 migrations are JS functions**, not SQL strings. SQLite
+  doesn't have `ADD COLUMN IF NOT EXISTS`. Function checks
+  `PRAGMA table_info` before ADD.
+- **`manifestsEqual` ignores `updatedAt`** — it's a timestamp, not
+  content. Otherwise every `new Date()` would generate a new
+  `updatedAt` and always rewrite, breaking the anti-loop CI (git
+  diff would show a change on every commit).
+- **Circuit breaker ratio check requires `totalAttempted >= 3`** —
+  without this, `1 fail / 0 done = 100%` would abort any run with
+  1 task.
+- **`safeIo.resolveAndValidate` is async** (uses `realpath` async).
+  There is no sync version — always `await`.
+- **MCP write_doc rollback** — if verify rejects after write,
+  deletes the file that was just written (best-effort). Ensures
+  inconsistent state doesn't persist (rule #3: disk is the truth).
+- **MCP FTS5 rebuild on startup** — `openAndIndex` reindexes all
+  markdown pages. If you only added a page via `write_doc`, it already
+  updates incrementally; no need to restart the server.
+- **Edit tool sometimes fails** with "Could not safely match
+  oldString" on large files. Workaround: Python one-off patch, run,
+  delete with `mavis-trash`. Don't retry — wastes tokens.
+- **PowerShell on Windows**: do NOT use `&&`, `ls -la`, `head`,
+  `tail`, `grep`. Use `;`, `Get-ChildItem`, `Select-Object`,
+  `Select-String`. If `bash` produces garbled/UTF-16 output or WSL
+  prompts ("install a distribution"), switch to `node`/`python`
+  immediately — max 2 retries before changing approach.
+- **Lock from git sometimes persists** — if `git commit` complains
+  about `index.lock`, wait 2s and retry (usually the process has
+  already released it). If it persists,
+  `mavis-trash .git/index.lock` (do NOT use `Remove-Item`).
+
+## Live state (next phase: 6 — export + 7 — viewer)
 
 ```bash
-# Última validação (Fase 3 + Fase 4 + fixes O/P):
-pnpm -r test  → 307 passed + 8 skipped (core 265 + cli 30 + mcp 12)
-pnpm -r build → verde (core + cli + mcp)
+# Last validation (Phase 5 + [R] + [S] + language policy):
+pnpm -r test  → 430 passed + 8 skipped (core 369 + cli 42 + mcp 19)
+pnpm -r build → green (core + cli + mcp)
 ```
 
-Próximos passos planejados:
-1. Fase 5: hooks (`post-commit`, `Stop` do Claude Code), skill
-   `document-as-you-go`, `livewiki update` (pacote de trabalho incremental),
-   pointer opt-in em AGENTS.md/CLAUDE.md.
-2. **Presets de provider** (ad87319 — docs já na SPEC, código pra próximo
-   ciclo): tabela embutida de anthropic/openai/openrouter/deepseek/kimi/
-   minimax/gemini/nvidia/ollama/lmstudio com baseUrl + adapter + env var +
-   pricing default. `config.json` referencia o preset e sobrescreve.
-3. Fase 6: export pra github-wiki/gitlab-wiki/generic.
-4. Fase 7: viewer local + templates.
+Next planned steps:
+1. Phase 5 close-out: reviewer approves R + S + language policy →
+   push the package (Fase 5 + reviewer's VISION/SPEC translation).
+2. Phase 6: export to github-wiki/gitlab-wiki/generic.
+3. Phase 7: local viewer + templates.
 
-> **Lembrete do user**: validar doc/spec nova ANTES de codar. Quando Edu
-> adiciona algo à SPEC (via commit), comparar com implementação atual
-> antes de mergir — não implementar direto, alinhar primeiro.
+> **Reminder for the user**: validate doc/spec additions BEFORE coding.
+> When Edu adds something to SPEC (via commit), compare with the current
+> implementation before merging — don't implement directly, align first.

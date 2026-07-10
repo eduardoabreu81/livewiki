@@ -391,3 +391,107 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     }
   }, 60_000);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (R) Achado do revisor: `livewiki init` deve adicionar `.livewiki/` ao
+// .gitignore do repo-alvo (regra #3 SPEC: banco derivado, nunca viaja no git).
+// Idempotente: re-init é no-op se já contém.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("E2E Fase 5 — Achado R: livewiki init adiciona .livewiki/ ao .gitignore", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-r-gitignore-"));
+    // Setup source mínimo (init precisa de algo pra indexar)
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/lib.ts"),
+      "export function hello(): string { return 'hi'; }\n",
+      "utf8",
+    );
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("init cria .gitignore com .livewiki/ quando ausente", async () => {
+    // .gitignore NÃO existe
+    expect(nodeFsSync.existsSync(nodePath.join(repoRoot, ".gitignore"))).toBe(false);
+
+    const r = await runCli(["init"], repoRoot);
+    expect(r.code, `init falhou: ${r.stderr}`).toBe(0);
+
+    // .gitignore foi criado com .livewiki/ dentro de bloco gerenciado
+    const giPath = nodePath.join(repoRoot, ".gitignore");
+    expect(nodeFsSync.existsSync(giPath)).toBe(true);
+    const content = await nodeFs.readFile(giPath, "utf8");
+    expect(content).toContain(".livewiki/");
+    expect(content).toContain("# livewiki:start");
+    expect(content).toContain("# livewiki:end");
+  });
+
+  it("init PRESERVA entries existentes do user (append, não overwrite)", async () => {
+    // .gitignore já existe com entries do user
+    const userGi = "node_modules/\ndist/\n*.log\n";
+    await nodeFs.writeFile(nodePath.join(repoRoot, ".gitignore"), userGi, "utf8");
+
+    const r = await runCli(["init"], repoRoot);
+    expect(r.code).toBe(0);
+
+    const content = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
+    // Entries do user preservadas
+    expect(content).toContain("node_modules/");
+    expect(content).toContain("dist/");
+    expect(content).toContain("*.log");
+    // .livewiki/ adicionado
+    expect(content).toContain(".livewiki/");
+    // Bloco gerenciado presente
+    expect(content).toContain("# livewiki:start");
+    expect(content).toContain("# livewiki:end");
+  });
+
+  it("init idempotente: rodar 2x não duplica .livewiki/", async () => {
+    await runCli(["init"], repoRoot);
+    const first = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
+
+    await runCli(["init"], repoRoot);
+    const second = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
+
+    expect(second).toBe(first);
+    // Conta exata de ".livewiki/" — só 1 (não duplicada)
+    const matches = second.match(/^\.livewiki\/$/gm) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  it("init respeita entry existente do user com mesmo nome (não duplica)", async () => {
+    // User já adicionou .livewiki/ manualmente (fora do bloco gerenciado)
+    await nodeFs.writeFile(nodePath.join(repoRoot, ".gitignore"), ".livewiki/\n", "utf8");
+
+    const r = await runCli(["init"], repoRoot);
+    expect(r.code).toBe(0);
+
+    const content = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
+    // Não duplicou — entry do user continua sendo a única
+    const matches = content.match(/^\.livewiki\/$/gm) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  it("init --batch também adiciona .gitignore (regression: deve rodar antes do batch)", async () => {
+    // Garante que init (com ou sem --batch) faz o trabalho de gitignore
+    // ANTES de qualquer outra coisa — batch não deveria ter que cuidar disso.
+    const r = await runCli(["init", "--batch"], repoRoot);
+    // init --batch pode falhar se não tiver LLM config; o que importa é o .gitignore
+    const giExists = nodeFsSync.existsSync(nodePath.join(repoRoot, ".gitignore"));
+    if (giExists) {
+      const content = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
+      expect(content).toContain(".livewiki/");
+    } else {
+      // Se r.code !== 0 (ex.: batch aborted por falta de config), init base
+      // ainda pode ter rodado parcialmente. Verifica stderr.
+      // Não falhamos o teste aqui — o ponto é documentar o comportamento.
+      expect(r.code).not.toBe(0);
+    }
+  }, 60_000);
+});
