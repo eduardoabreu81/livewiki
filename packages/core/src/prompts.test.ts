@@ -4,6 +4,7 @@ import {
   buildStage2RefinePrompt,
   buildQuickstartPrompt,
   buildOverviewPrompt,
+  buildRepairPrompt,
   DEFAULT_CONTEXT_TOKEN_BUDGET,
   DEFAULT_OUTPUT_TOKEN_BUDGET,
 } from "./prompts.js";
@@ -45,6 +46,70 @@ describe("prompts — todos em inglês (templates)", () => {
   it("regra 'NEVER invent' presente no system prompt", () => {
     const r = buildStage4Prompt(sampleModule, ["k"], "sym", "code");
     expect(r.system).toMatch(/NEVER invent/);
+  });
+});
+
+// === U — prompt hardening (Phase-5 plan) ===
+// Achado 1 do baseline: o system prompt continha `<!-- lw:anchors key1 key2 -->`
+// como exemplo copiável. LLM copiava isso verbatim pra página → anchor
+// fantasma. Aqui garantimos que NENHUM system prompt do stage 4 ou repair
+// traga anchor literal copiável.
+describe("prompts U — hardening (sem fake anchors copiáveis)", () => {
+  it("stage 4 system prompt NÃO contém a string 'key1' ou 'key2' como placeholders", () => {
+    const r = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "sym", "code");
+    expect(r.system).not.toMatch(/\bkey1\b/);
+    expect(r.system).not.toMatch(/\bkey2\b/);
+  });
+
+  it("stage 4 system prompt NÃO contém marker lw:anchors literal com keys placeholder", () => {
+    const r = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "sym", "code");
+    // Se aparecer, deve ser prosa explicando o que o marker faz, NUNCA
+    // uma string copiável.
+    expect(r.system).not.toMatch(/lw:anchors\s+[a-z]+\s+[a-z]+/);
+  });
+
+  it("repair prompt NÃO contém 'key1' ou 'key2' como placeholders", () => {
+    const r = buildRepairPrompt(
+      sampleModule,
+      ["src/auth.ts#login"],
+      "sym",
+      "code",
+      "prior candidate content",
+      [{ code: "wrong_owner", message: "owner wrong", location: "frontmatter" }],
+      "en",
+    );
+    expect(r.system).not.toMatch(/\bkey1\b/);
+    expect(r.system).not.toMatch(/\bkey2\b/);
+    expect(r.user).not.toMatch(/\bkey1\b/);
+    expect(r.user).not.toMatch(/\bkey2\b/);
+  });
+
+  it("repair prompt recebe a closed key list verbatim e os erros estruturados", () => {
+    const closed = ["src/auth.ts#login", "src/auth.ts#logout"];
+    const errors: import("./prompts.js").ArtifactValidationError[] = [
+      { code: "wrong_owner", message: "owner must be generated", location: "frontmatter" },
+      { code: "anchor_outside_closed_list", message: "fake key", location: "frontmatter", offending: "fake-key" },
+    ];
+    const r = buildRepairPrompt(sampleModule, closed, "sym", "code", "prior text", errors, "en");
+    for (const k of closed) {
+      expect(r.user).toContain(k);
+    }
+    expect(r.user).toContain("owner must be generated");
+    expect(r.user).toContain("fake-key");
+  });
+
+  it("repair prompt recebe o prior candidate (truncado) e instrui sem prose de reasoning", () => {
+    const r = buildRepairPrompt(
+      sampleModule,
+      ["k"],
+      "sym",
+      "code",
+      "PRIOR CANDIDATE TEXT",
+      [{ code: "empty_body", message: "no body", location: "body" }],
+      "en",
+    );
+    expect(r.user).toContain("PRIOR CANDIDATE TEXT");
+    expect(r.system).toMatch(/Do NOT wrap your output in code fences/);
   });
 });
 

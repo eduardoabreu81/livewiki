@@ -63,6 +63,15 @@ export interface LivewikiConfig {
   languages?: string[];
   /** Patterns extra pra ignorar (além de .gitignore). Default []. */
   ignores?: string[];
+  /**
+   * Phase-5 plan (X): número de chamadas corretivas permitidas por task do
+   * stage 4, após a chamada inicial. Default 2 → uma task pode fazer no
+   * MÁXIMO 1 inicial + 2 reparos = 3 chamadas LLM.
+   *
+   * Deve ser um inteiro ≥ 0. Validado por `validateConfigShape` (rejeita
+   * floats, NaN, strings, negativos).
+   */
+  maxRepairAttempts?: number;
 }
 
 /** Defaults aplicados em runtime, NÃO gravados no config. */
@@ -74,6 +83,12 @@ export const CONFIG_DEFAULTS = {
     anthropic: "https://api.anthropic.com",
     "openai-compat": "https://api.openai.com",
   } as Record<LlmProvider, string>,
+  /**
+   * Phase-5 plan (X): default de reparos por task. Plan exige 2.
+   * Inteiro não-negativo. Sobrescrito por `config.maxRepairAttempts`
+   * ou por `BatchOptions.maxRepairAttempts` (testes, override CLI).
+   */
+  maxRepairAttempts: 2,
 } as const;
 
 /**
@@ -156,6 +171,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
   return {
     language: CONFIG_DEFAULTS.language,
     languages: [...CONFIG_DEFAULTS.languages],
+    maxRepairAttempts: CONFIG_DEFAULTS.maxRepairAttempts,
     ...config,
   };
 }
@@ -241,6 +257,18 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       }
     }
     out.pricing = outPricing;
+  }
+  // Phase-5 plan (X): maxRepairAttempts — inteiro não-negativo. Floats,
+  // NaN, strings e negativos são rejeitados (em vez de silenciosamente
+  // cair pro default) pra que configs corrompidos não escondam bugs.
+  if (obj["maxRepairAttempts"] !== undefined) {
+    const v = obj["maxRepairAttempts"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `invalid maxRepairAttempts: must be a non-negative integer, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.maxRepairAttempts = v;
   }
   return out;
 }

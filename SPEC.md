@@ -193,18 +193,63 @@ All commands: `--json`, `--repo <path>` (default cwd), consistent exit codes.
 
 1. **Scan**: full `index`; symbol snapshot.
 2. **Module identification**: grouping by directory + import graph (deterministic
-   heuristic; an LLM may refine module names/boundaries — 1 call).
+   heuristic; an LLM may refine module names/boundaries — 1 call). Module IDs
+   are deterministic, stable slugs. A unique directory leaf keeps its short ID;
+   colliding leaves use the shortest unique path suffix (`core-src`, `cli-src`,
+   `mcp-src`, expanding only when necessary). Duplicate IDs are a hard pipeline
+   error before stage-4 tasks, LLM calls, or page writes: one module ID maps to
+   exactly one task target and one `livewiki/<id>.md` page.
 3. **Prioritization**: orders modules by centrality (how many others depend on
    them) and size; the user can reorder/exclude (`--plan` shows the plan before
    running).
 4. **Coordinated documentation**: for each module (task): context = symbols +
    relevant code (bounded by a configurable token budget) → LLM generates a page
-   with anchors → `verify` → write → checkpoint. Failed/interrupted? the task
-   stays `pending`, resumes later.
+   with anchors → normalize and validate the artifact → transactional write +
+   `verify` → checkpoint. Failed/interrupted? the task stays resumable.
 
-**Run failure policy**: a task that fails post-write verify → marks `failed` with
-the reason in the checkpoint and MOVES ON to the next one (an isolated failure
-doesn't cost the run; surgical retry via `--only`). **Circuit breaker**: 3
+Stage-4 output is an artifact, never a raw transcript. The prompt contains the
+closed canonical key list and explicitly requires exact keys from that list; it
+must not contain copyable fake anchors. Before writing, livewiki:
+
+- removes one complete leading `<think>...</think>` block and rejects an
+  unclosed reasoning block or a response that contains only reasoning;
+- unwraps one complete outer `markdown`/`md` code fence;
+- requires a non-empty Markdown page beginning with valid frontmatter and
+  `owner: generated`; and
+- rejects every page or section anchor outside the module's closed canonical
+  key list. This validation produces structured error codes and details for
+  correction. It does not weaken the repository-wide `verify` contract.
+
+An invalid artifact or post-write verify failure triggers a bounded corrective
+call for the same task. `maxRepairAttempts` defaults to `2` in
+`.livewiki/config.json` conventions and can be overridden per run; therefore a
+task makes at most one initial call plus two corrective calls by default. The
+repair prompt receives the structured errors, the exact closed key list, and
+the prior candidate needed to correct the artifact. A repaired task is `done`
+and does not increment circuit-breaker failures. Only exhaustion becomes one
+final task failure.
+
+Candidate writes are transactional. Before retry or final failure, livewiki
+restores an existing page byte-for-byte or removes a newly-created page through
+the safe-I/O allowlist. No invalid candidate remains on disk. Ownership rules for
+regeneration:
+
+- `owner: human` — refuse the entire automated rewrite (no LLM call);
+- `owner: generated` — allow full rewrite of the page;
+- `owner: mixed` — allow rewrite of generated sections; every `lw:manual` block
+  is preserved byte-for-byte and the final frontmatter keeps `owner: mixed`
+  (the model still emits `owner: generated` in its artifact; the orchestrator
+  restores `mixed` before write/verify).
+
+If post-write verify fails **and** rollback itself fails, that is terminal for
+the **entire run** (`aborted`): later modules must not call the LLM or write
+pages, because disk may be inconsistent.
+
+**Run failure policy**: a task that exhausts artifact/verify correction → marks
+`failed` once with the final reason in the checkpoint and MOVES ON to the next
+one (an isolated failure doesn't cost the run; surgical retry via `--only`),
+except `rollback_failed` which aborts the run as above.
+**Circuit breaker**: 3
 consecutive failures or >50% failure in the run → aborts with a diagnostic (serial
 failure = systemic problem; continuing burns tokens). Run finished with failures:
 status `completed_with_failures`, exit ≠ 0, the report lists each failed task with
@@ -221,7 +266,8 @@ interpretation that varies by route (the same model costs differently direct vs
 via OpenRouter) and by the user's credits. Every report leads with tokens; USD
 appears as a secondary estimate, always marked "estimated, table of <date>", and
 dropped without drama when there's no price.
-- **Batch**: each task records the real API `usage` in the checkpoint
+- **Batch**: each actual LLM call records exactly one real API `usage` entry in
+  the checkpoint, including corrective calls
   (input/output tokens + model). `livewiki batch <run>` reports tokens per
   module/stage and cumulative; USD as a secondary line. Goal: reproducible
   comparison with OpenWiki and similar tools.
@@ -230,8 +276,9 @@ dropped without drama when there's no price.
   dedicated table under `.livewiki/`, exposed via `status --json`.
 - The anchor instruction in the batch prompt is closed: the LLM receives the list
   of canonical keys of the module (from the index) and **distributes** those keys
-  across the sections — never invents a key. `verify` rejects a key not in the
-  index.
+  across the sections — never invents a key. Stage-4 artifact validation rejects
+  a key outside that module before acceptance, and `verify` still rejects a key
+  not in the repository index.
 
 ## Skills and hooks (phase 5)
 

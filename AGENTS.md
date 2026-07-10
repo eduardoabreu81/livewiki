@@ -1,18 +1,12 @@
 # AGENTS.md — livewiki
 
 > For LLMs/agents working in this repo. **Live state below in §"Status"**:
-> Phases 0–4 approved and on the remote (08a1c0e included). Phase 5 in
-> progress with 3 local commits without push (70e643a step 1, 48197dc
-> step 2, 13dd441 packaging). Working tree clean.
->
-> Previous session: Phase 5 mechanic was approved by the reviewer after
-> testing the full incremental flow as an in-session agent (hook
-> detects on commit without blocking → debt → paid via MCP `write_doc`
-> → verify clean → manifest updated). Two findings before closing, plus
-> a new policy (see below). Phase 5 finalization continues in this
-> session: [R] livewiki init adds `.livewiki/` to `.gitignore`, [S]
-> translation to English for all CLI strings and messages, language
-> policy recorded here.
+> Phases 0–5 on main. Batch Resilience U–X approved after independent
+> review (unique module IDs + taken set, owner:mixed retention, multi
+> manual blocks, rollback_failed aborts run, monotonic usage attempts,
+> stage-4 artifact normalize/repair, English-only new U–X text).
+> Benchmark MiniMax raw under `docs/benchmarks/` is evidence only — no
+> public winner claim until a corrected livewiki rerun + quality review.
 
 ## Language policy
 
@@ -65,6 +59,8 @@ Project status:
     issues → manifest updated) ✅
   - **[R]** `livewiki init` adds `.livewiki/` to `.gitignore` ✅
   - **[S]** translation to English of CLI strings + messages ✅
+  - **[U–X]** batch resilience (unique IDs, artifact validation, bounded
+    repair, transactional write, ownership) ✅ approved (pending push)
 - **Phase 6** (export to github-wiki/gitlab-wiki/generic) — post-MVP
 - **Phase 7** (local viewer + templates) — post-MVP
 
@@ -426,19 +422,21 @@ those files are explicitly out of the `vitest` unit suite).
   already released it). If it persists,
   `mavis-trash .git/index.lock` (do NOT use `Remove-Item`).
 
-## Live state (next phase: 6 — export + 7 — viewer)
+## Live state (next: optional MiniMax rerun → Phase 6 export → Phase 7 viewer)
 
 ```bash
-# Last validation (Phase 5 + [R] + [S] + language policy):
-pnpm -r test  → 430 passed + 8 skipped (core 369 + cli 42 + mcp 19)
+# Last validation (Phase 5 + U–X batch resilience):
+pnpm -r test  → 518 passed + 8 skipped (core 457 + cli 42 + mcp 19)
 pnpm -r build → green (core + cli + mcp)
 ```
 
 Next planned steps:
-1. Phase 5 close-out: reviewer approves R + S + language policy →
-   push the package (Fase 5 + reviewer's VISION/SPEC translation).
-2. Phase 6: export to github-wiki/gitlab-wiki/generic.
-3. Phase 7: local viewer + templates.
+1. Push U–X when maintainer authorizes (no force-push).
+2. Optional: improve token proxy + rerun livewiki only on frozen MiniMax
+   snapshot; quality-compare with preserved OpenWiki output (no winner
+   claim until review).
+3. Phase 6: export to github-wiki/gitlab-wiki/generic.
+4. Phase 7: local viewer + templates.
 
 > **Reminder for the user**: validate doc/spec additions BEFORE coding.
 > When Edu adds something to SPEC (via commit), compare with the current

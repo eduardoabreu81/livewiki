@@ -41,6 +41,11 @@ export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
  *     código (truncado pelo caller por orçamento).
  *   - ${language} aparece na instrução do system e na do user (instrução
  *     explícita pra escrever no idioma).
+ *
+ * Phase-5 plan (U): o system prompt NUNCA traz âncoras fictícias copiáveis
+ * (ex.: "key1 key2"). Qualquer ilustração de sintaxe usa prosa neutra
+ * ("a key from the list below") ou os próprios placeholders de expressão
+ * (ex.: "keyN"). A regra fechada é reforçada nos REJECTION CRITERIA.
  */
 export function buildStage4Prompt(
   module: Module,
@@ -54,7 +59,7 @@ export function buildStage4Prompt(
     `You will receive a module's metadata, a CLOSED list of canonical symbol keys, a symbol table, and a code excerpt.`,
     ``,
     `Output rules (strict):`,
-    `- Markdown + frontmatter with: title, owner: generated, anchors (list).`,
+    `- Markdown + frontmatter with: title, owner: generated, anchors (list of closed keys).`,
     `- Use ONLY the keys from the closed list below. Distribute them across sections. NEVER invent a key outside the list.`,
     `- If information is missing, write "TODO: <reason>" and continue — do not invent behaviour.`,
     `- Keep prose tight; this is reference documentation, not marketing.`,
@@ -62,8 +67,15 @@ export function buildStage4Prompt(
     ``,
     `Constraints (livewiki invariants):`,
     `- Frontmatter anchors list MUST only contain keys from the closed list.`,
-    `- Section markers `+"`<!-- lw:anchors key1 key2 -->`"+` distribute remaining keys across sections.`,
+    `- Distribute the remaining closed keys across sections using the section-marker comment (one marker per section, list the keys that section anchors).`,
     `- The page must be syntactically valid Markdown (frontmatter between --- blocks).`,
+    ``,
+    `REJECTION CRITERIA (the artifact validator will reject if any of these are violated):`,
+    `- Frontmatter missing, malformed, missing the \`owner:\` line, or \`owner\` is not "generated".`,
+    `- Any anchor key in the frontmatter or in a section marker is NOT in the closed list.`,
+    `- Empty page or reasoning-only output.`,
+    `- The page is not a real Markdown page (e.g. just a fenced code block with no body).`,
+    `- The page contains a \`<!-- lw:manual -->\` block (reserved for human content — only the orchestrator can re-inject existing ones).`,
   ].join("\n");
 
   const user = [
@@ -72,6 +84,88 @@ export function buildStage4Prompt(
     `# Module: ${module.id}`,
     `# Paths (${module.paths.length}): ${module.paths.join(", ")}`,
     `# Symbol count: ${module.symbolCount}`,
+    ``,
+    `# Closed list of canonical keys (USE ONLY THESE — every anchor in your output MUST come from this list):`,
+    ...closedKeyList.map((k) => `- ${k}`),
+    ``,
+    closedKeyList.length > 0
+      ? `# Section marker syntax (concrete example using keys from the closed list above):`
+      : `# No canonical keys available for this module — emit no anchors and do not use <!-- lw:anchors -->.`,
+    closedKeyList.length > 0
+      ? `After a heading, drop one HTML comment listing the keys that section anchors. Pick 1+ keys from the list — never invent a key. Example with the actual keys:`
+      : `If your generated page would be empty or a placeholder, do not write a page. The page-write is rejected if it has no anchors (no <a id="..."> or no <!-- lw:anchors -->).`,
+    ``,
+    "```",
+    "## Validation flow",
+    closedKeyList.length > 0
+      ? `<!-- lw:anchors ${closedKeyList.slice(0, Math.min(2, closedKeyList.length)).join(" ")} -->`
+      : `<!-- (no anchors — page should not exist) -->`,
+    "",
+    "Prose about that section.",
+    "```",
+    ``,
+    `# Symbol table:`,
+    symbolsTable,
+    ``,
+    `# Source code (truncated by token budget):`,
+    "```",
+    truncatedSource,
+    "```",
+    ``,
+    `# FORBIDDEN: never emit a \`<!-- lw:manual -->...<!-- /lw:manual -->\` block. Manual blocks are sacred (regra #6) and are reserved for human content. If you write one, the artifact will be rejected.`,
+    ``,
+    `# Output: complete Markdown page for livewiki/${module.id}.md`,
+  ].join("\n");
+
+  return { system, user };
+}
+
+/**
+ * Repair prompt — usado quando a validação do artefato OU o verify pós-escrita
+ * falha após uma chamada LLM. Recebe a lista fechada de chaves, os erros
+ * estruturados e o candidato anterior (truncado) pra correção.
+ *
+ * Phase-5 plan (X): bounded corrective call. O caller controla quantas vezes
+ * invoca este prompt; o default é 2.
+ */
+export function buildRepairPrompt(
+  module: Module,
+  closedKeyList: string[],
+  symbolsTable: string,
+  truncatedSource: string,
+  priorCandidate: string,
+  errors: ReadonlyArray<ArtifactValidationError>,
+  language: Language = "en",
+): PromptPair {
+  const system = [
+    `You are a technical documentation REPAIR assistant for the livewiki project.`,
+    `Your previous attempt to document a module produced an artifact that the livewiki validator REJECTED.`,
+    `You will receive the closed list of canonical keys, the prior candidate (possibly truncated), and a structured list of validation errors.`,
+    ``,
+    `Your job: produce a corrected Markdown page that fixes every error listed below.`,
+    `Hard constraints (same as the initial generation):`,
+    `- Frontmatter: title, owner: generated, anchors list.`,
+    `- Every anchor key in the page MUST be in the closed list. NEVER invent a key.`,
+    `- Valid Markdown (frontmatter between --- blocks).`,
+    `- NEVER emit a \`<!-- lw:manual -->\` block in your output. Manual blocks are reserved for human content (regra #6); the orchestrator preserves them byte-for-byte from the previous version.`,
+    ``,
+    `Do NOT wrap your output in code fences. Do NOT include reasoning prose. Output the raw Markdown page only.`,
+  ].join("\n");
+
+  const errorLines = errors.map((e) => {
+    const where = e.sectionSlug
+      ? ` (section "${e.sectionSlug}")`
+      : e.location === "frontmatter"
+        ? " (frontmatter)"
+        : ` (${e.location})`;
+    return `- [${e.code}]${where}: ${e.message}` + (e.offending ? ` — offending: ${e.offending}` : "");
+  });
+
+  const user = [
+    `# Language: ${language}`,
+    ``,
+    `# Module: ${module.id}`,
+    `# Paths (${module.paths.length}): ${module.paths.join(", ")}`,
     ``,
     `# Closed list of canonical keys (USE ONLY THESE):`,
     ...closedKeyList.map((k) => `- ${k}`),
@@ -84,10 +178,47 @@ export function buildStage4Prompt(
     truncatedSource,
     "```",
     ``,
-    `# Output: complete Markdown page for livewiki/${module.id}.md`,
+    `# Structured errors from the validator (FIX ALL):`,
+    ...errorLines,
+    ``,
+    `# Prior candidate (truncated to first 2000 chars — what the validator saw):`,
+    "```",
+    priorCandidate.slice(0, 2000),
+    "```",
+    ``,
+    `# Output: corrected Markdown page for livewiki/${module.id}.md`,
   ].join("\n");
 
   return { system, user };
+}
+
+/** Códigos estruturados de erro produzidos pela validação do artefato. */
+export type ArtifactValidationCode =
+  | "empty_after_normalize"        // nothing left after think/fence strip
+  | "unclosed_reasoning"            // <think> without matching </think>
+  | "reasoning_only"                // output was ONLY the <think>…</think> block
+  | "no_frontmatter"                // no --- ... --- at the top
+  | "invalid_frontmatter"           // frontmatter present but didn't parse
+  | "missing_owner"                 // frontmatter `owner:` line is absent
+  | "wrong_owner"                   // owner is set but is not "generated"
+  | "anchor_outside_closed_list"    // anchor in frontmatter or section marker
+  | "empty_body"                    // frontmatter ok, but body is empty/whitespace
+  | "model_invented_manual"         // LLM wrote a <!-- lw:manual --> block (forbidden)
+  // Phase-5 plan (X): codes usados pelo ORQUESTRADOR pra alimentar o
+  // repair prompt quando o problema NÃO é o artifact (LLM call failed ou
+  // verify rejected). O repair prompt trata todos da mesma forma.
+  | "llm_error"                     // LLM call threw (network, 5xx, etc)
+  | "verify_failed";                // repository-wide verify rejected the page
+
+export interface ArtifactValidationError {
+  code: ArtifactValidationCode;
+  message: string;
+  /** Where the violation lives — drives repair prompt context. */
+  location: "frontmatter" | "section" | "body" | "global";
+  /** Offending text (e.g. the bad anchor key), if applicable. */
+  offending?: string;
+  /** Section slug, when location is "section". */
+  sectionSlug?: string;
 }
 
 /**

@@ -33,6 +33,8 @@ import {
   identifyModulesHeuristic,
   resolveModuleEdges,
   prioritizeModules,
+  makeUniqueDeterministicIds,
+  assertUniqueModuleIds,
   type Module,
 } from "./modules.js";
 import { collectImports } from "./imports.js";
@@ -265,7 +267,13 @@ async function buildPlan(absRoot: string): Promise<{
       const p = s.key.split("#")[0]!;
       symbolCountByPath.set(p, (symbolCountByPath.get(p) ?? 0) + 1);
     }
-    const modules = identifyModulesHeuristic(filePaths, symbolCountByPath);
+    // Review finding #2: aplica o W gate (plan-wide uniqueness) ANTES de
+  // resolver edges e priorizar — assim a identidade dos módulos é a mesma
+  // em todos os artefatos derivados (modules.mmd, quickstart.md, overview.md,
+  // regenerator, e batch_tasks.target).
+  const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath);
+  const modules = makeUniqueDeterministicIds(heuristicModules);
+  assertUniqueModuleIds(modules);
 
     // Coleta imports pra montar o grafo
     const importsByFile = new Map<string, Awaited<ReturnType<typeof collectImports>>>();

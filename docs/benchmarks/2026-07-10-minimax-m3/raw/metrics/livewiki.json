@@ -1,0 +1,9 @@
+{
+  "label": "livewiki",
+  "calls": 8,
+  "promptTokens": 79850,
+  "completionTokens": 22357,
+  "totalTokens": 102207,
+  "callsWithoutUsage": 0,
+  "updatedAt": "2026-07-10T12:46:24.731Z"
+}

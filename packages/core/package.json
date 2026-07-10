@@ -86,6 +86,10 @@
       "types": "./dist/presets.d.ts",
       "import": "./dist/presets.js"
     },
+    "./artifact": {
+      "types": "./dist/artifact.d.ts",
+      "import": "./dist/artifact.js"
+    },
     "./gitignore": {
       "types": "./dist/gitignore.d.ts",
       "import": "./dist/gitignore.js"

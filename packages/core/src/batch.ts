@@ -16,11 +16,17 @@
  * --only (commit fb6807d):
  *   - Re-roda 1 task (mesma interface que modo em-sessão usará na Fase 5).
  *   - Preserva lw:manual byte-a-byte, recusa owner: human.
- *   - Retry soma novo usage ao checkpoint (usageHistory, attempt++).
+ *   - Retry adds new usage to the checkpoint (usageHistory, attempt++).
  *
- * Manifest (correção #3):
+ * Manifest (fix #3):
  *   - manifest.ts grava .livewiki/.manifest.json com snapshotHash.
- *   - pendingBatch dentro do manifest permite handoff cross-máquina.
+ *   - pendingBatch inside the manifest allows cross-machine handoff.
+ *
+ * Phase-5 plan (U, V, W, X): stage 4 accepts a normalized artifact, not
+ * the raw transcript. Structural failures trigger a bounded sequence
+ * of repair prompts. Module IDs are globally unique before the
+ * first write. The write is transactional (snapshot → write → verify
+ * → restore/remove on failure).
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -29,11 +35,14 @@ import * as safeIo from "./safe-io.js";
 import { openIndex, type SymbolRow } from "./db.js";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
-import { run as runVerify } from "./verify.js";
+import { run as runVerify, type VerifyIssue } from "./verify.js";
 import {
   identifyModulesHeuristic,
   resolveModuleEdges,
   prioritizeModules,
+  makeUniqueDeterministicIds,
+  assertUniqueModuleIds,
+  DuplicateModuleIdError,
   type Module,
 } from "./modules.js";
 import { collectImports } from "./imports.js";
@@ -44,11 +53,18 @@ import { calculateCostUsd, lookupPricing } from "./pricing.js";
 import {
   buildStage2RefinePrompt,
   buildStage4Prompt,
+  buildRepairPrompt,
   type Language,
+  type ArtifactValidationError,
 } from "./prompts.js";
+import {
+  normalizeStage4Artifact,
+  validateStage4Artifact,
+} from "./artifact.js";
 import { computeSnapshotHash, writeManifestIfChanged, buildManifest } from "./manifest.js";
 import { sha256 } from "./hashes.js";
 import { regenerateArchitectureOverview } from "./init.js";
+import { parseFrontmatter, getOwner } from "./frontmatter.js";
 import type {
   BatchStatusReport,
   BatchRunSummary,
@@ -61,18 +77,24 @@ import type {
 
 export interface BatchOptions {
   repoRoot: string;
-  /** Injetado pra testes. Se ausente, carrega do config + env var. */
+  /** Injected for tests. If absent, loads from config + env var. */
   llmClient?: LlmClient;
-  /** Idioma da doc (default: config.language || "en") */
+  /** Language of the doc (default: config.language || "en") */
   language?: Language;
-  /** --no-refine: pula refinamento LLM da etapa 2 */
+  /** --no-refine: skip the LLM refinement of stage 2 */
   noRefine?: boolean;
-  /** --only <target>: re-roda 1 task (target = module.id ou runId) */
+  /** --only <target>: re-run 1 task (target = module.id or runId) */
   onlyTarget?: string;
-  /** Limite de caracteres do código por módulo no prompt (default 60_000). */
+  /** Character limit of the code per module in the prompt (default 60_000). */
   contextCharBudget?: number;
-  /** Skip write do manifest no fim (pra testes) */
+  /** Skip manifest write at the end (for tests) */
   skipManifestWrite?: boolean;
+  /**
+   * Phase-5 plan (X): override of `maxRepairAttempts` (default = config
+   * or `CONFIG_DEFAULTS.maxRepairAttempts` = 2). Non-negative integer.
+   * `0` disables repair (one single call per task).
+   */
+  maxRepairAttempts?: number;
 }
 
 export interface BatchRunResult {
@@ -126,6 +148,20 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     const resolvedConfig = applyDefaults(config);
     const language: Language = opts.language ?? resolvedConfig.language ?? "en";
 
+    // Phase-5 plan (X): resolve maxRepairAttempts (opts > config > default 2).
+    // In opts.maxRepairAttempts=0 → no repair.
+    const maxRepairAttempts =
+      opts.maxRepairAttempts ?? resolvedConfig.maxRepairAttempts ?? 2;
+    if (
+      typeof maxRepairAttempts !== "number" ||
+      !Number.isInteger(maxRepairAttempts) ||
+      maxRepairAttempts < 0
+    ) {
+      throw new Error(
+        `invalid maxRepairAttempts: must be a non-negative integer, got ${JSON.stringify(maxRepairAttempts)}`,
+      );
+    }
+
     // Cria LLM client se não injetado (lazy — só erra se o batch precisar)
     let llmClient = opts.llmClient;
     let needsLlm = false; // true se qualquer stage vai chamar LLM
@@ -143,6 +179,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         language,
         noRefine: opts.noRefine ?? false,
         contextCharBudget: opts.contextCharBudget ?? 60_000,
+        maxRepairAttempts,
       });
       const res = db
         .prepare(
@@ -159,13 +196,13 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       runId = last.id;
     }
 
-    // === Estágio 1: Varredura ===
+    // === Stage 1: Scan ===
     if (opts.mode === "run") {
       await runIndexer(absRoot, { quiet: true });
       await runLedger(absRoot, { quiet: true });
     }
 
-    // Carrega símbolos ativos + file paths (cache)
+    // Load active symbols + file paths (cache)
     const symbols = db
       .prepare("SELECT * FROM symbols WHERE status = 'active'")
       .all() as SymbolRow[];
@@ -209,14 +246,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             costUsd: cost,
             finishedAt: Date.now(),
           });
-          // FIX I (rev2): validar o refined ANTES de aceitar. Rejeita:
-          //   - JSON malformado / sem "modules" array
-          //   - modules: [] (vazio) — heurística sempre tem ≥1 módulo
-          //   - módulos que NÃO cobrem os arquivos da heurística
-          //     (paths declarados que apontam pra fora do repo, ou cobertura
-          //     < 100% dos arquivos heurísticos = LLM inventou módulos)
-          // Em qualquer caso de rejeição, mantém a heurística e marca
-          // error no checkpoint (com code específico) pra rastreabilidade.
+          // FIX I (rev2): validate refined BEFORE accepting. Rejects:
+          //   - malformed JSON / missing "modules" array
+          //   - modules: [] (empty) — heuristic always has ≥1 module
+          //   - modules that do NOT cover the heuristic files
+          //     (declared paths pointing outside the repo, or coverage
+          //     < 100% of heuristic files = LLM invented modules)
+          // In any rejection case, keep the heuristic and mark
+          // error in the checkpoint (with specific code) for traceability.
           const heuristicFiles = new Set(modules.flatMap((m) => m.paths));
           const validation = validateRefinedModules(
             result.content,
@@ -225,15 +262,15 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           if (validation.accepted) {
             modules = validation.modules!;
           } else {
-            // Mantém heurística. Marca erro no checkpoint (não é falha de
-            // task — é degradação, status continua 'done').
+            // Keep heuristic. Mark error in the checkpoint (not a task
+            // failure — it is degradation, status stays 'done').
             error = {
               code: validation.errorCode ?? "refine_rejected",
               message: validation.errorMessage ?? "refined modules rejected",
             };
           }
         } catch (err) {
-          // Falha de LLM no refinamento: continua com heurística (NÃO é falha de task)
+          // LLM refinement failure: continue with heuristic (NOT a task failure)
           error = {
             code: "refine_failed_degraded",
             message: (err as Error).message,
@@ -241,7 +278,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         }
       }
 
-      // Persiste task (sempre 'done' — degradação não é falha)
+      // Persist task (always 'done' — degradation is not a failure)
       const checkpoint: TaskCheckpoint = {
         stage: 2,
         status: "done",
@@ -253,24 +290,69 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         ...(artifacts ? { artifacts } : {}),
       };
       const checkpointJson = JSON.stringify(checkpoint);
-      // FIX J (rev2): módulos refinados NUNCA concatenados no checkpoint_json —
-      // isso corrompia o JSON e o status report perdia o usage do stage 2.
-      // Vivem em batch_runs.summary_json (campo próprio), populado ao final
-      // do run via `finalizeRunSummary` abaixo.
+      // FIX J (rev2): refined modules are NEVER concatenated into checkpoint_json —
+      // that corrupted the JSON and the status report lost stage 2 usage.
+      // They live in batch_runs.summary_json (own field), populated at the end
+      // of the run via `finalizeRunSummary` below.
       db.prepare(
         "UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?",
       ).run("done", checkpointJson, Date.now(), stage2Task.id);
     }
 
-    // === Estágio 3: Priorização ===
+    // === Phase-5 plan (W) — global uniqueness gate ===
+    // Must run BEFORE edges / prioritization / diagrams / quickstart /
+    // overview / creation of stage 4 tasks. The module identity is
+    // the same thing in all these places: planner, dependency graph,
+    // regeneratedArchitectureOverview, batch_tasks.target, and the name of the
+    // `livewiki/<id>.md` file. If the assertion fails, we mark the run
+    // as `aborted` (terminal status) — never `running` — before
+    // re-throwing.
+    try {
+      modules = makeUniqueDeterministicIds(modules);
+      assertUniqueModuleIds(modules);
+    } catch (err) {
+      const dupErr = err as DuplicateModuleIdError;
+      // REVIEW finding #3: status MUST NOT stay as 'running'. Mark
+      // terminal and re-throw so the caller knows.
+      try {
+        db.prepare(
+          "UPDATE batch_runs SET status = ?, finished_at = ?, summary_json = ? WHERE id = ?",
+        ).run(
+          "aborted",
+          Date.now(),
+          JSON.stringify({
+            totals: emptyUsage(),
+            byStage: {},
+            byModule: [],
+            tasksDone: 0,
+            tasksFailed: 0,
+            tasksPending: 0,
+            modulesRefined: null,
+            abortedReason: dupErr.message,
+          }),
+          runId,
+        );
+      } catch {
+        // best-effort; the re-throw below carries the message
+      }
+      throw err;
+    }
+
+    // === Stage 3: Prioritization (with IDs already unique and stable) ===
     const edges = resolveModuleEdges(
       modules,
       await collectAllImports(absRoot, filePaths),
       new Set(filePaths),
     );
-    const ordered = prioritizeModules(modules, edges);
+    let ordered = prioritizeModules(modules, edges);
 
-    // === Estágio 4: Documentação coordenada ===
+    // Defense in depth: prioritization does not change IDs, but re-applying W ensures
+    // that any new path that entered ordered (it shouldn't, but
+    // for safety) still passes the filter.
+    ordered = makeUniqueDeterministicIds(ordered);
+    assertUniqueModuleIds(ordered);
+
+    // === Stage 4: Coordinated documentation ===
     const cb = { consecutive: 0, fails: 0, done: 0 };
     const failures: BatchRunResult["failures"] = [];
     const moduleUsage: BatchRunResult["byModule"] = [];
@@ -286,10 +368,10 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       throw new Error(`module "${opts.onlyTarget}" not found in this run`);
     }
 
-    // H (rev2): guard explícito. Se há módulos a documentar e o `tasksToRun`
-    // está vazio, isso é uma falha do pipeline — não pode terminar "completed"
-    // com exit 0. Pega casos como: heurística achou módulos, refinamento
-    // devolveu [] vazio, ou o filter do --only não bateu.
+    // H (rev2): explicit guard. If there are modules to document and `tasksToRun`
+    // is empty, this is a pipeline failure — it cannot finish as "completed"
+    // with exit 0. Catches cases like: heuristic found modules, refinement
+    // returned empty [], or the --only filter did not match.
     if (ordered.length > 0 && tasksToRun.length === 0 && opts.mode !== "only") {
       throw new EmptyPipelineError(
         `pipeline produced 0 tasks but heuristic found ${ordered.length} module(s) — ` +
@@ -303,14 +385,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         .prepare("SELECT id, checkpoint_json FROM batch_tasks WHERE run_id = ? AND target = ?")
         .get(runId, opts.onlyTarget) as { id: number; checkpoint_json: string | null } | undefined;
       if (task) {
-        // Reseta o checkpoint pra re-run (mas preserva usageHistory se houver)
+        // Reset the checkpoint for re-run (but preserve usageHistory if any)
         db.prepare(
           "UPDATE batch_tasks SET status = 'pending', updated_at = ? WHERE id = ?",
         ).run(Date.now(), task.id);
       }
     }
 
-    // Acumula usage do stage 2 (se já rodou) pra byStage final
+    // Accumulate stage 2 usage (if it already ran) for final byStage
     if (stage2Task) {
       const cp2 = stage2Task.checkpoint_json ? safeJsonParse<TaskCheckpoint>(stage2Task.checkpoint_json) : null;
       if (cp2?.usageHistory) {
@@ -332,6 +414,11 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       byStageAcc["2"] = stage2UsageAcc;
     }
 
+    // Reviewer revision (finding #4): if ANY task had rollback_failed,
+    // the entire RUN aborts (terminal status = "aborted"). We do not continue
+    // for the other modules — disk may be inconsistent.
+    let runAbortedByRollback = false;
+
     for (const module of tasksToRun) {
       let moduleUsageEntry: StageUsage = emptyUsage();
       const task = getOrCreateTask(db, runId, 4, module.id);
@@ -345,73 +432,166 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         usageHistory = [...prevCheckpoint.usageHistory];
       }
 
-      try {
-        attempt++;
-        // Guardrail regra #6: páginas owner: human não são regeradas
-        const pageOwner = checkPageOwner(absRoot, module);
-        if (pageOwner === "human") {
-          throw new TaskError("refused_human_page", `module "${module.id}" is on a page with owner: human — refuses to rewrite (regra #6)`);
-        }
+      const wikiPath = `livewiki/${module.id}.md`;
 
-        // Gera doc via LLM (ou via mock se injetado)
-        const result = await generateModuleDoc(absRoot, module, ordered, llmClient!, language, opts.contextCharBudget ?? 60_000);
-        const cost = calculateCostUsd(
-          result.usage.inputTokens,
-          result.usage.outputTokens,
-          result.usage.model,
-          resolvedConfig.pricing,
-        );
-        usageHistory.push({
-          attempt,
-          usage: result.usage,
-          costUsd: cost,
-          finishedAt: Date.now(),
-        });
-        moduleUsageEntry = accumulateUsage(moduleUsageEntry, result.usage, cost, resolvedConfig.pricing);
-        stageUsageTotals = accumulateUsage(stageUsageTotals, result.usage, cost, resolvedConfig.pricing);
-
-        // Grava página (preserva blocos lw:manual byte-a-byte)
-        const wikiPath = `livewiki/${module.id}.md`;
-        await writeWikiPagePreservingManual(absRoot, wikiPath, result.content);
-
-        // Verify pós-escrita
-        const verifyResult = await runVerify(absRoot);
-        const broken = verifyResult.issues.filter((i) => i.wikiPath === wikiPath && i.severity === "error");
-        if (broken.length > 0) {
-          throw new TaskError(
-            "verify_failed",
-            broken.map((b) => `[${b.code}] ${b.detail}`).join("; "),
-          );
-        }
-
-        const pageHash = sha256(result.content);
-        artifacts = { wikiPath, pageHash };
-
-        const okCheckpoint: TaskCheckpoint = {
-          stage: 4,
-          status: "done",
-          attempt,
-          startedAt,
-          finishedAt: Date.now(),
-          usageHistory,
-          ...(artifacts ? { artifacts } : {}),
+      // Review finding #1 + reviewer revision: pre-LLM check —
+      // ONLY `owner: human` refuses the whole page (rule #6:
+      // human is untouchable). `owner: mixed` is allowed (manual blocks
+      // preserved byte-for-byte; only the generated part is rewritten).
+      // `null` (new page) proceeds normally. `untrusted` and
+      // `unparseable` refuse for safety.
+      const existing = await safeIo.readText(absRoot, wikiPath).catch(() => null);
+      const preOwner = readOwnerFromFrontmatter(existing);
+      if (preOwner === "human") {
+        taskError = {
+          code: "refused_human_page",
+          message:
+            `module "${module.id}" is on a page with owner: human — refuses to rewrite (regra #6). ` +
+            `Operator must manually change owner to "generated" or "mixed" if a re-run is desired.`,
         };
-        db.prepare(
-          "UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?",
-        ).run("done", JSON.stringify(okCheckpoint), Date.now(), task.id);
+      } else if (preOwner === "untrusted") {
+        taskError = {
+          code: "refused_human_page",
+          message:
+            `module "${module.id}" is on a page with a missing or invalid \`owner:\` line — refuses to rewrite (regra #6). ` +
+            `Operator must manually set owner to "generated" or "mixed" if a re-run is desired.`,
+        };
+      } else if (preOwner === "unparseable") {
+        taskError = {
+          code: "refused_unparseable_page",
+          message:
+            `module "${module.id}" is on a page whose frontmatter did not parse (LF/CRLF/BOM-safe check). ` +
+            `Refusing to rewrite untrusted content (regra #6 — operator must repair the page manually).`,
+        };
+      } else {
+        // Loop bounded: 1 initial + maxRepairAttempts repairs.
+        const totalAttempts = 1 + maxRepairAttempts;
+        let attemptDone = false;
+        let priorCandidate = "";
+        let priorErrors: ArtifactValidationError[] = [];
 
-        cb.consecutive = 0;
-        cb.done++;
-      } catch (err) {
-        const code = err instanceof TaskError ? err.code : "unexpected";
-        const message = (err as Error).message;
-        taskError = { code, message };
-        usageHistory.push({
-          attempt,
-          usage: { inputTokens: 0, outputTokens: 0, model: "(no usage)" },
-          costUsd: null,
-          finishedAt: Date.now(),
-        });
+        for (let i = 0; i < totalAttempts; i++) {
+          attempt++;
+          // Reviewer revision (finding #5): the `attemptNumber` passed
+          // to the LLM call is the GLOBAL COUNTER (started from `task.attempt`
+          // persisted and incremented at every attempt). NEVER `i + 1`
+          // (que resetaria a cada nova execução de run/--only). Com isso,
+          // usageHistory[].attempt is monotonic: 1, 2, 3, 4, ... over
+          // longo de múltiplos --only/resume.
+          const attemptResult = await attemptStage4Generation({
+            attemptNumber: attempt,
+            module,
+            language,
+            llmClient: llmClient!,
+            charBudget: opts.contextCharBudget ?? 60_000,
+            // isRepair = attempt > 1 inside this bounded loop
+            isRepair: i > 0,
+            priorCandidate,
+            priorErrors,
+            absRoot,
+            // Review finding #5: pricing override preserved in repairs.
+            pricing: resolvedConfig.pricing,
+          });
+          usageHistory.push(attemptResult.usageEntry);
+          moduleUsageEntry = accumulateUsage(
+            moduleUsageEntry,
+            attemptResult.usageEntry.usage,
+            attemptResult.usageEntry.costUsd,
+            resolvedConfig.pricing,
+          );
+          stageUsageTotals = accumulateUsage(
+            stageUsageTotals,
+            attemptResult.usageEntry.usage,
+            attemptResult.usageEntry.costUsd,
+            resolvedConfig.pricing,
+          );
+
+          if (attemptResult.llmError) {
+            // LLM call failed (network, 5xx, etc). We record zero-usage,
+            // and if there are still attempts, the next attempt makes the call
+            // again from scratch (no prior candidate). Otherwise,
+            // task fails.
+            priorCandidate = "";
+            priorErrors = [
+              {
+                code: "llm_error",
+                message: attemptResult.llmError.message,
+                location: "global",
+              },
+            ];
+            continue;
+          }
+
+          if (attemptResult.artifact === null) {
+            // Invalid artifact (validation rejected it). Next attempt uses
+            // repair prompt with the structured errors and the candidate.
+            priorCandidate = attemptResult.normalizedRaw;
+            priorErrors = attemptResult.validationErrors;
+            continue;
+          }
+
+          // Artifact válido → try write + verify
+          const writeResult = await tryWriteAndVerify(
+            absRoot,
+            wikiPath,
+            attemptResult.artifact,
+            existing,
+          );
+          if (writeResult.ok) {
+            // SUCCESS — task done. Does NOT increment cb.fails.
+            attemptDone = true;
+            artifacts = writeResult.artifacts;
+            break;
+          } else if (writeResult.rollbackFailed) {
+            // Review finding #4 + reviewer revision: rollback failure is
+            // TERMINAL not just for the task, but for the ENTIRE RUN. Disk
+            // may be inconsistent; continuing to other modules
+            // only amplifies the problem. Mark the task as final failure and
+            // sets runAbortedByRollback to abort the loop.
+            taskError = {
+              code: "rollback_failed",
+              message:
+                `rollback failed after verify rejection for ${wikiPath}: ${writeResult.rollbackFailed.reason}. ` +
+                `This is a terminal state for the ENTIRE run — the disk may have an inconsistent page. ` +
+                `Operator must inspect ${wikiPath} and re-run with --only after manual repair.`,
+            };
+            attemptDone = true; // break out of this task's repair loop
+            runAbortedByRollback = true; // signals: exits the modules loop too
+            break;
+          } else {
+            // Verify failed → restore/remove the candidate (already done inside
+            // de tryWriteAndVerify). Prepare the next attempt for repair.
+            // The "prior candidate" for repair is what was rejected.
+            priorCandidate = attemptResult.artifact;
+            priorErrors = verifyIssuesToValidationErrors(writeResult.issues ?? []);
+            continue;
+          }
+        }
+
+        if (!attemptDone) {
+          // Review finding #10: repair_exhausted PRESERVES the last
+          // diagnóstico estruturado (validation errors ou verify issues)
+          // so the operator knows exactly what failed. Without this,
+          // the report only said "exhausted N calls" and the user had to
+          // look at raw logs.
+          const lastError = priorErrors[0];
+          const lastDetail = lastError
+            ? `[${lastError.code}] ${lastError.message}` +
+              (lastError.offending ? ` (offending: ${lastError.offending})` : "")
+            : "no validation/verify error was recorded (LLM call may have failed every attempt)";
+          taskError = {
+            code: "repair_exhausted",
+            message:
+              `task "${module.id}" exhausted ${totalAttempts} LLM call(s) without producing a verified artifact. ` +
+              `Last diagnostic: ${lastDetail}. ` +
+              `Total errors recorded: ${priorErrors.length}.`,
+            ...(lastError?.sectionSlug ? { failedAt: 4 } : {}),
+          };
+        }
+      }
+
+      // Persist checkpoint and update counters
+      if (taskError) {
         const failCheckpoint: TaskCheckpoint = {
           stage: 4,
           status: "failed",
@@ -433,40 +613,71 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           error: taskError,
           retryCommand: `livewiki batch --only ${module.id} ${runId}`,
         });
-        // Circuit breaker: 3 falhas CONSECUTIVAS, OU >50% com pelo menos
-        // 3 tasks já tentadas (senão o ratio dispara no 1º failure =
-        // 1/1 = 100%, o que abortaria qualquer run com 1 task).
-        const totalAttempted = cb.done + cb.fails;
-        if (
-          cb.consecutive >= 3 ||
-          (totalAttempted >= 3 && cb.fails / totalAttempted > 0.5)
-        ) {
-          // Circuit breaker triggered
-          byStageAcc["4"] = stageUsageTotals;
-          finalizeRun(db, runId, "aborted", {
-            totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
-            byStage: byStageAcc,
-            byModule: moduleUsage,
-            modulesRefined: modules.map((m) => ({ id: m.id, paths: m.paths })),
-            tasksDone: cb.done,
-            tasksFailed: cb.fails,
-          });
-          return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, true);
-        }
+      } else {
+        const okCheckpoint: TaskCheckpoint = {
+          stage: 4,
+          status: "done",
+          attempt,
+          startedAt,
+          finishedAt: Date.now(),
+          usageHistory,
+          ...(artifacts ? { artifacts } : {}),
+        };
+        db.prepare(
+          "UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?",
+        ).run("done", JSON.stringify(okCheckpoint), Date.now(), task.id);
+
+        cb.consecutive = 0;
+        cb.done++;
+      }
+
+      // Circuit breaker check: 3 CONSECUTIVE failures, OR >50% with at least
+      // 3 tasks já tentadas.
+      const totalAttempted = cb.done + cb.fails;
+      if (
+        cb.consecutive >= 3 ||
+        (totalAttempted >= 3 && cb.fails / totalAttempted > 0.5)
+      ) {
+        byStageAcc["4"] = stageUsageTotals;
+        finalizeRun(db, runId, "aborted", {
+          totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
+          byStage: byStageAcc,
+          byModule: moduleUsage,
+          modulesRefined: modules.map((m) => ({ id: m.id, paths: m.paths })),
+          tasksDone: cb.done,
+          tasksFailed: cb.fails,
+        });
+        return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, true);
       }
       moduleUsage.push({ module: module.id, ...moduleUsageEntry });
+
+      // Reviewer revision (finding #4): rollback_failed aborts the RUN
+      // INTEIRO. Do not process the next modules — they will NEVER call
+      // LLM and NEVER write. Exit the loop here and finalize as "aborted".
+      if (runAbortedByRollback) {
+        byStageAcc["4"] = stageUsageTotals;
+        finalizeRun(db, runId, "aborted", {
+          totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
+          byStage: byStageAcc,
+          byModule: moduleUsage,
+          modulesRefined: modules.map((m) => ({ id: m.id, paths: m.paths })),
+          tasksDone: cb.done,
+          tasksFailed: cb.fails,
+        });
+        return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, false);
+      }
     }
     byStageAcc["4"] = stageUsageTotals;
 
-    // H (rev2): se ordered > 0 mas cb.done === 0, isso é uma falha do pipeline
-    // (não terminamos nada). Status vira "completed_with_failures" (exit 1),
-    // nunca "completed" (exit 0). Mesma lógica que `cb.fails > 0` mas pro
-    // caso de zero tasks completadas por outro motivo.
+    // H (rev2): if ordered > 0 but cb.done === 0, this is a pipeline failure
+    // (we finished nothing). Status becomes "completed_with_failures" (exit 1),
+    // never "completed" (exit 0). Same logic as `cb.fails > 0` but for the
+    // case of zero tasks completed for another reason.
     let status: BatchRunResult["status"];
     if (ordered.length > 0 && cb.done === 0) {
       status = "completed_with_failures";
-      // Garante que aparece pelo menos 1 failure no reporte (senão o usuário
-      // não sabe o que aconteceu).
+      // Ensures that at least 1 failure appears in the report (otherwise the user
+      // does not know what happened).
       if (failures.length === 0) {
         failures.push({
           taskId: 0,
@@ -492,7 +703,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       tasksFailed: cb.fails,
     });
 
-    // Manifest no fim (se não skip)
+    // Manifest at the end (if not skipped)
     if (!opts.skipManifestWrite) {
       const snapshotHash = await computeSnapshotHash(absRoot);
       const pendingBatch: PendingBatchRef | null =
@@ -509,10 +720,10 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       );
     }
 
-    // (P) Fase 5: regenera `architecture/overview.md` com links pra pages
-    // de módulo recém-criadas. Sem isso, a overview gerada por init tem
-    // páginas faltando (init rodou antes do batch) → verify reporta
-    // broken_internal_link warnings (e `(Q)` falha).
+    // (P) Phase 5: regenerates `architecture/overview.md` with links to pages
+    // of newly-created modules. Without this, the overview generated by init has
+    // missing pages (init ran before batch) → verify reports
+    // broken_internal_link warnings (and `(Q)` fails).
     if (cb.done > 0) {
       await regenerateArchitectureOverview(absRoot);
     }
@@ -533,9 +744,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 // === Helpers ===
 
 /**
- * Erro lançado quando o pipeline termina com 0 tasks apesar de a heurística
- * ter encontrado módulos. H (rev2): NUNCA pode terminar "completed" com
- * exit 0 nesse caso — isso esconde bugs do orquestrador.
+ * Error thrown when the pipeline finishes with 0 tasks despite the heuristic
+ * having found modules. H (rev2): can NEVER finish as "completed" with
+ * exit 0 in this case — it hides orchestrator bugs.
  */
 export class EmptyPipelineError extends Error {
   constructor(message: string) {
@@ -635,19 +846,19 @@ function safeJsonParse<T>(s: string): T | null {
 }
 
 /**
- * Valida o JSON devolvido pelo LLM no stage 2 (refinamento de módulos).
+ * Validates the JSON returned by the LLM in stage 2 (module refinement).
  *
- * FIX I (rev2): a versão antiga aceitava `{"modules": []}` como sucesso e
- * substituía os módulos heurísticos por nada. Agora rejeita:
- *   - JSON malformado / sem campo "modules" array
- *   - `modules: []` (vazio) — heurística SEMPRE produz ≥1 módulo se há files
- *   - módulos cujos `paths` somados não cobrem ≥80% dos arquivos heurísticos
- *     (LLM inventou módulos ou omitiu paths) — cobre o caso onde a
- *     cobertura é parcial mas ainda útil (≥80%); abaixo disso é alucinação
- *   - `id` duplicado ou vazio
+ * FIX I (rev2): the old version accepted `{"modules": []}` as success and
+ * replaced heuristic modules with nothing. Now rejects:
+ *   - malformed JSON / missing "modules" array field
+ *   - `modules: []` (empty) — heuristic ALWAYS produces ≥1 module if there are files
+ *   - modules whose summed `paths` do not cover ≥80% of heuristic files
+ *     (LLM invented modules or omitted paths) — covers the case where
+ *     coverage is partial but still useful (≥80%); below that is hallucination
+ *   - duplicate or empty `id`
  *
- * Retorna `{ accepted: true, modules }` ou `{ accepted: false, errorCode,
- * errorMessage }`. A heurística é mantida em qualquer caso de rejeição.
+ * Returns `{ accepted: true, modules }` or `{ accepted: false, errorCode,
+ * errorMessage }`. The heuristic is kept in any rejection case.
  */
 function validateRefinedModules(
   content: string,
@@ -685,7 +896,7 @@ function validateRefinedModules(
     };
   }
 
-  // 2. modules: [] → rejeita
+  // 2. modules: [] → reject
   if (parsed.modules.length === 0) {
     return {
       accepted: false,
@@ -695,7 +906,7 @@ function validateRefinedModules(
     };
   }
 
-  // 3. Valida shape de cada módulo
+  // 3. Validate shape of each module
   const ids = new Set<string>();
   const refinedFiles = new Set<string>();
   const cleanModules: Module[] = [];
@@ -725,12 +936,23 @@ function validateRefinedModules(
       };
     }
     const paths = obj.paths.filter((p) => heuristicFiles.has(p));
+    // Reviewer revision (finding #6): module with ALL paths
+    // invented by the LLM (none matches `heuristicFiles`) is hallucination
+    // pure — there is no real code to document. Reject early instead of
+    // producing an empty page in stage 4.
+    if (paths.length === 0) {
+      return {
+        accepted: false,
+        errorCode: "refine_invalid_module",
+        errorMessage: `module "${obj.id}" has no paths present in heuristic files; would produce an empty page`,
+      };
+    }
     for (const p of paths) refinedFiles.add(p);
     cleanModules.push({ id: obj.id, paths: obj.paths, symbolCount: 0 });
   }
 
-  // 4. Cobertura: ≥80% dos arquivos heurísticos precisam aparecer nos paths
-  // refined. Caso contrário o LLM inventou módulos e perdeu arquivos.
+  // 4. Coverage: ≥80% of heuristic files must appear in the refined
+  // paths. Otherwise the LLM invented modules and lost files.
   if (heuristicFiles.size > 0) {
     let covered = 0;
     for (const f of heuristicFiles) if (refinedFiles.has(f)) covered++;
@@ -763,36 +985,565 @@ async function collectAllImports(
   return out;
 }
 
-function checkPageOwner(absRoot: string, module: Module): "human" | "generated" | "mixed" | null {
-  // Simplificado: lê a wiki page se existir e extrai owner do frontmatter
-  return null; // MVP: não bloqueia por owner — só no --only fase 5+
+/**
+ * Review finding #1 + reviewer revision: reads the owner declared in the
+ * frontmatter of an existing page. Detects LF, CRLF and BOM before the
+ * `---` opening. Used to refuse the re-generation BEFORE calling the LLM
+ * (rule #6).
+ *
+ * Retorna:
+ *   - `null`: file does not exist (true new page) → does not check
+ *   - `"generated"`: frontmatter válido com `owner: generated` → pode regerar
+ *   - `"mixed"`: frontmatter válido com `owner: mixed` → pode regerar
+ *     (revision: manual blocks are preserved byte-for-byte by
+ *     `tryWriteAndVerify`; o LLM re-gera só a parte generated)
+ *   - `"human"`: valid frontmatter with `owner: human` → REFUSES to regenerate
+ *     (rule #6: human is untouchable, the LLM cannot overwrite)
+ *   - `"untrusted"`: frontmatter present but no valid `owner`
+ *     (missing or non-string value) → REFUSES to regenerate
+ *   - `"unparseable"`: frontmatter present but failed to parse → REFUSES
+ *     (operador precisa revisar manualmente)
+ */
+type PreOwnerCheck = "generated" | "mixed" | "human" | "untrusted" | "unparseable" | null;
+
+function readOwnerFromFrontmatter(content: string | null): PreOwnerCheck {
+  if (content === null) return null;
+  // Strip BOM se presente (0xFEFF).
+  let s = content;
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
+  // Frontmatter opening: accepts LF or CRLF after `---`. Defense
+  // contra geradores que salvam com line endings diferentes (Windows,
+  // git autocrlf, etc).
+  if (!s.startsWith("---\n") && !s.startsWith("---\r\n")) return null;
+  // Normalize CRLF → LF for the parser.
+  s = s.replace(/\r\n/g, "\n");
+  try {
+    const parsed = parseFrontmatter(s);
+    const fm = parsed.frontmatter;
+    if (fm === null) return "unparseable";
+    if (!("owner" in fm)) return "untrusted";
+    const ownerVal = fm["owner"];
+    if (typeof ownerVal !== "string") return "untrusted";
+    // Reviewer revision: `owner: mixed` is allowed. Manual blocks
+    // are preserved byte-for-byte; only the generated part is rewritten.
+    if (ownerVal === "generated" || ownerVal === "mixed") return ownerVal;
+    if (ownerVal === "human") return "human";
+    return "untrusted";
+  } catch {
+    return "unparseable";
+  }
 }
 
-async function writeWikiPagePreservingManual(
+/**
+ * Reviewer revision (P0-2): rewrites the `owner:` line in the leading
+ * frontmatter of `content` to the given literal value. Defensive: if
+ * the content has no leading `---` block, no `owner:` line, or the
+ * frontmatter is unparseable, returns the content unchanged. Handles
+ * LF and CRLF line endings, and the `owner:` line in any indentation
+ * / surrounding whitespace.
+ */
+function forceOwnerInFrontmatter(content: string, owner: "generated" | "mixed"): string {
+  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return content;
+  // Find the closing `---` of the frontmatter.
+  const eolLen = content.startsWith("---\r\n") ? 2 : 1;
+  const after = eolLen + 3; // length of "---" + eol
+  const closeIdx = content.indexOf("\n---", after);
+  if (closeIdx < 0) return content;
+  const fmBlock = content.slice(0, closeIdx);
+  const rest = content.slice(closeIdx);
+  // Replace existing `owner: ...` line (with any value) within the block.
+  const ownerLineRe = /^(\s*)owner:\s*.*$/m;
+  if (ownerLineRe.test(fmBlock)) {
+    return fmBlock.replace(ownerLineRe, `$1owner: ${owner}`) + rest;
+  }
+  // No `owner:` line — inject one right after the opening `---`.
+  return `---${content.slice(3, after).slice(0, -eolLen)}\nowner: ${owner}${content.slice(after)}`;
+}
+
+/**
+ * Phase-5 plan (X) + reviewer revision: extracts blocks
+ * `<!-- lw:manual -->...<!-- /lw:manual -->` GROUPED BY SECTION
+ * (preceding heading), IN ORDER OF OCCURRENCE. The blocks
+ * are untouchable (rule #6) and must be preserved on any rewrite
+ * in the SAME logical position (same section, SAME ORDER).
+ *
+ * Supports MULTIPLE blocks in the same section (reviewer revision): the
+ * Map is `sectionSlug → list<blockContent>` instead of `→ single`. The
+ * blocks are reinserted in the order they appeared in `existing`.
+ *
+ * Implementation: pair start/end by order; for each block,
+ * finds the previous heading; the block is associated with the slug's list
+ * of that heading (append at the end of the list). If there is no heading
+ * before, the block is associated with `null` (it will be reinserted at the end
+ * of the page).
+ */
+function extractManualBlocksBySection(content: string): Map<string | null, string[]> {
+  const startRe = /<!--\s*lw:manual\s*-->/g;
+  const endRe = /<!--\s*\/lw:manual\s*-->/g;
+  type Hit = { offset: number; kind: "start" | "end"; markerLen: number };
+  const hits: Hit[] = [];
+  for (const m of content.matchAll(startRe)) {
+    if (m.index !== undefined) {
+      hits.push({ offset: m.index, kind: "start", markerLen: m[0].length });
+    }
+  }
+  for (const m of content.matchAll(endRe)) {
+    if (m.index !== undefined) {
+      hits.push({ offset: m.index, kind: "end", markerLen: m[0].length });
+    }
+  }
+  hits.sort((a, b) => a.offset - b.offset);
+
+  // Headings e seus offsets
+  const headingMatches: Array<{ slug: string; offset: number }> = [];
+  const headingRe = /^(#{1,6})\s+(.+?)\s*$/gm;
+  for (const m of content.matchAll(headingRe)) {
+    if (m.index === undefined || m[2] === undefined) continue;
+    headingMatches.push({
+      slug: slugifyHeadingText(m[2]),
+      offset: m.index,
+    });
+  }
+
+  const result = new Map<string | null, string[]>();
+  let openStart: Hit | null = null;
+  for (const h of hits) {
+    if (h.kind === "start") {
+      if (openStart === null) openStart = h;
+    } else if (openStart !== null) {
+      const startOff = openStart.offset;
+      const endEnd = h.offset + h.markerLen;
+      // Find the heading immediately preceding the start
+      let sectionSlug: string | null = null;
+      for (const heading of headingMatches) {
+        if (heading.offset <= startOff) sectionSlug = heading.slug;
+        else break;
+      }
+      const blockContent = content.slice(startOff, endEnd);
+      const list = result.get(sectionSlug);
+      if (list) {
+        list.push(blockContent);
+      } else {
+        result.set(sectionSlug, [blockContent]);
+      }
+      openStart = null;
+    }
+  }
+  return result;
+}
+
+/**
+ * Heading slug consistent with `anchors.ts:slugify`. Kept local
+ * here to avoid a cyclic dependency (batch.ts already imports from
+ * anchors; keeping the helper local simplifies the reasoning and is easy
+ * to audit).
+ */
+function slugifyHeadingText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+/**
+ * Review finding #7b + reviewer revision: injects ALL manual
+ * blocks (from `existing`) into `newContent` IN THE SAME LOGICAL POSITION
+ * (same section by slug) and IN THE SAME ORDER they appear in
+ * the original. Preserves the block bytes (rule #6). Supports multiple
+ * blocks per section.
+ *
+ * Sections in `newContent` are delimited by the next heading of the
+ * SAME level or higher. Blocks from a section with no match in
+ * new go to the end of the page (none are lost).
+ *
+ * Returns `newContent` with the blocks injected, or `null` if there is no
+ * manual block in `existing` (caller skips the step).
+ */
+function injectManualBlocksBySection(existing: string, newContent: string): string | null {
+  const blocksBySection = extractManualBlocksBySection(existing);
+  if (blocksBySection.size === 0) return null;
+
+  // Find headings in `newContent` with their offsets and levels.
+  const newHeadingRe = /^(#{1,6})\s+(.+?)\s*$/gm;
+  const newHeadings: Array<{ slug: string; offset: number; level: number }> = [];
+  for (const m of newContent.matchAll(newHeadingRe)) {
+    if (m.index === undefined || m[2] === undefined || m[1] === undefined) continue;
+    newHeadings.push({
+      slug: slugifyHeadingText(m[2]),
+      offset: m.index,
+      level: m[1].length,
+    });
+  }
+
+  function sectionRangeOf(headingOffset: number): { endOffset: number } {
+    const heading = newHeadings.find((h) => h.offset === headingOffset);
+    if (!heading) return { endOffset: newContent.length };
+    for (const h of newHeadings) {
+      if (h.offset > headingOffset && h.level <= heading.level) {
+        return { endOffset: h.offset };
+      }
+    }
+    return { endOffset: newContent.length };
+  }
+
+  // Collects insertions: (offset, text). Sorts DESCENDING to not
+  // invalidar offsets subsequentes.
+  const insertions: Array<{ offset: number; text: string }> = [];
+  for (const [sectionSlug, blocks] of blocksBySection.entries()) {
+    if (sectionSlug === null) {
+      // Blocks sem heading anterior: vão pro final do new.
+      insertions.push({
+        offset: newContent.length,
+        text: "\n\n" + blocks.join("\n\n") + "\n",
+      });
+      continue;
+    }
+    const targetHeading = newHeadings.find((h) => h.slug === sectionSlug);
+    if (!targetHeading) {
+      // Section does not exist in new: they go to the end (not lost).
+      insertions.push({
+        offset: newContent.length,
+        text: "\n\n" + blocks.join("\n\n") + "\n",
+      });
+      continue;
+    }
+    // Insert at the end of the section (before the next heading of same/higher
+    // level). Blocks are joined with a blank line between them to keep
+    // the original visual separation.
+    const { endOffset } = sectionRangeOf(targetHeading.offset);
+    insertions.push({
+      offset: endOffset,
+      text: "\n" + blocks.join("\n\n") + "\n",
+    });
+  }
+  insertions.sort((a, b) => b.offset - a.offset);
+
+  let result = newContent;
+  for (const ins of insertions) {
+    result = result.slice(0, ins.offset) + ins.text + result.slice(ins.offset);
+  }
+  return result;
+}
+
+/**
+ * Phase-5 plan (X): wiki page write transaction. Algorithm:
+ *   1. Se `existing !== null`, extrai blocos `<!-- lw:manual -->` deles
+ *      com a posição aproximada por seção e os reinsere em `newContent`
+ *      in the same section (byte-for-byte; review finding #7b).
+ *   2. Escreve `finalContent` via safe-io.
+ *   3. Roda `runVerify` no repo.
+ *   4. If there's an error-level issue touching this page: rollback (remove if
+ *      it was new, restore if it was a rewrite). Review finding #4: if the
+ *      rollback fails, this is TERMINAL — we return `rollback_failed`
+ *      and the orchestrator marks the task as final failure (does not retry
+ *      and does not let the invalid candidate persist).
+ *   5. Returns `{ ok, artifacts? | issues? | rollbackFailed? }`.
+ */
+interface WriteResult {
+  ok: boolean;
+  artifacts?: { wikiPath: string; pageHash: string };
+  issues?: VerifyIssue[];
+  /** True se o verify rejeitou E o rollback subsequente falhou. Terminal. */
+  rollbackFailed?: { reason: string };
+}
+
+async function tryWriteAndVerify(
   absRoot: string,
   wikiPath: string,
   newContent: string,
-): Promise<void> {
-  // Regra #6: se página existente tem blocos lw:manual, preserva byte-a-byte.
-  // MVP: simplesmente escreve (preserve vai pra fase 5).
-  await safeIo.writeText(absRoot, wikiPath, newContent);
+  existing: string | null,
+): Promise<WriteResult> {
+  // 1. Preserves manual blocks IN THE ORIGINAL POSITION (review finding #7b).
+  //    Strategy: extract blocks grouped by section (heading slug
+  //    preceding heading); for each section in `newContent` that matches
+  //    a section in `existing` that had a block, inject the block
+  //    at the end of the section (before the next heading). Sections from existing
+  //    that do not match in new go to the end of the page (not lost).
+  let finalContent = newContent;
+  if (existing !== null) {
+    const positioned = injectManualBlocksBySection(existing, newContent);
+    if (positioned !== null) {
+      finalContent = positioned;
+    }
+  }
+
+  // 1b. Reviewer revision (P0-2): if the existing page was `owner: mixed`,
+  // force the final frontmatter back to `owner: mixed` BEFORE the
+  // write. The LLM always emits `owner: generated` (validator rule),
+  // but when the human had already declared the page as `mixed` (mix
+  // of auto-generated + manual blocks) we need to preserve that
+  // declaration. Without this, the page would be re-classified as
+  // pure `generated` and the next re-run would treat it differently.
+  if (existing !== null) {
+    const existingOwner = readOwnerFromFrontmatter(existing);
+    if (existingOwner === "mixed") {
+      finalContent = forceOwnerInFrontmatter(finalContent, "mixed");
+    }
+  }
+
+  const isNew = existing === null;
+  const snapshot = existing;
+
+  // 2. Escreve via safe-io
+  await safeIo.writeText(absRoot, wikiPath, finalContent);
+
+  // 3. Verify
+  const verifyResult = await runVerify(absRoot);
+  const broken = verifyResult.issues.filter(
+    (i) => i.wikiPath === wikiPath && i.severity === "error",
+  );
+
+  if (broken.length > 0) {
+    // 4. ROLLBACK MANDATORY. If the rollback fails, this is TERMINAL
+    //    (review finding #4): invalid candidate MUST NEVER persist
+    //    on disk and the orchestrator must signal the failure.
+    let rollbackError: string | null = null;
+    if (isNew) {
+      try {
+        await safeIo.remove(absRoot, wikiPath);
+      } catch (e) {
+        rollbackError = `failed to remove new file ${wikiPath}: ${(e as Error).message}`;
+      }
+    } else if (snapshot !== null) {
+      try {
+        await safeIo.writeText(absRoot, wikiPath, snapshot);
+      } catch (e) {
+        rollbackError = `failed to restore previous content of ${wikiPath}: ${(e as Error).message}`;
+      }
+    }
+    if (rollbackError !== null) {
+      return {
+        ok: false,
+        issues: broken,
+        rollbackFailed: { reason: rollbackError },
+      };
+    }
+    return { ok: false, issues: broken };
+  }
+
+  const pageHash = sha256(finalContent);
+  return { ok: true, artifacts: { wikiPath, pageHash } };
 }
 
-async function generateModuleDoc(
+/**
+ * Phase-5 plan (X): converts verify issues (with wikiPath, code, detail)
+ * into ArtifactValidationError to feed the repair prompt. Keeps the
+ * location "frontmatter" for `broken_anchor` and "body" for others.
+ */
+function verifyIssuesToValidationErrors(
+  issues: ReadonlyArray<VerifyIssue>,
+): ArtifactValidationError[] {
+  return issues.map((i) => {
+    const location =
+      i.code === "broken_anchor" ? "frontmatter" : "body";
+    return {
+      code: "verify_failed",
+      message: i.detail,
+      location,
+      ...(i.wikiPath ? { offending: i.wikiPath } : {}),
+    };
+  });
+}
+
+// === Stage 4 attempt abstraction ===
+
+/**
+ * Result of ONE LLM attempt (initial or repair) inside the bounded
+ * stage 4 loop.
+ */
+interface Stage4AttemptResult {
+  /**
+   * `usageHistory` entry a ser gravada. SEMPRE presente:
+   *   - real usage se o LLM retornou um resultado
+   *   - zero-usage se o LLM call lançou (rede, 5xx, etc)
+   */
+  usageEntry: UsageAttempt;
+  /**
+   * Raw LLM output (or empty string if the call failed). Used to
+   * pass to the repair prompt when the artifact is invalid.
+   */
+  normalizedRaw: string;
+  /**
+   * NORMALIZED and VALIDATED artifact. Null if the artifact is invalid.
+   * If valid, it is the content to write.
+   */
+  artifact: string | null;
+  /** Erros de artifact validation (vazio se artifact !== null). */
+  validationErrors: ArtifactValidationError[];
+  /** Se o LLM call falhou, aqui está o erro. */
+  llmError: { code: string; message: string } | null;
+}
+
+interface AttemptOpts {
+  attemptNumber: number;
+  module: Module;
+  language: Language;
+  llmClient: LlmClient;
+  charBudget: number;
+  isRepair: boolean;
+  priorCandidate: string;
+  priorErrors: ArtifactValidationError[];
+  absRoot: string;
+  /**
+   * Review finding #5: pricing override preserved in ALL calls
+   * (incluindo repairs). Sem isso, repair cost seria calculado com a
+   * embedded table, losing the user's override in `config.json`.
+   */
+  pricing: import("./pricing.js").PricingOverride | undefined;
+}
+
+/**
+ * Phase-5 plan (X): ONE LLM call. Loads context (symbols, source)
+ * from the DB / filesystem, builds the prompt (initial or repair), calls the LLM,
+ * registra usage real e normaliza/valida o artifact.
+ *
+ * The caller orchestrates the bounded loop; this function is "one turn of the loop".
+ */
+async function attemptStage4Generation(
+  opts: AttemptOpts,
+): Promise<Stage4AttemptResult> {
+  // Load context (symbols + source) on each attempt. Repair prompts
+  // need the same context (the closed list does not change between attempts —
+  // unless the index changes, which would be out of batch scope).
+  const ctx = await buildModuleDocContext(opts.absRoot, opts.module, opts.charBudget);
+
+  // Build prompt
+  let prompt: { system: string; user: string };
+  if (opts.isRepair) {
+    prompt = buildRepairPrompt(
+      opts.module,
+      ctx.closedKeyList,
+      ctx.symbolsTable,
+      ctx.truncatedSource,
+      opts.priorCandidate,
+      opts.priorErrors,
+      opts.language,
+    );
+  } else {
+    prompt = buildStage4Prompt(
+      opts.module,
+      ctx.closedKeyList,
+      ctx.symbolsTable,
+      ctx.truncatedSource,
+      opts.language,
+    );
+  }
+
+  // Call LLM
+  let raw: string;
+  let usage: { inputTokens: number; outputTokens: number; model: string };
+  try {
+    const result = await opts.llmClient.generate({
+      system: prompt.system,
+      user: prompt.user,
+      maxTokens: 4_000,
+    });
+    raw = result.content;
+    usage = result.usage;
+  } catch (err) {
+    const e = err as Error;
+    return {
+      usageEntry: {
+        attempt: opts.attemptNumber,
+        usage: { inputTokens: 0, outputTokens: 0, model: "(no usage)" },
+        costUsd: null,
+        finishedAt: Date.now(),
+      },
+      normalizedRaw: "",
+      artifact: null,
+      validationErrors: [],
+      llmError: { code: "llm_call_failed", message: e.message },
+    };
+  }
+
+  // Cost — review finding #5: uses the config's pricing override so that
+  // repairs are also calculated in the user's table (not just the
+  // tabela embutida).
+  const cost = computeCostFromUsage(usage, opts.pricing);
+
+  // Normalize
+  const normalize = normalizeStage4Artifact(raw);
+  if (!normalize.ok) {
+    return {
+      usageEntry: {
+        attempt: opts.attemptNumber,
+        usage,
+        costUsd: cost,
+        finishedAt: Date.now(),
+      },
+      normalizedRaw: raw,
+      artifact: null,
+      validationErrors: normalize.errors,
+      llmError: null,
+    };
+  }
+
+  // Validate against closed key list
+  const validation = validateStage4Artifact(normalize.content, ctx.closedKeyList);
+  if (!validation.ok) {
+    return {
+      usageEntry: {
+        attempt: opts.attemptNumber,
+        usage,
+        costUsd: cost,
+        finishedAt: Date.now(),
+      },
+      normalizedRaw: raw,
+      artifact: null,
+      validationErrors: validation.errors,
+      llmError: null,
+    };
+  }
+
+  return {
+    usageEntry: {
+      attempt: opts.attemptNumber,
+      usage,
+      costUsd: cost,
+      finishedAt: Date.now(),
+    },
+    normalizedRaw: raw,
+    artifact: normalize.content,
+    validationErrors: [],
+    llmError: null,
+  };
+}
+
+/**
+ * Helper: computa o cost (USD) de um usage. Aplica o `override` do config
+ * from the user when present, falling back to the embedded table if the model
+ * not there. Review finding #5 — preserves the override in repairs.
+ */
+function computeCostFromUsage(
+  usage: { inputTokens: number; outputTokens: number; model: string },
+  override: import("./pricing.js").PricingOverride | undefined,
+): ReturnType<typeof calculateCostUsd> {
+  // Tries the override first; if the model has no price there, falls back to the table.
+  if (override && usage.model in override) {
+    return calculateCostUsd(usage.inputTokens, usage.outputTokens, usage.model, override);
+  }
+  const pricing = lookupPricing(usage.model);
+  if (pricing === null) return null;
+  return calculateCostUsd(usage.inputTokens, usage.outputTokens, usage.model, override);
+}
+
+interface ModuleDocContext {
+  closedKeyList: string[];
+  symbolsTable: string;
+  truncatedSource: string;
+}
+
+async function buildModuleDocContext(
   absRoot: string,
   module: Module,
-  _ordered: Module[],
-  llmClient: LlmClient,
-  language: Language,
   charBudget: number,
-): Promise<GenerateResult> {
-  // Monta closedKeyList a partir dos símbolos ativos do módulo
+): Promise<ModuleDocContext> {
   const db = openIndex(
     await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db"),
   );
-  let closedKeyList: string[];
-  let symbolsTable: string;
-  let truncatedSource: string;
   try {
     const fileIds = await getFileIdsForModule(absRoot, module);
     const stmt = db.prepare(
@@ -805,11 +1556,10 @@ async function generateModuleDoc(
       kind: string;
       signature: string | null;
     }>;
-    closedKeyList = symbols.map((s) => s.key).sort();
-    symbolsTable = symbols
+    const closedKeyList = symbols.map((s) => s.key).sort();
+    const symbolsTable = symbols
       .map((s) => `- ${s.key} (${s.kind}): ${s.signature ?? ""}`)
       .join("\n");
-    // Concatena source dos arquivos do módulo (truncado por orçamento)
     let src = "";
     for (const p of module.paths) {
       try {
@@ -823,17 +1573,10 @@ async function generateModuleDoc(
         // skip
       }
     }
-    truncatedSource = src;
+    return { closedKeyList, symbolsTable, truncatedSource: src };
   } finally {
     db.close();
   }
-
-  const prompt = buildStage4Prompt(module, closedKeyList, symbolsTable, truncatedSource, language);
-  return await llmClient.generate({
-    system: prompt.system,
-    user: prompt.user,
-    maxTokens: 4_000,
-  });
 }
 
 async function getFileIdsForModule(absRoot: string, module: Module): Promise<number[]> {
@@ -864,9 +1607,9 @@ function finalizeRun(
     tasksFailed: number;
   },
 ): void {
-  // FIX J (rev2): summary_json mora em batch_runs.summary_json — é uma
-  // propriedade do RUN, não de uma task. Aqui carregamos os módulos
-  // refinados + o agregado do run (totals/byStage/byModule).
+  // FIX J (rev2): summary_json lives in batch_runs.summary_json — it is a
+  // property of the RUN, not of a task. Here we load the refined modules
+  // + the run aggregate (totals/byStage/byModule).
   const summary: BatchRunSummary = {
     totals: opts.totals,
     byStage: opts.byStage,
@@ -910,12 +1653,12 @@ export type { BatchStatusReport, BatchRunSummary };
  *
  * Fonte: AGENTS.md §"Convenções adicionais" e batch.ts CLI (setExitCode
  * existente). Exportado aqui para que init --batch propague o mesmo exit
- * code que `batch status/resume/--only` já propagam — antes do fix (O),
- * init --batch sempre retornava 0 mesmo em completed_with_failures/aborted,
- * escondendo falha sistêmica do orquestrador atrás de exit success.
+ * code that `batch status/resume/--only` already propagate — before fix (O),
+ * init --batch always returned 0 even on completed_with_failures/aborted,
+ * hiding systemic orchestrator failure behind an exit success.
  *
- * Use com `process.exitCode = statusToExitCode(status)` (não `process.exit`)
- * pra preservar o FIX L (rev2): deixar o event loop drenar antes de sair.
+ * Use with `process.exitCode = statusToExitCode(status)` (not `process.exit`)
+ * to preserve FIX L (rev2): let the event loop drain before exiting.
  */
 export function statusToExitCode(
   status: BatchRunResult["status"],
