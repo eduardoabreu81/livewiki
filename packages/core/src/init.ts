@@ -35,9 +35,11 @@ import {
   prioritizeModules,
   makeUniqueDeterministicIds,
   splitOversizedModules,
+  assertExactPathPartition,
   assertUniqueModuleIds,
   type Module,
 } from "./modules.js";
+import { loadConfig, applyDefaults } from "./config.js";
 import { collectImports } from "./imports.js";
 import {
   generateStructure,
@@ -273,8 +275,25 @@ async function buildPlan(absRoot: string): Promise<{
     // across all derived artifacts (modules.mmd, quickstart.md, overview.md,
     // regenerator, and batch_tasks.target).
     const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath);
-    const split = splitOversizedModules(heuristicModules, { symbolCountByPath });
-    const modules = makeUniqueDeterministicIds(split);
+    // Unique first, then split oversized, then unique again (see batch.ts).
+    // Prefer config thresholds when present so init --plan matches batch.
+    // loadConfig returns {} when missing; throws on malformed JSON — do NOT
+    // swallow parse errors (would silently apply MODULE_SPLIT_DEFAULTS).
+    const splitOpts: Parameters<typeof splitOversizedModules>[1] = {
+      symbolCountByPath,
+    };
+    const cfg = applyDefaults(await loadConfig(absRoot));
+    if (cfg.maxModuleFiles !== undefined) {
+      splitOpts!.maxFiles = cfg.maxModuleFiles;
+    }
+    if (cfg.maxModuleSymbols !== undefined) {
+      splitOpts!.maxSymbols = cfg.maxModuleSymbols;
+    }
+    let modules = makeUniqueDeterministicIds(heuristicModules);
+    modules = splitOversizedModules(modules, splitOpts);
+    // Partition vs original indexed inventory (same contract as batch).
+    assertExactPathPartition(modules, filePaths);
+    modules = makeUniqueDeterministicIds(modules);
     assertUniqueModuleIds(modules);
 
     // Collect imports to build the graph

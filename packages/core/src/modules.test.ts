@@ -7,6 +7,11 @@ import {
   assertUniqueModuleIds,
   DuplicateModuleIdError,
   splitOversizedModules,
+  normalizeSplitLimits,
+  assertExactPathPartition,
+  ExactPartitionError,
+  refinePeerDirectoryFragmentationError,
+  SPLIT_AXIS_DISABLED,
 } from "./modules.js";
 import type { ExtractedImport } from "./imports.js";
 
@@ -145,7 +150,7 @@ describe("modules.prioritizeModules", () => {
 // (packages/core/src, packages/cli/src, packages/mcp/src, ...) received
 // the same module ID. They shared one batch_task, overwrote
 // livewiki/src.md and corrupted accounting.
-describe("modules — splitOversizedModules", () => {
+describe("modules — splitOversizedModules (T0)", () => {
   it("leaves small modules unchanged", () => {
     const mods = [
       { id: "auth", paths: ["src/auth/a.ts", "src/auth/b.ts"], symbolCount: 4 },
@@ -155,23 +160,56 @@ describe("modules — splitOversizedModules", () => {
     expect(out[0]!.id).toBe("auth");
   });
 
-  it("chunks a flat oversized directory by maxFiles with stable stems", () => {
+  it("chunks a pure flat directory into exact 12/12/1 with ordinal ids", () => {
     const paths = Array.from({ length: 25 }, (_, i) =>
       `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
     );
     const mods = [{ id: "core-src", paths, symbolCount: 25 }];
     const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
-    expect(out.length).toBeGreaterThan(1);
-    expect(out.every((m) => m.paths.length <= 12)).toBe(true);
+    expect(out).toHaveLength(3);
+    expect(out.map((m) => m.paths.length).sort((a, b) => b - a)).toEqual([
+      12, 12, 1,
+    ]);
+    expect(out.map((m) => m.id).sort()).toEqual([
+      "core-src-01",
+      "core-src-02",
+      "core-src-03",
+    ]);
+    // Must NOT be one module per file
+    expect(out.every((m) => m.paths.length === 1)).toBe(false);
     const allPaths = out.flatMap((m) => m.paths).sort();
     expect(allPaths).toEqual([...paths].sort());
-    // ids are distinct prefixes of core-src-
-    const ids = new Set(out.map((m) => m.id));
-    expect(ids.size).toBe(out.length);
-    for (const m of out) expect(m.id.startsWith("core-src-")).toBe(true);
+    assertExactPathPartition(out, paths);
   });
 
-  it("splits by next path segment when structure exists", () => {
+  it("mixed leaves + subdirectory: llm structural, peers flat-chunked", () => {
+    const leaves = Array.from({ length: 13 }, (_, i) =>
+      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
+    );
+    const llm = [
+      "packages/core/src/llm/index.ts",
+      "packages/core/src/llm/anthropic.ts",
+      "packages/core/src/llm/openai-compat.ts",
+    ];
+    const paths = [...leaves, ...llm];
+    const mods = [{ id: "core-src", paths, symbolCount: paths.length }];
+    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
+
+    const llmMod = out.find((m) => m.id === "core-src-llm");
+    expect(llmMod).toBeDefined();
+    expect(llmMod!.paths.sort()).toEqual([...llm].sort());
+
+    const leafMods = out.filter((m) => m.id !== "core-src-llm");
+    expect(leafMods.length).toBeGreaterThanOrEqual(1);
+    expect(leafMods.every((m) => m.paths.every((p) => !p.includes("/llm/")))).toBe(
+      true,
+    );
+    // No one-file-per-leaf explosion across all 13 peers as 13 modules
+    expect(leafMods.length).toBeLessThan(13);
+    assertExactPathPartition(out, paths);
+  });
+
+  it("splits true subdirectories and respects maxFiles recursively", () => {
     const mods = [
       {
         id: "pkg",
@@ -187,8 +225,210 @@ describe("modules — splitOversizedModules", () => {
     ];
     const out = splitOversizedModules(mods, { maxFiles: 2, maxSymbols: 80 });
     expect(out.length).toBeGreaterThan(1);
-    // each sub-group further chunked if needed
     expect(out.every((m) => m.paths.length <= 2)).toBe(true);
+    // Must not use filenames as structural ids at the top level alone
+    assertExactPathPartition(out, mods[0]!.paths);
+  });
+
+  it("symbol-only overflow packs dual-axis chunks under maxSymbols", () => {
+    const paths = ["a/x.ts", "a/y.ts", "a/z.ts"];
+    const symbolCountByPath = new Map([
+      ["a/x.ts", 50],
+      ["a/y.ts", 50],
+      ["a/z.ts", 50],
+    ]);
+    const mods = [{ id: "a", paths, symbolCount: 150 }];
+    const out = splitOversizedModules(mods, {
+      maxFiles: 12,
+      maxSymbols: 80,
+      symbolCountByPath,
+    });
+    expect(out.length).toBeGreaterThan(1);
+    expect(
+      out.every((m) => {
+        if (m.unsplittable) return true;
+        return m.symbolCount <= 80;
+      }),
+    ).toBe(true);
+    assertExactPathPartition(out, paths);
+  });
+
+  it("atomic over-symbol file is marked unsplittable and kept", () => {
+    const paths = ["a/big.ts", "a/small.ts"];
+    const symbolCountByPath = new Map([
+      ["a/big.ts", 200],
+      ["a/small.ts", 1],
+    ]);
+    const mods = [{ id: "a", paths, symbolCount: 201 }];
+    const out = splitOversizedModules(mods, {
+      maxFiles: 12,
+      maxSymbols: 80,
+      symbolCountByPath,
+    });
+    const big = out.find((m) => m.paths.includes("a/big.ts"));
+    expect(big).toBeDefined();
+    expect(big!.unsplittable).toBe(true);
+    expect(big!.paths).toEqual(["a/big.ts"]);
+    assertExactPathPartition(out, paths);
+  });
+
+  it("maxFiles:0 alone disables the file axis (symbol axis still active)", () => {
+    const paths = Array.from({ length: 30 }, (_, i) => `src/f${i}.ts`);
+    const symbolCountByPath = new Map(paths.map((p) => [p, 1] as const));
+    const mods = [{ id: "src", paths, symbolCount: 30 }];
+    // 30 files but symbols total 30 < 80 → no symbol split; file axis off → 1 module
+    const out = splitOversizedModules(mods, {
+      maxFiles: 0,
+      maxSymbols: 80,
+      symbolCountByPath,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.paths).toHaveLength(30);
+  });
+
+  it("maxSymbols:0 alone disables the symbol axis (file axis still active)", () => {
+    const paths = Array.from({ length: 25 }, (_, i) => `src/f${i}.ts`);
+    const symbolCountByPath = new Map(paths.map((p) => [p, 100] as const));
+    const mods = [{ id: "src", paths, symbolCount: 2500 }];
+    const out = splitOversizedModules(mods, {
+      maxFiles: 12,
+      maxSymbols: 0,
+      symbolCountByPath,
+    });
+    // File axis only → 12/12/1 ordinals
+    expect(out).toHaveLength(3);
+    expect(out.every((m) => m.paths.length <= 12)).toBe(true);
+    expect(out.some((m) => m.unsplittable)).toBe(false);
+  });
+
+  it("maxFiles:0 and maxSymbols:0 together disable all size splits", () => {
+    const paths = Array.from({ length: 30 }, (_, i) => `src/f${i}.ts`);
+    const mods = [{ id: "src", paths, symbolCount: 30 }];
+    const out = splitOversizedModules(mods, { maxFiles: 0, maxSymbols: 0 });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.paths).toHaveLength(30);
+  });
+
+  it("preserves module symbolCount when path map is omitted and module stays intact", () => {
+    const mods = [
+      {
+        id: "auth",
+        paths: ["src/auth/a.ts", "src/auth/b.ts"],
+        symbolCount: 42,
+      },
+    ];
+    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.symbolCount).toBe(42);
+  });
+
+  it("chunking without symbolCountByPath zeros child symbolCounts (no aggregate claim)", () => {
+    const paths = Array.from({ length: 25 }, (_, i) =>
+      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
+    );
+    const mods = [{ id: "core-src", paths, symbolCount: 999 }];
+    // No symbolCountByPath — dual-axis file split still runs; children must not
+    // invent a redistribution of 999.
+    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
+    expect(out).toHaveLength(3);
+    expect(out.every((m) => m.symbolCount === 0)).toBe(true);
+    expect(out.reduce((a, m) => a + m.symbolCount, 0)).not.toBe(999);
+  });
+
+  it("normalizeSplitLimits maps 0 to disabled sentinel", () => {
+    const n = normalizeSplitLimits(0, 0);
+    expect(n.maxFiles).toBe(SPLIT_AXIS_DISABLED);
+    expect(n.maxSymbols).toBe(SPLIT_AXIS_DISABLED);
+    expect(normalizeSplitLimits(undefined, undefined)).toEqual({
+      maxFiles: 12,
+      maxSymbols: 80,
+    });
+  });
+
+  it("legitimate one-file module is preserved (not rejected by R1)", () => {
+    const mods = [
+      { id: "solo", paths: ["packages/solo/index.ts"], symbolCount: 3 },
+    ];
+    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.id).toBe("solo");
+    expect(out[0]!.paths).toEqual(["packages/solo/index.ts"]);
+  });
+
+  it("is deterministic under shuffled input order", () => {
+    const paths = Array.from({ length: 25 }, (_, i) =>
+      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
+    );
+    const forward = splitOversizedModules(
+      [{ id: "core-src", paths: [...paths], symbolCount: 25 }],
+      { maxFiles: 12, maxSymbols: 80 },
+    );
+    const reverse = splitOversizedModules(
+      [{ id: "core-src", paths: [...paths].reverse(), symbolCount: 25 }],
+      { maxFiles: 12, maxSymbols: 80 },
+    );
+    expect(reverse.map((m) => ({ id: m.id, paths: m.paths }))).toEqual(
+      forward.map((m) => ({ id: m.id, paths: m.paths })),
+    );
+  });
+
+  it("unique then split yields core-src ordinals not src-* file explosion", () => {
+    const corePaths = Array.from({ length: 25 }, (_, i) =>
+      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
+    );
+    const mods = [
+      { id: "src", paths: corePaths, symbolCount: 25 },
+      { id: "src", paths: ["packages/cli/src/cli.ts"], symbolCount: 1 },
+      { id: "src", paths: ["packages/mcp/src/server.ts"], symbolCount: 1 },
+    ];
+    let out = makeUniqueDeterministicIds(mods);
+    out = splitOversizedModules(out, { maxFiles: 12, maxSymbols: 80 });
+    out = makeUniqueDeterministicIds(out);
+    assertUniqueModuleIds(out);
+    assertExactPathPartition(
+      out,
+      mods.flatMap((m) => m.paths),
+    );
+    expect(out.some((m) => m.id.startsWith("core-src"))).toBe(true);
+    // No bare src-<filename> explosion from colliding leaf
+    expect(out.filter((m) => /^src-f\d+/.test(m.id))).toHaveLength(0);
+  });
+});
+
+describe("modules — exact partition + refine peer guard", () => {
+  it("assertExactPathPartition rejects duplicates and missing paths", () => {
+    expect(() =>
+      assertExactPathPartition(
+        [
+          { id: "a", paths: ["x.ts"], symbolCount: 1 },
+          { id: "b", paths: ["x.ts"], symbolCount: 1 },
+        ],
+        ["x.ts", "y.ts"],
+      ),
+    ).toThrow(ExactPartitionError);
+
+    expect(() =>
+      assertExactPathPartition(
+        [{ id: "a", paths: ["x.ts"], symbolCount: 1 }],
+        ["x.ts", "y.ts"],
+      ),
+    ).toThrow(/missing/);
+  });
+
+  it("refinePeerDirectoryFragmentationError rejects peer split", () => {
+    const err = refinePeerDirectoryFragmentationError([
+      { id: "one", paths: ["src/a.ts"], symbolCount: 0 },
+      { id: "two", paths: ["src/b.ts"], symbolCount: 0 },
+    ]);
+    expect(err).toMatch(/fragment peer files/);
+  });
+
+  it("refinePeerDirectoryFragmentationError allows whole-dir modules", () => {
+    const err = refinePeerDirectoryFragmentationError([
+      { id: "src", paths: ["src/a.ts", "src/b.ts"], symbolCount: 0 },
+      { id: "lib", paths: ["lib/c.ts"], symbolCount: 0 },
+    ]);
+    expect(err).toBeNull();
   });
 });
 

@@ -42,6 +42,10 @@ import {
   prioritizeModules,
   makeUniqueDeterministicIds,
   splitOversizedModules,
+  normalizeSplitLimits,
+  assertExactPathPartition,
+  refinePeerDirectoryFragmentationError,
+  ExactPartitionError,
   assertUniqueModuleIds,
   DuplicateModuleIdError,
   type Module,
@@ -174,10 +178,11 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       resolvedConfig.stage4MaxOutputTokens ??
       8192;
     const thinkingMode = opts.thinking ?? resolvedConfig.thinking;
-    const maxModuleFiles =
-      opts.maxModuleFiles ?? resolvedConfig.maxModuleFiles ?? 12;
-    const maxModuleSymbols =
-      opts.maxModuleSymbols ?? resolvedConfig.maxModuleSymbols ?? 80;
+    const { maxFiles: maxModuleFiles, maxSymbols: maxModuleSymbols } =
+      normalizeSplitLimits(
+        opts.maxModuleFiles ?? resolvedConfig.maxModuleFiles,
+        opts.maxModuleSymbols ?? resolvedConfig.maxModuleSymbols,
+      );
 
     // Cria LLM client se não injetado (lazy — só erra se o batch precisar)
     let llmClient = opts.llmClient;
@@ -263,18 +268,18 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             costUsd: cost,
             finishedAt: Date.now(),
           });
-          // FIX I (rev2): validate refined BEFORE accepting. Rejects:
-          //   - malformed JSON / missing "modules" array
-          //   - modules: [] (empty) — heuristic always has ≥1 module
-          //   - modules that do NOT cover the heuristic files
-          //     (declared paths pointing outside the repo, or coverage
-          //     < 100% of heuristic files = LLM invented modules)
-          // In any rejection case, keep the heuristic and mark
-          // error in the checkpoint (with specific code) for traceability.
-          const heuristicFiles = new Set(modules.flatMap((m) => m.paths));
+          // FIX I + T0 exact partition: validate refined BEFORE accepting.
+          // Inventory is the indexed filePaths (not a post-refine subset).
+          // Rejects missing/duplicate/unknown paths, empty modules, peer
+          // fragmentation. On any rejection: keep full heuristic, do not abort.
+          const indexedInventory = new Set(
+            filePaths.map((p) =>
+              p.includes("\\") ? p.replace(/\\/g, "/") : p,
+            ),
+          );
           const validation = validateRefinedModules(
             result.content,
-            heuristicFiles,
+            indexedInventory,
           );
           if (validation.accepted) {
             modules = validation.modules!;
@@ -325,17 +330,25 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // as `aborted` (terminal status) — never `running` — before
     // re-throwing.
     try {
-      // Split oversized modules (structural) so stage-4 pages can complete.
+      // T0 plan W gate:
+      // 1) Unique IDs first (src → core-src / cli-src / …) so split prefixes are stable.
+      // 2) Structural + dual-axis split (true subdirs, then ordinal chunks).
+      // 3) Exact path partition vs original indexed filePaths (never a
+      //    post-refine subset — incomplete refine is rejected earlier).
+      // 4) Unique again for chunk ordinals / collisions.
+      // Splitting BEFORE uniqueness made every packages/*/src leaf keep id "src"
+      // and explode into src-<file> pages (bad A/B v2 run).
+      modules = makeUniqueDeterministicIds(modules);
       modules = splitOversizedModules(modules, {
-        maxFiles: maxModuleFiles === 0 ? Number.MAX_SAFE_INTEGER : maxModuleFiles,
-        maxSymbols:
-          maxModuleSymbols === 0 ? Number.MAX_SAFE_INTEGER : maxModuleSymbols,
+        maxFiles: maxModuleFiles,
+        maxSymbols: maxModuleSymbols,
         symbolCountByPath,
       });
+      assertExactPathPartition(modules, filePaths);
       modules = makeUniqueDeterministicIds(modules);
       assertUniqueModuleIds(modules);
     } catch (err) {
-      const dupErr = err as DuplicateModuleIdError;
+      const dupErr = err as DuplicateModuleIdError | ExactPartitionError;
       // REVIEW finding #3: status MUST NOT stay as 'running'. Mark
       // terminal and re-throw so the caller knows.
       try {
@@ -874,28 +887,33 @@ function safeJsonParse<T>(s: string): T | null {
 /**
  * Validates the JSON returned by the LLM in stage 2 (module refinement).
  *
- * FIX I (rev2): the old version accepted `{"modules": []}` as success and
- * replaced heuristic modules with nothing. Now rejects:
+ * Exact partition of the indexed inventory (100% — no 80% soft threshold):
  *   - malformed JSON / missing "modules" array field
- *   - `modules: []` (empty) — heuristic ALWAYS produces ≥1 module if there are files
- *   - modules whose summed `paths` do not cover ≥80% of heuristic files
- *     (LLM invented modules or omitted paths) — covers the case where
- *     coverage is partial but still useful (≥80%); below that is hallucination
- *   - duplicate or empty `id`
+ *   - `modules: []` (empty)
+ *   - empty module / missing id / duplicate id
+ *   - any unknown path (not in inventory)
+ *   - any path assigned more than once
+ *   - any inventory path missing from the refine
+ *   - peer directory fragmentation (`refine_fragmented_peers`)
  *
  * Returns `{ accepted: true, modules }` or `{ accepted: false, errorCode,
- * errorMessage }`. The heuristic is kept in any rejection case.
+ * errorMessage }`. The heuristic is kept in any rejection case (batch continues).
  */
 function validateRefinedModules(
   content: string,
-  heuristicFiles: Set<string>,
+  indexedInventory: Set<string>,
 ): {
   accepted: boolean;
   modules?: Module[];
   errorCode?: string;
   errorMessage?: string;
 } {
-  // 1. Extrai primeiro objeto JSON do content (LLM pode adicionar prosa)
+  // Normalize inventory keys for comparison.
+  const inventory = new Set(
+    [...indexedInventory].map((p) => p.replace(/\\/g, "/")),
+  );
+
+  // 1. Extract first JSON object (LLM may add prose)
   const match = content.match(/\{[\s\S]*\}/);
   if (!match) {
     return {
@@ -932,12 +950,18 @@ function validateRefinedModules(
     };
   }
 
-  // 3. Validate shape of each module
+  // 3. Validate shape + exact partition (no silent path filtering)
   const ids = new Set<string>();
-  const refinedFiles = new Set<string>();
+  const pathToModule = new Map<string, string>();
   const cleanModules: Module[] = [];
   for (const m of parsed.modules) {
-    if (!m || typeof m !== "object") continue;
+    if (!m || typeof m !== "object") {
+      return {
+        accepted: false,
+        errorCode: "refine_invalid_module",
+        errorMessage: "module entry is not an object",
+      };
+    }
     const obj = m as { id?: unknown; paths?: unknown };
     if (typeof obj.id !== "string" || obj.id === "") {
       return {
@@ -961,35 +985,69 @@ function validateRefinedModules(
         errorMessage: `module "${obj.id}" has non-string paths`,
       };
     }
-    const paths = obj.paths.filter((p) => heuristicFiles.has(p));
-    // Reviewer revision (finding #6): module with ALL paths
-    // invented by the LLM (none matches `heuristicFiles`) is hallucination
-    // pure — there is no real code to document. Reject early instead of
-    // producing an empty page in stage 4.
-    if (paths.length === 0) {
+    if (obj.paths.length === 0) {
       return {
         accepted: false,
         errorCode: "refine_invalid_module",
-        errorMessage: `module "${obj.id}" has no paths present in heuristic files; would produce an empty page`,
+        errorMessage: `module "${obj.id}" is empty (no paths); would produce an empty page`,
       };
     }
-    for (const p of paths) refinedFiles.add(p);
-    cleanModules.push({ id: obj.id, paths: obj.paths, symbolCount: 0 });
+
+    const normalizedPaths: string[] = [];
+    for (const raw of obj.paths) {
+      const p = raw.replace(/\\/g, "/");
+      if (!inventory.has(p)) {
+        return {
+          accepted: false,
+          errorCode: "refine_unknown_path",
+          errorMessage: `module "${obj.id}" references unknown path "${p}" not in indexed inventory; ignoring refinement`,
+        };
+      }
+      const prev = pathToModule.get(p);
+      if (prev !== undefined) {
+        return {
+          accepted: false,
+          errorCode: "refine_duplicate_path",
+          errorMessage: `path "${p}" assigned to modules "${prev}" and "${obj.id}"; ignoring refinement`,
+        };
+      }
+      pathToModule.set(p, obj.id);
+      normalizedPaths.push(p);
+    }
+    normalizedPaths.sort((a, b) => a.localeCompare(b));
+    cleanModules.push({
+      id: obj.id,
+      paths: normalizedPaths,
+      // symbolCount filled later from the index map in the split/prioritize path
+      symbolCount: 0,
+    });
   }
 
-  // 4. Coverage: ≥80% of heuristic files must appear in the refined
-  // paths. Otherwise the LLM invented modules and lost files.
-  if (heuristicFiles.size > 0) {
-    let covered = 0;
-    for (const f of heuristicFiles) if (refinedFiles.has(f)) covered++;
-    const coverage = covered / heuristicFiles.size;
-    if (coverage < 0.8) {
-      return {
-        accepted: false,
-        errorCode: "refine_insufficient_coverage",
-        errorMessage: `refined modules cover only ${(coverage * 100).toFixed(0)}% of heuristic files (need ≥80%); ignoring refinement`,
-      };
+  // 4. Exact 100% coverage of indexed inventory (every path once)
+  if (pathToModule.size !== inventory.size) {
+    const missing: string[] = [];
+    for (const f of inventory) {
+      if (!pathToModule.has(f)) missing.push(f);
     }
+    missing.sort((a, b) => a.localeCompare(b));
+    const sample = missing.slice(0, 5).join(", ");
+    return {
+      accepted: false,
+      errorCode: "refine_incomplete_partition",
+      errorMessage:
+        `refined modules cover ${pathToModule.size}/${inventory.size} indexed paths ` +
+        `(need exact 100%); missing e.g. ${sample || "(none listed)"}; ignoring refinement`,
+    };
+  }
+
+  // 5. Peer directory integrity (no filename-derived split in refine)
+  const frag = refinePeerDirectoryFragmentationError(cleanModules);
+  if (frag) {
+    return {
+      accepted: false,
+      errorCode: "refine_fragmented_peers",
+      errorMessage: frag,
+    };
   }
 
   return { accepted: true, modules: cleanModules };

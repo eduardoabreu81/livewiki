@@ -312,9 +312,11 @@ those files are explicitly out of the `vitest` unit suite).
 - **Stage 2 LLM refinement is opt-in/degradable** (fix #5):
   `--no-refine` skips; LLM failure degrades to heuristic (not a task
   failure). Refined validation (FIX I rev2): rejects `{"modules": []}`,
-  malformed JSON, duplicate/id-less modules, or coverage < 80% of
-  heuristic files. On any rejection, heuristic wins and the error
-  goes into the stage 2 checkpoint.
+  malformed JSON, duplicate/id-less modules, empty modules, unknown or
+  duplicate paths, peer-directory fragmentation, or any incomplete
+  partition of the indexed inventory (exact 100% required — not 80%).
+  On any rejection, heuristic wins and the error goes into the stage 2
+  checkpoint; the batch does not abort.
 - **Checkpoint shape**: `usageHistory: [{ attempt, usage, costUsd, finishedAt }]`
   from attempt 1. Report aggregates; "current usage" = last item.
 - **Failure policy** (commit d274dd9): failed task → marks + reason,

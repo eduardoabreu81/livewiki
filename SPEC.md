@@ -196,15 +196,29 @@ All commands: `--json`, `--repo <path>` (default cwd), consistent exit codes.
 1. **Scan**: full `index`; symbol snapshot.
 2. **Module identification**: grouping by directory + import graph (deterministic
    heuristic; an LLM may refine module names/boundaries — 1 call). Oversized
-   modules are **split** into smaller units (by subdirectory, else stable file
-   chunks) so each stage-4 page can complete successfully under the model
-   output budget — thresholds: `maxModuleFiles` / `maxModuleSymbols` in config
-   (defaults 12 / 80). Module IDs are deterministic, stable slugs. A unique
-   directory leaf keeps its short ID; colliding leaves use the shortest unique
-   path suffix (`core-src`, `cli-src`, `mcp-src`, expanding only when necessary).
-   Duplicate IDs are a hard pipeline error before stage-4 tasks, LLM calls, or
-   page writes: one module ID maps to exactly one task target and one
-   `livewiki/<id>.md` page.
+   modules are **split** into smaller units (by **true subdirectory** only —
+   peer leaf filenames are never structural groups — else stable dual-axis
+   file/symbol **chunks** with ordinal ids `parent-01`, `parent-02`, …) so
+   each stage-4 page can complete under the model output budget — thresholds:
+   `maxModuleFiles` / `maxModuleSymbols` in config (defaults 12 / 80; `0`
+   disables that axis). A single file over `maxModuleSymbols` is emitted as
+   `unsplittable` (batch continues; stage 4 bounds context). The plan is an
+   **exact partition** of indexed paths (each path in exactly one module) and
+   is deterministic under input reordering. Optional stage-2 LLM refine may
+   rename/merge whole directories only when it forms an **exact 100% partition**
+   of the indexed inventory (every path once; no missing, duplicate, unknown,
+   or empty modules). It **must not** fragment peer files under the same
+   parent directory (`refine_fragmented_peers`). Any refine rejection keeps
+   the full heuristic and does **not** abort the batch. The pre-stage-4
+   partition assert compares executable modules to the original indexed
+   `filePaths`, never to a post-refine subset.
+   Module IDs are deterministic, stable slugs. A unique directory leaf keeps
+   its short ID; colliding leaves use the shortest unique path suffix
+   (`core-src`, `cli-src`, `mcp-src`, expanding only when necessary). Order:
+   unique → split → exact-partition assert → unique → assert. Duplicate IDs
+   are a hard pipeline error before stage-4 tasks, LLM calls, or page writes:
+   one module ID maps to exactly one task target and one `livewiki/<id>.md`
+   page.
 
    **Two content layers (roadmap):** (A) structural/agent pages (dirs, symbols,
    import links, anchors — verifiable); (B) optional later human/product

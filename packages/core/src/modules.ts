@@ -37,6 +37,12 @@ export interface Module {
   paths: string[];
   /** Quantos símbolos ativos tem no módulo (heurística de priorização). */
   symbolCount: number;
+  /**
+   * True when a single file exceeds maxModuleSymbols and cannot be
+   * path-split further. Batch still schedules the page (does not abort);
+   * stage 4 must bound context for that unit.
+   */
+  unsplittable?: boolean;
 }
 
 export interface ModuleGraphEdge {
@@ -58,7 +64,8 @@ export function identifyModulesHeuristic(
   symbolCountByPath: Map<string, number> = new Map(),
 ): Module[] {
   const byDir = new Map<string, string[]>();
-  for (const path of filePaths) {
+  for (const raw of filePaths) {
+    const path = normalizeRepoPath(raw);
     const slash = path.lastIndexOf("/");
     const dir = slash === -1 ? "" : path.slice(0, slash);
     const arr = byDir.get(dir) ?? [];
@@ -101,34 +108,94 @@ export const MODULE_SPLIT_DEFAULTS = {
   maxSymbols: 80,
 } as const;
 
+/** Sentinel for a disabled size axis (`maxModuleFiles: 0` / `maxModuleSymbols: 0`). */
+export const SPLIT_AXIS_DISABLED = Number.MAX_SAFE_INTEGER;
+
 export interface SplitOversizedOptions {
+  /**
+   * Max files per module. Omit → default 12. `0` disables the file axis.
+   * Negative values are treated as disabled.
+   */
   maxFiles?: number;
+  /**
+   * Max symbols per module. Omit → default 80. `0` disables the symbol axis.
+   * Negative values are treated as disabled.
+   */
   maxSymbols?: number;
   /** Optional map path → symbol count (defaults to 0 per file if missing). */
   symbolCountByPath?: Map<string, number>;
 }
 
 /**
+ * Normalize split thresholds. `0` or negative → axis disabled (no cap).
+ * `undefined` → MODULE_SPLIT_DEFAULTS.
+ */
+export function normalizeSplitLimits(
+  maxFiles?: number,
+  maxSymbols?: number,
+): { maxFiles: number; maxSymbols: number } {
+  const files =
+    maxFiles === undefined
+      ? MODULE_SPLIT_DEFAULTS.maxFiles
+      : maxFiles <= 0
+        ? SPLIT_AXIS_DISABLED
+        : maxFiles;
+  const symbols =
+    maxSymbols === undefined
+      ? MODULE_SPLIT_DEFAULTS.maxSymbols
+      : maxSymbols <= 0
+        ? SPLIT_AXIS_DISABLED
+        : maxSymbols;
+  return { maxFiles: files, maxSymbols: symbols };
+}
+
+/**
  * Split modules that are too large for a single stage-4 LLM page into
  * smaller units that still complete with valid frontmatter + verify.
  *
- * Strategy (in order):
- * 1. Group by next path segment under a common parent (structural).
- * 2. If still flat and oversized, chunk sorted paths by maxFiles with
- *    stable ids derived from the first file stem in each chunk.
+ * Strategy (T0 — SPEC: subdirectory, else stable file chunks):
+ * 1. True subdirectories only (next path segment with remaining depth).
+ * 2. Peer leaf files in the same directory form one flat bucket (never
+ *    one module per filename).
+ * 3. Oversized flat buckets are packed with dual-axis limits (files +
+ *    symbols); chunk IDs are ordinal (`parent-01`, `parent-02`, …).
+ * 4. A single file over maxSymbols is emitted as `unsplittable` (batch
+ *    continues).
+ *
+ * **symbolCountByPath contract**
+ * - Batch and init always pass the full index map (AST-derived counts).
+ * - With that map, each emitted module/chunk gets `symbolCount` = sum of
+ *   per-path entries for its paths.
+ * - When the map is omitted (or has no entry for the module's paths), an
+ *   **intact** module that is not size-split keeps its input `symbolCount`
+ *   (fallback so prioritization is not wiped for already-small modules).
+ * - When **chunking/splitting** without map data for those paths, **child
+ *   chunks receive `symbolCount: 0`**. Do not claim the parent aggregate is
+ *   preserved or redistributed across chunks. Correct per-chunk counts
+ *   require `symbolCountByPath`.
  *
  * Does not guarantee global id uniqueness — call makeUniqueDeterministicIds after.
+ * Output is a deterministic exact partition of the input paths (order-independent).
  */
 export function splitOversizedModules(
   modules: Module[],
   opts: SplitOversizedOptions = {},
 ): Module[] {
-  const maxFiles = opts.maxFiles ?? MODULE_SPLIT_DEFAULTS.maxFiles;
-  const maxSymbols = opts.maxSymbols ?? MODULE_SPLIT_DEFAULTS.maxSymbols;
+  const { maxFiles, maxSymbols } = normalizeSplitLimits(
+    opts.maxFiles,
+    opts.maxSymbols,
+  );
   const symbolCountByPath = opts.symbolCountByPath ?? new Map<string, number>();
 
+  // Stable module order by id then first path — pure function of content.
+  const sortedMods = [...modules].sort((a, b) => {
+    const c = a.id.localeCompare(b.id);
+    if (c !== 0) return c;
+    return (a.paths[0] ?? "").localeCompare(b.paths[0] ?? "");
+  });
+
   const out: Module[] = [];
-  for (const m of modules) {
+  for (const m of sortedMods) {
     out.push(...splitOneModule(m, maxFiles, maxSymbols, symbolCountByPath));
   }
   return out;
@@ -138,64 +205,255 @@ function countSymbols(paths: string[], map: Map<string, number>): number {
   return paths.reduce((acc, p) => acc + (map.get(p) ?? 0), 0);
 }
 
+/**
+ * Resolve symbol count for a path set. Prefer per-path map entries when any
+ * path is present in the map; otherwise keep the module-level fallback so
+ * an omitted map does not wipe a known `symbolCount`.
+ */
+function resolveSymbolCount(
+  paths: string[],
+  map: Map<string, number>,
+  moduleFallback: number,
+): number {
+  let anyKnown = false;
+  let sum = 0;
+  for (const p of paths) {
+    if (map.has(p)) {
+      anyKnown = true;
+      sum += map.get(p) ?? 0;
+    }
+  }
+  if (anyKnown) return sum;
+  return moduleFallback;
+}
+
+function axisEnabled(limit: number): boolean {
+  return limit < SPLIT_AXIS_DISABLED;
+}
+
+function fitsLimits(
+  fileCount: number,
+  symbolCount: number,
+  maxFiles: number,
+  maxSymbols: number,
+): boolean {
+  if (axisEnabled(maxFiles) && fileCount > maxFiles) return false;
+  if (axisEnabled(maxSymbols) && symbolCount > maxSymbols) return false;
+  return true;
+}
+
 function splitOneModule(
   m: Module,
   maxFiles: number,
   maxSymbols: number,
   symbolCountByPath: Map<string, number>,
 ): Module[] {
-  const sc =
-    m.symbolCount > 0 ? m.symbolCount : countSymbols(m.paths, symbolCountByPath);
-  if (m.paths.length <= maxFiles && sc <= maxSymbols) {
-    return [{ ...m, symbolCount: sc, paths: [...m.paths].sort() }];
+  const paths = [...m.paths].map(normalizeRepoPath).sort((a, b) => a.localeCompare(b));
+  if (paths.length === 0) {
+    return [];
   }
 
-  // Structural: group by immediate child segment under the common directory prefix.
-  const bySeg = groupPathsByNextSegment(m.paths);
-  if (bySeg.size > 1) {
-    const parts: Module[] = [];
-    for (const [seg, paths] of [...bySeg.entries()].sort((a, b) =>
-      a[0].localeCompare(b[0]),
-    )) {
-      const id = `${m.id}-${slugifyIdSegment(seg)}`;
-      const symbolCount = countSymbols(paths, symbolCountByPath);
-      parts.push(
-        ...splitOneModule(
-          { id, paths, symbolCount },
-          maxFiles,
-          maxSymbols,
-          symbolCountByPath,
-        ),
-      );
+  const sc = resolveSymbolCount(paths, symbolCountByPath, m.symbolCount);
+
+  // Single file: never path-split; mark unsplittable if over symbol cap.
+  if (paths.length === 1) {
+    const p = paths[0]!;
+    const fileSc = resolveSymbolCount([p], symbolCountByPath, m.symbolCount);
+    const unsplittable =
+      axisEnabled(maxSymbols) && fileSc > maxSymbols ? true : undefined;
+    return [
+      {
+        id: m.id,
+        paths,
+        symbolCount: fileSc,
+        ...(unsplittable ? { unsplittable: true } : {}),
+      },
+    ];
+  }
+
+  if (fitsLimits(paths.length, sc, maxFiles, maxSymbols)) {
+    return [{ id: m.id, paths, symbolCount: sc }];
+  }
+
+  const { prefixLen, groups } = groupPathsByNextSegment(paths);
+
+  const subdirBuckets: Array<{ seg: string; paths: string[] }> = [];
+  const leafPaths: string[] = [];
+
+  for (const [seg, groupPaths] of groups) {
+    // Structural only when at least one path has depth beyond the segment
+    // (i.e. the segment is a directory, not only a peer leaf filename).
+    const isSubdir = groupPaths.some(
+      (p) => p.split("/").length > prefixLen + 1,
+    );
+    if (isSubdir) {
+      subdirBuckets.push({
+        seg,
+        paths: [...groupPaths].sort((a, b) => a.localeCompare(b)),
+      });
+    } else {
+      leafPaths.push(...groupPaths);
     }
-    return parts;
+  }
+  leafPaths.sort((a, b) => a.localeCompare(b));
+  subdirBuckets.sort((a, b) => a.seg.localeCompare(b.seg));
+
+  // Pure flat (no true subdirs): dual-axis chunk under parent id.
+  if (subdirBuckets.length === 0) {
+    return chunkFlatBucket(m.id, paths, maxFiles, maxSymbols, symbolCountByPath);
   }
 
-  // Flat oversized directory: chunk sorted paths.
-  const sorted = [...m.paths].sort();
-  const chunks: Module[] = [];
-  for (let i = 0; i < sorted.length; i += maxFiles) {
-    const paths = sorted.slice(i, i + maxFiles);
-    const stem = fileStem(paths[0]!);
-    const id = `${m.id}-${slugifyIdSegment(stem)}`;
-    chunks.push({
-      id,
-      paths,
-      symbolCount: countSymbols(paths, symbolCountByPath),
-    });
+  // Single nested directory, no peer leaves: descend without a rename.
+  if (subdirBuckets.length === 1 && leafPaths.length === 0) {
+    const only = subdirBuckets[0]!;
+    return splitOneModule(
+      {
+        id: m.id,
+        paths: only.paths,
+        symbolCount: resolveSymbolCount(
+          only.paths,
+          symbolCountByPath,
+          m.symbolCount,
+        ),
+      },
+      maxFiles,
+      maxSymbols,
+      symbolCountByPath,
+    );
   }
-  return chunks;
+
+  const parts: Module[] = [];
+  for (const { seg, paths: sp } of subdirBuckets) {
+    const id = `${m.id}-${slugifyIdSegment(seg)}`;
+    parts.push(
+      ...splitOneModule(
+        {
+          id,
+          paths: sp,
+          symbolCount: resolveSymbolCount(sp, symbolCountByPath, 0),
+        },
+        maxFiles,
+        maxSymbols,
+        symbolCountByPath,
+      ),
+    );
+  }
+  if (leafPaths.length > 0) {
+    parts.push(
+      ...splitOneModule(
+        {
+          id: m.id,
+          paths: leafPaths,
+          symbolCount: resolveSymbolCount(leafPaths, symbolCountByPath, 0),
+        },
+        maxFiles,
+        maxSymbols,
+        symbolCountByPath,
+      ),
+    );
+  }
+  return parts;
+}
+
+/**
+ * Pack sorted peer paths into chunks that respect both enabled limits.
+ * Ordinal ids: `{parentId}-01`, `{parentId}-02`, … when more than one chunk.
+ * A single atomic file over maxSymbols is marked unsplittable.
+ */
+function chunkFlatBucket(
+  parentId: string,
+  paths: string[],
+  maxFiles: number,
+  maxSymbols: number,
+  symbolCountByPath: Map<string, number>,
+): Module[] {
+  const sorted = [...paths].sort((a, b) => a.localeCompare(b));
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let currentSymbols = 0;
+
+  const flush = () => {
+    if (current.length > 0) {
+      chunks.push(current);
+      current = [];
+      currentSymbols = 0;
+    }
+  };
+
+  for (const p of sorted) {
+    const fileSc = symbolCountByPath.get(p) ?? 0;
+
+    // Atomic over-symbol file: own chunk, marked later.
+    if (axisEnabled(maxSymbols) && fileSc > maxSymbols) {
+      flush();
+      chunks.push([p]);
+      continue;
+    }
+
+    const nextFiles = current.length + 1;
+    const nextSymbols = currentSymbols + fileSc;
+    const exceedsFiles =
+      current.length > 0 && axisEnabled(maxFiles) && nextFiles > maxFiles;
+    const exceedsSymbols =
+      current.length > 0 &&
+      axisEnabled(maxSymbols) &&
+      nextSymbols > maxSymbols;
+
+    if (exceedsFiles || exceedsSymbols) {
+      flush();
+    }
+    current.push(p);
+    currentSymbols += fileSc;
+  }
+  flush();
+
+  if (chunks.length === 0) {
+    return [];
+  }
+
+  if (chunks.length === 1) {
+    const cPaths = chunks[0]!;
+    const sc = countSymbols(cPaths, symbolCountByPath);
+    const unsplittable =
+      cPaths.length === 1 &&
+      axisEnabled(maxSymbols) &&
+      (symbolCountByPath.get(cPaths[0]!) ?? 0) > maxSymbols;
+    return [
+      {
+        id: parentId,
+        paths: cPaths,
+        symbolCount: sc,
+        ...(unsplittable ? { unsplittable: true } : {}),
+      },
+    ];
+  }
+
+  return chunks.map((cPaths, i) => {
+    const ordinal = String(i + 1).padStart(2, "0");
+    const sc = countSymbols(cPaths, symbolCountByPath);
+    const unsplittable =
+      cPaths.length === 1 &&
+      axisEnabled(maxSymbols) &&
+      (symbolCountByPath.get(cPaths[0]!) ?? 0) > maxSymbols;
+    return {
+      id: `${parentId}-${ordinal}`,
+      paths: cPaths,
+      symbolCount: sc,
+      ...(unsplittable ? { unsplittable: true } : {}),
+    };
+  });
 }
 
 /**
  * Group paths by the path segment after their longest common directory prefix.
- * Example: packages/core/src/a.ts + packages/core/src/llm/b.ts →
- *   common "packages/core/src", groups "a.ts" vs "llm".
- * If all files share the same next segment, returns size 1 (not useful).
+ * Returns prefix length (in segments) and the group map.
  */
-function groupPathsByNextSegment(paths: string[]): Map<string, string[]> {
-  if (paths.length === 0) return new Map();
-  const split = paths.map((p) => p.split("/"));
+function groupPathsByNextSegment(paths: string[]): {
+  prefixLen: number;
+  groups: Map<string, string[]>;
+} {
+  if (paths.length === 0) return { prefixLen: 0, groups: new Map() };
+  const split = paths.map((p) => p.split("/").filter(Boolean));
   const minLen = Math.min(...split.map((s) => s.length));
   let prefixLen = 0;
   for (let i = 0; i < minLen - 1; i++) {
@@ -203,15 +461,15 @@ function groupPathsByNextSegment(paths: string[]): Map<string, string[]> {
     if (split.every((s) => s[i] === seg)) prefixLen++;
     else break;
   }
-  const map = new Map<string, string[]>();
+  const groups = new Map<string, string[]>();
   for (let i = 0; i < paths.length; i++) {
     const segs = split[i]!;
     const key = segs[prefixLen] ?? fileStem(paths[i]!);
-    const arr = map.get(key) ?? [];
+    const arr = groups.get(key) ?? [];
     arr.push(paths[i]!);
-    map.set(key, arr);
+    groups.set(key, arr);
   }
-  return map;
+  return { prefixLen, groups };
 }
 
 function fileStem(path: string): string {
@@ -221,13 +479,126 @@ function fileStem(path: string): string {
 }
 
 function slugifyIdSegment(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "part";
+  return (
+    s
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\w-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "part"
+  );
+}
+
+/** Canonical repo-relative path: forward slashes, no leading `./`. */
+export function normalizeRepoPath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+export class ExactPartitionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExactPartitionError";
+  }
+}
+
+/**
+ * Assert every expected path appears in exactly one module, modules are
+ * non-empty, and no unknown paths appear. Paths are compared after
+ * normalizeRepoPath. Throws ExactPartitionError on violation.
+ */
+export function assertExactPathPartition(
+  modules: Module[],
+  expectedPaths: Iterable<string>,
+): void {
+  const expected = new Set(
+    [...expectedPaths].map(normalizeRepoPath).filter((p) => p.length > 0),
+  );
+  const seen = new Map<string, string>(); // path → module id
+  for (const m of modules) {
+    if (!m.paths || m.paths.length === 0) {
+      throw new ExactPartitionError(
+        `module "${m.id}" is empty (exact partition requires non-empty modules)`,
+      );
+    }
+    for (const raw of m.paths) {
+      const p = normalizeRepoPath(raw);
+      if (!expected.has(p)) {
+        throw new ExactPartitionError(
+          `module "${m.id}" contains unknown path "${p}" (not in expected inventory)`,
+        );
+      }
+      const prev = seen.get(p);
+      if (prev !== undefined) {
+        throw new ExactPartitionError(
+          `path "${p}" appears in modules "${prev}" and "${m.id}" (exact partition violated)`,
+        );
+      }
+      seen.set(p, m.id);
+    }
+  }
+  const missing: string[] = [];
+  for (const p of expected) {
+    if (!seen.has(p)) missing.push(p);
+  }
+  if (missing.length > 0) {
+    missing.sort((a, b) => a.localeCompare(b));
+    const sample = missing.slice(0, 5).join(", ");
+    throw new ExactPartitionError(
+      `exact partition missing ${missing.length} path(s) (e.g. ${sample})`,
+    );
+  }
+}
+
+/**
+ * T0 refine guard: peer leaf files that share a parent directory must not
+ * be split across refined modules. Merge/rename of whole directories is OK;
+ * path-level size chunking runs after refine. Rejects filename-derived
+ * one-file explosion that already satisfies size caps.
+ *
+ * Returns null if OK, or an error message if fragmented.
+ */
+export function refinePeerDirectoryFragmentationError(
+  modules: Module[],
+): string | null {
+  // path → module id
+  const fileToModule = new Map<string, string>();
+  for (const m of modules) {
+    for (const raw of m.paths) {
+      const p = normalizeRepoPath(raw);
+      if (fileToModule.has(p)) {
+        return `refined modules assign path "${p}" to more than one module`;
+      }
+      fileToModule.set(p, m.id);
+    }
+  }
+
+  // parent dir → peer leaf files (files whose dirname is that parent)
+  const peersByDir = new Map<string, string[]>();
+  for (const p of fileToModule.keys()) {
+    const slash = p.lastIndexOf("/");
+    const dir = slash === -1 ? "" : p.slice(0, slash);
+    // Only peer leaves at this directory (not nested paths — inventory is files)
+    const arr = peersByDir.get(dir) ?? [];
+    arr.push(p);
+    peersByDir.set(dir, arr);
+  }
+
+  for (const [dir, peers] of peersByDir) {
+    if (peers.length < 2) continue;
+    const moduleIds = new Set(
+      peers.map((p) => fileToModule.get(p)!).filter(Boolean),
+    );
+    if (moduleIds.size > 1) {
+      const label = dir === "" ? "(repo root)" : dir;
+      return (
+        `refined modules fragment peer files under "${label}" across ` +
+        `${moduleIds.size} modules — T0 forbids splitting a directory in ` +
+        `stage-2 refine (deterministic chunker owns size splits)`
+      );
+    }
+  }
+  return null;
 }
 
 /**
@@ -468,10 +839,12 @@ export function makeUniqueDeterministicIds(modules: Module[]): Module[] {
     taken.add(id);
   }
   for (let i = 0; i < modules.length; i++) {
+    const src = modules[i]!;
     out[i] = {
       id: chosen[i]!,
-      paths: modules[i]!.paths,
-      symbolCount: modules[i]!.symbolCount,
+      paths: src.paths,
+      symbolCount: src.symbolCount,
+      ...(src.unsplittable ? { unsplittable: true } : {}),
     };
   }
   return out;

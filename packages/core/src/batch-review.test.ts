@@ -512,8 +512,8 @@ describe("review #6 — validateRefinedModules rejects modules with ALL paths in
       const cp = JSON.parse(s2.checkpoint_json) as {
         error?: { code: string; message: string };
       };
-      expect(cp.error?.code).toBe("refine_invalid_module");
-      expect(cp.error?.message).toMatch(/made-up/);
+      expect(cp.error?.code).toBe("refine_unknown_path");
+      expect(cp.error?.message).toMatch(/made-up|unknown path/);
     } finally {
       db.close();
     }
@@ -553,6 +553,170 @@ describe("review #6 — validateRefinedModules rejects modules with ALL paths in
     } finally {
       db.close();
     }
+  });
+});
+
+// === T0 — refine must be an exact 100% partition of the indexed inventory ===
+describe("T0 refine exact 100% partition of indexed inventory", () => {
+  const FILES = [
+    "src/auth/login.ts",
+    "src/auth/session.ts",
+    "src/auth/token.ts",
+    "src/auth/roles.ts",
+    "src/auth/audit.ts",
+  ] as const;
+
+  async function seedFiveFileRepo(): Promise<void> {
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src/auth"), { recursive: true });
+    for (const rel of FILES) {
+      const base = nodePath.basename(rel, ".ts");
+      await nodeFs.writeFile(
+        nodePath.join(repoRoot, rel),
+        `export function ${base}() { return '${base}'; }\n`,
+        "utf8",
+      );
+    }
+  }
+
+  async function stage2ErrorCode(): Promise<string | undefined> {
+    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const s2 = db
+        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 2")
+        .get() as { checkpoint_json: string };
+      const cp = JSON.parse(s2.checkpoint_json) as {
+        error?: { code: string };
+      };
+      return cp.error?.code;
+    } finally {
+      db.close();
+    }
+  }
+
+  async function executablePlanPaths(): Promise<string[]> {
+    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT summary_json FROM batch_runs ORDER BY id DESC LIMIT 1")
+        .get() as { summary_json: string };
+      const summary = JSON.parse(row.summary_json) as {
+        modulesRefined: Array<{ id: string; paths: string[] }> | null;
+      };
+      return (summary.modulesRefined ?? []).flatMap((m) => m.paths).sort();
+    } finally {
+      db.close();
+    }
+  }
+
+  it("rejects ~80% coverage (missing 1 of 5) and preserves full heuristic paths", async () => {
+    await seedFiveFileRepo();
+    // 4/5 = 80% — old threshold would accept; exact partition must reject
+    const partial = JSON.stringify({
+      modules: [
+        {
+          id: "auth-partial",
+          paths: FILES.slice(0, 4),
+        },
+      ],
+    });
+    llm.responses = [partial];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: false,
+      skipManifestWrite: true,
+    });
+    expect(["completed", "completed_with_failures"]).toContain(result.status);
+    expect(await stage2ErrorCode()).toBe("refine_incomplete_partition");
+    const planPaths = await executablePlanPaths();
+    expect(planPaths).toEqual([...FILES].sort());
+    expect(planPaths).toHaveLength(5);
+  });
+
+  it("rejects true 99% coverage (99 of 100 indexed paths) and preserves full inventory", async () => {
+    // Explicit 99/100 — not a 4/5 stand-in. Reset tree so inventory is exactly 100 files.
+    await nodeFs.rm(nodePath.join(repoRoot, "src"), { recursive: true, force: true });
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src/bulk"), { recursive: true });
+    const paths: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      const rel = `src/bulk/f${String(i).padStart(3, "0")}.ts`;
+      paths.push(rel);
+      await nodeFs.writeFile(
+        nodePath.join(repoRoot, rel),
+        `export function f${String(i).padStart(3, "0")}() { return ${i}; }\n`,
+        "utf8",
+      );
+    }
+    const omitted = paths[50]!;
+    const kept = paths.filter((p) => p !== omitted);
+    expect(kept).toHaveLength(99);
+
+    const nearFull = JSON.stringify({
+      modules: [{ id: "bulk-almost", paths: kept }],
+    });
+    llm.responses = [nearFull];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: false,
+      skipManifestWrite: true,
+    });
+    expect(["completed", "completed_with_failures"]).toContain(result.status);
+    expect(await stage2ErrorCode()).toBe("refine_incomplete_partition");
+    const planPaths = await executablePlanPaths();
+    expect(planPaths).toHaveLength(100);
+    expect(planPaths).toEqual([...paths].sort());
+    expect(planPaths).toContain(omitted);
+  });
+
+  it("rejects duplicate path across refined modules and keeps heuristic", async () => {
+    await seedFiveFileRepo();
+    const dup = JSON.stringify({
+      modules: [
+        { id: "a", paths: [FILES[0], FILES[1], FILES[2]] },
+        { id: "b", paths: [FILES[2], FILES[3], FILES[4]] }, // FILES[2] duplicated
+      ],
+    });
+    llm.responses = [dup];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: false,
+      skipManifestWrite: true,
+    });
+    expect(["completed", "completed_with_failures"]).toContain(result.status);
+    expect(await stage2ErrorCode()).toBe("refine_duplicate_path");
+    expect(await executablePlanPaths()).toEqual([...FILES].sort());
+  });
+
+  it("rejects unknown path and keeps heuristic full inventory", async () => {
+    await seedFiveFileRepo();
+    const unknown = JSON.stringify({
+      modules: [
+        {
+          id: "auth",
+          paths: [...FILES, "src/auth/not-real.ts"],
+        },
+      ],
+    });
+    llm.responses = [unknown];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: false,
+      skipManifestWrite: true,
+    });
+    expect(["completed", "completed_with_failures"]).toContain(result.status);
+    expect(await stage2ErrorCode()).toBe("refine_unknown_path");
+    expect(await executablePlanPaths()).toEqual([...FILES].sort());
   });
 });
 
