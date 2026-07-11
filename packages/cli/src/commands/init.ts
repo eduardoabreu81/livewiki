@@ -9,7 +9,13 @@ interface InitOptions {
   repo?: string;
   batch?: boolean;
   plan?: boolean;
-  noRefine?: boolean;
+  /**
+   * Commander maps `--no-refine` to the boolean property `refine`
+   * (default true when the option is declared as `--no-refine`).
+   * When the user passes `--no-refine`, `refine === false`.
+   * Do not look for `noRefine` — that property is never set by Commander.
+   */
+  refine?: boolean;
 }
 
 /**
@@ -30,16 +36,18 @@ export function registerInit(program: Command): void {
     .option("--batch", "run the full LLM documentation pipeline")
     .option("--plan", "show the module plan (no LLM, no writes)")
     .option("--no-refine", "skip LLM refinement of stage 2 (stage 2 stays heuristic-only)")
-.action(async (_options: InitOptions, command: Command) => {
+    .action(async (_options: InitOptions, command: Command) => {
       const opts = command.optsWithGlobals<InitOptions>();
       const json = Boolean(opts.json);
       const repoRoot = resolveRepoRoot(opts.repo);
+      // Commander `--no-refine` → opts.refine === false (not opts.noRefine).
+      const noRefine = opts.refine === false;
       try {
         const result = await runInit({
           repoRoot: path.resolve(process.cwd(), repoRoot),
           ...(opts.batch !== undefined ? { batch: opts.batch } : {}),
           ...(opts.plan !== undefined ? { plan: opts.plan } : {}),
-          ...(opts.noRefine !== undefined ? { noRefine: opts.noRefine } : {}),
+          ...(noRefine ? { noRefine: true } : {}),
           quiet: json,
         });
         emit(

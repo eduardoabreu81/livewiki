@@ -285,6 +285,130 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   });
 
+  it("init --batch --no-refine skips stage-2 LLM (zero stage-2 tokens and stub calls)", async () => {
+    // Regression: Commander maps --no-refine → opts.refine === false; CLI must
+    // pass noRefine: true into runInit. Without the fix, stage 2 still calls LLM.
+    await writeCode("src/auth/login.ts", "export function login() { return 'auth'; }");
+    await writeCode("src/utils/helper.ts", "export function help() { return 'utils'; }");
+
+    let stage2Calls = 0;
+    let stage4Calls = 0;
+    stub.setHandler((req) => {
+      if (req.user.includes("Heuristic module grouping")) {
+        stage2Calls++;
+        // If this fires under --no-refine, the wiring is still broken.
+        return {
+          status: 200,
+          body: {
+            content: [{ type: "text", text: JSON.stringify({ modules: [] }) }],
+            model: "claude-test-mock",
+            usage: { input_tokens: 999, output_tokens: 99 },
+          },
+        };
+      }
+      stage4Calls++;
+      return defaultHandler(req);
+    });
+
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-norefine";
+    const callsBefore = stub.callCount();
+    try {
+      const r = await runCli([
+        "--json",
+        "--repo",
+        repoRoot,
+        "init",
+        "--batch",
+        "--no-refine",
+      ]);
+      expect(r.status, `init --batch --no-refine failed: ${r.stderr}`).toBe(0);
+
+      // No stage-2 refine HTTP call at all
+      expect(stage2Calls, "stage-2 refine must not call the stub under --no-refine").toBe(0);
+      // Stage 4 still documents modules
+      expect(stage4Calls).toBeGreaterThanOrEqual(2);
+      expect(stub.callCount() - callsBefore).toBe(stage4Calls);
+      expect(stub.callCount() - callsBefore).toBeGreaterThan(0);
+
+      // Heuristic pages still produced
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8"),
+      ).toMatch(/title: auth/);
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/utils.md"), "utf8"),
+      ).toMatch(/title: utils/);
+
+      const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
+      expect(status.status, status.stderr).toBe(0);
+      const report = JSON.parse(status.stdout) as {
+        byStage: Record<string, { inputTokens: number; outputTokens: number }>;
+        run: { status: string };
+      };
+      expect(report.run.status).toBe("completed");
+      const stage2 = report.byStage["2"] ?? { inputTokens: 0, outputTokens: 0 };
+      expect(stage2.inputTokens, "stage 2 input tokens must be 0 with --no-refine").toBe(0);
+      expect(stage2.outputTokens, "stage 2 output tokens must be 0 with --no-refine").toBe(0);
+      // Stage 4 still spent tokens
+      const stage4 = report.byStage["4"];
+      expect(stage4).toBeDefined();
+      expect(stage4!.inputTokens).toBeGreaterThan(0);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
+  it("init --batch without --no-refine still invokes stage-2 refine", async () => {
+    await writeCode("src/auth/login.ts", "export function login() { return 'auth'; }");
+    await writeCode("src/utils/helper.ts", "export function help() { return 'utils'; }");
+
+    let stage2Calls = 0;
+    stub.setHandler((req) => {
+      if (req.user.includes("Heuristic module grouping")) {
+        stage2Calls++;
+        return {
+          status: 200,
+          body: {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  modules: [
+                    { id: "auth", paths: ["src/auth/login.ts"] },
+                    { id: "utils", paths: ["src/utils/helper.ts"] },
+                  ],
+                }),
+              },
+            ],
+            model: "claude-test-mock",
+            usage: { input_tokens: 100, output_tokens: 50 },
+          },
+        };
+      }
+      return defaultHandler(req);
+    });
+
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-refine-on";
+    try {
+      const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      expect(r.status, `init --batch failed: ${r.stderr}`).toBe(0);
+      expect(stage2Calls, "default init --batch must call stage-2 refine").toBeGreaterThanOrEqual(1);
+
+      const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
+      expect(status.status, status.stderr).toBe(0);
+      const report = JSON.parse(status.stdout) as {
+        byStage: Record<string, { inputTokens: number; outputTokens: number }>;
+      };
+      const stage2 = report.byStage["2"];
+      expect(stage2).toBeDefined();
+      expect(stage2!.inputTokens).toBeGreaterThan(0);
+      expect(stage2!.outputTokens).toBeGreaterThan(0);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
   it("--only <module> re-roda 1 task: usageHistory acumula", async () => {
     await writeCode("src/auth/login.ts", "export function login() { return 1; }");
     stub.setHandler((req) => defaultHandler(req));

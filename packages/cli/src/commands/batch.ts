@@ -10,8 +10,11 @@ interface BatchOptions {
   repo?: string;
   /** --only <target>: re-roda 1 task */
   only?: string;
-  /** --no-refine: pula refinamento LLM da etapa 2 */
-  noRefine?: boolean;
+  /**
+   * Commander maps `--no-refine` → `refine === false` (not `noRefine`).
+   * Default is true when the negated option is declared.
+   */
+  refine?: boolean;
 }
 
 /**
@@ -78,7 +81,8 @@ export function registerBatch(program: Command): void {
           }
           const result = await resumeBatch({
             repoRoot: absRoot,
-            ...(opts.noRefine ? { noRefine: true } : {}),
+            // Commander `--no-refine` → opts.refine === false
+            ...(opts.refine === false ? { noRefine: true } : {}),
           });
           emit(json, result, formatResultHuman(result));
           return setExitCode(absRoot, result.status, json);

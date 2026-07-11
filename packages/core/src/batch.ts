@@ -184,11 +184,15 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         opts.maxModuleSymbols ?? resolvedConfig.maxModuleSymbols,
       );
 
-    // Cria LLM client se não injetado (lazy — só erra se o batch precisar)
+    // Create LLM client if not injected. Stage 4 (and --only) always need it.
+    // --no-refine only skips stage-2 refinement; it must NOT skip client
+    // creation or stage 4 runs without an LLM and fails every doc task.
     let llmClient = opts.llmClient;
-    let needsLlm = false; // true se qualquer stage vai chamar LLM
-    if (opts.mode === "only") needsLlm = true;
-    if (!opts.noRefine) needsLlm = true;
+    const needsLlm =
+      opts.mode === "only" ||
+      opts.mode === "run" ||
+      opts.mode === "resume" ||
+      !opts.noRefine;
     if (needsLlm && !llmClient) {
       // Valida config e cria client. Falha clara se ausente.
       validateConfigForBatch(absRoot, resolvedConfig);
