@@ -1,0 +1,9 @@
+commitUnderTest=4e62536c2138b0342109e82c08f163a2889b4478
+message=fix(cli): honor no-refine in batch execution
+clonePath=<temporary-working-tree>
+startedPrep=2026-07-11T11:07:57.1708955-03:00
+batch_started=2026-07-11T11:08:13.5196432-03:00
+batch_ended=2026-07-11T11:18:30.8108383-03:00
+batch_exitCode=0
+batch_durationSec=617.3
+verify_exitCode=0

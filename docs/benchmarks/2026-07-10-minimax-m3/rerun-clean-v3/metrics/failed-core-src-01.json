@@ -1,0 +1,16 @@
+{
+  "taskId": 5,
+  "stage": 4,
+  "target": "core-src-01",
+  "status": "failed",
+  "attempts": 3,
+  "inputTokens": 39996,
+  "outputTokens": 8959,
+  "costUsd": null,
+  "error": {
+    "code": "repair_exhausted",
+    "message": "task \"core-src-01\" exhausted 3 LLM call(s) without producing a verified artifact. Last diagnostic: [anchor_outside_closed_list] section anchor \"...\" is not in the module's closed key list (offending: ...). Total errors recorded: 5.",
+    "failedAt": 4
+  },
+  "retryCommand": "livewiki batch --only core-src-01 1"
+}
