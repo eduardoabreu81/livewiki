@@ -89,17 +89,26 @@ async function startStubServer(): Promise<StubServer> {
   };
 }
 
+/** Extract closed-list keys from the stage-4 / repair user prompt. */
+function closedKeysFromPrompt(user: string, fallbackModuleId: string): string[] {
+  const keys: string[] = [];
+  for (const line of user.split("\n")) {
+    const m = /^- (\S+#\S+)$/.exec(line);
+    if (m?.[1]) keys.push(m[1]);
+  }
+  return keys.length > 0 ? keys : [`${fallbackModuleId}.ts#placeholder`];
+}
+
 /** Gera doc Markdown válido pra qualquer módulo (mesmo formato do E2E da Fase 3). */
 function defaultHandler(req: { system: string; user: string }): StubResponse | null {
-  const match = req.user.match(/# Module: ([^\s]+)/);
-  const moduleId = match ? match[1] : "unknown";
-  const keyMatch = req.user.match(/^- (.+?#[\w.]+)$/m);
-  const firstKey = keyMatch ? keyMatch[1] : `${moduleId}.ts#placeholder`;
+  const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
+  const closedKeys = closedKeysFromPrompt(req.user, moduleId);
+  const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
   const content = `---
 title: ${moduleId}
 owner: generated
 anchors:
-  - ${firstKey}
+${fmAnchors}
 ---
 
 # ${moduleId}
@@ -107,7 +116,7 @@ anchors:
 Documentation for ${moduleId}.
 
 ## Details
-<!-- lw:anchors ${firstKey} -->
+<!-- lw:anchors ${closedKeys.join(" ")} -->
 
 Some prose about ${moduleId}.
 `;

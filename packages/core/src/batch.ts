@@ -1712,23 +1712,74 @@ async function buildModuleDocContext(
     const symbolsTable = symbols
       .map((s) => `- ${s.key} (${s.kind}): ${s.signature ?? ""}`)
       .join("\n");
-    let src = "";
-    for (const p of module.paths) {
-      try {
-        const c = await nodeFs.readFile(nodePath.join(absRoot, p), "utf8");
-        src += `\n// === ${p} ===\n${c}\n`;
-        if (src.length > charBudget) {
-          src = src.slice(0, charBudget) + "\n// ... (truncated by budget)\n";
-          break;
-        }
-      } catch {
-        // skip
-      }
-    }
-    return { closedKeyList, symbolsTable, truncatedSource: src };
+    // Fair per-file truncation: sequential first-fit left later files (and
+    // their closed-list keys) with zero source context, which strongly
+    // correlates with invented anchors. Give every path a share of the
+    // budget so stage-4 always sees a slice of each module file.
+    const truncatedSource = await buildFairTruncatedSource(
+      absRoot,
+      module.paths,
+      charBudget,
+    );
+    return { closedKeyList, symbolsTable, truncatedSource };
   } finally {
     db.close();
   }
+}
+
+/**
+ * Build a source excerpt for stage-4 prompts with a fair share of
+ * `charBudget` per module path. Each file is included (header + body
+ * slice) so closed-list keys from late paths still have local context.
+ * When the sum of full files fits the budget, returns full content.
+ */
+export async function buildFairTruncatedSource(
+  absRoot: string,
+  paths: ReadonlyArray<string>,
+  charBudget: number,
+): Promise<string> {
+  if (paths.length === 0 || charBudget <= 0) return "";
+
+  type FileSlice = { path: string; content: string };
+  const files: FileSlice[] = [];
+  for (const p of paths) {
+    try {
+      const c = await nodeFs.readFile(nodePath.join(absRoot, p), "utf8");
+      files.push({ path: p, content: c });
+    } catch {
+      // skip unreadable paths
+    }
+  }
+  if (files.length === 0) return "";
+
+  const headerOf = (p: string) => `\n// === ${p} ===\n`;
+  // Untruncated total (same layout as the old sequential builder).
+  let full = "";
+  for (const f of files) {
+    full += `${headerOf(f.path)}${f.content}\n`;
+  }
+  if (full.length <= charBudget) return full;
+
+  // Equal share per file (headers included in the share).
+  const n = files.length;
+  const share = Math.max(128, Math.floor(charBudget / n));
+  let src = "";
+  for (const f of files) {
+    const header = headerOf(f.path);
+    const bodyBudget = Math.max(0, share - header.length - 1);
+    let body = f.content;
+    if (body.length > bodyBudget) {
+      body =
+        body.slice(0, bodyBudget) +
+        (bodyBudget > 0 ? "\n// ... (truncated by budget)\n" : "");
+    }
+    src += `${header}${body}\n`;
+  }
+  // Hard cap: rare when truncation markers push over budget.
+  if (src.length > charBudget) {
+    src = src.slice(0, charBudget) + "\n// ... (truncated by budget)\n";
+  }
+  return src;
 }
 
 async function getFileIdsForModule(absRoot: string, module: Module): Promise<number[]> {

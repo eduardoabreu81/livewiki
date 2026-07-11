@@ -16,10 +16,16 @@
  *      - Requires valid frontmatter between `---` at the top.
  *      - Requires the `owner:` line EXPLICITLY present AND with value
  *        `"generated"` (no implicit fallback — review finding #9).
- *      - Requires `anchors:` in the frontmatter.
+ *      - Requires `anchors:` in the frontmatter when the closed list is
+ *        non-empty.
  *      - Requires every key in `anchors:` to be in the closed list.
  *      - Requires every key in the markers `<!-- lw:anchors ... -->`
  *        to be in the closed list.
+ *      - Completeness: the UNION of frontmatter anchors and section-marker
+ *        keys must include EVERY closed-list key (`missing_closed_key`).
+ *      - No duplicate keys in the frontmatter list; no key listed in more
+ *        than one section marker (`duplicate_anchor`). The same key may
+ *        appear once in frontmatter and once in a single section marker.
  *      - Requires non-empty body after the frontmatter.
  *      - Rejects ANY `<!-- lw:manual -->` block in the body (rule #6:
  *        manual blocks are reserved for human content and the orchestrator
@@ -211,7 +217,7 @@ export function validateStage4Artifact(
 
     // 3. Frontmatter anchors
     const fmAnchors = getAnchors(fm);
-    if (fmAnchors.length === 0) {
+    if (closedKeyList.length > 0 && fmAnchors.length === 0) {
       errors.push(
         err(
           "no_frontmatter",
@@ -220,7 +226,21 @@ export function validateStage4Artifact(
         ),
       );
     }
+    // Duplicates within the frontmatter list (order-preserving scan).
+    const fmSeen = new Set<string>();
     for (const k of fmAnchors) {
+      if (fmSeen.has(k)) {
+        errors.push(
+          err(
+            "duplicate_anchor",
+            `anchor "${k}" is listed more than once in frontmatter anchors`,
+            "frontmatter",
+            k,
+          ),
+        );
+      } else {
+        fmSeen.add(k);
+      }
       if (!closedSet.has(k)) {
         errors.push(
           err(
@@ -248,13 +268,48 @@ export function validateStage4Artifact(
       offset: m.index,
     });
   }
+  /** Keys seen in section markers (for cross-section duplicate detection). */
+  const sectionKeysSeen = new Set<string>();
+  /** All declared keys for completeness (frontmatter + sections). */
+  const declared = new Set<string>();
+  if (fm !== null) {
+    for (const k of getAnchors(fm)) declared.add(k);
+  }
   for (const m of body.matchAll(sectionRe)) {
     if (m.index === undefined || m[1] === undefined) continue;
     const preceding = lastHeadingBefore(headingMatches, m.index);
     const sectionSlug = preceding?.slug;
     const raw = m[1].trim();
     const keys = raw.split(/\s+/).filter(Boolean);
+    const inMarker = new Set<string>();
     for (const k of keys) {
+      if (inMarker.has(k)) {
+        errors.push(
+          err(
+            "duplicate_anchor",
+            `section anchor "${k}" is listed more than once in the same marker`,
+            "section",
+            k,
+            sectionSlug,
+          ),
+        );
+      } else {
+        inMarker.add(k);
+      }
+      if (sectionKeysSeen.has(k)) {
+        errors.push(
+          err(
+            "duplicate_anchor",
+            `section anchor "${k}" appears in more than one section marker`,
+            "section",
+            k,
+            sectionSlug,
+          ),
+        );
+      } else {
+        sectionKeysSeen.add(k);
+      }
+      declared.add(k);
       if (!closedSet.has(k)) {
         errors.push(
           err(
@@ -263,6 +318,22 @@ export function validateStage4Artifact(
             "section",
             k,
             sectionSlug,
+          ),
+        );
+      }
+    }
+  }
+
+  // 4b. Completeness: every closed-list key must be declared at least once.
+  if (closedKeyList.length > 0) {
+    for (const k of closedKeyList) {
+      if (!declared.has(k)) {
+        errors.push(
+          err(
+            "missing_closed_key",
+            `closed-list key "${k}" is not declared in frontmatter anchors or any section marker`,
+            "global",
+            k,
           ),
         );
       }

@@ -331,6 +331,8 @@ title: x
 owner: human
 anchors:
   - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
 ---
 # x`;
     const mixed = `---
@@ -338,10 +340,123 @@ title: x
 owner: mixed
 anchors:
   - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
 ---
 # x`;
     expect(validateStage4Artifact(human, closedKeys).ok).toBe(false);
     expect(validateStage4Artifact(mixed, closedKeys).ok).toBe(false);
+  });
+
+  it("partial closed-list coverage → missing_closed_key (completeness)", () => {
+    // Only 1 of 3 closed keys declared — historically accepted; now rejected.
+    const art = `---
+title: x
+owner: generated
+anchors:
+  - src/auth.ts#login
+---
+# x
+
+Body.
+`;
+    const r = validateStage4Artifact(art, closedKeys);
+    expect(r.ok).toBe(false);
+    const missing = r.errors.filter((e) => e.code === "missing_closed_key");
+    expect(missing.map((e) => e.offending).sort()).toEqual([
+      "src/auth.ts#logout",
+      "src/auth.ts#validate",
+    ]);
+  });
+
+  it("union of frontmatter + section markers can complete the closed list", () => {
+    const art = `---
+title: x
+owner: generated
+anchors:
+  - src/auth.ts#login
+---
+# x
+
+<!-- lw:anchors src/auth.ts#logout src/auth.ts#validate -->
+
+Body.
+`;
+    const r = validateStage4Artifact(art, closedKeys);
+    expect(r.ok).toBe(true);
+  });
+
+  it("duplicate key in frontmatter list → duplicate_anchor", () => {
+    const art = `---
+title: x
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+# x
+
+Body.
+`;
+    const r = validateStage4Artifact(art, closedKeys);
+    expect(r.ok).toBe(false);
+    expect(
+      r.errors.some(
+        (e) => e.code === "duplicate_anchor" && e.offending === "src/auth.ts#login",
+      ),
+    ).toBe(true);
+  });
+
+  it("same key in two section markers → duplicate_anchor", () => {
+    const art = `---
+title: x
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+# a
+
+<!-- lw:anchors src/auth.ts#login -->
+
+# b
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout -->
+
+Body.
+`;
+    const r = validateStage4Artifact(art, closedKeys);
+    expect(r.ok).toBe(false);
+    expect(
+      r.errors.some(
+        (e) =>
+          e.code === "duplicate_anchor" &&
+          e.offending === "src/auth.ts#login" &&
+          e.location === "section",
+      ),
+    ).toBe(true);
+  });
+
+  it("key may appear once in frontmatter and once in a single section marker", () => {
+    const art = `---
+title: x
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Body.
+`;
+    const r = validateStage4Artifact(art, closedKeys);
+    expect(r.ok).toBe(true);
   });
 });
 

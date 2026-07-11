@@ -60,19 +60,23 @@ export function buildStage4Prompt(
     ``,
     `Output rules (strict):`,
     `- Markdown + frontmatter with: title, owner: generated, anchors (list of closed keys).`,
-    `- Use ONLY the keys from the closed list below. Distribute them across sections. NEVER invent a key outside the list.`,
+    `- Use ONLY the keys from the closed list. NEVER invent a key outside the list.`,
+    `- COMPLETENESS: every key in the closed list MUST appear at least once in the frontmatter \`anchors:\` list and/or in a \`<!-- lw:anchors ... -->\` section marker. Partial coverage is rejected.`,
+    `- Do NOT list the same key twice in the frontmatter \`anchors:\` list. Do NOT list the same key in more than one section marker.`,
+    `- Distribute closed keys across sections with one marker per section. A key may appear in both frontmatter and exactly one section marker.`,
     `- If information is missing, write "TODO: <reason>" and continue — do not invent behaviour.`,
     `- Keep prose tight; this is reference documentation, not marketing.`,
-    `- Sections end when there are no more keys to assign or the budget is exhausted.`,
     ``,
     `Constraints (livewiki invariants):`,
     `- Frontmatter anchors list MUST only contain keys from the closed list.`,
-    `- Distribute the remaining closed keys across sections using the section-marker comment (one marker per section, list the keys that section anchors).`,
+    `- The union of frontmatter anchors and section-marker keys must equal the closed list exactly.`,
     `- The page must be syntactically valid Markdown (frontmatter between --- blocks).`,
     ``,
     `REJECTION CRITERIA (the artifact validator will reject if any of these are violated):`,
     `- Frontmatter missing, malformed, missing the \`owner:\` line, or \`owner\` is not "generated".`,
     `- Any anchor key in the frontmatter or in a section marker is NOT in the closed list.`,
+    `- Any closed-list key is missing from the page (incomplete coverage).`,
+    `- Duplicate key in the frontmatter list or the same key in two section markers.`,
     `- Empty page or reasoning-only output.`,
     `- The page is not a real Markdown page (e.g. just a fenced code block with no body).`,
     `- The page contains a \`<!-- lw:manual -->\` block (reserved for human content — only the orchestrator can re-inject existing ones).`,
@@ -120,6 +124,9 @@ export function buildStage4Prompt(
   return { system, user };
 }
 
+/** Max chars of the prior candidate embedded in the repair user prompt. */
+export const REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT = 16_000;
+
 /**
  * Repair prompt — used when artifact validation OR post-write verify
  * fails after an LLM call. Receives the closed key list, structured
@@ -146,6 +153,7 @@ export function buildRepairPrompt(
     `Hard constraints (same as the initial generation):`,
     `- Frontmatter: title, owner: generated, anchors list.`,
     `- Every anchor key in the page MUST be in the closed list. NEVER invent a key.`,
+    `- COMPLETENESS: every closed-list key MUST appear in frontmatter \`anchors:\` and/or section markers. No missing keys. No duplicate keys in the frontmatter list or across two section markers.`,
     `- Valid Markdown (frontmatter between --- blocks).`,
     `- NEVER emit a \`<!-- lw:manual -->\` block in your output. Manual blocks are reserved for human content (rule #6); the orchestrator preserves them byte-for-byte from the previous version.`,
     ``,
@@ -181,9 +189,9 @@ export function buildRepairPrompt(
     `# Structured errors from the validator (FIX ALL):`,
     ...errorLines,
     ``,
-    `# Prior candidate (truncated to first 2000 chars — what the validator saw):`,
+    `# Prior candidate (truncated to first ${REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT} chars — what the validator saw):`,
     "```",
-    priorCandidate.slice(0, 2000),
+    priorCandidate.slice(0, REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT),
     "```",
     ``,
     `# Output: corrected Markdown page for livewiki/${module.id}.md`,
@@ -202,6 +210,8 @@ export type ArtifactValidationCode =
   | "missing_owner"                 // frontmatter `owner:` line is absent
   | "wrong_owner"                   // owner is set but is not "generated"
   | "anchor_outside_closed_list"    // anchor in frontmatter or section marker
+  | "duplicate_anchor"              // same key listed twice in FM or across section markers
+  | "missing_closed_key"            // closed-list key never declared on the page
   | "empty_body"                    // frontmatter ok, but body is empty/whitespace
   | "model_invented_manual"         // LLM wrote a <!-- lw:manual --> block (forbidden)
   // Phase-5 plan (X): codes used by the ORCHESTRATOR to feed the repair

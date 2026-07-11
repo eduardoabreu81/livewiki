@@ -241,8 +241,18 @@ must not contain copyable fake anchors. Before writing, livewiki:
 - requires a non-empty Markdown page beginning with valid frontmatter and
   `owner: generated`; and
 - rejects every page or section anchor outside the module's closed canonical
-  key list. This validation produces structured error codes and details for
-  correction. It does not weaken the repository-wide `verify` contract.
+  key list;
+- rejects **incomplete coverage**: every closed-list key must appear at least
+  once in frontmatter `anchors:` and/or a `<!-- lw:anchors ... -->` marker
+  (`missing_closed_key`);
+- rejects **duplicate** keys in the frontmatter list or the same key in more
+  than one section marker (`duplicate_anchor`). The same key may appear once
+  in frontmatter and once in a single section marker.
+
+  This validation produces structured error codes and details for correction.
+  It does not weaken the repository-wide `verify` contract. Stage-4 source
+  context is truncated with a **fair per-file share** of the char budget so
+  later module paths are not starved of local code context.
 
 An invalid artifact or post-write verify failure triggers a bounded corrective
 call for the same task. `maxRepairAttempts` defaults to `2` in

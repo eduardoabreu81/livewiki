@@ -203,7 +203,7 @@ describe("batch X — repair success (Criterion #6)", () => {
       // initial: missing frontmatter
       "# auth\n\nno frontmatter at all\n",
       // repair: valid
-      makeValidPage(["src/auth/login.ts#login"]),
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
     ];
     const result = await runBatch({
       repoRoot,
@@ -432,7 +432,7 @@ describe("batch X — verify failure rollbacks a new page", () => {
 
     try {
       llm.responses = [
-        makeValidPage(["src/auth/login.ts#login"]),
+        makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
       ];
 
       const result = await runBatch({
@@ -520,7 +520,7 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
       // initial: anchor outside closed list → validator rejects
       "---\ntitle: x\nowner: generated\nanchors:\n  - fake\n---\n# x\n",
       // repair: valid
-      makeValidPage(["src/auth/login.ts#login"]),
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
     ];
     const result = await runBatch({
       repoRoot,
@@ -562,7 +562,7 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
     // Call 1: valid response
     llm.responses = [""];
     llm.throwOn = new Set([0]);
-    llm.responses[1] = makeValidPage(["src/auth/login.ts#login"]);
+    llm.responses[1] = makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]);
 
     const result = await runBatch({
       repoRoot,
@@ -745,7 +745,7 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
 
   it("network failure without usage → usage null / usageKnown false / incomplete", async () => {
     llm.throwOn = new Set([0]);
-    llm.responses = [makeValidPage(["src/auth/login.ts#login"])];
+    llm.responses = [makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"])];
     // single module only
     await nodeFs.rm(nodePath.join(repoRoot, "src/utils"), {
       recursive: true,

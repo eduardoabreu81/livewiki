@@ -47,6 +47,31 @@ describe("prompts — todos em inglês (templates)", () => {
     const r = buildStage4Prompt(sampleModule, ["k"], "sym", "code");
     expect(r.system).toMatch(/NEVER invent/);
   });
+
+  it("stage 4 system requires complete closed-list coverage (no partial budget escape)", () => {
+    const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
+    expect(r.system).toMatch(/COMPLETENESS/i);
+    expect(r.system).toMatch(/Partial coverage is rejected/);
+    expect(r.system).not.toMatch(/budget is exhausted/);
+    expect(r.system).toMatch(/missing_closed_key|incomplete coverage|closed-list key is missing/i);
+  });
+
+  it("repair prompt requires completeness and embeds a larger prior-candidate window", () => {
+    const longPrior = "P".repeat(5000);
+    const r = buildRepairPrompt(
+      sampleModule,
+      ["src/a.ts#x"],
+      "sym",
+      "code",
+      longPrior,
+      [{ code: "missing_closed_key", message: "missing", location: "global", offending: "src/a.ts#x" }],
+      "en",
+    );
+    expect(r.system).toMatch(/COMPLETENESS/i);
+    // Previously truncated at 2000; must keep a multi-kilobyte window.
+    expect(r.user.length).toBeGreaterThan(4000);
+    expect(r.user).toContain("P".repeat(4000));
+  });
 });
 
 // === U — prompt hardening (Phase-5 plan) ===

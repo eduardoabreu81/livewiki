@@ -154,6 +154,7 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
       "owner: mixed",
       "anchors:",
       "  - src/auth/login.ts#login",
+      "  - src/auth/login.ts#logout",
       "---",
       "",
       "## Login",
@@ -177,8 +178,8 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
     await safeIo.mkdir(repoRoot, ".livewiki");
     await safeIo.writeText(repoRoot, "livewiki/auth.md", existing);
 
-    // Mock LLM: produces a page with owner=generated, the SAME single
-    // anchor as the existing page, and NEW prose. Validator accepts it.
+    // Mock LLM: produces a page with owner=generated, full closed-list
+    // coverage, and NEW prose. Validator accepts it.
     // Manual blocks are NOT included (LLM never writes manual blocks
     // per rule #6). The orchestrator must inject them in the final
     // write, AND force owner back to "mixed" (reviewer revision P0-2).
@@ -189,6 +190,7 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
         "owner: generated",
         "anchors:",
         "  - src/auth/login.ts#login",
+        "  - src/auth/login.ts#logout",
         "---",
         "",
         "## Login",
@@ -739,7 +741,7 @@ describe("review #5 — pricing override is preserved in repairs (not just the i
     // Repair 1: correct anchor → valid
     llm.responses = [
       "---\ntitle: t\nowner: generated\nanchors:\n  - bad-key\n---\n# t\n",
-      "---\ntitle: t\nowner: generated\nanchors:\n  - src/auth/login.ts#login\n---\n# t\n",
+      "---\ntitle: t\nowner: generated\nanchors:\n  - src/auth/login.ts#login\n  - src/auth/login.ts#logout\n---\n# t\n",
     ];
 
     const result = await runBatch({
@@ -907,6 +909,7 @@ describe("review #7a — validator rejects when LLM invents a <!-- lw:manual -->
       "",
     ].join("\n");
 
+    // Closed list matches the single declared anchor — rejection is for manual only.
     const result = validateStage4Artifact(artifact, ["src/auth/login.ts#login"]);
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.code === "model_invented_manual")).toBe(true);
@@ -924,6 +927,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "owner: generated",
       "anchors:",
       "  - src/auth/login.ts#login",
+      "  - src/auth/login.ts#logout",
       "---",
       "",
       "## First section",
@@ -945,6 +949,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "owner: generated",
       "anchors:",
       "  - src/auth/login.ts#login",
+      "  - src/auth/login.ts#logout",
       "---",
       "",
       "## First section",
@@ -993,6 +998,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "owner: generated",
       "anchors:",
       "  - src/auth/login.ts#login",
+      "  - src/auth/login.ts#logout",
       "---",
       "",
       "## Removed section",
@@ -1008,6 +1014,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "owner: generated",
       "anchors:",
       "  - src/auth/login.ts#login",
+      "  - src/auth/login.ts#logout",
       "---",
       "",
       "## Totally different section",
@@ -1043,6 +1050,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "owner: generated",
       "anchors:",
       "  - src/auth/login.ts#login",
+      "  - src/auth/login.ts#logout",
       "---",
       "",
       "## Repeated section",
@@ -1070,6 +1078,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "owner: generated",
       "anchors:",
       "  - src/auth/login.ts#login",
+      "  - src/auth/login.ts#logout",
       "---",
       "",
       "## Repeated section",
