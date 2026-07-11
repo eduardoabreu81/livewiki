@@ -291,3 +291,52 @@ describe("config X — maxRepairAttempts", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/maxRepairAttempts/);
   });
 });
+
+describe("config — timeoutMs", () => {
+  it("applyDefaults uses 300_000 when timeoutMs absent", async () => {
+    const { applyDefaults, CONFIG_DEFAULTS } = await import("./config.js");
+    expect(CONFIG_DEFAULTS.timeoutMs).toBe(300_000);
+    const d = applyDefaults({});
+    expect(d.timeoutMs).toBe(300_000);
+  });
+
+  it("loadConfig accepts configured timeoutMs including 0", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "openai-compat",
+        model: "MiniMax-M3",
+        timeoutMs: 0,
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.timeoutMs).toBe(0);
+  });
+
+  it("loadConfig REJECTS negative timeoutMs", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "openai-compat",
+        model: "x",
+        timeoutMs: -1,
+      }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/timeoutMs/);
+  });
+
+  it("loadConfig REJECTS non-integer timeoutMs", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "openai-compat",
+        model: "x",
+        timeoutMs: 1.5,
+      }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/timeoutMs/);
+  });
+});

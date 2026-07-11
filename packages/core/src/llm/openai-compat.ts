@@ -10,7 +10,7 @@
 
 import type { LlmClient } from "./index.js";
 import type { GenerateRequest, GenerateResult, ThinkingMode } from "./types.js";
-import { type AdapterConfig, requestWithRetry } from "./base.js";
+import { type AdapterConfig, requestWithRetry, withTimeoutMs } from "./base.js";
 
 export interface OpenAiCompatAdapterOpts {
   apiKey: string;
@@ -19,6 +19,7 @@ export interface OpenAiCompatAdapterOpts {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   maxRetries?: number;
+  retryDelayMs?: number;
   /** Default thinking when request does not set it. */
   thinkingDefault?: ThinkingMode | "n/a";
   preferMaxCompletionTokens?: boolean;
@@ -44,8 +45,12 @@ export class OpenAiCompatAdapter implements LlmClient {
       baseUrl: opts.baseUrl,
       model: opts.model,
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
-      ...(opts.maxRetries ? { maxRetries: opts.maxRetries } : {}),
+      // Preserve timeoutMs: 0 (disable); never use truthy spread.
+      ...withTimeoutMs(opts.timeoutMs),
+      ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
+      ...(opts.retryDelayMs !== undefined
+        ? { retryDelayMs: opts.retryDelayMs }
+        : {}),
     };
   }
 

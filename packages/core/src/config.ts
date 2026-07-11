@@ -95,6 +95,36 @@ export interface LivewikiConfig {
    * Default: derived from preset / MiniMax model heuristic.
    */
   thinking?: "disabled" | "adaptive" | "omit";
+  /**
+   * Per-attempt LLM HTTP timeout in milliseconds (client/provider level).
+   * - omitted → 300_000 (5 min) at the adapter
+   * - 0 → disable client abort (local providers may use 900_000)
+   * - integer in 0..MAX_TIMEOUT_MS (2_147_483_647, Node setTimeout safe max)
+   * Timeouts do not auto-retry; usage for timed-out attempts is unknown.
+   */
+  timeoutMs?: number;
+}
+
+/** Max safe timeout for Node `setTimeout` (signed 32-bit ms). */
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * Validate timeoutMs for config load and programmatic createLlmClient paths.
+ * Accepts only integers in [0, MAX_TIMEOUT_MS].
+ */
+export function assertValidTimeoutMs(v: unknown): asserts v is number {
+  if (
+    typeof v !== "number" ||
+    !Number.isInteger(v) ||
+    v < 0 ||
+    v > MAX_TIMEOUT_MS
+  ) {
+    throw new Error(
+      `invalid timeoutMs: must be an integer 0..${MAX_TIMEOUT_MS} ` +
+        `(0 disables timeout; upper bound is Node setTimeout safe max), ` +
+        `got ${JSON.stringify(v)}`,
+    );
+  }
 }
 
 /** Defaults applied at runtime, NOT written into the config file. */
@@ -117,6 +147,11 @@ export const CONFIG_DEFAULTS = {
   /** Structural split thresholds for oversized modules. */
   maxModuleFiles: 12,
   maxModuleSymbols: 80,
+  /**
+   * Default LLM HTTP timeout (ms). Applied when config omits timeoutMs.
+   * Local providers may set 900_000; 0 disables the abort timer.
+   */
+  timeoutMs: 300_000,
 } as const;
 
 /**
@@ -203,6 +238,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     stage4MaxOutputTokens: CONFIG_DEFAULTS.stage4MaxOutputTokens,
     maxModuleFiles: CONFIG_DEFAULTS.maxModuleFiles,
     maxModuleSymbols: CONFIG_DEFAULTS.maxModuleSymbols,
+    timeoutMs: CONFIG_DEFAULTS.timeoutMs,
     ...config,
   };
 }
@@ -219,6 +255,10 @@ export function validateConfigForBatch(repoRoot: string, config: LivewikiConfig)
   if (!config.model) missing.push("model");
   if (missing.length > 0) {
     throw new MissingProviderConfigError(repoRoot, missing);
+  }
+  // Programmatic callers may skip loadConfig — still reject invalid timeoutMs.
+  if (config.timeoutMs !== undefined) {
+    assertValidTimeoutMs(config.timeoutMs);
   }
 }
 
@@ -336,6 +376,10 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       );
     }
     out.thinking = v;
+  }
+  if (obj["timeoutMs"] !== undefined) {
+    assertValidTimeoutMs(obj["timeoutMs"]);
+    out.timeoutMs = obj["timeoutMs"] as number;
   }
   return out;
 }

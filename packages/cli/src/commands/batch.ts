@@ -126,7 +126,11 @@ export function registerBatch(program: Command): void {
     });
 }
 
-function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string {
+/** Shared incomplete-usage note (status + result human output). */
+export const USAGE_INCOMPLETE_NOTE =
+  "Note: totals are incomplete — some attempts have unknown usage. Prefer proxy/provider billing for wire cost.";
+
+export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string {
   // Token-first (ad87319): tokens are the primary metric, USD is secondary
   // and omitted without drama when no pricing exists. Each stage/module line
   // starts with tokens; USD appears as a separate "estimated" line.
@@ -143,6 +147,9 @@ function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>
     `  Total:        ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output` +
       (t.models.length > 0 ? `  (${t.models.join(", ")})` : ""),
   );
+  if (t.usageIncomplete) {
+    lines.push(`  ${USAGE_INCOMPLETE_NOTE}`);
+  }
   for (const [stage, u] of Object.entries(report.byStage)) {
     lines.push(
       `  Stage ${stage}:      ${u.inputTokens.toLocaleString()} input + ${u.outputTokens.toLocaleString()} output`,
@@ -186,7 +193,7 @@ function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>
   return lines.join("\n");
 }
 
-function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string {
+export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string {
   // Token-first (ad87319): totals tokens first, USD estimated in a
   // secondary line when pricing exists.
   const lines: string[] = [];
@@ -196,10 +203,17 @@ function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string
     `  tokens: ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output` +
       (t.models.length > 0 ? `  (${t.models.join(", ")})` : ""),
   );
+  if (t.usageIncomplete) {
+    lines.push(`  ${USAGE_INCOMPLETE_NOTE}`);
+  }
   if (t.costUsd !== null) {
     lines.push(`  USD (estimated): $${t.costUsd.toFixed(4)}`);
-  } else if (t.inputTokens + t.outputTokens > 0) {
-    lines.push(`  USD: omitted (model without pricing)`);
+  } else if (t.inputTokens + t.outputTokens > 0 || t.usageIncomplete) {
+    lines.push(
+      t.usageIncomplete
+        ? `  USD: unknown/incomplete (observed totals only)`
+        : `  USD: omitted (model without pricing)`,
+    );
   }
   lines.push(`  tasks done: ${result.byModule.length}`);
   lines.push(`  failures: ${result.failures.length}`);

@@ -259,6 +259,26 @@ disable thinking/reasoning for documentation, livewiki disables it by default**
 (e.g. MiniMax-M3 Chat Completions: `thinking: { "type": "disabled" }` — omitting
 the field enables thinking on that API).
 
+**LLM HTTP timeout** (client/provider level, not stage-specific) is controlled
+by `timeoutMs` in `.livewiki/config.json`:
+
+- default **300_000** ms (5 minutes) when omitted;
+- **0** disables the client abort timer (local providers may set e.g. **900_000**);
+- must be a non-negative integer (negatives / non-integers rejected at load);
+- on client timeout (`AbortError`), livewiki **does not** automatically retry
+  the same generation at the adapter **or** in the stage-4 repair loop
+  (provider state is unknown and may still bill); the task fails with
+  `llm_timeout` and the run may continue other modules;
+- HTTP **429** and **5xx** remain retryable under `maxRetries`;
+- any `generate()` that throws **without** returning provider usage records
+  **usage unknown** (`usage: null`, `usageKnown: false`) — including timeouts
+  and network errors after the request may have been sent; this is **not**
+  cost zero and must not invent models like `(no usage)`;
+- known batch totals are **observed values only** and may be **incomplete**
+  (`usageIncomplete`); human status/result output warns when incomplete;
+  **proxy or provider billing** is authoritative for wire cost;
+- `timeoutMs` must be an integer in `0..2147483647` (Node `setTimeout` safe max).
+
 Candidate writes are transactional. Before retry or final failure, livewiki
 restores an existing page byte-for-byte or removes a newly-created page through
 the safe-I/O allowlist. No invalid candidate remains on disk. Ownership rules for

@@ -83,13 +83,14 @@ export async function buildStatusReport(
     for (const t of taskRows) {
       const cp = t.checkpoint_json ? safeJsonParse<TaskCheckpoint>(t.checkpoint_json) : null;
       const stageUsage = aggregateUsageFromCheckpoint(cp);
-      // Total
+      // Total (known usage only; incomplete flag propagates)
       totals.inputTokens += stageUsage.inputTokens;
       totals.outputTokens += stageUsage.outputTokens;
       totals.costUsd =
         totals.costUsd === null || stageUsage.costUsd === null
           ? (totals.costUsd ?? stageUsage.costUsd)
           : totals.costUsd + stageUsage.costUsd;
+      if (stageUsage.usageIncomplete) totals.usageIncomplete = true;
       // By stage
       const stageKey = String(t.stage);
       const prev = byStage[stageKey] ?? emptyStageUsage();
@@ -109,6 +110,7 @@ export async function buildStatusReport(
         inputTokens: stageUsage.inputTokens,
         outputTokens: stageUsage.outputTokens,
         costUsd: stageUsage.costUsd,
+        ...(stageUsage.usageIncomplete ? { usageIncomplete: true } : {}),
         ...(cp?.error ? { error: cp.error } : {}),
         retryCommand: `livewiki batch --only ${t.target} ${run.id}`,
       });
@@ -189,33 +191,70 @@ export async function listRuns(repoRoot: string): Promise<Array<{
 }
 
 function emptyStageUsage(): StageUsage {
-  return { inputTokens: 0, outputTokens: 0, costUsd: null, models: [] };
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: null,
+    models: [],
+    usageIncomplete: false,
+  };
 }
 
 function aggregateUsageFromCheckpoint(cp: TaskCheckpoint | null): StageUsage {
   if (!cp) return emptyStageUsage();
   let input = 0;
   let output = 0;
-  let cost: number | null = 0;
+  /** null until first known attempt; null cost on that attempt stays null. */
+  let cost: number | null = null;
+  let sawKnownAttempt = false;
+  let sawPricedAttempt = false;
+  let usageIncomplete = false;
   const models = new Set<string>();
   for (const attempt of cp.usageHistory) {
-    input += attempt.usage.inputTokens;
-    output += attempt.usage.outputTokens;
-    models.add(attempt.usage.model);
-    if (attempt.costUsd === null) {
+    // Legacy: omit usageKnown but present usage object → known.
+    // Malformed: missing usage → unknown (do not crash status).
+    const known =
+      attempt.usage != null &&
+      typeof attempt.usage === "object" &&
+      (attempt.usageKnown !== false);
+    if (!known) {
+      usageIncomplete = true;
+      continue;
+    }
+    sawKnownAttempt = true;
+    input += attempt.usage!.inputTokens;
+    output += attempt.usage!.outputTokens;
+    models.add(attempt.usage!.model);
+    if (attempt.costUsd !== null && attempt.costUsd !== undefined) {
+      if (!sawPricedAttempt) {
+        cost = attempt.costUsd.total;
+        sawPricedAttempt = true;
+      } else if (cost !== null) {
+        cost += attempt.costUsd.total;
+      }
+    } else {
+      // Known usage without price → overall cost unknown (existing policy).
       cost = null;
-    } else if (cost !== null) {
-      cost += attempt.costUsd.total;
+      sawPricedAttempt = true;
     }
   }
-  if (cp.usageHistory.length === 0) {
-    cost = null;
+  // No known attempts at all (timeout-only, empty history): costUsd must be
+  // null, never a synthetic 0.
+  if (!sawKnownAttempt) {
+    return {
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: null,
+      models: [],
+      usageIncomplete: usageIncomplete || (cp.usageHistory?.length ?? 0) > 0,
+    };
   }
   return {
     inputTokens: input,
     outputTokens: output,
     costUsd: cost,
     models: [...models],
+    usageIncomplete,
   };
 }
 
@@ -229,6 +268,7 @@ function mergeStageUsage(a: StageUsage, b: StageUsage): StageUsage {
     outputTokens: a.outputTokens + b.outputTokens,
     costUsd,
     models: [...new Set([...a.models, ...b.models])],
+    usageIncomplete: Boolean(a.usageIncomplete || b.usageIncomplete),
   };
 }
 

@@ -25,7 +25,7 @@
 
 import type { LlmClient } from "./index.js";
 import type { GenerateRequest, GenerateResult } from "./types.js";
-import { type AdapterConfig, requestWithRetry } from "./base.js";
+import { type AdapterConfig, requestWithRetry, withTimeoutMs } from "./base.js";
 
 export class AnthropicAdapter implements LlmClient {
   public readonly provider = "anthropic" as const;
@@ -43,8 +43,8 @@ export class AnthropicAdapter implements LlmClient {
       baseUrl: opts.baseUrl,
       model: opts.model,
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
-      ...(opts.maxRetries ? { maxRetries: opts.maxRetries } : {}),
+      ...withTimeoutMs(opts.timeoutMs),
+      ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
     };
   }
 

@@ -52,6 +52,7 @@ export interface LlmClient {
  *   - env var da API key ausente (resolveProviderFromConfig + MissingApiKeyError)
  */
 export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient {
+  // Validates provider/model and timeoutMs (even when not from loadConfig).
   validateConfigForBatch(repoRoot, config);
   // Após validateConfigForBatch, provider/preset e model são garantidos string.
   const resolved = resolveProviderFromConfig(config);
@@ -65,8 +66,13 @@ export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmCl
     throw new MissingApiKeyError(resolved.adapter, resolved.envVar);
   }
 
+  // Client/provider timeout from config (default applied in requestWithRetry).
+  // Use explicit undefined checks so timeoutMs: 0 (disable) is preserved.
+  const timeoutOpts =
+    config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {};
+
   if (resolved.adapter === "anthropic") {
-    return new AnthropicAdapter({ apiKey, baseUrl, model });
+    return new AnthropicAdapter({ apiKey, baseUrl, model, ...timeoutOpts });
   }
   // openai-compat — pass preset defaults for thinking / token field name
   return new OpenAiCompatAdapter({
@@ -75,6 +81,7 @@ export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmCl
     model,
     thinkingDefault: resolved.thinkingDefault,
     preferMaxCompletionTokens: resolved.preferMaxCompletionTokens,
+    ...timeoutOpts,
   });
 }
 
@@ -116,5 +123,7 @@ export class LlmRequestError extends Error {
     this.errorBody = errorBody;
   }
 }
+
+export { LlmTimeoutError, DEFAULT_LLM_TIMEOUT_MS } from "./base.js";
 
 export type { GenerateRequest, GenerateResult, LlmUsage } from "./types.js";

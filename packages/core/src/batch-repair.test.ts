@@ -27,6 +27,7 @@ import * as nodeFs from "node:fs/promises";
 import { runBatch } from "./batch.js";
 import * as safeIo from "./safe-io.js";
 import type { LlmClient } from "./llm/index.js";
+import { LlmTimeoutError } from "./llm/index.js";
 import type { GenerateResult } from "./llm/types.js";
 
 /**
@@ -583,20 +584,244 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
         .get("auth") as { checkpoint_json: string | null };
       const cp = JSON.parse(task.checkpoint_json!) as {
         status: string;
-        usageHistory: Array<{ usage: { inputTokens: number; model: string } }>;
+        usageHistory: Array<{
+          usage: { inputTokens: number; model: string } | null;
+          usageKnown: boolean;
+          costUsd: { total: number } | null;
+        }>;
       };
       expect(cp.status).toBe("done");
       expect(cp.usageHistory).toHaveLength(2);
-      // 1st entry: zero-usage (LLM threw)
-      expect(cp.usageHistory[0]?.usage.inputTokens).toBe(0);
-      expect(cp.usageHistory[0]?.usage.model).toBe("(no usage)");
+      // 1st entry: generate threw without usage → unknown (not fake 0/0 model)
+      expect(cp.usageHistory[0]?.usageKnown).toBe(false);
+      expect(cp.usageHistory[0]?.usage).toBeNull();
+      expect(cp.usageHistory[0]?.costUsd).toBeNull();
       // 2nd entry: real usage (LLM returned)
-      expect(cp.usageHistory[1]?.usage.inputTokens).toBeGreaterThan(0);
-      expect(cp.usageHistory[1]?.usage.model).toBe("claude-test-mock");
+      expect(cp.usageHistory[1]?.usageKnown).toBe(true);
+      expect(cp.usageHistory[1]?.usage?.inputTokens).toBeGreaterThan(0);
+      expect(cp.usageHistory[1]?.usage?.model).toBe("claude-test-mock");
     } finally {
       db.close();
     }
 
     expect(result.status).toBe("completed");
+    expect(result.totals.usageIncomplete).toBe(true);
+    expect(result.totals.models).not.toContain("(call failed)");
+    expect(result.totals.models).not.toContain("(no usage)");
+  });
+});
+
+describe("batch — llm_timeout is terminal (no repair loop)", () => {
+  let repoRoot: string;
+  let llm: ProgrammableMockLlm;
+
+  beforeEach(async () => {
+    repoRoot = await nodeFs.mkdtemp(
+      nodePath.join(nodeOs.tmpdir(), "livewiki-timeout-"),
+    );
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src/auth"), { recursive: true });
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src/utils"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/auth/login.ts"),
+      "export function login() { return 1; }\n",
+      "utf8",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/utils/help.ts"),
+      "export function help() { return 2; }\n",
+      "utf8",
+    );
+    llm = new ProgrammableMockLlm();
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("LlmTimeoutError: one call, failed llm_timeout, no repair, unknown usage; other modules continue", async () => {
+    // First stage-4 module times out; second succeeds (order depends on prioritize).
+    let n = 0;
+    llm.generate = async (req) => {
+      llm.callLog.push({ system: req.system, user: req.user });
+      const idx = n++;
+      llm.callCount = n;
+      if (idx === 0) {
+        throw new LlmTimeoutError("openai-compat", 300_000);
+      }
+      // Valid page for whatever module is second
+      const closedKeys: string[] = [];
+      for (const line of req.user.split("\n")) {
+        const m = /^- (\S+)$/.exec(line);
+        if (m?.[1]) closedKeys.push(m[1]);
+      }
+      return {
+        content: makeValidPage(closedKeys.length ? closedKeys : ["src/utils/help.ts#help"]),
+        usage: { inputTokens: 100, outputTokens: 50, model: llm.model },
+      };
+    };
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    // Only one call for the timeout module + one for the success module = 2
+    // (timeout must NOT burn maxRepairAttempts+1 = 3)
+    expect(llm.callCount).toBe(2);
+    expect(result.status).toBe("completed_with_failures");
+    expect(result.failures.some((f) => f.error.code === "llm_timeout")).toBe(
+      true,
+    );
+    // No repair prompt (repair prompts mention "repair" / prior candidate structure)
+    const repairish = llm.callLog.filter((c) =>
+      /repair|prior candidate|Previous candidate/i.test(c.user + c.system),
+    );
+    expect(repairish).toHaveLength(0);
+
+    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const failed = db
+        .prepare(
+          "SELECT target, status, checkpoint_json FROM batch_tasks WHERE stage = 4 AND status = 'failed'",
+        )
+        .all() as Array<{ target: string; status: string; checkpoint_json: string }>;
+      expect(failed).toHaveLength(1);
+      const cp = JSON.parse(failed[0]!.checkpoint_json) as {
+        status: string;
+        attempt: number;
+        error?: { code: string; message: string };
+        usageHistory: Array<{
+          usage: unknown;
+          usageKnown: boolean;
+          attempt: number;
+        }>;
+      };
+      expect(cp.status).toBe("failed");
+      expect(cp.error?.code).toBe("llm_timeout");
+      expect(cp.error?.message).toMatch(/unknown|bill|timeout/i);
+      expect(cp.attempt).toBe(1);
+      expect(cp.usageHistory).toHaveLength(1);
+      expect(cp.usageHistory[0]!.usageKnown).toBe(false);
+      expect(cp.usageHistory[0]!.usage).toBeNull();
+      expect(cp.usageHistory[0]!.attempt).toBe(1);
+
+      const done = db
+        .prepare(
+          "SELECT COUNT(*) as c FROM batch_tasks WHERE stage = 4 AND status = 'done'",
+        )
+        .get() as { c: number };
+      expect(done.c).toBe(1);
+    } finally {
+      db.close();
+    }
+
+    // Totals incomplete when timeout present
+    expect(result.totals.usageIncomplete).toBe(true);
+    expect(result.totals.inputTokens).toBe(100); // only known success
+    expect(result.totals.outputTokens).toBe(50);
+    expect(result.totals.models).not.toContain("(no usage)");
+    expect(result.totals.models).not.toContain("(call failed)");
+
+    // Status rebuild: timeout-only task has costUsd null (never 0)
+    const { buildStatusReport } = await import("./batch-status.js");
+    const report = await buildStatusReport(repoRoot);
+    expect(report.totals.usageIncomplete).toBe(true);
+    const failedTask = report.tasks.find((t) => t.error?.code === "llm_timeout");
+    expect(failedTask).toBeDefined();
+    expect(failedTask!.inputTokens).toBe(0);
+    expect(failedTask!.outputTokens).toBe(0);
+    expect(failedTask!.costUsd).toBeNull();
+    expect(failedTask!.usageIncomplete).toBe(true);
+    // Successful module still has known tokens
+    const doneTask = report.tasks.find((t) => t.status === "done" && t.stage === 4);
+    expect(doneTask!.inputTokens).toBe(100);
+    expect(report.totals.inputTokens).toBe(100);
+  });
+
+  it("network failure without usage → usage null / usageKnown false / incomplete", async () => {
+    llm.throwOn = new Set([0]);
+    llm.responses = [makeValidPage(["src/auth/login.ts#login"])];
+    // single module only
+    await nodeFs.rm(nodePath.join(repoRoot, "src/utils"), {
+      recursive: true,
+      force: true,
+    });
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0, // one attempt only so task fails on network
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db
+        .prepare(
+          "SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND status = 'failed'",
+        )
+        .get() as { checkpoint_json: string };
+      const cp = JSON.parse(row.checkpoint_json) as {
+        error?: { code: string };
+        usageHistory: Array<{
+          usage: unknown;
+          usageKnown: boolean;
+          costUsd: unknown;
+        }>;
+      };
+      expect(cp.error?.code).toBe("repair_exhausted"); // maxRepairAttempts 0 → one fail
+      expect(cp.usageHistory[0]!.usageKnown).toBe(false);
+      expect(cp.usageHistory[0]!.usage).toBeNull();
+      expect(cp.usageHistory[0]!.costUsd).toBeNull();
+    } finally {
+      db.close();
+    }
+    expect(result.totals.usageIncomplete).toBe(true);
+    expect(result.totals.costUsd).toBeNull();
+    expect(result.totals.models).not.toContain("(call failed)");
+    expect(result.totals.models).toEqual([]);
+  });
+
+  it("timeout-only status rebuild: costUsd null never 0", async () => {
+    await nodeFs.rm(nodePath.join(repoRoot, "src/utils"), {
+      recursive: true,
+      force: true,
+    });
+    llm.generate = async (req) => {
+      llm.callLog.push({ system: req.system, user: req.user });
+      llm.callCount++;
+      throw new LlmTimeoutError("openai-compat", 300_000);
+    };
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+    expect(llm.callCount).toBe(1);
+
+    const { buildStatusReport } = await import("./batch-status.js");
+    const report = await buildStatusReport(repoRoot);
+    const t4 = report.byStage["4"];
+    expect(t4).toBeDefined();
+    expect(t4!.inputTokens).toBe(0);
+    expect(t4!.outputTokens).toBe(0);
+    expect(t4!.costUsd).toBeNull();
+    expect(t4!.models).toEqual([]);
+    expect(t4!.usageIncomplete).toBe(true);
+    expect(report.totals.costUsd).toBeNull();
+    expect(report.totals.usageIncomplete).toBe(true);
+    const failed = report.tasks.find((t) => t.stage === 4 && t.status === "failed");
+    expect(failed?.error?.code).toBe("llm_timeout");
   });
 });

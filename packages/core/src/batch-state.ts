@@ -44,10 +44,17 @@ export interface CostUsd {
 /**
  * Uma tentativa (attempt) dentro do histórico de usage de uma task.
  * Cada retry empilha um novo item aqui — o reporte agrega a soma.
+ *
+ * When `usageKnown` is false (e.g. client timeout), `usage` is null and
+ * aggregators must not treat the attempt as zero-token real usage. Wire/cost
+ * may still exist at the provider; totals are incomplete.
  */
 export interface UsageAttempt {
   attempt: number;
-  usage: LlmUsage;
+  /** Known usage from a completed response; null when unknown (timeout). */
+  usage: LlmUsage | null;
+  /** false ⇒ usage is null; do not invent 0/0 tokens. */
+  usageKnown: boolean;
   costUsd: CostUsd | null;
   finishedAt: number;
 }
@@ -98,6 +105,11 @@ export interface StageUsage {
   costUsd: number | null;
   /** Models distintos usados nesse stage (pra debugging de drift). */
   models: string[];
+  /**
+   * True if any attempt had unknown usage (e.g. llm_timeout). Known token
+   * totals then under-report wire cost; prefer proxy/provider billing.
+   */
+  usageIncomplete?: boolean;
 }
 
 /** Item do reporte `byModule` (agregado por task stage=4 agrupado por módulo). */
@@ -115,6 +127,8 @@ export interface TaskReportItem {
   inputTokens: number;
   outputTokens: number;
   costUsd: number | null;
+  /** True if this task had attempts with unknown usage. */
+  usageIncomplete?: boolean;
   error?: TaskError;
   /** Comando pronto pra retry: `livewiki batch --only <target> <runId>` */
   retryCommand: string;

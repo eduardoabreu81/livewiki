@@ -51,7 +51,7 @@ import {
   type Module,
 } from "./modules.js";
 import { collectImports } from "./imports.js";
-import { createLlmClient, type LlmClient } from "./llm/index.js";
+import { createLlmClient, LlmTimeoutError, type LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult } from "./llm/types.js";
 import { loadConfig, applyDefaults, validateConfigForBatch } from "./config.js";
 import { calculateCostUsd, lookupPricing } from "./pricing.js";
@@ -269,6 +269,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           usageHistory.push({
             attempt,
             usage: result.usage,
+            usageKnown: true,
             costUsd: cost,
             finishedAt: Date.now(),
           });
@@ -440,6 +441,10 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         let cost: number | null = 0;
         const models = new Set<string>();
         for (const a of cp2.usageHistory) {
+          if (a.usageKnown === false || a.usage === null) {
+            stage2UsageAcc.usageIncomplete = true;
+            continue;
+          }
           stage2UsageAcc.inputTokens += a.usage.inputTokens;
           stage2UsageAcc.outputTokens += a.usage.outputTokens;
           models.add(a.usage.model);
@@ -538,22 +543,29 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           usageHistory.push(attemptResult.usageEntry);
           moduleUsageEntry = accumulateUsage(
             moduleUsageEntry,
-            attemptResult.usageEntry.usage,
-            attemptResult.usageEntry.costUsd,
+            attemptResult.usageEntry,
             resolvedConfig.pricing,
           );
           stageUsageTotals = accumulateUsage(
             stageUsageTotals,
-            attemptResult.usageEntry.usage,
-            attemptResult.usageEntry.costUsd,
+            attemptResult.usageEntry,
             resolvedConfig.pricing,
           );
 
           if (attemptResult.llmError) {
-            // LLM call failed (network, 5xx, etc). We record zero-usage,
-            // and if there are still attempts, the next attempt makes the call
-            // again from scratch (no prior candidate). Otherwise,
-            // task fails.
+            // Client timeout: terminal for this task — no repair, no second
+            // generation (provider state unknown; may still bill).
+            if (attemptResult.llmError.code === "llm_timeout") {
+              taskError = {
+                code: "llm_timeout",
+                message: attemptResult.llmError.message,
+                failedAt: 4,
+              };
+              attemptDone = true;
+              break;
+            }
+            // Other LLM failures (network, 5xx, etc): record and allow
+            // another attempt within the bounded loop when attempts remain.
             priorCandidate = "";
             priorErrors = [
               {
@@ -611,12 +623,12 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           }
         }
 
-        if (!attemptDone) {
+        if (!attemptDone && !taskError) {
           // Review finding #10: repair_exhausted PRESERVES the last
           // structured diagnostic (validation errors or verify issues)
           // so the operator knows exactly what failed. Without this,
           // the report only said "exhausted N calls" and the user had to
-          // look at raw logs.
+          // look at raw logs. Skip if taskError already set (e.g. llm_timeout).
           const lastError = priorErrors[0];
           const lastDetail = lastError
             ? `[${lastError.code}] ${lastError.message}` +
@@ -808,7 +820,13 @@ class TaskError extends Error {
 }
 
 function emptyUsage(): StageUsage {
-  return { inputTokens: 0, outputTokens: 0, costUsd: null, models: [] };
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: null,
+    models: [],
+    usageIncomplete: false,
+  };
 }
 
 /** Soma dois StageUsage (lida com costUsd null = "desconhecido"). */
@@ -822,28 +840,43 @@ function aggregateTotals(a: StageUsage, b: StageUsage): StageUsage {
     outputTokens: a.outputTokens + b.outputTokens,
     costUsd,
     models: [...new Set([...a.models, ...b.models])],
+    usageIncomplete: Boolean(a.usageIncomplete || b.usageIncomplete),
   };
 }
 
+/**
+ * Accumulate known usage only. Unknown attempts (timeout) set
+ * usageIncomplete and do not invent zero tokens.
+ */
 function accumulateUsage(
   acc: StageUsage,
-  usage: { inputTokens: number; outputTokens: number; model: string },
-  cost: ReturnType<typeof calculateCostUsd>,
-  override: Parameters<typeof calculateCostUsd>[3],
+  entry: Pick<UsageAttempt, "usage" | "usageKnown" | "costUsd">,
+  _pricingOverride: Parameters<typeof calculateCostUsd>[3],
 ): StageUsage {
-  const newAcc: StageUsage = {
+  if (!entry.usageKnown || entry.usage === null) {
+    return {
+      ...acc,
+      usageIncomplete: true,
+      // Incomplete wire work: keep known cost sum but flag incompleteness.
+      costUsd: acc.costUsd,
+    };
+  }
+  const usage = entry.usage;
+  const costTotal = entry.costUsd?.total ?? null;
+  return {
     inputTokens: acc.inputTokens + usage.inputTokens,
     outputTokens: acc.outputTokens + usage.outputTokens,
-    costUsd: acc.costUsd === null
-      ? cost?.total ?? null
-      : cost === null
-        ? acc.costUsd
-        : acc.costUsd + cost.total,
+    costUsd:
+      acc.costUsd === null
+        ? costTotal
+        : costTotal === null
+          ? acc.costUsd
+          : acc.costUsd + costTotal,
     models: acc.models.includes(usage.model)
       ? acc.models
       : [...acc.models, usage.model],
+    usageIncomplete: Boolean(acc.usageIncomplete),
   };
-  return newAcc;
 }
 
 function getOrCreateTask(
@@ -1535,18 +1568,43 @@ async function attemptStage4Generation(
     raw = result.content;
     usage = result.usage;
   } catch (err) {
+    // Typed timeout: usage unknown (provider may still bill). No fake 0/0 model.
+    if (err instanceof LlmTimeoutError) {
+      return {
+        usageEntry: {
+          attempt: opts.attemptNumber,
+          usage: null,
+          usageKnown: false,
+          costUsd: null,
+          finishedAt: Date.now(),
+        },
+        normalizedRaw: "",
+        artifact: null,
+        validationErrors: [],
+        llmError: {
+          code: "llm_timeout",
+          message: err.message,
+        },
+      };
+    }
     const e = err as Error;
+    // Any generate() throw without provider usage → usage unknown (request
+    // may have been sent; provider may still bill). Not fake 0/0 models.
     return {
       usageEntry: {
         attempt: opts.attemptNumber,
-        usage: { inputTokens: 0, outputTokens: 0, model: "(no usage)" },
+        usage: null,
+        usageKnown: false,
         costUsd: null,
         finishedAt: Date.now(),
       },
       normalizedRaw: "",
       artifact: null,
       validationErrors: [],
-      llmError: { code: "llm_call_failed", message: e.message },
+      llmError: {
+        code: "llm_call_failed",
+        message: e.message,
+      },
     };
   }
 
@@ -1562,6 +1620,7 @@ async function attemptStage4Generation(
       usageEntry: {
         attempt: opts.attemptNumber,
         usage,
+        usageKnown: true,
         costUsd: cost,
         finishedAt: Date.now(),
       },
@@ -1579,6 +1638,7 @@ async function attemptStage4Generation(
       usageEntry: {
         attempt: opts.attemptNumber,
         usage,
+        usageKnown: true,
         costUsd: cost,
         finishedAt: Date.now(),
       },
@@ -1593,6 +1653,7 @@ async function attemptStage4Generation(
     usageEntry: {
       attempt: opts.attemptNumber,
       usage,
+      usageKnown: true,
       costUsd: cost,
       finishedAt: Date.now(),
     },
