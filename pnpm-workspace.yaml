@@ -3,7 +3,7 @@ packages:
 
 allowBuilds:
   better-sqlite3: true
-  esbuild: set this to true or false
+  esbuild: true
   tree-sitter-cli: true
   tree-sitter-javascript: true
   tree-sitter-python: true
@@ -12,10 +12,3 @@ allowBuilds:
 # Fase 0: apenas `core` e `cli`. `packages/mcp` entra na Fase 4 (especificação
 # de MCP server) — não antecipar. Decisão alinhada com SPEC.md:
 # "se simplificar, começar single-package e extrair depois é aceitável".
-
-# Libera o postinstall do esbuild (vitest depende do binário compilado).
-# Em pnpm 11, build scripts são bloqueados por default; esta whitelist é o
-# caminho canônico. Ver https://pnpm.io/settings#onlybuiltdependencies
-onlyBuiltDependencies:
-  - esbuild
-  - better-sqlite3
