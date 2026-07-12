@@ -1,6 +1,6 @@
 {
   "note": "T0 offline inventory via real runInit({ plan: true }) on a disposable copy of the working tree (walker + parser + AST symbols + config + planner). Not a synthetic 1-symbol-per-file walk. No LLM. Partition is audited against plan.filePaths (symbol-bearing inventory), matching batch.",
-  "generatedAt": "2026-07-11T13:00:43.087Z",
+  "generatedAt": "2026-07-12T20:05:50.014Z",
   "method": {
     "entrypoint": "runInit({ plan: true, quiet: true })",
     "disposableRootNote": "removed after run; recreate with this script",
@@ -24,18 +24,18 @@
     }
   },
   "inventory": {
-    "totalPlanFiles": 70,
-    "totalActiveSymbols": 366,
-    "totalFilesTableActive": 99,
-    "filesWithZeroSymbols": 29,
-    "filesNotInPlanInventory": 29,
+    "totalPlanFiles": 74,
+    "totalActiveSymbols": 402,
+    "totalFilesTableActive": 107,
+    "filesWithZeroSymbols": 33,
+    "filesNotInPlanInventory": 33,
     "extensionsPlan": {
-      ".mjs": 2,
-      ".ts": 68
+      ".mjs": 3,
+      ".ts": 71
     },
     "extensionsFilesTable": {
-      ".mjs": 4,
-      ".ts": 94,
+      ".mjs": 6,
+      ".ts": 100,
       ".py": 1
     },
     "includesMjsInPlan": true,
@@ -47,18 +47,19 @@
     "partitionError": null,
     "uniqueModuleIds": true,
     "uniqueError": null,
-    "moduleCount": 12,
+    "moduleCount": 13,
     "duplicateIds": [],
     "legacySrcFilePattern": [],
     "maxFilesInModule": 12,
-    "maxSymbolsInModule": 74,
+    "maxSymbolsInModule": 78,
     "unsplittableCount": 0,
     "oneFileCount": 4,
-    "sumModuleFiles": 70,
-    "sumModuleSymbols": 366,
+    "sumModuleFiles": 74,
+    "sumModuleSymbols": 402,
     "sumModuleSymbolsMatchesPlanTotal": true
   },
   "planFilePaths": [
+    "docs/benchmarks/2026-07-10-minimax-m3/tools/acceptance-analysis.mjs",
     "docs/benchmarks/2026-07-10-minimax-m3/tools/token-proxy.mjs",
     "packages/cli/src/cli-batch-e2e-subdirs.test.ts",
     "packages/cli/src/cli-batch-e2e.test.ts",
@@ -102,12 +103,15 @@
     "packages/core/src/llm/openai-compat.ts",
     "packages/core/src/manifest.test.ts",
     "packages/core/src/manifest.ts",
+    "packages/core/src/markdown-mask.ts",
+    "packages/core/src/mermaid-validator.ts",
     "packages/core/src/modules.test.ts",
     "packages/core/src/modules.ts",
     "packages/core/src/parser.ts",
     "packages/core/src/pointer.ts",
     "packages/core/src/presets.ts",
     "packages/core/src/pricing.ts",
+    "packages/core/src/prompts.test.ts",
     "packages/core/src/prompts.ts",
     "packages/core/src/safe-io.test.ts",
     "packages/core/src/safe-io.ts",
@@ -132,6 +136,20 @@
   ],
   "filesTableActive": [
     {
+      "path": "docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v5/_acceptance.mjs",
+      "lang": "javascript",
+      "size": 730,
+      "symbolCount": 0,
+      "inPlanInventory": false
+    },
+    {
+      "path": "docs/benchmarks/2026-07-10-minimax-m3/tools/acceptance-analysis.mjs",
+      "lang": "javascript",
+      "size": 8188,
+      "symbolCount": 4,
+      "inPlanInventory": true
+    },
+    {
       "path": "docs/benchmarks/2026-07-10-minimax-m3/tools/token-proxy.mjs",
       "lang": "javascript",
       "size": 12047,
@@ -146,17 +164,24 @@
       "inPlanInventory": false
     },
     {
+      "path": "packages/cli/src/batch-format.test.ts",
+      "lang": "typescript",
+      "size": 2888,
+      "symbolCount": 0,
+      "inPlanInventory": false
+    },
+    {
       "path": "packages/cli/src/cli-batch-e2e-subdirs.test.ts",
       "lang": "typescript",
-      "size": 17325,
-      "symbolCount": 7,
+      "size": 17684,
+      "symbolCount": 8,
       "inPlanInventory": true
     },
     {
       "path": "packages/cli/src/cli-batch-e2e.test.ts",
       "lang": "typescript",
-      "size": 27222,
-      "symbolCount": 5,
+      "size": 32530,
+      "symbolCount": 6,
       "inPlanInventory": true
     },
     {
@@ -183,8 +208,8 @@
     {
       "path": "packages/cli/src/commands/batch.ts",
       "lang": "typescript",
-      "size": 9165,
-      "symbolCount": 5,
+      "size": 9977,
+      "symbolCount": 6,
       "inPlanInventory": true
     },
     {
@@ -197,14 +222,14 @@
     {
       "path": "packages/cli/src/commands/index-cmd.ts",
       "lang": "typescript",
-      "size": 3953,
+      "size": 4020,
       "symbolCount": 4,
       "inPlanInventory": true
     },
     {
       "path": "packages/cli/src/commands/init.ts",
       "lang": "typescript",
-      "size": 4318,
+      "size": 4701,
       "symbolCount": 2,
       "inPlanInventory": true
     },
@@ -225,7 +250,7 @@
     {
       "path": "packages/cli/src/commands/status.ts",
       "lang": "typescript",
-      "size": 1432,
+      "size": 1499,
       "symbolCount": 1,
       "inPlanInventory": true
     },
@@ -246,7 +271,7 @@
     {
       "path": "packages/cli/src/commands/verify.ts",
       "lang": "typescript",
-      "size": 1431,
+      "size": 1590,
       "symbolCount": 1,
       "inPlanInventory": true
     },
@@ -260,7 +285,7 @@
     {
       "path": "packages/cli/src/index.ts",
       "lang": "typescript",
-      "size": 731,
+      "size": 792,
       "symbolCount": 0,
       "inPlanInventory": false
     },
@@ -316,42 +341,49 @@
     {
       "path": "packages/core/src/artifact.test.ts",
       "lang": "typescript",
-      "size": 12343,
+      "size": 23635,
       "symbolCount": 0,
       "inPlanInventory": false
     },
     {
       "path": "packages/core/src/artifact.ts",
       "lang": "typescript",
-      "size": 12029,
-      "symbolCount": 5,
+      "size": 19919,
+      "symbolCount": 6,
       "inPlanInventory": true
+    },
+    {
+      "path": "packages/core/src/batch-context.test.ts",
+      "lang": "typescript",
+      "size": 2049,
+      "symbolCount": 0,
+      "inPlanInventory": false
     },
     {
       "path": "packages/core/src/batch-repair.test.ts",
       "lang": "typescript",
-      "size": 21601,
+      "size": 31921,
       "symbolCount": 3,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/batch-review.test.ts",
       "lang": "typescript",
-      "size": 49224,
+      "size": 50297,
       "symbolCount": 5,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/batch-state.ts",
       "lang": "typescript",
-      "size": 5896,
+      "size": 6769,
       "symbolCount": 0,
       "inPlanInventory": false
     },
     {
       "path": "packages/core/src/batch-status.ts",
       "lang": "typescript",
-      "size": 7307,
+      "size": 8708,
       "symbolCount": 7,
       "inPlanInventory": true
     },
@@ -365,22 +397,22 @@
     {
       "path": "packages/core/src/batch.ts",
       "lang": "typescript",
-      "size": 63963,
-      "symbolCount": 31,
+      "size": 68606,
+      "symbolCount": 32,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/config.test.ts",
       "lang": "typescript",
-      "size": 9543,
+      "size": 11802,
       "symbolCount": 0,
       "inPlanInventory": false
     },
     {
       "path": "packages/core/src/config.ts",
       "lang": "typescript",
-      "size": 13311,
-      "symbolCount": 12,
+      "size": 16207,
+      "symbolCount": 14,
       "inPlanInventory": true
     },
     {
@@ -400,15 +432,15 @@
     {
       "path": "packages/core/src/diagrams.test.ts",
       "lang": "typescript",
-      "size": 4008,
+      "size": 9497,
       "symbolCount": 0,
       "inPlanInventory": false
     },
     {
       "path": "packages/core/src/diagrams.ts",
       "lang": "typescript",
-      "size": 4458,
-      "symbolCount": 6,
+      "size": 4704,
+      "symbolCount": 8,
       "inPlanInventory": true
     },
     {
@@ -496,10 +528,17 @@
       "inPlanInventory": false
     },
     {
+      "path": "packages/core/src/init-overview.test.ts",
+      "lang": "typescript",
+      "size": 5605,
+      "symbolCount": 0,
+      "inPlanInventory": false
+    },
+    {
       "path": "packages/core/src/init.ts",
       "lang": "typescript",
-      "size": 20399,
-      "symbolCount": 6,
+      "size": 24217,
+      "symbolCount": 7,
       "inPlanInventory": true
     },
     {
@@ -512,42 +551,49 @@
     {
       "path": "packages/core/src/llm/adapters.test.ts",
       "lang": "typescript",
-      "size": 9535,
+      "size": 17439,
       "symbolCount": 1,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/llm/anthropic.ts",
       "lang": "typescript",
-      "size": 2898,
-      "symbolCount": 3,
+      "size": 3431,
+      "symbolCount": 4,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/llm/base.ts",
       "lang": "typescript",
-      "size": 4053,
-      "symbolCount": 4,
+      "size": 5327,
+      "symbolCount": 8,
       "inPlanInventory": true
+    },
+    {
+      "path": "packages/core/src/llm/create-client-timeout.test.ts",
+      "lang": "typescript",
+      "size": 4844,
+      "symbolCount": 0,
+      "inPlanInventory": false
     },
     {
       "path": "packages/core/src/llm/index.ts",
       "lang": "typescript",
-      "size": 4651,
+      "size": 5099,
       "symbolCount": 5,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/llm/openai-compat.ts",
       "lang": "typescript",
-      "size": 4544,
-      "symbolCount": 4,
+      "size": 5308,
+      "symbolCount": 5,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/llm/types.ts",
       "lang": "typescript",
-      "size": 1742,
+      "size": 2671,
       "symbolCount": 0,
       "inPlanInventory": false
     },
@@ -566,17 +612,31 @@
       "inPlanInventory": true
     },
     {
+      "path": "packages/core/src/markdown-mask.ts",
+      "lang": "typescript",
+      "size": 4390,
+      "symbolCount": 5,
+      "inPlanInventory": true
+    },
+    {
+      "path": "packages/core/src/mermaid-validator.ts",
+      "lang": "typescript",
+      "size": 2066,
+      "symbolCount": 3,
+      "inPlanInventory": true
+    },
+    {
       "path": "packages/core/src/modules.test.ts",
       "lang": "typescript",
-      "size": 29819,
+      "size": 32543,
       "symbolCount": 1,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/modules.ts",
       "lang": "typescript",
-      "size": 31679,
-      "symbolCount": 32,
+      "size": 35588,
+      "symbolCount": 36,
       "inPlanInventory": true
     },
     {
@@ -638,21 +698,21 @@
     {
       "path": "packages/core/src/prompts.test.ts",
       "lang": "typescript",
-      "size": 6938,
-      "symbolCount": 0,
-      "inPlanInventory": false
+      "size": 20553,
+      "symbolCount": 1,
+      "inPlanInventory": true
     },
     {
       "path": "packages/core/src/prompts.ts",
       "lang": "typescript",
-      "size": 13661,
-      "symbolCount": 7,
+      "size": 22427,
+      "symbolCount": 9,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/safe-io.test.ts",
       "lang": "typescript",
-      "size": 15661,
+      "size": 15703,
       "symbolCount": 1,
       "inPlanInventory": true
     },
@@ -715,15 +775,15 @@
     {
       "path": "packages/core/src/verify.test.ts",
       "lang": "typescript",
-      "size": 9665,
+      "size": 18770,
       "symbolCount": 2,
       "inPlanInventory": true
     },
     {
       "path": "packages/core/src/verify.ts",
       "lang": "typescript",
-      "size": 12724,
-      "symbolCount": 6,
+      "size": 15627,
+      "symbolCount": 7,
       "inPlanInventory": true
     },
     {
@@ -820,19 +880,22 @@
     {
       "path": "scripts/offline-inventory-t0.mjs",
       "lang": "javascript",
-      "size": 12073,
+      "size": 12066,
       "symbolCount": 4,
       "inPlanInventory": true
     }
   ],
   "filesNotInPlanInventory": [
+    "docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v5/_acceptance.mjs",
     "packages/cli/scripts/make-executable.mjs",
+    "packages/cli/src/batch-format.test.ts",
     "packages/cli/src/cli.test.ts",
     "packages/cli/src/index.ts",
     "packages/cli/src/templates.test.ts",
     "packages/cli/vitest.config.ts",
     "packages/core/src/anchors.test.ts",
     "packages/core/src/artifact.test.ts",
+    "packages/core/src/batch-context.test.ts",
     "packages/core/src/batch-state.ts",
     "packages/core/src/config.test.ts",
     "packages/core/src/db.test.ts",
@@ -844,12 +907,13 @@
     "packages/core/src/index.ts",
     "packages/core/src/indexer.test.ts",
     "packages/core/src/init-config.test.ts",
+    "packages/core/src/init-overview.test.ts",
+    "packages/core/src/llm/create-client-timeout.test.ts",
     "packages/core/src/llm/types.ts",
     "packages/core/src/parser.test.ts",
     "packages/core/src/pointer.test.ts",
     "packages/core/src/presets.test.ts",
     "packages/core/src/pricing.test.ts",
-    "packages/core/src/prompts.test.ts",
     "packages/core/src/status.test.ts",
     "packages/core/test/fixtures/sample-ts-repo/lib/calc.py",
     "packages/core/vitest.config.ts",
@@ -860,7 +924,7 @@
     {
       "id": "cli-src",
       "files": 5,
-      "symbolCount": 24,
+      "symbolCount": 26,
       "unsplittable": false,
       "paths": [
         "packages/cli/src/cli-batch-e2e-subdirs.test.ts",
@@ -873,7 +937,7 @@
     {
       "id": "commands",
       "files": 11,
-      "symbolCount": 24,
+      "symbolCount": 25,
       "unsplittable": false,
       "paths": [
         "packages/cli/src/commands/batch.ts",
@@ -892,7 +956,7 @@
     {
       "id": "core-src-01",
       "files": 9,
-      "symbolCount": 74,
+      "symbolCount": 76,
       "unsplittable": false,
       "paths": [
         "packages/core/src/anchor-ledger.test.ts",
@@ -909,7 +973,7 @@
     {
       "id": "core-src-02",
       "files": 12,
-      "symbolCount": 64,
+      "symbolCount": 69,
       "unsplittable": false,
       "paths": [
         "packages/core/src/config.ts",
@@ -928,26 +992,29 @@
     },
     {
       "id": "core-src-03",
-      "files": 8,
-      "symbolCount": 73,
+      "files": 9,
+      "symbolCount": 78,
       "unsplittable": false,
       "paths": [
+        "packages/core/src/markdown-mask.ts",
+        "packages/core/src/mermaid-validator.ts",
         "packages/core/src/modules.test.ts",
         "packages/core/src/modules.ts",
         "packages/core/src/parser.ts",
         "packages/core/src/pointer.ts",
         "packages/core/src/presets.ts",
         "packages/core/src/pricing.ts",
-        "packages/core/src/prompts.ts",
-        "packages/core/src/safe-io.test.ts"
+        "packages/core/src/prompts.test.ts"
       ]
     },
     {
       "id": "core-src-04",
-      "files": 11,
-      "symbolCount": 50,
+      "files": 12,
+      "symbolCount": 58,
       "unsplittable": false,
       "paths": [
+        "packages/core/src/prompts.ts",
+        "packages/core/src/safe-io.test.ts",
         "packages/core/src/safe-io.ts",
         "packages/core/src/status.ts",
         "packages/core/src/symbols.test.ts",
@@ -957,7 +1024,15 @@
         "packages/core/src/update.ts",
         "packages/core/src/verify.test.ts",
         "packages/core/src/verify.ts",
-        "packages/core/src/walker.test.ts",
+        "packages/core/src/walker.test.ts"
+      ]
+    },
+    {
+      "id": "core-src-05",
+      "files": 1,
+      "symbolCount": 3,
+      "unsplittable": false,
+      "paths": [
         "packages/core/src/walker.ts"
       ]
     },
@@ -973,7 +1048,7 @@
     {
       "id": "llm",
       "files": 5,
-      "symbolCount": 17,
+      "symbolCount": 23,
       "unsplittable": false,
       "paths": [
         "packages/core/src/llm/adapters.test.ts",
@@ -1016,10 +1091,11 @@
     },
     {
       "id": "tools",
-      "files": 1,
-      "symbolCount": 8,
+      "files": 2,
+      "symbolCount": 12,
       "unsplittable": false,
       "paths": [
+        "docs/benchmarks/2026-07-10-minimax-m3/tools/acceptance-analysis.mjs",
         "docs/benchmarks/2026-07-10-minimax-m3/tools/token-proxy.mjs"
       ]
     }
@@ -1029,6 +1105,7 @@
     "core-src-03",
     "core-src-04",
     "core-src-01",
+    "core-src-05",
     "cli-src",
     "commands",
     "llm",
@@ -1038,5 +1115,5 @@
     "fase2-repo-src",
     "scripts"
   ],
-  "edgeCount": 15
+  "edgeCount": 17
 }

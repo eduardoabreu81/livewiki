@@ -267,10 +267,11 @@ try {
 
   const notes = `# T0 offline module inventory (real index/plan)
 
-**Generated:** ${summary.generatedAt}  
-**Method:** disposable copy of the **working tree** + \`runInit({ plan: true })\`  
+**Generated:** ${summary.generatedAt}
+
+**Method:** disposable copy of the **working tree** + \`runInit({ plan: true })\`
 (same walker, parser, indexer, AST symbol extraction, \`loadConfig\`, and
-unique → split → exact-partition → unique planner as batch).  
+unique → split → exact-partition → unique planner as batch).
 **Not** a synthetic file walk with 1 symbol/file.
 
 **Partition base:** \`plan.filePaths\` = distinct paths from **active AST symbols**
@@ -313,7 +314,7 @@ ${summary.modules.map((m) => `- \`${m.id}\` files=${m.files} symbols=${m.symbolC
 
 See \`modules.json\` for \`planFilePaths\`, per-file AST counts, and modules.
 
-**Reproduce:** \`pnpm --filter @livewiki/core build && node scripts/offline-inventory-t0.mjs\`  
+**Reproduce:** \`pnpm --filter @livewiki/core build && node scripts/offline-inventory-t0.mjs\`
 **Do not** treat as OpenWiki A/B winner. No paid batch / clean v3.
 `;
   writeFileSync(join(outDir, "NOTES.md"), notes, "utf8");
