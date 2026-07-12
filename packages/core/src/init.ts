@@ -37,6 +37,9 @@ import {
   splitOversizedModules,
   assertExactPathPartition,
   assertUniqueModuleIds,
+  classifyModuleRole,
+  classifyPathRole,
+  type PathRoleConfig,
   type Module,
 } from "./modules.js";
 import { loadConfig, applyDefaults } from "./config.js";
@@ -121,7 +124,16 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   await runLedger(absRoot, { ...(opts.quiet ? { quiet: true } : {}) });
 
   // 2. Carrega símbolos + módulos heurísticos
-  const { symbols, filePaths, modules, edges, ordered, totalSymbols, totalFiles } = await buildPlan(absRoot);
+  const {
+    symbols,
+    pathRoleConfig,
+    filePaths,
+    modules,
+    edges,
+    ordered,
+    totalSymbols,
+    totalFiles,
+  } = await buildPlan(absRoot);
 
   // 3. --plan: relatório e sai (sem escrita, sem LLM)
   if (opts.plan) {
@@ -156,7 +168,15 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   }
 
   // quickstart.md (entry point — sem LLM, determinístico)
-  const quickstart = generateQuickstartDeterministic(modules, ordered, symbols, totalSymbols, totalFiles);
+  const quickstart = generateQuickstartDeterministic(
+    modules,
+    ordered,
+    symbols,
+    totalSymbols,
+    totalFiles,
+    "en",
+    pathRoleConfig,
+  );
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", quickstart);
   filesWritten.push("livewiki/quickstart.md");
 
@@ -175,6 +195,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     totalFiles,
     edges,
     symbols,
+    ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
   filesWritten.push("livewiki/architecture/overview.md");
@@ -255,6 +276,7 @@ async function buildPlan(absRoot: string): Promise<{
   ordered: Module[];
   totalSymbols: number;
   totalFiles: number;
+  pathRoleConfig?: PathRoleConfig;
 }> {
   const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
   const db = openIndex(dbPath);
@@ -308,7 +330,7 @@ async function buildPlan(absRoot: string): Promise<{
       }
     }
     const edges = resolveModuleEdges(modules, importsByFile, new Set(filePaths));
-    const ordered = prioritizeModules(modules, edges);
+    const ordered = prioritizeModules(modules, edges, cfg.pathRoles);
 
     return {
       symbols,
@@ -318,6 +340,7 @@ async function buildPlan(absRoot: string): Promise<{
       ordered,
       totalSymbols: symbols.length,
       totalFiles: filePaths.length,
+      ...(cfg.pathRoles !== undefined ? { pathRoleConfig: cfg.pathRoles } : {}),
     };
   } finally {
     db.close();
@@ -328,6 +351,19 @@ async function buildPlan(absRoot: string): Promise<{
  * Quickstart determinístico (sem LLM). Lista módulos + top symbols + entry points.
  * Linguagem controlada por `language` (default: "en").
  */
+/**
+ * Renamed from "Key concepts" to
+ * "Important symbols" — a purely mechanical ranking (module centrality +
+ * deterministic key order, no semantics/embeddings) does not produce
+ * "concepts" (a semantic/domain grouping), and the section header should
+ * not claim more than the pipeline can honestly deliver. The SUBSTANCE
+ * also changed: symbols are drawn from `ordered` product modules (the
+ * same centrality-based ranking already used for "Top entry points"),
+ * never a raw unordered DB query slice — and non-product paths (test
+ * fixtures, benchmark tooling — see `classifyModuleRole`) never appear
+ * here, the same way they can no longer out-rank a product module in
+ * `ordered` itself.
+ */
 function generateQuickstartDeterministic(
   modules: Module[],
   ordered: Module[],
@@ -335,21 +371,23 @@ function generateQuickstartDeterministic(
   totalSymbols: number,
   totalFiles: number,
   language: string = "en",
+  pathRoleConfig?: PathRoleConfig,
 ): string {
   const labels: Record<string, { intro: string; entry: string; concepts: string; module: string }> = {
     en: {
       intro: "Quickstart",
       entry: "Top entry points",
-      concepts: "Key concepts",
+      concepts: "Important symbols",
       module: "Module",
     },
   };
   const l = labels[language] ?? labels.en!;
 
-  const topModules = ordered.slice(0, 3);
-  const topSymbols = symbols
-    .filter((s) => s.kind === "function" || s.kind === "class")
-    .slice(0, 10);
+  const productModules = ordered.filter(
+    (module) => classifyModuleRole(module, pathRoleConfig) === "product",
+  );
+  const topModules = (productModules.length > 0 ? productModules : ordered).slice(0, 3);
+  const topSymbols = selectImportantSymbols(ordered, symbols, 10, pathRoleConfig);
 
   const lines: string[] = [];
   lines.push(`# ${l.intro}`);
@@ -377,6 +415,39 @@ function generateQuickstartDeterministic(
   );
   lines.push("");
   return lines.join("\n");
+}
+
+/**
+ * Selects up to `limit` function/class symbols from PRODUCT-role modules
+ * only, walking `ordered` in its already-computed priority order
+ * (centrality + size, product modules first — see `prioritizeModules`).
+ * Within a module, symbols are sorted by key (stable, deterministic —
+ * never raw SQL row order, which is what let benchmark-tooling helpers
+ * appear ahead of real product symbols before this fix).
+ */
+function selectImportantSymbols(
+  ordered: Module[],
+  symbols: SymbolRow[],
+  limit: number,
+  pathRoleConfig?: PathRoleConfig,
+): SymbolRow[] {
+  const out: SymbolRow[] = [];
+  for (const m of ordered) {
+    if (classifyModuleRole(m, pathRoleConfig) !== "product") continue;
+    const modulePaths = new Set(m.paths);
+    const moduleSymbols = symbols
+      .filter(
+        (s) =>
+          (s.kind === "function" || s.kind === "class") &&
+          modulePaths.has(s.key.split("#")[0]!),
+      )
+      .sort((a, b) => a.key.localeCompare(b.key));
+    for (const s of moduleSymbols) {
+      out.push(s);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
 }
 
 /**
@@ -412,7 +483,7 @@ function generateQuickstartDeterministic(
  */
 export async function regenerateArchitectureOverview(repoRoot: string): Promise<void> {
   const absRoot = nodePath.resolve(repoRoot);
-  const { modules, edges, ordered, totalSymbols, totalFiles, symbols, filePaths } =
+  const { modules, edges, ordered, totalSymbols, totalFiles, symbols, filePaths, pathRoleConfig } =
     await buildPlan(absRoot);
   const overview = await generateArchitectureOverview({
     absRoot,
@@ -423,6 +494,7 @@ export async function regenerateArchitectureOverview(repoRoot: string): Promise<
     totalFiles,
     edges,
     symbols,
+    ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
 }
@@ -437,8 +509,19 @@ async function generateArchitectureOverview(opts: {
   totalFiles: number;
   edges: Array<{ from: string; to: string }>;
   symbols: SymbolRow[];
+  pathRoleConfig?: PathRoleConfig;
 }): Promise<string> {
-  const { absRoot, modules, ordered, filePaths, totalSymbols, totalFiles, edges, symbols } = opts;
+  const {
+    absRoot,
+    modules,
+    ordered,
+    filePaths,
+    totalSymbols,
+    totalFiles,
+    edges,
+    symbols,
+    pathRoleConfig,
+  } = opts;
 
   // Top arquivos por número de símbolos (entry points heurísticos).
   const symbolsByFile = new Map<string, number>();
@@ -447,6 +530,7 @@ async function generateArchitectureOverview(opts: {
     symbolsByFile.set(p, (symbolsByFile.get(p) ?? 0) + 1);
   }
   const topFiles = [...symbolsByFile.entries()]
+    .filter(([path]) => classifyPathRole(path, pathRoleConfig) === "product")
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10)
     .map(([path, count]) => ({ path, count }));
@@ -473,12 +557,28 @@ async function generateArchitectureOverview(opts: {
     "the module pages they link to are written by the batch (`livewiki init --batch`) or " +
     "manually.");
   lines.push("");
-  lines.push("## Module index");
+  lines.push(
+    "Modules are grouped by repository role and ordered by prioritization " +
+      "within each group. Each module links to artifacts that exist on disk.",
+  );
   lines.push("");
-  lines.push("Ordered by prioritization (centrality + size). Each module links to its class " +
-    "diagram and (when available) to its generated page.");
-  lines.push("");
-  for (const m of ordered) {
+  const roleSections: Array<{
+    role: ReturnType<typeof classifyModuleRole>;
+    heading: string;
+  }> = [
+    { role: "product", heading: "Product modules" },
+    { role: "fixture", heading: "Test fixtures" },
+    { role: "tooling", heading: "Tooling and benchmarks" },
+    { role: "docs", heading: "Documentation modules" },
+  ];
+  for (const section of roleSections) {
+    const sectionModules = ordered.filter(
+      (module) => classifyModuleRole(module, pathRoleConfig) === section.role,
+    );
+    if (sectionModules.length === 0) continue;
+    lines.push(`## ${section.heading}`);
+    lines.push("");
+    for (const m of sectionModules) {
     // Anchor HTML inline garante match exato com o link `[id](overview.md#id)` do quickstart.
     lines.push(`<a id="${escapeHtmlId(m.id)}"></a>`);
     lines.push("");
@@ -492,16 +592,29 @@ async function generateArchitectureOverview(opts: {
       .stat(nodePath.join(absRoot, "livewiki", pageRelPath))
       .then(() => true)
       .catch(() => false);
+    // Apply the same existence check to
+    // the class-diagram link — `generateClassDiagram` writes NO file when
+    // the module has zero classes, so the link would otherwise point to a
+    // file that never existed (broken_internal_link, caught by `verify`
+    // once it also checks `.mmd` — but the correct fix is not emitting the
+    // dead link in the first place).
+    const classDiagramExists = await nodeFs
+      .stat(nodePath.join(absRoot, "livewiki", "diagrams", `${moduleSlug(m.id)}.classes.mmd`))
+      .then(() => true)
+      .catch(() => false);
     const parts: string[] = [];
     parts.push(`**${m.symbolCount}** symbols across **${m.paths.length}** files`);
-    parts.push(`[class diagram](${classDiagramPath})`);
+    if (classDiagramExists) {
+      parts.push(`[class diagram](${classDiagramPath})`);
+    }
     if (pageExists) {
       parts.push(`[page](../${pageRelPath})`);
     }
     lines.push(`### ${m.id}`);
     lines.push("");
     lines.push(parts.join(" · "));
-    lines.push("");
+      lines.push("");
+    }
   }
   lines.push("## Diagrams");
   lines.push("");

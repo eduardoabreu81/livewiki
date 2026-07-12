@@ -29,6 +29,7 @@ import * as safeIo from "./safe-io.js";
 import type { LlmClient } from "./llm/index.js";
 import { LlmTimeoutError } from "./llm/index.js";
 import type { GenerateResult } from "./llm/types.js";
+import type { StopReason } from "./llm/types.js";
 
 /**
  * Programmable LLM mock: each call consumes the next response in the queue,
@@ -42,6 +43,8 @@ class ProgrammableMockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
   public responses: string[] = [];
+  public stopReasons: Array<StopReason | undefined> = [];
+  public rawStopReasons: Array<string | undefined> = [];
   public throwOn: Set<number> = new Set();
   public callCount = 0;
   public callLog: Array<{ system: string; user: string }> = [];
@@ -77,6 +80,10 @@ class ProgrammableMockLlm implements LlmClient {
     return {
       content,
       usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      ...(this.stopReasons[idx] !== undefined ? { stopReason: this.stopReasons[idx] } : {}),
+      ...(this.rawStopReasons[idx] !== undefined
+        ? { rawStopReason: this.rawStopReasons[idx] }
+        : {}),
     };
   }
 }
@@ -93,7 +100,7 @@ function makeValidPage(closedKeyList: string[]): string {
     "",
     "# test",
     "",
-    `<!-- lw:anchors ${closedKeyList[0] ?? "src/x.ts#placeholder"} -->`,
+    `<!-- lw:anchors ${closedKeyList.join(" ")} -->`,
     "",
     "Body.",
     "",
@@ -121,6 +128,47 @@ afterEach(async () => {
 
 // === Repair: success path ===
 describe("batch X — repair success (Criterion #6)", () => {
+  it("repairs a provider-declared token-limit truncation within the bounded loop", async () => {
+    llm.responses = [
+      "# truncated candidate",
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+    llm.stopReasons = ["length", "complete"];
+    llm.rawStopReasons = ["max_tokens", "end_turn"];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(2);
+    expect(llm.callLog[1]?.user).toContain("truncated_by_token_limit");
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), {
+      readonly: true,
+    });
+    try {
+      const task = db
+        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?")
+        .get("auth") as { checkpoint_json: string };
+      const checkpoint = JSON.parse(task.checkpoint_json) as {
+        usageHistory: Array<{ stopReason?: StopReason; rawStopReason?: string }>;
+      };
+      expect(checkpoint.usageHistory.map((entry) => entry.stopReason)).toEqual([
+        "length",
+        "complete",
+      ]);
+      expect(checkpoint.usageHistory[0]?.rawStopReason).toBe("max_tokens");
+    } finally {
+      db.close();
+    }
+  });
+
   it("unknown anchor → repair prompt; second valid response = 2 entries, no circuit failure", async () => {
     // Initial: INVENTED anchor (not in the closed list) — fails validator.
     // Repair: correct anchor — passes.

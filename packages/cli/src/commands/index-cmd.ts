@@ -58,7 +58,8 @@ export function registerIndex(program: Command): void {
         emit(json, quiet, indexResult, ledgerResult);
       } catch (err) {
         process.stderr.write(`livewiki index: error — ${(err as Error).message}\n`);
-        process.exit(1);
+        // Let Node drain pending stderr I/O before exiting.
+        process.exitCode = 1;
       }
     });
 }

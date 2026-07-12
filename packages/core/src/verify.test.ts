@@ -107,6 +107,35 @@ describe("verify — link interno aponta para página fora do allowlist", () => 
 });
 
 describe("verify — manual block byte-a-byte (regra #6)", () => {
+  it("matches preserved manual blocks by hash after large offset shifts", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki(
+      "livewiki/foo.md",
+      "# Foo\n\n<!-- lw:manual -->\nPreserve me.\n<!-- /lw:manual -->\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const path = nodePath.join(repoRoot, "livewiki/foo.md");
+    const original = await nodeFs.readFile(path, "utf8");
+    await nodeFs.writeFile(path, `${"Generated prose. ".repeat(20)}\n\n${original}`, "utf8");
+
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((issue) => issue.code === "manual_block_altered")).toEqual([]);
+  });
+
+  it("detects when one of two byte-identical stored manual blocks disappears", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    const block = "<!-- lw:manual -->\nSame bytes.\n<!-- /lw:manual -->";
+    await writeWiki("livewiki/foo.md", `# Foo\n\n${block}\n\n${block}\n`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeWiki("livewiki/foo.md", `# Foo\n\n${block}\n`);
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((issue) => issue.code === "manual_block_altered")).toHaveLength(1);
+  });
+
   it("bloco manual inalterado: OK", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
@@ -392,6 +421,55 @@ describe("verify — links inside code are not navigable (verify.ts hardening)",
     const broken = result.issues.filter((i) => i.code === "broken_internal_link");
     expect(broken.length).toBe(1);
     expect(broken[0]?.detail).toContain("nope-for-real.md");
+  });
+});
+
+describe("verify — .mmd diagrams are checkable link targets", () => {
+  it("link to an existing .mmd diagram: OK", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki("livewiki/index.md", "# Home\n\nSee [diagram](diagrams/foo.classes.mmd).\n");
+    await writeWiki("livewiki/diagrams/foo.classes.mmd", "classDiagram\n  class Foo\n");
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((i) => i.code === "broken_internal_link")).toEqual([]);
+  });
+
+  it("link to a missing .mmd diagram: broken_internal_link", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki(
+      "livewiki/architecture/overview.md",
+      "# Overview\n\nSee [diagram](../diagrams/ghost.classes.mmd).\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const broken = result.issues.filter((i) => i.code === "broken_internal_link");
+    expect(broken.length).toBe(1);
+    expect(broken[0]?.detail).toContain("ghost.classes.mmd");
+  });
+
+  it("malformed .mmd diagram: invalid_mermaid_diagram", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki("livewiki/index.md", "# Home\n");
+    await writeWiki(
+      "livewiki/diagrams/broken.classes.mmd",
+      "classDiagram\n  class Foo {\n    +bar()\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const invalid = result.issues.filter(
+      (issue) => issue.code === "invalid_mermaid_diagram",
+    );
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]?.wikiPath).toBe("livewiki/diagrams/broken.classes.mmd");
   });
 });
 

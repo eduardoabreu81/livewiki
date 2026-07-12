@@ -28,7 +28,9 @@ export function registerVerify(program: Command): void {
         result = await runVerify(repoRoot);
       } catch (err) {
         process.stderr.write(`livewiki verify: error — ${(err as Error).message}\n`);
-        process.exit(1);
+        // An abrupt exit after writing stderr can crash libuv on Windows
+        // while I/O is pending. Let Node drain the event loop naturally.
+        process.exitCode = 1;
         return;
       }
       if (json) {
@@ -37,6 +39,6 @@ export function registerVerify(program: Command): void {
         process.stdout.write(formatVerifyHuman(result) + "\n");
       }
       // CI-friendly: exit code != 0 if there are errors
-      if (!result.ok) process.exit(1);
+      if (!result.ok) process.exitCode = 1;
     });
 }

@@ -207,19 +207,31 @@ describe("artifact.validateStage4Artifact — schema + closed-list check", () =>
     "src/auth.ts#validate",
   ];
 
-  it("valid artifact (frontmatter + owner + anchors in list) passes", () => {
+  it("valid artifact (frontmatter + owner + anchors in list, EVERY key in both FM and a section) passes", () => {
+    // Frontmatter and section markers must each independently
+    // cover the full closed list — every key needs a section with real
+    // prose too, not just a frontmatter listing.
     const art = `---
 title: auth
 owner: generated
 anchors:
   - src/auth.ts#login
   - src/auth.ts#logout
+  - src/auth.ts#validate
 ---
 # auth
 
+<!-- lw:anchors src/auth.ts#login -->
+
+Prose about login.
+
+<!-- lw:anchors src/auth.ts#logout -->
+
+Prose about logout.
+
 <!-- lw:anchors src/auth.ts#validate -->
 
-Body.
+Prose about validate.
 `;
     const r = validateStage4Artifact(art, closedKeys);
     expect(r.ok).toBe(true);
@@ -377,8 +389,9 @@ anchors:
     expect(validateStage4Artifact(mixed, closedKeys).ok).toBe(false);
   });
 
-  it("partial closed-list coverage → missing_closed_key (completeness)", () => {
-    // Only 1 of 3 closed keys declared — historically accepted; now rejected.
+  it("partial FRONTMATTER coverage → missing_closed_key tagged frontmatter, independent of sections", () => {
+    // Sections here fully cover the closed list, but frontmatter
+    // is short 2 keys — the frontmatter-side check fires on its own.
     const art = `---
 title: x
 owner: generated
@@ -387,18 +400,60 @@ anchors:
 ---
 # x
 
-Body.
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Body prose here.
 `;
     const r = validateStage4Artifact(art, closedKeys);
     expect(r.ok).toBe(false);
-    const missing = r.errors.filter((e) => e.code === "missing_closed_key");
-    expect(missing.map((e) => e.offending).sort()).toEqual([
+    const fmMissing = r.errors.filter(
+      (e) => e.code === "missing_closed_key" && e.location === "frontmatter",
+    );
+    expect(fmMissing.map((e) => e.offending).sort()).toEqual([
       "src/auth.ts#logout",
       "src/auth.ts#validate",
     ]);
+    expect(
+      r.errors.some((e) => e.code === "missing_closed_key" && e.location === "section"),
+    ).toBe(false);
   });
 
-  it("union of frontmatter + section markers can complete the closed list", () => {
+  it("partial SECTION coverage → missing_closed_key tagged section, independent of frontmatter", () => {
+    // Frontmatter here fully covers the closed list, but only one
+    // key is declared in a section marker — the section-side check fires
+    // on its own, even though frontmatter is complete.
+    const art = `---
+title: x
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+# x
+
+<!-- lw:anchors src/auth.ts#login -->
+
+Body prose here.
+`;
+    const r = validateStage4Artifact(art, closedKeys);
+    expect(r.ok).toBe(false);
+    const sectionMissing = r.errors.filter(
+      (e) => e.code === "missing_closed_key" && e.location === "section",
+    );
+    expect(sectionMissing.map((e) => e.offending).sort()).toEqual([
+      "src/auth.ts#logout",
+      "src/auth.ts#validate",
+    ]);
+    expect(
+      r.errors.some((e) => e.code === "missing_closed_key" && e.location === "frontmatter"),
+    ).toBe(false);
+  });
+
+  it("union coverage is insufficient — each location must cover the closed list", () => {
+    // This exact shape used to PASS (union completeness) — it is the shape
+    // that previously allowed pages to ship with real
+    // coverage missing from one side. Now it fails on BOTH sides at once.
     const art = `---
 title: x
 owner: generated
@@ -412,7 +467,18 @@ anchors:
 Body.
 `;
     const r = validateStage4Artifact(art, closedKeys);
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    const fmMissing = r.errors.filter(
+      (e) => e.code === "missing_closed_key" && e.location === "frontmatter",
+    );
+    expect(fmMissing.map((e) => e.offending).sort()).toEqual([
+      "src/auth.ts#logout",
+      "src/auth.ts#validate",
+    ]);
+    const sectionMissing = r.errors.filter(
+      (e) => e.code === "missing_closed_key" && e.location === "section",
+    );
+    expect(sectionMissing.map((e) => e.offending)).toEqual(["src/auth.ts#login"]);
   });
 
   it("duplicate key in frontmatter list → duplicate_anchor", () => {
@@ -489,6 +555,171 @@ Body.
   });
 });
 
+describe("artifact.validateStage4Artifact — structural completeness", () => {
+  const closedKeys = [
+    "src/auth.ts#login",
+    "src/auth.ts#logout",
+    "src/auth.ts#validate",
+  ];
+  const fullArt = (body: string) => `---
+title: x
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+${body}`;
+
+  describe("empty_section — anchor present but no real prose", () => {
+    it("marker followed immediately by the next heading (nothing in between) → empty_section", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login -->
+
+## Next section
+
+<!-- lw:anchors src/auth.ts#logout src/auth.ts#validate -->
+
+Real prose for logout and validate.
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.ok).toBe(false);
+      expect(r.errors.some((e) => e.code === "empty_section")).toBe(true);
+    });
+
+    it("marker followed only by a TODO/TBD line (no other prose) → empty_section", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+TODO: fill this in later
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.ok).toBe(false);
+      expect(r.errors.some((e) => e.code === "empty_section")).toBe(true);
+    });
+
+    it("marker followed by real prose before the next heading → no empty_section", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Real explanatory prose about all three.
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "empty_section")).toBe(false);
+    });
+  });
+
+  describe("unclosed_markdown — body cut mid fence or mid code-span", () => {
+    it("unclosed fenced code block → unclosed_markdown", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Example:
+
+\`\`\`ts
+const x = 1;
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.ok).toBe(false);
+      expect(r.errors.some((e) => e.code === "unclosed_markdown")).toBe(true);
+    });
+
+    it("unclosed inline code span (cut mid-token, the tools.md finding) → unclosed_markdown", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Run with \`node acceptance-analysis.mjs <artifactRoot
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.ok).toBe(false);
+      expect(r.errors.some((e) => e.code === "unclosed_markdown")).toBe(true);
+    });
+
+    it("properly closed fences and inline code → no unclosed_markdown", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Uses \`node cli.js\` and:
+
+\`\`\`ts
+const x = 1;
+\`\`\`
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "unclosed_markdown")).toBe(false);
+    });
+  });
+
+  describe("todo_marker_present — TODO/TBD banned outside code and lw:manual", () => {
+    it("TODO in plain prose → todo_marker_present", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+TODO: describe this properly.
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.ok).toBe(false);
+      expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(true);
+    });
+
+    it("TBD in plain prose → todo_marker_present", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Behavior is TBD pending review.
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(true);
+    });
+
+    it("TODO quoted inside an inline code span (real code comment) → NOT flagged", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+The source has a literal \`// TODO: refactor\` comment on line 12.
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(false);
+    });
+
+    it("TODO quoted inside a fenced code block → NOT flagged", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Example:
+
+\`\`\`ts
+// TODO: refactor this later
+const x = 1;
+\`\`\`
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(false);
+    });
+
+    it("plain prose without TODO/TBD → not flagged", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Everything here is fully described, nothing pending.
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(false);
+    });
+  });
+});
+
 describe("artifact — pipeline normalize+validate (round-trip)", () => {
   it("MiniMax baseline output (src.md) normalizes to a valid artifact", () => {
     // Reproduced literally from docs/benchmarks/2026-07-10-minimax-m3/raw/livewiki/src.md
@@ -536,7 +767,10 @@ Source file exposing an authentication helper class.
 \`\`\`
 `;
     const norm = normalizeStage4Artifact(raw);
+    // Normalization (think-strip + fence-unwrap) still succeeds — that part
+    // of the pipeline is unchanged.
     expect(norm.ok).toBe(true);
+    expect(norm.content).toMatch(/^---\n/);
     const closed = [
       "packages/core/test/fixtures/fase2-repo/src/auth.ts#Auth",
       "packages/core/test/fixtures/fase2-repo/src/auth.ts#Auth.hash",
@@ -544,7 +778,14 @@ Source file exposing an authentication helper class.
       "packages/core/test/fixtures/fase2-repo/src/auth.ts#validate",
     ];
     const val = validateStage4Artifact(norm.content, closed);
-    expect(val.ok).toBe(true);
+    // This real historical MiniMax output has
+    // two bare headings ("## validate", "## extra") with an anchor marker
+    // but NO explanatory prose before the next marker/end of page — exactly
+    // the "anchor present but section undocumented" gap the stricter
+    // contract now catches. It no longer passes as-is.
+    expect(val.ok).toBe(false);
+    const emptySections = val.errors.filter((e) => e.code === "empty_section");
+    expect(emptySections.length).toBeGreaterThanOrEqual(2);
   });
 
   it("output with anchor copied from prompt (key1) is REJECTED even after normalizing", () => {

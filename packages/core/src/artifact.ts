@@ -21,11 +21,27 @@
  *      - Requires every key in `anchors:` to be in the closed list.
  *      - Requires every key in the markers `<!-- lw:anchors ... -->`
  *        to be in the closed list.
- *      - Completeness: the UNION of frontmatter anchors and section-marker
- *        keys must include EVERY closed-list key (`missing_closed_key`).
+ *      - Completeness is two
+ *        INDEPENDENT requirements, not a union — the frontmatter anchors
+ *        list ALONE must contain every closed-list key, AND the section
+ *        markers ALONE must also contain every closed-list key. A page
+ *        with every key only in frontmatter (zero real section markers)
+ *        used to pass; it no longer does (`missing_closed_key`, tagged
+ *        with the specific location that is short).
  *      - No duplicate keys in the frontmatter list; no key listed in more
  *        than one section marker (`duplicate_anchor`). The same key may
  *        appear once in frontmatter and once in a single section marker.
+ *      - Every section with an anchor marker must be followed by
+ *        real prose (not blank, not TODO/TBD-only) before the next
+ *        heading/marker/end of page (`empty_section`) — presence of an
+ *        anchor is not the same thing as the section being documented.
+ *      - The body must be fully closed Markdown — every fenced
+ *        code block and inline-code span opened must be closed
+ *        (`unclosed_markdown`) — the objective, non-size-based signal of
+ *        a response truncated mid-token.
+ *      - "TODO"/"TBD" placeholders are banned from the body,
+ *        except inside a fenced/inline code example or an
+ *        `<!-- lw:manual -->` block (`todo_marker_present`).
  *      - Requires non-empty body after the frontmatter.
  *      - Rejects ANY `<!-- lw:manual -->` block in the body (rule #6:
  *        manual blocks are reserved for human content and the orchestrator
@@ -42,6 +58,7 @@
 
 import { parseFrontmatter, getAnchors, type Frontmatter } from "./frontmatter.js";
 import type { ArtifactValidationError, ArtifactValidationCode } from "./prompts.js";
+import { maskCodeSpans, hasUnclosedMarkdown } from "./markdown-mask.js";
 
 export interface NormalizeResult {
   ok: boolean;
@@ -66,6 +83,8 @@ const THINK_CLOSE_RE = /<\/think>/g;
 const OUTER_FENCE_RE = /^```(?:markdown|md)\s*\n([\s\S]*?)\n```\s*$/;
 /** Regex for any opening fence. */
 const ANY_FENCE_RE = /^(```)/;
+/** Matches a complete `<!-- lw:manual --> ... <!-- /lw:manual -->` block. */
+const MANUAL_BLOCK_RE = /<!--\s*lw:manual\s*-->[\s\S]*?<!--\s*\/lw:manual\s*-->/g;
 
 /**
  * Normalizes the raw LLM output into a Markdown artifact.
@@ -175,6 +194,9 @@ export function validateStage4Artifact(
   let fm: Frontmatter | null = null;
   let body = artifact;
   let frontmatterParseError: string | null = null;
+  /** Populated inside the `fm !== null` branch below; used for the
+   * independent frontmatter-coverage check further down. */
+  let fmAnchors: string[] = [];
   try {
     const parsed = parseFrontmatter(artifact);
     fm = parsed.frontmatter;
@@ -216,7 +238,7 @@ export function validateStage4Artifact(
     }
 
     // 3. Frontmatter anchors
-    const fmAnchors = getAnchors(fm);
+    fmAnchors = getAnchors(fm);
     if (closedKeyList.length > 0 && fmAnchors.length === 0) {
       errors.push(
         err(
@@ -268,18 +290,17 @@ export function validateStage4Artifact(
       offset: m.index,
     });
   }
+  // Collected once so it can drive BOTH the duplicate-key scan and the
+  // per-section prose check below, without re-running the regex.
+  const sectionMatches = [...body.matchAll(sectionRe)].filter(
+    (m) => m.index !== undefined && m[1] !== undefined,
+  );
   /** Keys seen in section markers (for cross-section duplicate detection). */
   const sectionKeysSeen = new Set<string>();
-  /** All declared keys for completeness (frontmatter + sections). */
-  const declared = new Set<string>();
-  if (fm !== null) {
-    for (const k of getAnchors(fm)) declared.add(k);
-  }
-  for (const m of body.matchAll(sectionRe)) {
-    if (m.index === undefined || m[1] === undefined) continue;
-    const preceding = lastHeadingBefore(headingMatches, m.index);
+  for (const m of sectionMatches) {
+    const preceding = lastHeadingBefore(headingMatches, m.index!);
     const sectionSlug = preceding?.slug;
-    const raw = m[1].trim();
+    const raw = m[1]!.trim();
     const keys = raw.split(/\s+/).filter(Boolean);
     const inMarker = new Set<string>();
     for (const k of keys) {
@@ -309,7 +330,6 @@ export function validateStage4Artifact(
       } else {
         sectionKeysSeen.add(k);
       }
-      declared.add(k);
       if (!closedSet.has(k)) {
         errors.push(
           err(
@@ -324,19 +344,116 @@ export function validateStage4Artifact(
     }
   }
 
-  // 4b. Completeness: every closed-list key must be declared at least once.
+  // 4b. Completeness is two
+  // INDEPENDENT requirements, not a union. Before this, a page with every
+  // key ONLY in frontmatter (zero real section markers) passed — the
+  // exact shape of the `tools.md` truncation and the `core-src-03.md`
+  // sentinel-leak findings. Frontmatter coverage is only checked when
+  // frontmatter itself parsed (fm !== null) — an entirely missing/broken
+  // frontmatter is already reported by `no_frontmatter`/`invalid_frontmatter`
+  // above, and re-emitting one `missing_closed_key` per key on top of that
+  // would just be noise for a problem already named.
   if (closedKeyList.length > 0) {
+    if (fm !== null) {
+      const fmKeySet = new Set(fmAnchors);
+      for (const k of closedKeyList) {
+        if (!fmKeySet.has(k)) {
+          errors.push(
+            err(
+              "missing_closed_key",
+              `closed-list key "${k}" is not declared in the frontmatter anchors list`,
+              "frontmatter",
+              k,
+            ),
+          );
+        }
+      }
+    }
     for (const k of closedKeyList) {
-      if (!declared.has(k)) {
+      if (!sectionKeysSeen.has(k)) {
         errors.push(
           err(
             "missing_closed_key",
-            `closed-list key "${k}" is not declared in frontmatter anchors or any section marker`,
-            "global",
+            `closed-list key "${k}" is not declared in any section marker`,
+            "section",
             k,
           ),
         );
       }
+    }
+  }
+
+  // 4c. Every section that has an anchor marker must be followed
+  // by real prose before the next heading/marker/end of body. A marker
+  // with nothing (or only a TODO/TBD line) after it means the closed-list
+  // key was "declared" but never actually documented — presence of an
+  // anchor is not the same thing as complete documentation.
+  {
+    const breakpoints = [
+      ...new Set([
+        ...sectionMatches.map((m) => m.index!),
+        ...headingMatches.map((h) => h.offset),
+        body.length,
+      ]),
+    ].sort((a, b) => a - b);
+    for (const m of sectionMatches) {
+      const markerStart = m.index!;
+      const markerEnd = markerStart + m[0]!.length;
+      const nextBreak = breakpoints.find((bp) => bp > markerStart) ?? body.length;
+      const windowText = body.slice(markerEnd, nextBreak);
+      if (!hasRealProse(windowText)) {
+        const preceding = lastHeadingBefore(headingMatches, markerStart);
+        errors.push(
+          err(
+            "empty_section",
+            `section marker at offset ${markerStart} has no real prose before the next heading/marker/end of page`,
+            "section",
+            undefined,
+            preceding?.slug,
+          ),
+        );
+      }
+    }
+  }
+
+  // 4d. The page must be fully closed Markdown — every fenced
+  // code block and every inline-code span opened must be closed. This is
+  // the objective, deterministic signal of truncation-mid-token (the
+  // `tools.md` finding): a well-formed document has zero backticks
+  // surviving the mask and zero fences left open. Not a size/length
+  // heuristic — a structural balance check.
+  if (hasUnclosedMarkdown(body)) {
+    errors.push(
+      err(
+        "unclosed_markdown",
+        "the page ends with an unclosed fenced code block or inline-code span (cut mid-token)",
+        "body",
+      ),
+    );
+  }
+
+  // 4e. "TODO"/"TBD" placeholders are banned from prose, except
+  // when they appear inside a fenced/inline code example (quoting someone
+  // else's TODO comment is not the same as writing your own placeholder)
+  // or inside a `<!-- lw:manual -->` block (human content this validator
+  // does not otherwise police). `model_invented_manual` below already
+  // rejects the artifact outright if the LLM wrote its OWN manual block,
+  // so this exclusion mostly matters for reused/shared masking helpers —
+  // it is still correct to apply it here defensively.
+  {
+    const withoutManual = body.replace(
+      MANUAL_BLOCK_RE,
+      (m) => " ".repeat(m.length),
+    );
+    const withoutCode = maskCodeSpans(withoutManual);
+    if (/\b(TODO|TBD)\b/i.test(withoutCode)) {
+      errors.push(
+        err(
+          "todo_marker_present",
+          `the page body contains a "TODO"/"TBD" placeholder outside code — write concrete content about what is visible instead`,
+          "body",
+        ),
+      );
     }
   }
 
@@ -362,6 +479,19 @@ export function validateStage4Artifact(
   }
 
   return { ok: errors.length === 0, errors };
+}
+
+/**
+ * True if `text` has at least one line that is neither blank nor a
+ * TODO/TBD placeholder. Used to detect a section marker followed by
+ * nothing (or nothing but a placeholder) — presence of an anchor marker
+ * is not the same thing as the section being actually documented.
+ */
+function hasRealProse(text: string): boolean {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .some((l) => l.length > 0 && !/^(TODO|TBD)\b/i.test(l));
 }
 
 function err(

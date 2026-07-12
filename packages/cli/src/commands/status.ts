@@ -34,7 +34,8 @@ export function registerStatus(program: Command): void {
         }
       } catch (err) {
         process.stderr.write(`livewiki status: error — ${(err as Error).message}\n`);
-        process.exit(1);
+        // Let Node drain pending stderr I/O before exiting.
+        process.exitCode = 1;
       }
     });
 }

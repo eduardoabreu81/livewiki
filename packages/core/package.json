@@ -108,6 +108,8 @@
   "dependencies": {
     "better-sqlite3": "^12.0.0",
     "ignore": "^7.0.0",
+    "jsdom": "^26.1.0",
+    "mermaid": "^11.16.0",
     "tree-sitter-javascript": "^0.25.0",
     "tree-sitter-python": "^0.25.0",
     "tree-sitter-typescript": "^0.23.0",
@@ -115,6 +117,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^2.1.0",
     "tree-sitter-cli": "^0.26.10",

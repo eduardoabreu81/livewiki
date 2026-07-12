@@ -1,29 +1,18 @@
 /**
- * diagrams — geração determinística de Mermaid (sem LLM).
+ * Deterministic Mermaid diagram generation. No LLM is involved.
  *
- * SPEC §"Diagramas determinísticos (Fase 3)" (commit 34e34d9): "structure.mmd
- * (organograma de diretórios/módulos), modules.mmd (grafo de dependências por
- * imports — subproduto da etapa 2 do pipeline) e diagrams/<modulo>.classes.mmd
- * (classDiagram Mermaid: classes/métodos/herança, direto da tabela `symbols`)".
- *
- * **Paths SPEC (correção #2 da revisão do plano)**:
- *   - livewiki/architecture/structure.mmd
- *   - livewiki/architecture/modules.mmd
- *   - livewiki/diagrams/<module-slug>.classes.mmd
- *
- * `owner: generated` puros — nunca envelhecem, nunca entram em dívida.
- * Regenerados a cada `livewiki index` / `livewiki init`.
- *
- * Call-graph de funções e diagramas de sequência estão FORA (VISION §"Fora
- * do escopo desenhado").
+ * Output paths:
+ * - `livewiki/architecture/structure.mmd`
+ * - `livewiki/architecture/modules.mmd`
+ * - `livewiki/diagrams/<module-slug>.classes.mmd`
  */
 
-import type { Module, ModuleGraphEdge } from "./modules.js";
 import type { SymbolRow } from "./db.js";
+import type { Module, ModuleGraphEdge } from "./modules.js";
 
-/** Slug válido pra nome de arquivo: lowercase, alfanum + hífen. */
-export function moduleSlug(s: string): string {
-  return s
+/** Returns a lowercase, filesystem-safe module slug. */
+export function moduleSlug(value: string): string {
+  return value
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -31,101 +20,126 @@ export function moduleSlug(s: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/**
- * Gera `structure.mmd` — organograma de diretórios. Mermaid `graph TD`.
- * Cada nó é um path de arquivo; edges = "pertence a".
- */
+/** Generates the repository directory graph. */
 export function generateStructure(filePaths: string[]): string {
   const lines: string[] = ["graph TD"];
-  const seen = new Set<string>();
-  for (const p of filePaths) {
-    // Edge chain: src → src/auth → src/auth/login.ts
-    const segments = p.split("/");
+  const seenNodes = new Set<string>();
+  const seenEdges = new Set<string>();
+
+  for (const path of filePaths) {
+    const segments = path.split("/");
     let parent = "";
-    for (const seg of segments) {
-      const node = parent ? `${parent}/${seg}` : seg;
-      if (!seen.has(node)) {
+    for (const segment of segments) {
+      const node = parent ? `${parent}/${segment}` : segment;
+      if (!seenNodes.has(node)) {
         lines.push(`  ${mermaidId(node)}["${escapeLabel(node)}"]`);
-        seen.add(node);
+        seenNodes.add(node);
       }
       if (parent) {
-        lines.push(`  ${mermaidId(parent)} --> ${mermaidId(node)}`);
+        const edgeKey = JSON.stringify([parent, node]);
+        if (!seenEdges.has(edgeKey)) {
+          lines.push(`  ${mermaidId(parent)} --> ${mermaidId(node)}`);
+          seenEdges.add(edgeKey);
+        }
       }
       parent = node;
     }
   }
+
   return lines.join("\n") + "\n";
 }
 
-/**
- * Gera `modules.mmd` — grafo de imports entre módulos. Mermaid `graph LR`.
- */
+/** Generates the import graph between modules. */
 export function generateModulesGraph(edges: ModuleGraphEdge[]): string {
   const lines: string[] = ["graph LR"];
   if (edges.length === 0) {
     lines.push("  root[No module edges detected]");
     return lines.join("\n") + "\n";
   }
-  for (const e of edges) {
-    lines.push(`  ${mermaidId(e.from)}["${escapeLabel(e.from)}"]`);
-    lines.push(`  ${mermaidId(e.to)}["${escapeLabel(e.to)}"]`);
-    lines.push(`  ${mermaidId(e.from)} --> ${mermaidId(e.to)}`);
+
+  const seenNodes = new Set<string>();
+  const seenEdges = new Set<string>();
+  for (const edge of edges) {
+    for (const moduleId of [edge.from, edge.to]) {
+      if (!seenNodes.has(moduleId)) {
+        lines.push(`  ${mermaidId(moduleId)}["${escapeLabel(moduleId)}"]`);
+        seenNodes.add(moduleId);
+      }
+    }
+    const edgeKey = JSON.stringify([edge.from, edge.to]);
+    if (!seenEdges.has(edgeKey)) {
+      lines.push(`  ${mermaidId(edge.from)} --> ${mermaidId(edge.to)}`);
+      seenEdges.add(edgeKey);
+    }
   }
+
   return lines.join("\n") + "\n";
 }
 
 /**
- * Gera `diagrams/<slug>.classes.mmd` — classDiagram Mermaid por módulo.
- * Apenas classes e métodos (sem call-graphs). Subproduto direto da tabela
- * symbols.
+ * Generates a class diagram for one module. Classes with the same display
+ * name in different files receive distinct Mermaid IDs, and methods are
+ * grouped by the full `(path, className)` identity.
  */
-export function generateClassDiagram(
-  module: Module,
-  symbols: SymbolRow[],
-): string {
-  const classSymbols = symbols.filter(
-    (s) =>
-      s.kind === "class" &&
-      module.paths.some((p) => s.key.startsWith(`${p}#`)),
-  );
-  if (classSymbols.length === 0) {
-    return ""; // sem classes → sem arquivo (correção: SPEC fala "quando há classes")
+export function generateClassDiagram(module: Module, symbols: SymbolRow[]): string {
+  const modulePaths = new Set(module.paths);
+  const classSymbols = symbols
+    .filter(
+      (symbol) =>
+        symbol.kind === "class" && modulePaths.has(symbol.key.split("#")[0] ?? ""),
+    )
+    .sort((a, b) => a.key.localeCompare(b.key));
+
+  if (classSymbols.length === 0) return "";
+
+  const methodsByClass = new Map<string, SymbolRow[]>();
+  for (const symbol of symbols) {
+    if (symbol.kind !== "method") continue;
+    const [path, qualifiedName] = symbol.key.split("#");
+    if (!path || !qualifiedName || !modulePaths.has(path)) continue;
+    const className = qualifiedName.split(".")[0];
+    if (!className) continue;
+    const identity = classIdentity(path, className);
+    const methods = methodsByClass.get(identity) ?? [];
+    methods.push(symbol);
+    methodsByClass.set(identity, methods);
   }
 
   const lines: string[] = ["classDiagram"];
-  const methodSymbolsByClass = new Map<string, SymbolRow[]>();
-  for (const s of symbols) {
-    if (s.kind !== "method") continue;
-    if (!module.paths.some((p) => s.key.startsWith(`${p}#`))) continue;
-    const parts = s.key.split("#");
-    if (parts.length < 2) continue;
-    const className = parts[1]!.split(".")[0];
-    if (!className) continue;
-    const arr = methodSymbolsByClass.get(className) ?? [];
-    arr.push(s);
-    methodSymbolsByClass.set(className, arr);
+  for (const [index, classSymbol] of classSymbols.entries()) {
+    const [path, className = "Unknown"] = classSymbol.key.split("#");
+    const classId = `class_${index + 1}`;
+    lines.push(`  class ${classId}["${escapeLabel(className)}"] {`);
+    const methods = (methodsByClass.get(classIdentity(path ?? "", className)) ?? [])
+      .sort((a, b) => a.key.localeCompare(b.key));
+    for (const method of methods) {
+      const qualifiedName = method.key.split("#")[1] ?? "method";
+      const methodName = qualifiedName.split(".").slice(1).join(".") || "method";
+      lines.push(`    +${mermaidMemberName(methodName)}()`);
+    }
+    lines.push("  }");
   }
 
-  for (const cls of classSymbols) {
-    const name = cls.key.split("#")[1] ?? "Unknown";
-    lines.push(`  class ${name} {`);
-    const methods = methodSymbolsByClass.get(name) ?? [];
-    for (const m of methods) {
-      const mname = m.key.split("#")[1]?.split(".").slice(1).join(".") ?? "?";
-      // signature pode ser null; usa fallback
-      const sig = (m.signature ?? `+${mname}()`).replace(/"/g, '\\"');
-      lines.push(`    ${sig}`);
-    }
-    lines.push(`  }`);
-  }
   return lines.join("\n") + "\n";
 }
 
-/** ID válido pra nó Mermaid (sem caracteres especiais). */
-function mermaidId(s: string): string {
-  return s.replace(/[^a-zA-Z0-9]/g, "_");
+function classIdentity(path: string, className: string): string {
+  return JSON.stringify([path, className]);
 }
 
-function escapeLabel(s: string): string {
-  return s.replace(/"/g, '\\"').replace(/\[/g, "&#91;").replace(/\]/g, "&#93;");
+function mermaidId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]/g, "_");
+}
+
+function mermaidMemberName(value: string): string {
+  const sanitized = value.replace(/[^a-zA-Z0-9_.]/g, "_");
+  return sanitized || "method";
+}
+
+function escapeLabel(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/\[/g, "&#91;")
+    .replace(/\]/g, "&#93;");
 }

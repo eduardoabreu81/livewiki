@@ -47,6 +47,8 @@ class MockLlm implements LlmClient {
             "",
             "# t",
             "",
+            `<!-- lw:anchors ${closedKeys.join(" ")} -->`,
+            "",
             "Body.",
             "",
           ].join("\n")
@@ -195,9 +197,13 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
         "",
         "## Login",
         "",
+        "<!-- lw:anchors src/auth/login.ts#login -->",
+        "",
         "New prose for login (regenerated).",
         "",
         "## Logout",
+        "",
+        "<!-- lw:anchors src/auth/login.ts#logout -->",
         "",
         "New prose for logout (regenerated).",
         "",
@@ -954,9 +960,13 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "",
       "## First section",
       "",
+      "<!-- lw:anchors src/auth/login.ts#login -->",
+      "",
       "New prose here.",
       "",
       "## Second section",
+      "",
+      "<!-- lw:anchors src/auth/login.ts#logout -->",
       "",
       "Also new.",
       "",
@@ -1018,6 +1028,8 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "---",
       "",
       "## Totally different section",
+      "",
+      "<!-- lw:anchors src/auth/login.ts#login src/auth/login.ts#logout -->",
       "",
       "New prose.",
       "",
@@ -1083,9 +1095,13 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "",
       "## Repeated section",
       "",
+      "<!-- lw:anchors src/auth/login.ts#login -->",
+      "",
       "Totally new prose for the repeated section.",
       "",
       "## Other section",
+      "",
+      "<!-- lw:anchors src/auth/login.ts#logout -->",
       "",
       "Also new.",
       "",
@@ -1119,6 +1135,8 @@ describe("review #7b — manual block preserves bytes and position (section)", (
     // Both inside "## Repeated section" (before "## Other section")
     const repeatedIdx = onDisk.indexOf("## Repeated section");
     const otherIdx = onDisk.indexOf("## Other section");
+    expect(repeatedIdx, onDisk).toBeGreaterThanOrEqual(0);
+    expect(otherIdx, onDisk).toBeGreaterThanOrEqual(0);
     expect(idx1).toBeGreaterThan(repeatedIdx);
     expect(idx2).toBeLessThan(otherIdx);
 

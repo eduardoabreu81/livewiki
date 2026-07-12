@@ -17,6 +17,7 @@
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import type { PricingOverride } from "./pricing.js";
+import type { PathRoleConfig } from "./modules.js";
 import { isKnownPreset, resolvePreset, resolveProviderConfig, type PresetName } from "./presets.js";
 
 /** Provideres suportados pelo client LLM (Fase 3). */
@@ -103,6 +104,13 @@ export interface LivewikiConfig {
    * Timeouts do not auto-retry; usage for timed-out attempts is unknown.
    */
   timeoutMs?: number;
+  /**
+   * Optional gitignore-style path-role patterns. Roles affect navigation and
+   * prioritization only; they never remove files, modules, or symbols from
+   * the exact documentation inventory. A supplied category replaces its
+   * built-in patterns; an empty array disables that category.
+   */
+  pathRoles?: PathRoleConfig;
 }
 
 /** Max safe timeout for Node `setTimeout` (signed 32-bit ms). */
@@ -380,6 +388,29 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
   if (obj["timeoutMs"] !== undefined) {
     assertValidTimeoutMs(obj["timeoutMs"]);
     out.timeoutMs = obj["timeoutMs"] as number;
+  }
+  if (obj["pathRoles"] !== undefined) {
+    const value = obj["pathRoles"];
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("invalid pathRoles: must be an object");
+    }
+    const roleObject = value as Record<string, unknown>;
+    const allowed = new Set(["fixturePatterns", "toolingPatterns", "docsPatterns"]);
+    for (const key of Object.keys(roleObject)) {
+      if (!allowed.has(key)) {
+        throw new Error(`invalid pathRoles key "${key}"`);
+      }
+    }
+    const pathRoles: PathRoleConfig = {};
+    for (const key of allowed) {
+      const patterns = roleObject[key];
+      if (patterns === undefined) continue;
+      if (!Array.isArray(patterns) || patterns.some((item) => typeof item !== "string")) {
+        throw new Error(`invalid pathRoles.${key}: must be an array of strings`);
+      }
+      pathRoles[key as keyof PathRoleConfig] = patterns as string[];
+    }
+    out.pathRoles = pathRoles;
   }
   return out;
 }

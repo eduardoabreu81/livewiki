@@ -57,6 +57,10 @@ export interface UsageAttempt {
   usageKnown: boolean;
   costUsd: CostUsd | null;
   finishedAt: number;
+  /** Normalized provider completion signal for this response, when known. */
+  stopReason?: import("./llm/types.js").StopReason;
+  /** Original provider value retained for diagnostics. */
+  rawStopReason?: string;
 }
 
 /**

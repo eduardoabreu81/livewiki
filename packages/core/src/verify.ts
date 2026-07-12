@@ -24,12 +24,15 @@ import * as safeIo from "./safe-io.js";
 import { openIndex, type SymbolRow } from "./db.js";
 import { extractAnchors, slugify } from "./anchors.js";
 import { sha256 } from "./hashes.js";
+import { maskCodeSpans } from "./markdown-mask.js";
+import { validateMermaidSyntax } from "./mermaid-validator.js";
 
 export type IssueSeverity = "error" | "warning";
 
 export type IssueCode =
   | "broken_anchor"        // anchor referencia symbol que não existe
   | "broken_internal_link" // [text](page.md) ou [text](page.md#section) pra página inexistente
+  | "invalid_mermaid_diagram"
   | "manual_block_altered"  // bloco <!-- lw:manual -->...<!-- /lw:manual --> com hash divergente
   | "missing_wiki_path";    // doc_page do banco sumiu da wiki
 
@@ -94,6 +97,11 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
 
     // Walk wiki do disco (Fix C) — não depende de doc_pages do banco.
     const wikiPages = await collectWikiPages(absRoot);
+    // The existence set used for link resolution
+    // includes non-.md wiki artifacts (currently `.mmd` diagrams) — a link
+    // to a diagram is checkable even though diagrams aren't full "pages"
+    // (no anchors/manual-blocks/section-scan of their own).
+    const existingArtifactPaths = await collectWikiArtifactPaths(absRoot);
 
     // Mapa de section_slug por wiki_path (pra links internos)
     const sectionSlugsByPath = new Map<string, Set<string>>();
@@ -136,27 +144,32 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
         }
       }
 
-      // Verifica manual blocks byte-a-byte (regra #6)
-      // baseline vem do banco (manual_blocks); só temos baseline se a página
-      // já foi indexada pelo menos uma vez.
+      // Verify stored manual blocks byte-for-byte. Offsets are not identities:
+      // regenerated prose and section markers can move a preserved block by
+      // any distance. Compare the multiset of hashes so duplicate blocks are
+      // counted correctly and a missing/changed stored block is detected.
       const storedBlocks = manualBlocksByPath.get(page.relPath) ?? [];
-      for (const mb of extracted.manualBlocks) {
-        const currentContent = source.slice(mb.start, mb.end);
-        const currentHash = sha256(currentContent);
-        // storedBlocks usa offsets da época que a página foi indexada —
-        // pode estar deslocado. Tolerância de 50 chars pra edição que moveu
-        // o bloco.
-        const stored = storedBlocks.find(
-          (s) => Math.abs(s.start_offset - mb.start) < 50,
-        );
-        if (stored && stored.content_hash !== currentHash) {
-          issues.push({
-            severity: "error",
-            code: "manual_block_altered",
-            wikiPath: page.relPath,
-            detail: `bloco manual em offset ${mb.start} divergiu (hash stored=${stored.content_hash.slice(0, 8)}, current=${currentHash.slice(0, 8)})`,
-          });
+      const unmatchedCurrentHashes = extracted.manualBlocks.map((block) =>
+        sha256(source.slice(block.start, block.end)),
+      );
+      const unmatchedStored = [...storedBlocks];
+      for (let index = unmatchedStored.length - 1; index >= 0; index--) {
+        const stored = unmatchedStored[index]!;
+        const currentIndex = unmatchedCurrentHashes.indexOf(stored.content_hash);
+        if (currentIndex >= 0) {
+          unmatchedCurrentHashes.splice(currentIndex, 1);
+          unmatchedStored.splice(index, 1);
         }
+      }
+      for (const stored of unmatchedStored) {
+        issues.push({
+          severity: "error",
+          code: "manual_block_altered",
+          wikiPath: page.relPath,
+          detail:
+            `stored manual block at offset ${stored.start_offset} is missing or changed ` +
+            `(expected hash=${stored.content_hash.slice(0, 8)})`,
+        });
       }
 
       // Links internos — entre páginas da wiki (lidos do disco)
@@ -164,8 +177,11 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
       // they are syntax examples, not real references. Mask that content
       // BEFORE running the link regex (does not mutate `source`; used only
       // for this scan).
-      const sourceForLinks = maskCodeForLinkScan(source);
-      const linkRe = /\[([^\]]*)\]\(([^)#]+\.md)(#([^)]+))?\)/g;
+      const sourceForLinks = maskCodeSpans(source);
+      // `.md` and `.mmd` are both checkable wiki artifacts:
+      // overview links to class diagrams must be caught the same way as
+      // broken page links — extension-driven, not path-driven).
+      const linkRe = /\[([^\]]*)\]\(([^)#]+\.(?:md|mmd))(#([^)]+))?\)/g;
       for (const m of sourceForLinks.matchAll(linkRe)) {
         const linkPathRaw = m[2];
         if (!linkPathRaw) continue;
@@ -197,8 +213,8 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
           });
           continue;
         }
-        // Verifica se a página alvo EXISTE no disco
-        const targetExists = sectionSlugsByPath.has(resolved);
+        // Check whether the target artifact exists on disk.
+        const targetExists = existingArtifactPaths.has(resolved);
         if (!targetExists) {
           issues.push({
             severity: "warning",
@@ -219,6 +235,22 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
             });
           }
         }
+      }
+    }
+
+    for (const diagramPath of [...existingArtifactPaths]
+      .filter((path) => path.endsWith(".mmd"))
+      .sort()) {
+      const source = await safeIo.readText(absRoot, diagramPath).catch(() => null);
+      if (source === null) continue;
+      const diagnostic = await validateMermaidSyntax(source);
+      if (diagnostic !== null) {
+        issues.push({
+          severity: "error",
+          code: "invalid_mermaid_diagram",
+          wikiPath: diagramPath,
+          detail: `Mermaid parser rejected the diagram: ${diagnostic}`,
+        });
       }
     }
 
@@ -245,104 +277,6 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
   }
 }
 
-/**
- * Masks code content BEFORE the `broken_internal_link` scan.
- * `[text](page.md)` inside fenced code blocks (``` or ~~~) or inline code
- * (`` `...` ``, including multi-backtick runs) is syntax example, not a
- * navigable link — it must not be resolved or reported.
- *
- * Deterministic and local to this file: does not mutate `source` (used
- * for other checks — anchors, manual blocks, headings) or the content on
- * disk. No exception by path/file — any code, on any page, is treated
- * the same way.
- */
-function maskCodeForLinkScan(text: string): string {
-  return maskInlineCode(maskFencedCodeBlocks(text));
-}
-
-/** Blanks the body (opening line, content, and closing line) of each fenced code block (``` or ~~~). */
-function maskFencedCodeBlocks(text: string): string {
-  // CRLF-safe: a lone "\n" split leaves a trailing "\r" on each line, which
-  // breaks the closing-fence `$` match on CRLF files and lets the fence
-  // stay open — masking (and the link scan after it) the rest of the page.
-  const lines = text.split(/\r?\n/);
-  const fenceOpenRe = /^[ \t]{0,3}(`{3,}|~{3,})/;
-  let inFence = false;
-  let fenceChar = "";
-  let fenceLen = 0;
-  const out: string[] = [];
-  for (const line of lines) {
-    if (!inFence) {
-      const m = line.match(fenceOpenRe);
-      if (m?.[1]) {
-        inFence = true;
-        fenceChar = m[1][0] as string;
-        fenceLen = m[1].length;
-        out.push("");
-        continue;
-      }
-      out.push(line);
-      continue;
-    }
-    const closeRe = new RegExp(`^[ \\t]{0,3}[${fenceChar}]{${fenceLen},}[ \\t]*$`);
-    if (closeRe.test(line)) {
-      inFence = false;
-    }
-    out.push("");
-  }
-  return out.join("\n");
-}
-
-/**
- * Blanks inline code spans delimited by N backticks (N >= 1), following
- * the CommonMark rule: the closing delimiter must have the SAME number of
- * backticks as the opening one (allows `` `code with ` inside` `` etc).
- * A backtick run with no matching close is left as literal text.
- */
-function maskInlineCode(text: string): string {
-  let result = "";
-  let i = 0;
-  const n = text.length;
-  while (i < n) {
-    if (text[i] !== "`") {
-      result += text[i];
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j < n && text[j] === "`") j++;
-    const runLen = j - i;
-
-    let k = j;
-    let closeStart = -1;
-    while (k < n) {
-      if (text[k] === "`") {
-        let k2 = k;
-        while (k2 < n && text[k2] === "`") k2++;
-        if (k2 - k === runLen) {
-          closeStart = k;
-          k = k2;
-          break;
-        }
-        k = k2;
-      } else {
-        k++;
-      }
-    }
-
-    if (closeStart === -1) {
-      // No matching close — not a code span; keep it literal.
-      result += text.slice(i, j);
-      i = j;
-    } else {
-      const spanEnd = closeStart + runLen;
-      result += " ".repeat(spanEnd - i);
-      i = spanEnd;
-    }
-  }
-  return result;
-}
-
 async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]> {
   const out: { relPath: string }[] = [];
   const stack = [nodePath.join(absRoot, "livewiki")];
@@ -363,6 +297,37 @@ async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
         out.push({
           relPath: nodePath.relative(absRoot, abs).split(nodePath.sep).join("/"),
         });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Every wiki-relative artifact path on disk that a link is allowed to
+ * target — `.md` pages and `.mmd` diagrams (`verify` must be
+ * able to see a broken link to a deterministic diagram the same way it
+ * sees a broken link to a page). Extension-driven, not path-driven — a
+ * future third artifact type only needs one more suffix here.
+ */
+async function collectWikiArtifactPaths(absRoot: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  const stack = [nodePath.join(absRoot, "livewiki")];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await nodeFs.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const abs = nodePath.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(abs);
+      } else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".mmd"))) {
+        out.add(nodePath.relative(absRoot, abs).split(nodePath.sep).join("/"));
       }
     }
   }

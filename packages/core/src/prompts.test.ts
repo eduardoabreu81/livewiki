@@ -66,6 +66,27 @@ describe("prompts — todos em inglês (templates)", () => {
     expect(r.system).toMatch(/incomplete coverage|closed-list key is missing|missing from the page/i);
   });
 
+  it("stage 4 system requires independent frontmatter and section coverage", () => {
+    const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
+    expect(r.system).toMatch(/TWO INDEPENDENT REQUIREMENTS/i);
+    expect(r.system).toMatch(/frontmatter anchors list alone MUST contain every closed-list key/i);
+    expect(r.system).toMatch(/section markers alone.*MUST also contain every closed-list key/i);
+  });
+
+  it("stage 4 system requires prose after every section marker and closed Markdown", () => {
+    const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
+    expect(r.system).toMatch(/followed by real explanatory prose/i);
+    expect(r.system).toMatch(/[Cc]lose every (fenced code block|Markdown construct)/);
+    expect(r.system).toMatch(/never end the page mid code-span or mid-fence/i);
+  });
+
+  it("stage 4 system bans TODO/TBD placeholders", () => {
+    const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
+    expect(r.system).not.toMatch(/write "TODO:"/i);
+    expect(r.system).toMatch(/do not write "TODO", "TBD"/i);
+    expect(r.system).toMatch(/"TODO"\/"TBD" text in the body, outside a fenced\/inline code example/i);
+  });
+
   it("repair prompt requires completeness and embeds a larger prior-candidate window", () => {
     const longPrior = "P".repeat(5000);
     const r = buildRepairPrompt(
@@ -226,20 +247,33 @@ describe("prompts U — hardening (no copyable fake anchors)", () => {
     );
   });
 
-  it("repair prompt for missing_closed_key instructs adding ONLY the listed keys, no duplicates", () => {
-    const r = buildRepairPrompt(
+  it("repair prompt for missing_closed_key instructs adding ONLY to the location named by the error, no duplicates", () => {
+    const rFrontmatter = buildRepairPrompt(
       sampleModule,
       ["src/auth.ts#login", "src/auth.ts#logout"],
       "sym",
       "code",
       "prior",
-      [{ code: "missing_closed_key", message: "missing", location: "global", offending: "src/auth.ts#logout" }],
+      [{ code: "missing_closed_key", message: "missing", location: "frontmatter", offending: "src/auth.ts#logout" }],
       "en",
     );
-    expect(r.user).toMatch(/ACTION:\s*ADD this exact key "src\/auth\.ts#logout"/i);
-    expect(r.user).toMatch(/do not duplicate it/i);
-    expect(r.system).toMatch(/ADD only those key\(s\)/i);
-    expect(r.system).toMatch(/do not add any key that is not explicitly listed as missing/i);
+    expect(rFrontmatter.user).toMatch(/ACTION:\s*ADD this exact key "src\/auth\.ts#logout"/i);
+    expect(rFrontmatter.user).toMatch(/frontmatter anchors list ONLY/i);
+    expect(rFrontmatter.user).toMatch(/do not duplicate it/i);
+
+    const rSection = buildRepairPrompt(
+      sampleModule,
+      ["src/auth.ts#login", "src/auth.ts#logout"],
+      "sym",
+      "code",
+      "prior",
+      [{ code: "missing_closed_key", message: "missing", location: "section", offending: "src/auth.ts#logout" }],
+      "en",
+    );
+    expect(rSection.user).toMatch(/exactly one section marker ONLY/i);
+
+    expect(rFrontmatter.system).toMatch(/COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS/i);
+    expect(rFrontmatter.system).toMatch(/ADD the key ONLY to the location named by that error/i);
   });
 
   it("repair prompt receives the prior candidate (truncated) and instructs no reasoning prose", () => {
@@ -263,27 +297,33 @@ describe("prompts U — hardening (no copyable fake anchors)", () => {
 // as copyable marker syntax — only the dynamic example built from real
 // closed-list keys may look like a marker.
 describe("prompts — untrusted content neutralization (source / priorCandidate)", () => {
-  it("neutralizeUntrustedControlMarkers() drops the ENTIRE payload, keeping only the marker type", () => {
-    expect(neutralizeUntrustedControlMarkers("<!-- lw:anchors ... -->")).toBe(
-      "[untrusted lw:anchors control marker omitted]",
-    );
-    expect(neutralizeUntrustedControlMarkers("<!-- lw:anchors fake-key -->")).toBe(
-      "[untrusted lw:anchors control marker omitted]",
-    );
+  it("neutralizeUntrustedControlMarkers() drops the ENTIRE payload — pure whitespace, no visible token", () => {
+    // A bracketed placeholder is itself a
+    // copyable, prose-shaped token the LLM can echo. Nothing should
+    // survive except whitespace of the same length as the original match.
+    const a = neutralizeUntrustedControlMarkers("<!-- lw:anchors ... -->");
+    expect(a).toBe(" ".repeat("<!-- lw:anchors ... -->".length));
+    expect(a.trim()).toBe("");
+
+    const b = neutralizeUntrustedControlMarkers("<!-- lw:anchors fake-key -->");
+    expect(b.trim()).toBe("");
+
     // Payload never survives — no "...", no "fake-key", no real key copied out of context.
-    expect(neutralizeUntrustedControlMarkers("<!-- lw:anchors ... -->")).not.toContain("...");
-    expect(neutralizeUntrustedControlMarkers("<!-- lw:anchors fake-key -->")).not.toContain("fake-key");
+    expect(a).not.toContain("...");
+    expect(b).not.toContain("fake-key");
     expect(
       neutralizeUntrustedControlMarkers("<!-- lw:anchors src/auth.ts#login extra-junk -->"),
     ).not.toContain("src/auth.ts#login");
+    // No "[untrusted...]"-shaped text either — that was itself the leak vector.
+    expect(a).not.toMatch(/untrusted|omitted|control marker/i);
     expect(neutralizeUntrustedControlMarkers("plain text, no marker")).toBe("plain text, no marker");
   });
 
-  it("neutralizeUntrustedControlMarkers() neutralizes OPENING and CLOSING markers (e.g. lw:manual)", () => {
+  it("neutralizeUntrustedControlMarkers() neutralizes OPENING and CLOSING markers (e.g. lw:manual) as pure whitespace", () => {
     const opening = neutralizeUntrustedControlMarkers("<!-- lw:manual -->");
     const closing = neutralizeUntrustedControlMarkers("<!-- /lw:manual -->");
-    expect(opening).toBe("[untrusted lw:manual control marker omitted]");
-    expect(closing).toBe("[untrusted /lw:manual control marker omitted]");
+    expect(opening.trim()).toBe("");
+    expect(closing.trim()).toBe("");
     expect(opening).not.toContain("<!--");
     expect(closing).not.toContain("<!--");
 
@@ -308,10 +348,14 @@ describe("prompts — untrusted content neutralization (source / priorCandidate)
     }
     expect(r.user).not.toContain("<!-- lw:anchors ... -->");
     expect(r.user).not.toContain("<!-- lw:anchors fake-key -->");
-    // The invalid payload disappears entirely — not just the comment delimiters.
+    // The invalid payload disappears entirely — not just the comment delimiters —
+    // and leaves no visible bracketed replacement token either (whitespace
+    // only). The static "# Source code (... untrusted ...)" HEADING is fine
+    // (it's our own fixed instructional text, not a copyable marker); what
+    // must never appear is the OLD leak vector, the bracketed placeholder.
     expect(r.user).not.toContain("fake-key");
     expect(r.user).not.toMatch(/lw:anchors\s+\.\.\./);
-    expect(r.user).toContain("[untrusted lw:anchors control marker omitted]");
+    expect(r.user).not.toMatch(/\[untrusted lw:\w+ control marker omitted\]/);
   });
 
   it("repair prompt: fake markers in source AND priorCandidate never survive as copyable syntax", () => {

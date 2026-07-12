@@ -126,4 +126,4 @@ export class LlmRequestError extends Error {
 
 export { LlmTimeoutError, DEFAULT_LLM_TIMEOUT_MS } from "./base.js";
 
-export type { GenerateRequest, GenerateResult, LlmUsage } from "./types.js";
+export type { GenerateRequest, GenerateResult, LlmUsage, StopReason } from "./types.js";

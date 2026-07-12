@@ -24,7 +24,7 @@
  */
 
 import type { LlmClient } from "./index.js";
-import type { GenerateRequest, GenerateResult } from "./types.js";
+import type { GenerateRequest, GenerateResult, StopReason } from "./types.js";
 import { type AdapterConfig, requestWithRetry, withTimeoutMs } from "./base.js";
 
 export class AnthropicAdapter implements LlmClient {
@@ -84,12 +84,23 @@ export class AnthropicAdapter implements LlmClient {
         outputTokens: raw.usage.output_tokens,
         model: raw.model,
       },
+      stopReason: normalizeStopReason(raw.stop_reason),
+      ...(raw.stop_reason != null ? { rawStopReason: raw.stop_reason } : {}),
     };
   }
+}
+
+/** Anthropic `stop_reason` → normalized `StopReason`. */
+function normalizeStopReason(stopReason: string | null | undefined): StopReason {
+  if (stopReason === "max_tokens") return "length";
+  if (stopReason === "end_turn" || stopReason === "stop_sequence") return "complete";
+  if (stopReason == null) return "unknown";
+  return "incomplete";
 }
 
 interface AnthropicResponse {
   content: Array<{ type: string; text?: string }>;
   model: string;
   usage: { input_tokens: number; output_tokens: number };
+  stop_reason?: string | null;
 }

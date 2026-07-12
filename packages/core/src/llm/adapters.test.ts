@@ -77,6 +77,33 @@ describe("AnthropicAdapter", () => {
     expect(r.usage.outputTokens).toBe(567);
   });
 
+  it("normalizes Anthropic stop reasons and preserves unknown values safely", async () => {
+    const cases: Array<[string | null | undefined, "complete" | "length" | "incomplete" | "unknown"]> = [
+      ["max_tokens", "length"],
+      ["end_turn", "complete"],
+      ["stop_sequence", "complete"],
+      ["tool_use", "incomplete"],
+      [null, "unknown"],
+      [undefined, "unknown"],
+    ];
+    for (const [raw, expected] of cases) {
+      const fetchImpl = fakeFetch({
+        status: 200,
+        body: {
+          content: [{ type: "text", text: "x" }],
+          model: "claude-sonnet-5",
+          usage: { input_tokens: 1, output_tokens: 1 },
+          stop_reason: raw,
+        },
+      });
+      const adapter = new AnthropicAdapter({
+        apiKey: "k", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-5", fetchImpl,
+      });
+      const r = await adapter.generate({ system: "s", user: "u" });
+      expect(r.stopReason).toBe(expected);
+    }
+  });
+
   it("status 4xx (não 429) lança LlmRequestError sem retry", async () => {
     const fetchImpl = vi.fn(async () =>
       new Response("invalid api key", { status: 401 }),
@@ -205,6 +232,31 @@ describe("OpenAiCompatAdapter", () => {
     const r = await adapter.generate({ system: "s", user: "u" });
     expect(r.usage.inputTokens).toBe(100);
     expect(r.usage.outputTokens).toBe(50);
+  });
+
+  it("normalizes OpenAI-compatible finish reasons and preserves unknown values safely", async () => {
+    const cases: Array<[string | null | undefined, "complete" | "length" | "incomplete" | "unknown"]> = [
+      ["length", "length"],
+      ["stop", "complete"],
+      ["tool_calls", "incomplete"],
+      [null, "unknown"],
+      [undefined, "unknown"],
+    ];
+    for (const [raw, expected] of cases) {
+      const fetchImpl = fakeFetch({
+        status: 200,
+        body: {
+          choices: [{ message: { role: "assistant", content: "x" }, finish_reason: raw }],
+          model: "x",
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        },
+      });
+      const adapter = new OpenAiCompatAdapter({
+        apiKey: "k", baseUrl: "https://api.openai.com", model: "x", fetchImpl,
+      });
+      const r = await adapter.generate({ system: "s", user: "u" });
+      expect(r.stopReason).toBe(expected);
+    }
   });
 });
 

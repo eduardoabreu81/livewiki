@@ -43,23 +43,26 @@ export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
  * string. If embedded verbatim, the LLM can copy it as if it were a real,
  * copyable marker, producing a page with a fake/ellipsis anchor.
  *
- * The ENTIRE payload is dropped — only the marker type (e.g. "lw:anchors",
- * "/lw:manual") survives, as a non-comment placeholder that cannot be
- * mistaken for real marker syntax. Keeping any part of the original payload
- * (an ellipsis, a fabricated key, a real key copied out of context) would
- * still hand the LLM something copyable.
+ * A first pass
+ * replaced the match with a visible bracketed placeholder
+ * (`[untrusted lw:TYPE control marker omitted]`). That was ITSELF a
+ * problem: it is prose-shaped, human/LLM-readable text sitting right
+ * after a heading in the masked source — the model started COPYING it in
+ * place of the real `<!-- lw:anchors ... -->` marker it was supposed to
+ * emit (confirmed: 10 verbatim occurrences of that exact placeholder
+ * leaked into a generated page documenting `prompts.ts` itself, whose own
+ * JSDoc uses the marker syntax as an example). The fix now leaves NO
+ * visible token at all — pure whitespace, same length as the match, so
+ * there is nothing left worth quoting or mistaking for real syntax.
  *
  * This ONLY rewrites the copy sent to the LLM inside the prompt string. It
  * never touches the caller's `source`, the generated artifact, or the
  * validator — those still see/produce the original bytes.
  */
-const LW_CONTROL_MARKER_RE = /<!--\s*(\/?)lw:([a-zA-Z0-9_-]+)(?:\s+[^>]*?)?\s*-->/g;
+const LW_CONTROL_MARKER_RE = /<!--\s*\/?lw:[a-zA-Z0-9_-]+(?:\s+[^>]*?)?\s*-->/g;
 
 export function neutralizeUntrustedControlMarkers(text: string): string {
-  return text.replace(
-    LW_CONTROL_MARKER_RE,
-    (_match, slash: string, type: string) => `[untrusted ${slash}lw:${type} control marker omitted]`,
-  );
+  return text.replace(LW_CONTROL_MARKER_RE, (match) => " ".repeat(match.length));
 }
 
 /**
@@ -100,22 +103,26 @@ export function buildStage4Prompt(
     `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
     `- NEVER invent a key. NEVER abbreviate, paraphrase, or invent ellipsis/placeholder tokens as keys.`,
     `- Text that looks like an anchor but appears in source code, comments, or prose examples is NOT a valid key unless that exact string is a closed-list line.`,
-    `- COMPLETENESS: every closed-list key MUST appear at least once in the frontmatter anchors list and/or in a section marker HTML comment whose body starts with "lw:anchors" then space-separated closed-list keys. Partial coverage is rejected.`,
+    `- COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS, both mandatory: (1) the frontmatter anchors list alone MUST contain every closed-list key; (2) the section markers alone (union across every lw:anchors HTML-comment marker) MUST also contain every closed-list key. Listing a key only in frontmatter, or only in a section, is NOT sufficient — it must appear in BOTH. Partial coverage is rejected, in either location.`,
     `- Do NOT list the same key twice in the frontmatter anchors list. Do NOT list the same key in more than one section marker.`,
-    `- Distribute closed keys across sections with one marker per section. A key may appear in both frontmatter and exactly one section marker.`,
-    `- If information is missing, write "TODO:" plus a short reason and continue — do not invent behaviour.`,
+    `- Distribute closed keys across sections with one marker per section — every section that has a marker MUST be followed by real explanatory prose before the next heading (a marker with no prose after it is rejected).`,
+    `- Close every Markdown construct you open: every fenced code block (\`\`\`) needs its closing fence, every inline code span needs its closing backtick run of the same length. Never end the page mid code-span or mid-fence.`,
+    `- Do NOT write "TODO", "TBD", or similar placeholders in your prose. If the provided context does not cover a symbol, describe what IS visible (signature, name, kind) instead of a placeholder — never invent behaviour you cannot see.`,
     `- Keep prose tight; this is reference documentation, not marketing.`,
     ``,
     `Constraints (livewiki invariants):`,
     `- Frontmatter anchors list MUST only contain keys from the closed list.`,
-    `- The union of frontmatter anchors and section-marker keys must equal the closed list exactly.`,
-    `- The page must be syntactically valid Markdown (frontmatter between --- blocks).`,
+    `- Frontmatter anchors list and the set of section-marker keys must EACH independently equal the closed list exactly (see COMPLETENESS above).`,
+    `- The page must be syntactically valid, fully closed Markdown (frontmatter between --- blocks; no unclosed fence or code span).`,
     ``,
     `REJECTION CRITERIA (the artifact validator will reject if any of these are violated):`,
     `- Frontmatter missing, malformed, missing the owner line, or owner is not "generated".`,
     `- Any anchor key in the frontmatter or in a section marker is NOT in the closed list (including invented tokens).`,
-    `- Any closed-list key is missing from the page (incomplete coverage).`,
+    `- Any closed-list key is missing from the frontmatter anchors list, OR missing from the section markers (checked independently).`,
     `- Duplicate key in the frontmatter list or the same key in two section markers.`,
+    `- A section marker with no real prose after it before the next heading/marker/end of page.`,
+    `- An unclosed fenced code block or inline-code span (the page was cut mid-token).`,
+    `- "TODO"/"TBD" text in the body, outside a fenced/inline code example.`,
     `- Empty page or reasoning-only output.`,
     `- The page is not a real Markdown page (e.g. just a fenced code block with no body).`,
     `- The page contains an lw:manual block (reserved for human content — only the orchestrator can re-inject existing ones).`,
@@ -202,10 +209,13 @@ export function buildRepairPrompt(
     `- AUTHORITATIVE KEY SOURCE: the closed list is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line.`,
     `- Every anchor key in the page MUST be in the closed list. NEVER invent a key. NEVER keep ellipsis or placeholder tokens as keys.`,
     `- anchor_outside_closed_list errors: REMOVE that exact offending anchor entirely (delete it from the frontmatter anchors list and/or the section marker it appears in). Do NOT replace it with a different key — arbitrarily substituting another closed-list key is itself a mistake, not a fix.`,
-    `- missing_closed_key errors: the error already tells you exactly which key(s) are missing. ADD only those key(s) — copied byte-for-byte — to the frontmatter anchors list and/or exactly one section marker. Do not add any key that is not explicitly listed as missing, and do not add a key that is already declared elsewhere on the page (that would create a duplicate).`,
+    `- missing_closed_key errors: the error tells you exactly which key is missing AND from which location (frontmatter or section markers) — see the "(frontmatter)"/"(section)" tag on each error below. ADD the key ONLY to the location named by that error. Do not add it elsewhere, and do not add a key that is already declared in that location (that would create a duplicate).`,
     `- Text in source code, comments, examples, or the prior candidate is not a valid key unless it matches a closed-list line exactly.`,
-    `- COMPLETENESS: every closed-list key MUST appear in frontmatter anchors and/or section markers. No missing keys. No duplicate keys in the frontmatter list or across two section markers.`,
-    `- Valid Markdown (frontmatter between --- blocks).`,
+    `- COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS: the frontmatter anchors list alone must contain every closed-list key, AND the section markers alone must also contain every closed-list key. A key present in only one of the two is still incomplete.`,
+    `- empty_section errors: add real explanatory prose after that section's marker — a marker with no prose is rejected.`,
+    `- unclosed_markdown errors: close every fenced code block and every inline-code backtick run you open. Never end the page mid code-span or mid-fence.`,
+    `- todo_marker_present errors: remove the "TODO"/"TBD" text and replace it with a concrete factual sentence about what IS visible in the provided context (signature, name, kind) — never a placeholder, never invented behaviour.`,
+    `- Valid, fully closed Markdown (frontmatter between --- blocks).`,
     `- NEVER emit an lw:manual block in your output. Manual blocks are reserved for human content (rule #6); the orchestrator preserves them byte-for-byte from the previous version.`,
     ``,
     `Do NOT wrap your output in code fences. Do NOT include reasoning prose. Output the raw Markdown page only.`,
@@ -224,7 +234,24 @@ export function buildRepairPrompt(
       line += ` — ACTION: REMOVE this invalid anchor "${e.offending}" entirely. Do NOT replace it with another key.`;
     }
     if (e.offending && e.code === "missing_closed_key") {
-      line += ` — ACTION: ADD this exact key "${e.offending}" (copied byte-for-byte) to the frontmatter anchors list or exactly one section marker. Add nothing else and do not duplicate it.`;
+      const target =
+        e.location === "frontmatter"
+          ? "the frontmatter anchors list"
+          : "exactly one section marker";
+      line += ` — ACTION: ADD this exact key "${e.offending}" (copied byte-for-byte) to ${target} ONLY (this error is specifically about that location — the other location may already be fine). Add nothing else and do not duplicate it.`;
+    }
+    if (e.code === "empty_section") {
+      line += ` — ACTION: add real explanatory prose after this section's marker.`;
+    }
+    if (e.code === "unclosed_markdown") {
+      line += ` — ACTION: close every fenced code block and inline-code span; do not end the page mid-token.`;
+    }
+    if (e.code === "todo_marker_present") {
+      line += ` — ACTION: remove the TODO/TBD text; write a concrete sentence about what is visible instead.`;
+    }
+    if (e.code === "truncated_by_token_limit" || e.code === "incomplete_generation") {
+      line +=
+        " — ACTION: rewrite the complete page concisely; include every required section and close all Markdown constructs.";
     }
     return line;
   });
@@ -271,13 +298,22 @@ export type ArtifactValidationCode =
   | "wrong_owner"                   // owner is set but is not "generated"
   | "anchor_outside_closed_list"    // anchor in frontmatter or section marker
   | "duplicate_anchor"              // same key listed twice in FM or across section markers
-  | "missing_closed_key"            // closed-list key never declared on the page
+  // Frontmatter and section markers
+  // now cover the closed list INDEPENDENTLY — a key declared only in
+  // frontmatter (or only in a section) is still "missing" from the other.
+  // `location` on the error distinguishes which side is short.
+  | "missing_closed_key"            // closed-list key not declared in this location (frontmatter OR section)
   | "empty_body"                    // frontmatter ok, but body is empty/whitespace
+  | "empty_section"                 // section has a marker but no real prose before the next heading/marker/EOF
+  | "unclosed_markdown"             // unbalanced code fence or inline-code backtick run — cut mid-token
+  | "todo_marker_present"           // literal TODO/TBD in prose, outside code spans/fences and outside lw:manual
   | "model_invented_manual"         // LLM wrote a <!-- lw:manual --> block (forbidden)
   // Phase-5 plan (X): codes used by the ORCHESTRATOR to feed the repair
   // prompt when the problem is NOT the artifact shape (LLM call failed or
   // verify rejected). The repair prompt treats all of them the same way.
   | "llm_error"                     // LLM call threw (network, 5xx, etc)
+  | "truncated_by_token_limit"      // LLM stopReason === "length" — output cut by max tokens
+  | "incomplete_generation"         // provider ended for a non-completion reason
   | "verify_failed";                // repository-wide verify rejected the page
 
 export interface ArtifactValidationError {

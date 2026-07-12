@@ -15,5 +15,6 @@ run(process.argv).catch((err: unknown) => {
   // Any other error here is a bug or a runtime error not handled by the subcommand.
   const message = err instanceof Error ? err.message : String(err);
   process.stderr.write(`livewiki: fatal error — ${message}\n`);
-  process.exit(1);
+  // Let Node drain pending stderr I/O before exiting.
+  process.exitCode = 1;
 });

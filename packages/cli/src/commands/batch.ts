@@ -247,7 +247,9 @@ function formatListHuman(runs: Awaited<ReturnType<typeof listRuns>>): string {
 
 function setExitCode(repoRoot: string, status: string, json: boolean): void {
   if (json) return; // --json always exit 0 (structured output)
-  if (status === "completed") process.exit(0);
-  if (status === "completed_with_failures") process.exit(1);
-  if (status === "aborted") process.exit(2);
+  // Let Node drain pending I/O before exiting. All call sites invoke this
+  // as their final action-handler statement.
+  if (status === "completed") process.exitCode = 0;
+  if (status === "completed_with_failures") process.exitCode = 1;
+  if (status === "aborted") process.exitCode = 2;
 }

@@ -27,6 +27,7 @@
  *     token cost).
  */
 
+import ignore from "ignore";
 import type { ExtractedImport } from "./imports.js";
 import { sha256 } from "./hashes.js";
 
@@ -719,13 +720,100 @@ function stripNodeNextExtension(p: string): string {
 }
 
 /**
+ * A documentation "role" derived
+ * PURELY from a file path, used only to influence GROUPING/RANKING
+ * decisions (module prioritization order, which modules get promoted to
+ * "top" lists in quickstart/overview). It NEVER affects:
+ *   - which files get indexed (walker.ts is untouched)
+ *   - module inventory (`identifyModulesHeuristic` groups every path,
+ *     same as before — a fixture path still becomes a module)
+ *   - closed-list completeness (every symbol in a fixture/tooling module
+ *     still must be documented, same as a product module)
+ *
+ * `"product"` is the default for anything that doesn't match a more
+ * specific pattern — a project with no test fixtures or benchmark
+ * tooling classifies everything as `"product"` and behaves exactly like
+ * before this change.
+ */
+export type PathRole = "product" | "fixture" | "tooling" | "docs";
+
+export interface PathRoleConfig {
+  /** Gitignore-style patterns for test fixtures and golden inputs. */
+  fixturePatterns?: string[];
+  /** Gitignore-style patterns for scripts, benchmarks, and development tools. */
+  toolingPatterns?: string[];
+  /** Gitignore-style patterns for documentation trees. */
+  docsPatterns?: string[];
+}
+
+export const DEFAULT_PATH_ROLE_PATTERNS: Required<PathRoleConfig> = {
+  fixturePatterns: [
+    "**/test/fixtures/**",
+    "**/tests/fixtures/**",
+    "**/__tests__/fixtures/**",
+    "**/__fixtures__/**",
+    "**/testdata/**",
+  ],
+  toolingPatterns: ["scripts/**", "**/tools/**", "**/benchmarks/**"],
+  docsPatterns: ["docs/**", "**/docs/**"],
+};
+
+function matchesAnyPathPattern(path: string, patterns: string[]): boolean {
+  if (patterns.length === 0) return false;
+  return ignore().add(patterns).ignores(path.replace(/\\/g, "/"));
+}
+
+/** Classifies a SINGLE path. Config patterns replace (not merge with) the defaults for that category. */
+export function classifyPathRole(path: string, config?: PathRoleConfig): PathRole {
+  const fixture = config?.fixturePatterns ?? DEFAULT_PATH_ROLE_PATTERNS.fixturePatterns;
+  const tooling = config?.toolingPatterns ?? DEFAULT_PATH_ROLE_PATTERNS.toolingPatterns;
+  const docs = config?.docsPatterns ?? DEFAULT_PATH_ROLE_PATTERNS.docsPatterns;
+  if (matchesAnyPathPattern(path, fixture)) return "fixture";
+  if (matchesAnyPathPattern(path, tooling)) return "tooling";
+  if (matchesAnyPathPattern(path, docs)) return "docs";
+  return "product";
+}
+
+/**
+ * Classifies a MODULE by majority vote over its paths (ties broken by the
+ * first path, which is deterministic — `identifyModulesHeuristic` groups
+ * by common directory, so a module's paths are overwhelmingly one role in
+ * practice; majority vote only matters for LLM-refined merges).
+ */
+export function classifyModuleRole(module: Module, config?: PathRoleConfig): PathRole {
+  const counts = new Map<PathRole, number>();
+  for (const p of module.paths) {
+    const role = classifyPathRole(p, config);
+    counts.set(role, (counts.get(role) ?? 0) + 1);
+  }
+  let best: PathRole = classifyPathRole(module.paths[0] ?? "", config);
+  let bestCount = -1;
+  for (const [role, count] of counts) {
+    if (count > bestCount) {
+      best = role;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/**
  * Ordena módulos pra etapa 4 por centralidade (quantos outros dependem)
  * e tamanho (symbolCount). Centralidade maior primeiro; empate vai pro
  * maior symbolCount.
+ *
+ * `"product"` modules always rank above fixture/tooling/docs
+ * modules, regardless of centrality — a heavily-imported test fixture
+ * must not outrank a real product module for "top entry point" purposes.
+ * Within the same role, ordering is unchanged (centrality then size).
+ * This only reorders the returned list — no module is dropped, and
+ * `pathRoleConfig` is entirely optional (default behavior for a repo
+ * with no fixture/tooling/docs paths is identical to before).
  */
 export function prioritizeModules(
   modules: Module[],
   edges: ModuleGraphEdge[],
+  pathRoleConfig?: PathRoleConfig,
 ): Module[] {
   const indegree = new Map<string, number>();
   for (const m of modules) indegree.set(m.id, 0);
@@ -734,9 +822,13 @@ export function prioritizeModules(
   }
   const scored = modules.map((m) => ({
     m,
+    roleRank: classifyModuleRole(m, pathRoleConfig) === "product" ? 0 : 1,
     score: (indegree.get(m.id) ?? 0) * 1000 + m.symbolCount,
   }));
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => {
+    if (a.roleRank !== b.roleRank) return a.roleRank - b.roleRank;
+    return b.score - a.score;
+  });
   return scored.map((s) => s.m);
 }
 

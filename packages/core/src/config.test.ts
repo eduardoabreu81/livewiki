@@ -110,6 +110,33 @@ describe("config.loadConfig", () => {
     expect(cfg.provider).toBe("anthropic");
     expect((cfg as Record<string, unknown>)["futureField"]).toBeUndefined();
   });
+
+  it("loads configurable gitignore-style path-role patterns", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        pathRoles: {
+          fixturePatterns: ["examples/fixtures/**"],
+          toolingPatterns: [],
+        },
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.pathRoles).toEqual({
+      fixturePatterns: ["examples/fixtures/**"],
+      toolingPatterns: [],
+    });
+  });
+
+  it("rejects malformed path-role pattern categories", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ pathRoles: { fixturePatterns: "not-an-array" } }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/pathRoles\.fixturePatterns/);
+  });
 });
 
 describe("config.saveConfig + loadConfig round-trip", () => {

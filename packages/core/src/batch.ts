@@ -52,7 +52,7 @@ import {
 } from "./modules.js";
 import { collectImports } from "./imports.js";
 import { createLlmClient, LlmTimeoutError, type LlmClient } from "./llm/index.js";
-import type { GenerateRequest, GenerateResult } from "./llm/types.js";
+import type { GenerateRequest, GenerateResult, StopReason } from "./llm/types.js";
 import { loadConfig, applyDefaults, validateConfigForBatch } from "./config.js";
 import { calculateCostUsd, lookupPricing } from "./pricing.js";
 import {
@@ -386,7 +386,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       await collectAllImports(absRoot, filePaths),
       new Set(filePaths),
     );
-    let ordered = prioritizeModules(modules, edges);
+    let ordered = prioritizeModules(modules, edges, resolvedConfig.pathRoles);
 
     // Defense in depth: prioritization does not change IDs, but re-applying W ensures
     // that any new path that entered ordered (it shouldn't, but
@@ -1558,6 +1558,8 @@ async function attemptStage4Generation(
   // Call LLM
   let raw: string;
   let usage: { inputTokens: number; outputTokens: number; model: string };
+  let stopReason: StopReason = "unknown";
+  let rawStopReason: string | undefined;
   try {
     const result = await opts.llmClient.generate({
       system: prompt.system,
@@ -1567,6 +1569,8 @@ async function attemptStage4Generation(
     });
     raw = result.content;
     usage = result.usage;
+    stopReason = result.stopReason ?? "unknown";
+    rawStopReason = result.rawStopReason;
   } catch (err) {
     // Typed timeout: usage unknown (provider may still bill). No fake 0/0 model.
     if (err instanceof LlmTimeoutError) {
@@ -1612,18 +1616,48 @@ async function attemptStage4Generation(
   // repairs are also calculated in the user's table (not just the
   // tabela embutida).
   const cost = computeCostFromUsage(usage, opts.pricing);
+  const usageEntry: UsageAttempt = {
+    attempt: opts.attemptNumber,
+    usage,
+    usageKnown: true,
+    costUsd: cost,
+    finishedAt: Date.now(),
+    stopReason,
+    ...(rawStopReason !== undefined ? { rawStopReason } : {}),
+  };
+
+  // Provider-declared non-completions use the same bounded repair path as
+  // artifact validation failures. The raw candidate and provider reason are
+  // preserved so the repair prompt and checkpoint explain what happened.
+  if (stopReason === "length" || stopReason === "incomplete") {
+    const code =
+      stopReason === "length"
+        ? "truncated_by_token_limit"
+        : "incomplete_generation";
+    const reasonDetail = rawStopReason ? ` (provider reason: ${rawStopReason})` : "";
+    return {
+      usageEntry,
+      normalizedRaw: raw,
+      artifact: null,
+      validationErrors: [
+        {
+          code,
+          message:
+            stopReason === "length"
+              ? `provider stopped at the output-token limit${reasonDetail}`
+              : `provider stopped before a normal text completion${reasonDetail}`,
+          location: "global",
+        },
+      ],
+      llmError: null,
+    };
+  }
 
   // Normalize
   const normalize = normalizeStage4Artifact(raw);
   if (!normalize.ok) {
     return {
-      usageEntry: {
-        attempt: opts.attemptNumber,
-        usage,
-        usageKnown: true,
-        costUsd: cost,
-        finishedAt: Date.now(),
-      },
+      usageEntry,
       normalizedRaw: raw,
       artifact: null,
       validationErrors: normalize.errors,
@@ -1635,13 +1669,7 @@ async function attemptStage4Generation(
   const validation = validateStage4Artifact(normalize.content, ctx.closedKeyList);
   if (!validation.ok) {
     return {
-      usageEntry: {
-        attempt: opts.attemptNumber,
-        usage,
-        usageKnown: true,
-        costUsd: cost,
-        finishedAt: Date.now(),
-      },
+      usageEntry,
       normalizedRaw: raw,
       artifact: null,
       validationErrors: validation.errors,
@@ -1650,13 +1678,7 @@ async function attemptStage4Generation(
   }
 
   return {
-    usageEntry: {
-      attempt: opts.attemptNumber,
-      usage,
-      usageKnown: true,
-      costUsd: cost,
-      finishedAt: Date.now(),
-    },
+    usageEntry,
     normalizedRaw: raw,
     artifact: normalize.content,
     validationErrors: [],

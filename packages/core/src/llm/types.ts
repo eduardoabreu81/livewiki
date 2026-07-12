@@ -44,8 +44,28 @@ export interface GenerateRequest {
   preferMaxCompletionTokens?: boolean;
 }
 
+/**
+ * Normalized stop/finish signal — same normalization pattern as `LlmUsage`.
+ * Adapters translate the provider-specific field:
+ *   - OpenAI-compat: `choices[0].finish_reason` (`"length"` = cut by max_tokens)
+ *   - Anthropic: `stop_reason` (`"max_tokens"` = cut by max_tokens)
+ *
+ * `"length"` means the response was truncated by the token limit.
+ * `"incomplete"` covers a known non-completion such as tool use, content
+ * filtering, or refusal. `"unknown"` preserves backward compatibility for
+ * providers and test doubles that do not expose a reason.
+ *
+ * Optional so existing integrations that do not expose the field remain
+ * compatible; callers treat `undefined` as `"unknown"`, never as proof of
+ * completion.
+ */
+export type StopReason = "complete" | "length" | "incomplete" | "unknown";
+
 /** Response canônica — única forma que adapters retornam. */
 export interface GenerateResult {
   content: string;
   usage: LlmUsage;
+  stopReason?: StopReason;
+  /** Provider value retained for checkpoints and diagnostics. */
+  rawStopReason?: string;
 }

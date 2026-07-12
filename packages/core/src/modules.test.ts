@@ -12,8 +12,11 @@ import {
   ExactPartitionError,
   refinePeerDirectoryFragmentationError,
   SPLIT_AXIS_DISABLED,
+  classifyPathRole,
+  classifyModuleRole,
 } from "./modules.js";
 import type { ExtractedImport } from "./imports.js";
+import type { Module } from "./modules.js";
 
 describe("modules.identifyModulesHeuristic", () => {
   it("agrupa arquivos por diretório top-level", () => {
@@ -142,6 +145,77 @@ describe("modules.prioritizeModules", () => {
     // sem edges → todos centralidade 0; empate vai pro maior symbolCount
     const ordered = prioritizeModules(mods, []);
     expect(ordered[0]?.id).toBe("big");
+  });
+
+  it("product modules rank above fixtures even with a lower score", () => {
+    const mods = identifyModulesHeuristic([
+      "test/fixtures/big-fixture/x.ts",
+      "src/small-product/y.ts",
+    ]);
+    mods.find((m) => m.paths[0]?.includes("fixtures"))!.symbolCount = 1000;
+    mods.find((m) => m.paths[0]?.includes("src"))!.symbolCount = 1;
+    // Sem edges (centralidade 0 pros dois) — fixture teria vencido por
+    // The fixture won by symbolCount before role-aware ranking.
+    const ordered = prioritizeModules(mods, []);
+    expect(ordered[0]?.paths[0]).toContain("src/small-product");
+  });
+
+  it("role-aware ranking reorders modules without removing any", () => {
+    const mods = identifyModulesHeuristic([
+      "test/fixtures/foo/x.ts",
+      "src/bar/y.ts",
+    ]);
+    const ordered = prioritizeModules(mods, []);
+    expect(ordered.length).toBe(mods.length);
+    expect(new Set(ordered.map((m) => m.id))).toEqual(new Set(mods.map((m) => m.id)));
+  });
+});
+
+describe("modules.classifyPathRole", () => {
+  it("defaults: test/fixtures/** → fixture", () => {
+    expect(classifyPathRole("packages/core/test/fixtures/foo/src/x.ts")).toBe("fixture");
+  });
+
+  it("defaults: scripts/** and tools/** → tooling", () => {
+    expect(classifyPathRole("scripts/offline-inventory.mjs")).toBe("tooling");
+    expect(classifyPathRole("docs/benchmarks/run/tools/proxy.mjs")).toBe("tooling");
+  });
+
+  it("defaults: docs/** (not benchmarks) → docs", () => {
+    expect(classifyPathRole("docs/guide.md")).toBe("docs");
+  });
+
+  it("defaults: ordinary source path → product", () => {
+    expect(classifyPathRole("packages/core/src/verify.ts")).toBe("product");
+  });
+
+  it("config patterns REPLACE (not merge with) the default category", () => {
+    const role = classifyPathRole("packages/core/test/fixtures/foo/x.ts", {
+      fixturePatterns: ["never-matches-anything"],
+    });
+    // Custom fixturePatterns doesn't match, and the default is replaced —
+    // falls through to product.
+    expect(role).toBe("product");
+  });
+});
+
+describe("modules.classifyModuleRole", () => {
+  it("classifies a module by majority vote over its paths", () => {
+    const mod: Module = {
+      id: "mixed",
+      paths: [
+        "test/fixtures/a.ts",
+        "test/fixtures/b.ts",
+        "src/real.ts",
+      ],
+      symbolCount: 3,
+    };
+    expect(classifyModuleRole(mod)).toBe("fixture");
+  });
+
+  it("a module built entirely from product paths classifies as product", () => {
+    const mod: Module = { id: "core", paths: ["packages/core/src/verify.ts"], symbolCount: 1 };
+    expect(classifyModuleRole(mod)).toBe("product");
   });
 });
 

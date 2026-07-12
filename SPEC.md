@@ -78,6 +78,8 @@ target-repo/
 └── .livewiki/
     ├── index.db
     └── config.json                # local config (provider, languages, ignores,
+                                   # pathRoles: optional gitignore-style path
+                                   # classification overrides used for ranking,
                                    # language: wiki prose language — 1 per repo,
                                    # default "en" (en-US). Set when documenting;
                                    # pages keep the language they were written in
@@ -179,6 +181,10 @@ anchor is removed later.
 | `livewiki view` | (phase 7) generates a self-contained static site in `.livewiki/site/` and opens it in the browser. `--template <agent\|docs>`, `--out <dir>` to publish |
 
 All commands: `--json`, `--repo <path>` (default cwd), consistent exit codes.
+Commands set `process.exitCode` and return instead of calling
+`process.exit(...)`, allowing pending stdout/stderr and async handles to drain.
+This applies to normal status propagation and fatal command errors; documented
+numeric exit-code semantics remain unchanged.
 
 ## MCP tools (phase 4)
 
@@ -223,8 +229,12 @@ All commands: `--json`, `--repo <path>` (default cwd), consistent exit codes.
    **Two content layers (roadmap):** (A) structural/agent pages (dirs, symbols,
    import links, anchors — verifiable); (B) optional later human/product
    narrative synthesized from A. Batch today targets layer A.
-3. **Prioritization**: orders modules by centrality (how many others depend on
-   them) and size; the user can reorder/exclude (`--plan` shows the plan before
+3. **Prioritization**: product modules are ordered before auxiliary modules,
+   then by centrality (how many others depend on them) and size. Path roles are
+   deterministic (`product`, `fixture`, `tooling`, `docs`) with optional
+   gitignore-style overrides in `config.pathRoles`. Roles affect ranking and
+   presentation only: they never remove files, modules, symbols, or closed-list
+   obligations. The user can reorder/exclude (`--plan` shows the plan before
    running).
 4. **Coordinated documentation**: for each module (task): context = symbols +
    relevant code (bounded by a configurable token budget) → LLM generates a page
@@ -233,7 +243,10 @@ All commands: `--json`, `--repo <path>` (default cwd), consistent exit codes.
 
 Stage-4 output is an artifact, never a raw transcript. The prompt contains the
 closed canonical key list and explicitly requires exact keys from that list; it
-must not contain copyable fake anchors. Before writing, livewiki:
+must not contain copyable fake anchors. Marker-shaped text from untrusted source
+or prior candidates is replaced with same-length whitespace before prompt
+embedding, so neither a fake marker nor a visible replacement sentinel can be
+copied into the artifact. Before writing, livewiki:
 
 - removes one complete leading `<think>...</think>` block and rejects an
   unclosed reasoning block or a response that contains only reasoning;
@@ -242,19 +255,32 @@ must not contain copyable fake anchors. Before writing, livewiki:
   `owner: generated`; and
 - rejects every page or section anchor outside the module's closed canonical
   key list;
-- rejects **incomplete coverage**: every closed-list key must appear at least
-  once in frontmatter `anchors:` and/or a `<!-- lw:anchors ... -->` marker
+- rejects **incomplete coverage** independently in both locations: every
+  closed-list key must appear exactly once in frontmatter `anchors:` and once
+  in one real `<!-- lw:anchors ... -->` section marker
   (`missing_closed_key`);
 - rejects **duplicate** keys in the frontmatter list or the same key in more
   than one section marker (`duplicate_anchor`). The same key may appear once
-  in frontmatter and once in a single section marker.
+  in frontmatter and once in a single section marker;
+- requires real prose after every section marker before the next marker,
+  heading, or end of page (`empty_section`);
+- rejects unclosed fenced code blocks or inline-code spans
+  (`unclosed_markdown`) and rejects `TODO`/`TBD` placeholders in generated
+  prose outside code and manual blocks (`todo_marker_present`).
 
   This validation produces structured error codes and details for correction.
   It does not weaken the repository-wide `verify` contract. Stage-4 source
   context is truncated with a **fair per-file share** of the char budget so
   later module paths are not starved of local code context.
 
-An invalid artifact or post-write verify failure triggers a bounded corrective
+Adapters normalize provider completion signals as `complete`, `length`,
+`incomplete`, or `unknown` and preserve the raw provider reason in the task
+usage history. `length` and `incomplete` responses are never accepted as
+artifacts; they enter the same bounded correction loop. `unknown` remains
+backward-compatible for providers or proxies that omit the signal and still
+undergoes full structural validation.
+
+An invalid artifact, incomplete provider response, or post-write verify failure triggers a bounded corrective
 call for the same task. `maxRepairAttempts` defaults to `2` in
 `.livewiki/config.json` conventions and can be overridden per run; therefore a
 task makes at most one initial call plus two corrective calls by default. The
@@ -301,6 +327,10 @@ regeneration:
   (the model still emits `owner: generated` in its artifact; the orchestrator
   restores `mixed` before write/verify).
 
+Manual-block preservation compares a multiset of exact content hashes rather
+than byte offsets. Blocks may move as generated prose changes, duplicate blocks
+remain count-sensitive, and any missing or changed human block is rejected.
+
 If post-write verify fails **and** rollback itself fails, that is terminal for
 the **entire run** (`aborted`): later modules must not call the LLM or write
 pages, because disk may be inconsistent.
@@ -316,7 +346,10 @@ status `completed_with_failures`, exit ≠ 0, the report lists each failed task 
 the reason + a ready retry command.
 
 At the end: generates/updates `quickstart.md` and `architecture/overview.md`,
-writes the manifest.
+writes the manifest. Quickstart labels its deterministic list honestly as
+**Important symbols** and selects stable function/class entries from prioritized
+product modules, never raw database row order. Architecture overview groups
+product modules separately from fixtures, tooling/benchmarks, and docs.
 
 ### Token accounting (Phase 3)
 
@@ -382,6 +415,11 @@ straight from the `symbols` table). These are pure `owner: generated`: they neve
 age, never enter debt — the generator is what changes. Large graphs: one diagram
 per module, never a mega-diagram of the whole repo. Function call-graph and
 sequence diagrams are OUT (see "Out of designed scope" in VISION).
+Generators deduplicate node/edge declarations and keep same-named classes from
+different source files distinct. Class-diagram links are emitted only when the
+diagram file exists. `verify` checks navigable `.md` and `.mmd` targets while
+ignoring link-shaped examples inside Markdown code. Generator tests parse their
+output with the real Mermaid parser; parser packages remain development-only.
 
 ### Phase 4 — MCP server ✅ criterion: connected to Claude Code, the 6 tools work; `livewiki_write_doc` rejects a path outside `livewiki/` and content that fails verify
 FTS5 for search, stdio server, integration tests with the MCP inspector.

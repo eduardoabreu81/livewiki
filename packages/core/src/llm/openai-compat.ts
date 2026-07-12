@@ -9,7 +9,7 @@
  */
 
 import type { LlmClient } from "./index.js";
-import type { GenerateRequest, GenerateResult, ThinkingMode } from "./types.js";
+import type { GenerateRequest, GenerateResult, StopReason, ThinkingMode } from "./types.js";
 import { type AdapterConfig, requestWithRetry, withTimeoutMs } from "./base.js";
 
 export interface OpenAiCompatAdapterOpts {
@@ -112,8 +112,20 @@ export class OpenAiCompatAdapter implements LlmClient {
         outputTokens: raw.usage?.completion_tokens ?? 0,
         model: raw.model,
       },
+      stopReason: normalizeFinishReason(raw.choices?.[0]?.finish_reason),
+      ...(raw.choices?.[0]?.finish_reason != null
+        ? { rawStopReason: raw.choices[0].finish_reason }
+        : {}),
     };
   }
+}
+
+/** OpenAI-compat `finish_reason` → normalized `StopReason`. */
+function normalizeFinishReason(finishReason: string | null | undefined): StopReason {
+  if (finishReason === "length") return "length";
+  if (finishReason === "stop") return "complete";
+  if (finishReason == null) return "unknown";
+  return "incomplete";
 }
 
 /**
@@ -140,7 +152,7 @@ export function resolveThinkingMode(
 }
 
 interface OpenAiCompatResponse {
-  choices: Array<{ message: { role: string; content: string } }>;
+  choices: Array<{ message: { role: string; content: string }; finish_reason?: string | null }>;
   model: string;
   usage?: { prompt_tokens: number; completion_tokens: number };
 }

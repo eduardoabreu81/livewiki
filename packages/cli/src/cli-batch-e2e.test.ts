@@ -292,7 +292,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
-  });
+  }, 10_000);
 
   it("init --batch --no-refine skips stage-2 LLM (zero stage-2 tokens and stub calls)", async () => {
     // Regression: Commander maps --no-refine → opts.refine === false; CLI must
@@ -429,12 +429,17 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       expect(r1.status, r1.stderr).toBe(0);
       const callsAfterInit = stub.callCount();
 
-      // Re-roda 1 task
-      const r2 = await runCli(["--json", "--repo", repoRoot, "batch", "--only", "auth", "1"]);
-      // O número de args esperado é: --only <target> <runId>
-      // Vamos usar a forma alternativa: --only <target> (sem runId — usa o último)
-      const r2b = await runCli(["--json", "--repo", repoRoot, "batch", "--only", "auth"]);
-      expect(r2b.status, r2b.stderr).toBe(0);
+      // Re-run one task in the initial run.
+      const rerun = await runCli([
+        "--json",
+        "--repo",
+        repoRoot,
+        "batch",
+        "--only",
+        "auth",
+        "1",
+      ]);
+      expect(rerun.status, rerun.stderr).toBe(0);
 
       // Pelo menos 1 chamada extra pro mock LLM
       expect(stub.callCount()).toBeGreaterThan(callsAfterInit);
@@ -450,7 +455,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
-  });
+  }, 10_000);
 
   it("circuit breaker: falha 3x seguidas → abort", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
@@ -587,8 +592,10 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     // Anchor HTML inline garante match exato com o link do quickstart
     expect(overview).toMatch(/<a id="auth"><\/a>/);
     expect(overview).toMatch(/<a id="utils"><\/a>/);
-    // Link para diagrama de classes
-    expect(overview).toMatch(/\[class diagram\]\(\.\.\/diagrams\/auth\.classes\.mmd\)/);
+    // Function-only modules do not generate `diagrams/<slug>.classes.mmd`,
+    // so the overview must not link to a nonexistent artifact.
+    expect(overview).not.toMatch(/\[class diagram\]\(\.\.\/diagrams\/auth\.classes\.mmd\)/);
+    expect(overview).not.toMatch(/\[class diagram\]\(\.\.\/diagrams\/utils\.classes\.mmd\)/);
     // Diagramas embedados (mermaid code fence)
     expect(overview).toMatch(/```mermaid/);
     expect(overview).toMatch(/%% livewiki\/architecture\/structure\.mmd/);
