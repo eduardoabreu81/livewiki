@@ -1,0 +1,18 @@
+classDiagram
+  class AnthropicAdapter {
+    constructor(opts: { apiKey: string; baseUrl: string; model: string; fetchImpl?: typeof fetch; timeoutMs?: number; maxRetries?: number }) {
+    async generate(req: GenerateRequest): Promise<GenerateResult> {
+  }
+  class LlmTimeoutError {
+    constructor(provider: LlmProvider, timeoutMs: number) {
+  }
+  class MissingApiKeyError {
+    constructor(provider: LlmProvider, envVar: string) {
+  }
+  class LlmRequestError {
+    constructor(provider: LlmProvider, status: number, errorBody: string) {
+  }
+  class OpenAiCompatAdapter {
+    constructor(opts: OpenAiCompatAdapterOpts) {
+    async generate(req: GenerateRequest): Promise<GenerateResult> {
+  }
