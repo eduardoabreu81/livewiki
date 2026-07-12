@@ -237,6 +237,164 @@ See [auth page](../auth.md) and [class diag](../diagrams/auth.classes.mmd).
   });
 });
 
+describe("verify — links inside code are not navigable (verify.ts hardening)", () => {
+  it("1. [text](missing.md) inside `backticks` (inline code) → zero warning", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki(
+      "livewiki/index.md",
+      "# Home\n\nExample syntax: `[text](missing.md)` is just documentation.\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((i) => i.code === "broken_internal_link")).toEqual([]);
+  });
+
+  it("2. [text](missing.md#section) inside inline code → zero warning", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki(
+      "livewiki/index.md",
+      "# Home\n\nSyntax: `[text](missing.md#section)` links must resolve.\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((i) => i.code === "broken_internal_link")).toEqual([]);
+  });
+
+  it("3. links inside fenced code blocks (``` and ~~~) → zero warning", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki(
+      "livewiki/index.md",
+      [
+        "# Home",
+        "",
+        "```markdown",
+        "See [broken](missing.md) here.",
+        "```",
+        "",
+        "~~~markdown",
+        "Also [broken2](missing2.md#sec) here.",
+        "~~~",
+        "",
+      ].join("\n"),
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((i) => i.code === "broken_internal_link")).toEqual([]);
+  });
+
+  it("4. real link to missing.md outside code → warning", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki("livewiki/index.md", "# Home\n\nSee [Nothing](missing.md).\n");
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const broken = result.issues.filter((i) => i.code === "broken_internal_link");
+    expect(broken.length).toBe(1);
+    expect(broken[0]?.detail).toContain("missing.md");
+  });
+
+  it("5. real link next to inline code → only the real one is validated", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki("livewiki/foo.md", "# Foo\n");
+    await writeWiki(
+      "livewiki/index.md",
+      "# Home\n\nSee `[example](missing.md)` and also [Foo](foo.md) and [Nothing](missing2.md).\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const broken = result.issues.filter((i) => i.code === "broken_internal_link");
+    expect(broken.length).toBe(1);
+    expect(broken[0]?.detail).toContain("missing2.md");
+  });
+
+  it("6. existing links and relative links with '..' keep working (regression)", async () => {
+    await writeCode("src/auth/login.ts", "export function login() {}");
+    await writeWiki(
+      "livewiki/architecture/overview.md",
+      [
+        "# Architecture overview",
+        "",
+        "See [auth page](../auth.md) — and an inline example `[fake](nope.md)` too.",
+        "",
+      ].join("\n"),
+    );
+    await writeWiki("livewiki/auth.md", "# auth\n");
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((i) => i.code === "broken_internal_link")).toEqual([]);
+  });
+
+  it("7. inline code with multiple backticks (2-backtick delimiter) → zero warning", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki(
+      "livewiki/index.md",
+      "# Home\n\nDouble-backtick span: ``code with a ` backtick and [broken](missing.md)`` done.\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((i) => i.code === "broken_internal_link")).toEqual([]);
+  });
+
+  it("broken_internal_link was NOT relaxed for real links outside code (explicit regression)", async () => {
+    await writeCode("src/foo.ts", "export const x = 1");
+    await writeWiki("livewiki/index.md", "# Home\n\nSee [Nothing](nope.md) and [Other](other.md).\n");
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const broken = result.issues.filter((i) => i.code === "broken_internal_link");
+    expect(broken.length).toBe(2);
+  });
+
+  it("CRLF fenced block closes correctly and only the real link after it is reported", async () => {
+    // Regression: a naive `split("\n")` on CRLF content leaves a trailing
+    // "\r" on every line, so the closing-fence match (which anchors on
+    // end-of-line) never fires — the fence stays "open" and swallows the
+    // real link after it too.
+    await writeCode("src/foo.ts", "export const x = 1");
+    const crlf = [
+      "# Home",
+      "",
+      "```markdown",
+      "See [fake](missing.md) here.",
+      "```",
+      "",
+      "See [Nothing](nope-for-real.md) too.",
+      "",
+    ].join("\r\n");
+    await writeWiki("livewiki/index.md", crlf);
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const broken = result.issues.filter((i) => i.code === "broken_internal_link");
+    expect(broken.length).toBe(1);
+    expect(broken[0]?.detail).toContain("nope-for-real.md");
+  });
+});
+
 describe("formatHuman", () => {
   it("formats OK result", () => {
     const out = formatHuman({ ok: true, pagesChecked: 3, issues: [] });

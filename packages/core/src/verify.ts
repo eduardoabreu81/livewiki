@@ -160,8 +160,13 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
       }
 
       // Links internos — entre páginas da wiki (lidos do disco)
+      // Links inside fenced code blocks or inline code are NOT navigable —
+      // they are syntax examples, not real references. Mask that content
+      // BEFORE running the link regex (does not mutate `source`; used only
+      // for this scan).
+      const sourceForLinks = maskCodeForLinkScan(source);
       const linkRe = /\[([^\]]*)\]\(([^)#]+\.md)(#([^)]+))?\)/g;
-      for (const m of source.matchAll(linkRe)) {
+      for (const m of sourceForLinks.matchAll(linkRe)) {
         const linkPathRaw = m[2];
         if (!linkPathRaw) continue;
         const linkSection = m[4];
@@ -238,6 +243,104 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Masks code content BEFORE the `broken_internal_link` scan.
+ * `[text](page.md)` inside fenced code blocks (``` or ~~~) or inline code
+ * (`` `...` ``, including multi-backtick runs) is syntax example, not a
+ * navigable link — it must not be resolved or reported.
+ *
+ * Deterministic and local to this file: does not mutate `source` (used
+ * for other checks — anchors, manual blocks, headings) or the content on
+ * disk. No exception by path/file — any code, on any page, is treated
+ * the same way.
+ */
+function maskCodeForLinkScan(text: string): string {
+  return maskInlineCode(maskFencedCodeBlocks(text));
+}
+
+/** Blanks the body (opening line, content, and closing line) of each fenced code block (``` or ~~~). */
+function maskFencedCodeBlocks(text: string): string {
+  // CRLF-safe: a lone "\n" split leaves a trailing "\r" on each line, which
+  // breaks the closing-fence `$` match on CRLF files and lets the fence
+  // stay open — masking (and the link scan after it) the rest of the page.
+  const lines = text.split(/\r?\n/);
+  const fenceOpenRe = /^[ \t]{0,3}(`{3,}|~{3,})/;
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  const out: string[] = [];
+  for (const line of lines) {
+    if (!inFence) {
+      const m = line.match(fenceOpenRe);
+      if (m?.[1]) {
+        inFence = true;
+        fenceChar = m[1][0] as string;
+        fenceLen = m[1].length;
+        out.push("");
+        continue;
+      }
+      out.push(line);
+      continue;
+    }
+    const closeRe = new RegExp(`^[ \\t]{0,3}[${fenceChar}]{${fenceLen},}[ \\t]*$`);
+    if (closeRe.test(line)) {
+      inFence = false;
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+
+/**
+ * Blanks inline code spans delimited by N backticks (N >= 1), following
+ * the CommonMark rule: the closing delimiter must have the SAME number of
+ * backticks as the opening one (allows `` `code with ` inside` `` etc).
+ * A backtick run with no matching close is left as literal text.
+ */
+function maskInlineCode(text: string): string {
+  let result = "";
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    if (text[i] !== "`") {
+      result += text[i];
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < n && text[j] === "`") j++;
+    const runLen = j - i;
+
+    let k = j;
+    let closeStart = -1;
+    while (k < n) {
+      if (text[k] === "`") {
+        let k2 = k;
+        while (k2 < n && text[k2] === "`") k2++;
+        if (k2 - k === runLen) {
+          closeStart = k;
+          k = k2;
+          break;
+        }
+        k = k2;
+      } else {
+        k++;
+      }
+    }
+
+    if (closeStart === -1) {
+      // No matching close — not a code span; keep it literal.
+      result += text.slice(i, j);
+      i = j;
+    } else {
+      const spanEnd = closeStart + runLen;
+      result += " ".repeat(spanEnd - i);
+      i = spanEnd;
+    }
+  }
+  return result;
 }
 
 async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]> {
