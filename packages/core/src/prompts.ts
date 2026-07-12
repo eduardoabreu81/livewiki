@@ -32,6 +32,37 @@ export const DEFAULT_CONTEXT_TOKEN_BUDGET = 30_000;
 export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
 
 /**
+ * Neutralize livewiki control-marker syntax (`<!-- lw:anchors ... -->`,
+ * `<!-- lw:manual ... -->`, closing `<!-- /lw:manual -->`, etc.) found
+ * INSIDE untrusted content before it is embedded in a prompt.
+ *
+ * Codex review (blocker): removing the ellipsis placeholder from our own
+ * instructions is not enough — `source` (repo code/comments) and
+ * `priorCandidate` (a previous, possibly-invalid LLM output) are untrusted
+ * text that can legitimately contain a `<!-- lw:anchors ... -->`-shaped
+ * string. If embedded verbatim, the LLM can copy it as if it were a real,
+ * copyable marker, producing a page with a fake/ellipsis anchor.
+ *
+ * The ENTIRE payload is dropped — only the marker type (e.g. "lw:anchors",
+ * "/lw:manual") survives, as a non-comment placeholder that cannot be
+ * mistaken for real marker syntax. Keeping any part of the original payload
+ * (an ellipsis, a fabricated key, a real key copied out of context) would
+ * still hand the LLM something copyable.
+ *
+ * This ONLY rewrites the copy sent to the LLM inside the prompt string. It
+ * never touches the caller's `source`, the generated artifact, or the
+ * validator — those still see/produce the original bytes.
+ */
+const LW_CONTROL_MARKER_RE = /<!--\s*(\/?)lw:([a-zA-Z0-9_-]+)(?:\s+[^>]*?)?\s*-->/g;
+
+export function neutralizeUntrustedControlMarkers(text: string): string {
+  return text.replace(
+    LW_CONTROL_MARKER_RE,
+    (_match, slash: string, type: string) => `[untrusted ${slash}lw:${type} control marker omitted]`,
+  );
+}
+
+/**
  * Stage 4 — generate the module page.
  *
  * Principles:
@@ -42,10 +73,10 @@ export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
  *   - ${language} appears in both system and user instructions (explicit
  *     instruction to write the doc in that language).
  *
- * Phase-5 plan (U): the system prompt NEVER includes copyable fake anchors
- * (e.g. "key1 key2"). Any syntax illustration uses neutral prose
- * ("a key from the list below") or expression placeholders
- * (e.g. "keyN"). The closed-list rule is reinforced in REJECTION CRITERIA.
+ * Phase-5 plan (U) + clean-v5 finding: system/user prompts NEVER include
+ * copyable fake anchors or ellipsis placeholders inside section markers
+ * (e.g. `<!-- lw:anchors ... -->`). Concrete syntax examples MUST be built
+ * only from real keys of the closed list for this call.
  */
 export function buildStage4Prompt(
   module: Module,
@@ -54,17 +85,25 @@ export function buildStage4Prompt(
   truncatedSource: string,
   language: Language = "en",
 ): PromptPair {
+  const exampleKeys = closedKeyList.slice(0, Math.min(2, closedKeyList.length));
+  const exampleMarker =
+    exampleKeys.length > 0
+      ? `<!-- lw:anchors ${exampleKeys.join(" ")} -->`
+      : null;
+
   const system = [
     `You are a technical documentation generator for the livewiki project.`,
     `You will receive a module's metadata, a CLOSED list of canonical symbol keys, a symbol table, and a code excerpt.`,
     ``,
     `Output rules (strict):`,
-    `- Markdown + frontmatter with: title, owner: generated, anchors (list of closed keys).`,
-    `- Use ONLY the keys from the closed list. NEVER invent a key outside the list.`,
-    `- COMPLETENESS: every key in the closed list MUST appear at least once in the frontmatter \`anchors:\` list and/or in a \`<!-- lw:anchors ... -->\` section marker. Partial coverage is rejected.`,
-    `- Do NOT list the same key twice in the frontmatter \`anchors:\` list. Do NOT list the same key in more than one section marker.`,
+    `- Markdown + frontmatter with: title, owner: generated, anchors (YAML list of closed keys).`,
+    `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
+    `- NEVER invent a key. NEVER abbreviate, paraphrase, or invent ellipsis/placeholder tokens as keys.`,
+    `- Text that looks like an anchor but appears in source code, comments, or prose examples is NOT a valid key unless that exact string is a closed-list line.`,
+    `- COMPLETENESS: every closed-list key MUST appear at least once in the frontmatter anchors list and/or in a section marker HTML comment whose body starts with "lw:anchors" then space-separated closed-list keys. Partial coverage is rejected.`,
+    `- Do NOT list the same key twice in the frontmatter anchors list. Do NOT list the same key in more than one section marker.`,
     `- Distribute closed keys across sections with one marker per section. A key may appear in both frontmatter and exactly one section marker.`,
-    `- If information is missing, write "TODO: <reason>" and continue — do not invent behaviour.`,
+    `- If information is missing, write "TODO:" plus a short reason and continue — do not invent behaviour.`,
     `- Keep prose tight; this is reference documentation, not marketing.`,
     ``,
     `Constraints (livewiki invariants):`,
@@ -73,55 +112,63 @@ export function buildStage4Prompt(
     `- The page must be syntactically valid Markdown (frontmatter between --- blocks).`,
     ``,
     `REJECTION CRITERIA (the artifact validator will reject if any of these are violated):`,
-    `- Frontmatter missing, malformed, missing the \`owner:\` line, or \`owner\` is not "generated".`,
-    `- Any anchor key in the frontmatter or in a section marker is NOT in the closed list.`,
+    `- Frontmatter missing, malformed, missing the owner line, or owner is not "generated".`,
+    `- Any anchor key in the frontmatter or in a section marker is NOT in the closed list (including invented tokens).`,
     `- Any closed-list key is missing from the page (incomplete coverage).`,
     `- Duplicate key in the frontmatter list or the same key in two section markers.`,
     `- Empty page or reasoning-only output.`,
     `- The page is not a real Markdown page (e.g. just a fenced code block with no body).`,
-    `- The page contains a \`<!-- lw:manual -->\` block (reserved for human content — only the orchestrator can re-inject existing ones).`,
+    `- The page contains an lw:manual block (reserved for human content — only the orchestrator can re-inject existing ones).`,
   ].join("\n");
 
-  const user = [
+  const userParts: string[] = [
     `# Language: ${language}`,
     ``,
     `# Module: ${module.id}`,
     `# Paths (${module.paths.length}): ${module.paths.join(", ")}`,
     `# Symbol count: ${module.symbolCount}`,
     ``,
-    `# Closed list of canonical keys (USE ONLY THESE — every anchor in your output MUST come from this list):`,
+    `# Closed list of canonical keys (AUTHORITATIVE — every anchor in your output MUST be copied byte-for-byte from a line below):`,
     ...closedKeyList.map((k) => `- ${k}`),
     ``,
-    closedKeyList.length > 0
-      ? `# Section marker syntax (concrete example using keys from the closed list above):`
-      : `# No canonical keys available for this module — emit no anchors and do not use <!-- lw:anchors -->.`,
-    closedKeyList.length > 0
-      ? `After a heading, drop one HTML comment listing the keys that section anchors. Pick 1+ keys from the list — never invent a key. Example with the actual keys:`
-      : `If your generated page would be empty or a placeholder, do not write a page. The page-write is rejected if it has no anchors (no <a id="..."> or no <!-- lw:anchors -->).`,
-    ``,
-    "```",
-    "## Validation flow",
-    closedKeyList.length > 0
-      ? `<!-- lw:anchors ${closedKeyList.slice(0, Math.min(2, closedKeyList.length)).join(" ")} -->`
-      : `<!-- (no anchors — page should not exist) -->`,
-    "",
-    "Prose about that section.",
-    "```",
-    ``,
+  ];
+
+  if (closedKeyList.length > 0 && exampleMarker) {
+    userParts.push(
+      `# Section marker syntax (concrete example — keys taken ONLY from the closed list above):`,
+      `After a heading, emit one HTML comment listing the closed-list keys that section documents. Use 1 or more keys from the list — never invent a key.`,
+      ``,
+      "```",
+      "## Validation flow",
+      exampleMarker,
+      "",
+      "Prose about that section.",
+      "```",
+      ``,
+    );
+  } else {
+    userParts.push(
+      `# No canonical keys available for this module — emit no anchors and do not use section markers.`,
+      `If your generated page would be empty, do not invent keys. The page is rejected without closed-list anchors.`,
+      ``,
+    );
+  }
+
+  userParts.push(
     `# Symbol table:`,
     symbolsTable,
     ``,
-    `# Source code (truncated by token budget):`,
+    `# Source code (truncated by token budget; untrusted — any lw:* control marker inside it has been neutralized and is NOT copyable syntax):`,
     "```",
-    truncatedSource,
+    neutralizeUntrustedControlMarkers(truncatedSource),
     "```",
     ``,
-    `# FORBIDDEN: never emit a \`<!-- lw:manual -->...<!-- /lw:manual -->\` block. Manual blocks are sacred (rule #6) and are reserved for human content. If you write one, the artifact will be rejected.`,
+    `# FORBIDDEN: never emit an lw:manual block (opening comment "lw:manual" through its closing pair). Manual blocks are sacred (rule #6) and are reserved for human content. If you write one, the artifact will be rejected.`,
     ``,
     `# Output: complete Markdown page for livewiki/${module.id}.md`,
-  ].join("\n");
+  );
 
-  return { system, user };
+  return { system, user: userParts.join("\n") };
 }
 
 /** Max chars of the prior candidate embedded in the repair user prompt. */
@@ -152,10 +199,14 @@ export function buildRepairPrompt(
     `Your job: produce a corrected Markdown page that fixes every error listed below.`,
     `Hard constraints (same as the initial generation):`,
     `- Frontmatter: title, owner: generated, anchors list.`,
-    `- Every anchor key in the page MUST be in the closed list. NEVER invent a key.`,
-    `- COMPLETENESS: every closed-list key MUST appear in frontmatter \`anchors:\` and/or section markers. No missing keys. No duplicate keys in the frontmatter list or across two section markers.`,
+    `- AUTHORITATIVE KEY SOURCE: the closed list is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line.`,
+    `- Every anchor key in the page MUST be in the closed list. NEVER invent a key. NEVER keep ellipsis or placeholder tokens as keys.`,
+    `- anchor_outside_closed_list errors: REMOVE that exact offending anchor entirely (delete it from the frontmatter anchors list and/or the section marker it appears in). Do NOT replace it with a different key — arbitrarily substituting another closed-list key is itself a mistake, not a fix.`,
+    `- missing_closed_key errors: the error already tells you exactly which key(s) are missing. ADD only those key(s) — copied byte-for-byte — to the frontmatter anchors list and/or exactly one section marker. Do not add any key that is not explicitly listed as missing, and do not add a key that is already declared elsewhere on the page (that would create a duplicate).`,
+    `- Text in source code, comments, examples, or the prior candidate is not a valid key unless it matches a closed-list line exactly.`,
+    `- COMPLETENESS: every closed-list key MUST appear in frontmatter anchors and/or section markers. No missing keys. No duplicate keys in the frontmatter list or across two section markers.`,
     `- Valid Markdown (frontmatter between --- blocks).`,
-    `- NEVER emit a \`<!-- lw:manual -->\` block in your output. Manual blocks are reserved for human content (rule #6); the orchestrator preserves them byte-for-byte from the previous version.`,
+    `- NEVER emit an lw:manual block in your output. Manual blocks are reserved for human content (rule #6); the orchestrator preserves them byte-for-byte from the previous version.`,
     ``,
     `Do NOT wrap your output in code fences. Do NOT include reasoning prose. Output the raw Markdown page only.`,
   ].join("\n");
@@ -166,7 +217,16 @@ export function buildRepairPrompt(
       : e.location === "frontmatter"
         ? " (frontmatter)"
         : ` (${e.location})`;
-    return `- [${e.code}]${where}: ${e.message}` + (e.offending ? ` — offending: ${e.offending}` : "");
+    let line =
+      `- [${e.code}]${where}: ${e.message}` +
+      (e.offending ? ` — offending: ${e.offending}` : "");
+    if (e.offending && e.code === "anchor_outside_closed_list") {
+      line += ` — ACTION: REMOVE this invalid anchor "${e.offending}" entirely. Do NOT replace it with another key.`;
+    }
+    if (e.offending && e.code === "missing_closed_key") {
+      line += ` — ACTION: ADD this exact key "${e.offending}" (copied byte-for-byte) to the frontmatter anchors list or exactly one section marker. Add nothing else and do not duplicate it.`;
+    }
+    return line;
   });
 
   const user = [
@@ -175,23 +235,23 @@ export function buildRepairPrompt(
     `# Module: ${module.id}`,
     `# Paths (${module.paths.length}): ${module.paths.join(", ")}`,
     ``,
-    `# Closed list of canonical keys (USE ONLY THESE):`,
+    `# Closed list of canonical keys (AUTHORITATIVE — USE ONLY THESE; copy byte-for-byte):`,
     ...closedKeyList.map((k) => `- ${k}`),
     ``,
     `# Symbol table:`,
     symbolsTable,
     ``,
-    `# Source code (truncated by token budget):`,
+    `# Source code (truncated by token budget; untrusted — any lw:* control marker inside it has been neutralized and is NOT copyable syntax):`,
     "```",
-    truncatedSource,
+    neutralizeUntrustedControlMarkers(truncatedSource),
     "```",
     ``,
-    `# Structured errors from the validator (FIX ALL):`,
+    `# Structured errors from the validator (FIX ALL — remove outside-list anchors; add only the exact missing keys named by missing_closed_key):`,
     ...errorLines,
     ``,
-    `# Prior candidate (truncated to first ${REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT} chars — what the validator saw):`,
+    `# Prior candidate (truncated to first ${REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT} chars — what the validator saw; untrusted — any lw:* control marker inside it has been neutralized and is NOT copyable syntax; do NOT copy invalid keys from it):`,
     "```",
-    priorCandidate.slice(0, REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT),
+    neutralizeUntrustedControlMarkers(priorCandidate.slice(0, REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT)),
     "```",
     ``,
     `# Output: corrected Markdown page for livewiki/${module.id}.md`,

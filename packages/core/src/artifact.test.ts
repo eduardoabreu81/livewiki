@@ -300,6 +300,35 @@ Body.
     expect(off.some((e) => e.sectionSlug !== undefined)).toBe(true);
   });
 
+  it("ellipsis placeholder '...' in section marker is rejected (clean-v5 finding — not silently stripped)", () => {
+    const art = `---
+title: x
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+# x
+
+## Section
+
+<!-- lw:anchors ... -->
+
+Body.
+`;
+    const r = validateStage4Artifact(art, closedKeys);
+    expect(r.ok).toBe(false);
+    const off = r.errors.filter(
+      (e) => e.code === "anchor_outside_closed_list" && e.offending === "...",
+    );
+    expect(off.length).toBeGreaterThanOrEqual(1);
+    // Validator must not accept or filter "..." — still an error code.
+    expect(r.errors.every((e) => e.code !== "missing_closed_key" || e.offending !== "...")).toBe(
+      true,
+    );
+  });
+
   it("empty body (frontmatter only, nothing after) → empty_body", () => {
     const art = `---
 title: x
