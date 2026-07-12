@@ -272,7 +272,7 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   it.runIf(canSymlink)(
     "PERMITIDO: livewiki/data é symlink para .livewiki/data (interno)",
     async () => {
-      await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki", "data"));
+      await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki", "data"), { recursive: true });
       await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"));
 
       // Symlink que aponta para outro ponto DENTRO da allowlist
@@ -297,7 +297,7 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   it.runIf(canSymlink)(
     "PERMITIDO: readText via symlink interno (livewiki/data → .livewiki/data)",
     async () => {
-      await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki", "data"));
+      await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki", "data"), { recursive: true });
       await nodeFs.writeFile(
         nodePath.join(repoRoot, ".livewiki", "data", "y.txt"),
         "content-y",
