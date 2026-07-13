@@ -130,6 +130,54 @@ export function registerBatch(program: Command): void {
 export const USAGE_INCOMPLETE_NOTE =
   "Note: totals are incomplete — some attempts have unknown usage. Prefer proxy/provider billing for wire cost.";
 
+/**
+ * B2 (Lot B): one compact ordered line per diagnostic entry. Mirrors
+ * the format used inside `repair_exhausted` in core/batch.ts so the
+ * human output is consistent with what gets persisted in the
+ * checkpoint error message.
+ *
+ * `stopReason` falls back to "-" when the LLM did not provide one
+ * (e.g. `llm_error` outcomes). Codes are deduplicated but preserve
+ * first-seen order so the user can match against the validator
+ * enumeration.
+ */
+function formatDiagnosticLine(d: {
+  attempt: number;
+  stopReason?: string;
+  outcome: string;
+  errors: Array<{ code: string }>;
+}): string {
+  const stopReason = d.stopReason ?? "-";
+  const seen = new Set<string>();
+  const codes: string[] = [];
+  for (const e of d.errors) {
+    if (seen.has(e.code)) continue;
+    seen.add(e.code);
+    codes.push(e.code);
+  }
+  return `attempt ${d.attempt}: ${stopReason} -> ${d.outcome}` +
+    (codes.length > 0 ? ` [${codes.join(", ")}]` : "");
+}
+
+/**
+ * B2 (Lot B): for failed stage-4 tasks, print the compact per-attempt
+ * sequence derived from `diagnosticHistory`. Falls back silently when
+ * the checkpoint pre-dates diagnostics (CONTRACT I5) or when the task
+ * never reached the LLM (e.g. `refused_human_page`).
+ */
+function appendStage4Diagnostics(
+  lines: string[],
+  report: Awaited<ReturnType<typeof buildStatusReport>>,
+  failureTaskId: number,
+): void {
+  const task = report.tasks.find((t) => t.taskId === failureTaskId);
+  if (!task?.diagnosticHistory || task.diagnosticHistory.length === 0) return;
+  lines.push(`    attempts:`);
+  for (const d of task.diagnosticHistory) {
+    lines.push(`      ${formatDiagnosticLine(d)}`);
+  }
+}
+
 export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string {
   // Token-first (ad87319): tokens are the primary metric, USD is secondary
   // and omitted without drama when no pricing exists. Each stage/module line
@@ -187,6 +235,10 @@ export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusR
     lines.push(`Failures (${report.failures.length}):`);
     for (const f of report.failures) {
       lines.push(`  [${f.error.code}] ${f.module}: ${f.error.message}`);
+      // B2: per-task diagnostic sequence for failed stage-4 tasks.
+      if (f.stage === 4) {
+        appendStage4Diagnostics(lines, report, f.taskId);
+      }
       lines.push(`    retry: ${f.retryCommand}`);
     }
   }

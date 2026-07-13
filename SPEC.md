@@ -280,14 +280,42 @@ artifacts; they enter the same bounded correction loop. `unknown` remains
 backward-compatible for providers or proxies that omit the signal and still
 undergoes full structural validation.
 
-An invalid artifact, incomplete provider response, or post-write verify failure triggers a bounded corrective
-call for the same task. `maxRepairAttempts` defaults to `2` in
-`.livewiki/config.json` conventions and can be overridden per run; therefore a
-task makes at most one initial call plus two corrective calls by default. The
-repair prompt receives the structured errors, the exact closed key list, and
-the prior candidate needed to correct the artifact. A repaired task is `done`
-and does not increment circuit-breaker failures. Only exhaustion becomes one
-final task failure.
+An invalid artifact, incomplete provider response, or post-write verify failure
+triggers another bounded attempt for the same task. `maxRepairAttempts` defaults
+to `2` in `.livewiki/config.json` conventions and can be overridden per run;
+therefore a task makes at most one initial call plus two further calls by
+default. The next prompt depends only on the immediately previous attempt:
+
+| Previous outcome | Next prompt | Repair inputs |
+|---|---|---|
+| no previous attempt | initial | empty |
+| LLM error (non-timeout) | initial | cleared |
+| incomplete generation | initial | cleared |
+| token-limit truncation (`length`) | initial | cleared |
+| normalization, artifact-validation, or verify failure | repair | that attempt's candidate and exact structured errors |
+| LLM timeout | none (terminal for the task) | none |
+
+Incomplete and token-limited responses are not completed artifacts and are
+never embedded as repair candidates. A completed response with normalized stop
+reason `unknown` still flows through normalization and all validators. Repair
+state is never resurrected from an older attempt. A repaired task is `done` and
+does not increment circuit-breaker failures. Only exhaustion becomes one final
+task failure.
+
+Each stage-4 task checkpoint may include an append-only `diagnosticHistory`,
+with one content-safe record per LLM attempt: the global attempt number,
+normalized/raw stop reasons when available, outcome, prompt kind, bounded
+structured error summaries, candidate character count and SHA-256 (never the
+candidate itself), and completion timestamp. It is seeded and appended on
+resume and `--only`, exactly like `usageHistory`; every stage-4 call, including
+a timeout, has one entry in each history with the same global attempt number.
+Diagnostics never persist prompts, source text, raw candidates, or API keys.
+Text excerpts and error lists use fixed persistence caps, while dropped-entry
+counts preserve truthful totals.
+
+When attempts are exhausted, `repair_exhausted` reporting presents the ordered
+per-attempt sequence and real totals across all attempts. It never describes
+the final attempt's error count as the total.
 
 Stage-4 output budget defaults to `stage4MaxOutputTokens` **8192** (config
 override allowed). Provider presets carry market defaults; **where an API can

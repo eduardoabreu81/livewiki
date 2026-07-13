@@ -112,6 +112,15 @@ export async function buildStatusReport(
         costUsd: stageUsage.costUsd,
         ...(stageUsage.usageIncomplete ? { usageIncomplete: true } : {}),
         ...(cp?.error ? { error: cp.error } : {}),
+        // B2 (Lot B): surface the per-task diagnostic history as an
+        // ADDITIVE field. Only included when the checkpoint has it
+        // (CONTRACT I5: backward compat — older checkpoints serialize
+        // without the field, and the status output is byte-stable in
+        // that case). The CLI human formatters use this to print the
+        // compact per-attempt sequence for failed stage-4 tasks.
+        ...(cp?.diagnosticHistory !== undefined
+          ? { diagnosticHistory: cp.diagnosticHistory }
+          : {}),
         retryCommand: `livewiki batch --only ${t.target} ${run.id}`,
       });
       if (t.status === "failed") {

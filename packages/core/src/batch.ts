@@ -73,11 +73,19 @@ import { parseFrontmatter, getOwner } from "./frontmatter.js";
 import type {
   BatchStatusReport,
   BatchRunSummary,
+  DiagnosticAttempt,
+  DiagnosticErrorSummary,
+  DiagnosticOutcome,
   PendingBatchRef,
   StageUsage,
   TaskCheckpoint,
   UsageAttempt,
   ModuleUsage,
+} from "./batch-state.js";
+import {
+  DIAGNOSTIC_MAX_ERRORS,
+  DIAGNOSTIC_TEXT_CAP,
+  summarizeDiagnosticErrors,
 } from "./batch-state.js";
 
 export interface BatchOptions {
@@ -471,11 +479,15 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       const startedAt = Date.now();
       let attempt = task.attempt;
       let usageHistory: UsageAttempt[] = [];
+      let diagnosticHistory: DiagnosticAttempt[] = [];
       let taskError: TaskCheckpoint["error"] | undefined;
       let artifacts: TaskCheckpoint["artifacts"] | undefined;
       const prevCheckpoint = task.checkpoint_json ? safeJsonParse<TaskCheckpoint>(task.checkpoint_json) : null;
       if (prevCheckpoint?.usageHistory) {
         usageHistory = [...prevCheckpoint.usageHistory];
+      }
+      if (prevCheckpoint?.diagnosticHistory) {
+        diagnosticHistory = [...prevCheckpoint.diagnosticHistory];
       }
 
       const wikiPath = `livewiki/${module.id}.md`;
@@ -510,14 +522,22 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             `Refusing to rewrite untrusted content (rule #6 — operator must repair the page manually).`,
         };
       } else {
-        // Loop bounded: 1 initial + maxRepairAttempts repairs.
+        // Bounded loop: one initial call plus maxRepairAttempts further calls.
         const totalAttempts = 1 + maxRepairAttempts;
         let attemptDone = false;
         let priorCandidate = "";
         let priorErrors: ArtifactValidationError[] = [];
+        let lastErrorsForReporting: ArtifactValidationError[] = [];
+        let nextPromptKind: "initial" | "repair" = "initial";
+        // B1: capture the start of THIS loop's slice into
+        // `diagnosticHistory` so the eventual `repair_exhausted`
+        // message is built only from the new attempts in this loop
+        // (not from the seeded history of prior runs/--only calls).
+        const diagnosticSliceStart = diagnosticHistory.length;
 
         for (let i = 0; i < totalAttempts; i++) {
           attempt++;
+          const promptKind = nextPromptKind;
           // Reviewer revision (finding #5): the `attemptNumber` passed
           // to the LLM call is the GLOBAL COUNTER (started from `task.attempt`
           // persisted and incremented at every attempt). NEVER `i + 1`
@@ -530,8 +550,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             language,
             llmClient: llmClient!,
             charBudget: opts.contextCharBudget ?? 60_000,
-            // isRepair = attempt > 1 inside this bounded loop
-            isRepair: i > 0,
+            promptKind,
             priorCandidate,
             priorErrors,
             absRoot,
@@ -553,6 +572,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           );
 
           if (attemptResult.llmError) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "llm_error",
+                errors: summarizeLlmDiagnosticError(attemptResult.llmError),
+              }),
+            );
             // Client timeout: terminal for this task — no repair, no second
             // generation (provider state unknown; may still bill).
             if (attemptResult.llmError.code === "llm_timeout") {
@@ -566,22 +593,44 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             }
             // Other LLM failures (network, 5xx, etc): record and allow
             // another attempt within the bounded loop when attempts remain.
-            priorCandidate = "";
-            priorErrors = [
+            lastErrorsForReporting = [
               {
                 code: "llm_error",
                 message: attemptResult.llmError.message,
                 location: "global",
               },
             ];
+            priorCandidate = "";
+            priorErrors = [];
+            nextPromptKind = "initial";
             continue;
           }
 
           if (attemptResult.artifact === null) {
-            // Invalid artifact (validation rejected it). Next attempt uses
-            // repair prompt with the structured errors and the candidate.
-            priorCandidate = attemptResult.normalizedRaw;
-            priorErrors = attemptResult.validationErrors;
+            const outcome = attemptResult.diagnosticOutcome!;
+            lastErrorsForReporting = attemptResult.validationErrors;
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome,
+                errors: summarizeDiagnosticErrors(attemptResult.validationErrors),
+              }),
+            );
+            if (
+              outcome === "incomplete_generation" ||
+              outcome === "truncated_by_token_limit"
+            ) {
+              priorCandidate = "";
+              priorErrors = [];
+              nextPromptKind = "initial";
+            } else {
+              // Only the immediately previous completed-but-invalid candidate
+              // may become the next repair input.
+              priorCandidate = attemptResult.normalizedRaw;
+              priorErrors = attemptResult.validationErrors;
+              nextPromptKind = "repair";
+            }
             continue;
           }
 
@@ -593,11 +642,27 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             existing,
           );
           if (writeResult.ok) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "success",
+                errors: { errors: [], truncatedErrorCount: 0 },
+              }),
+            );
             // SUCCESS — task done. Does NOT increment cb.fails.
             attemptDone = true;
             artifacts = writeResult.artifacts;
             break;
           } else if (writeResult.rollbackFailed) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "verify_failed",
+                errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+              }),
+            );
             // Review finding #4 + reviewer revision: rollback failure is
             // TERMINAL not just for the task, but for the ENTIRE RUN. Disk
             // may be inconsistent; continuing to other modules
@@ -614,33 +679,55 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             runAbortedByRollback = true; // signals: exits the modules loop too
             break;
           } else {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "verify_failed",
+                errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+              }),
+            );
             // Verify failed → restore/remove the candidate (already done inside
             // tryWriteAndVerify). Prepare the next attempt for repair.
             // The "prior candidate" for repair is what was rejected.
             priorCandidate = attemptResult.artifact;
             priorErrors = verifyIssuesToValidationErrors(writeResult.issues ?? []);
+            lastErrorsForReporting = priorErrors;
+            nextPromptKind = "repair";
             continue;
           }
         }
 
         if (!attemptDone && !taskError) {
-          // Review finding #10: repair_exhausted PRESERVES the last
-          // structured diagnostic (validation errors or verify issues)
-          // so the operator knows exactly what failed. Without this,
-          // the report only said "exhausted N calls" and the user had to
-          // look at raw logs. Skip if taskError already set (e.g. llm_timeout).
-          const lastError = priorErrors[0];
-          const lastDetail = lastError
-            ? `[${lastError.code}] ${lastError.message}` +
-              (lastError.offending ? ` (offending: ${lastError.offending})` : "")
-            : "no validation/verify error was recorded (LLM call may have failed every attempt)";
+          // B1 (Lot B): repair_exhausted is built from the
+          // `diagnosticHistory` slice for THIS bounded loop, not from
+          // the last attempt alone. We surface one compact ordered
+          // line per attempt (`attempt N: <stopReason|-> -> <outcome>
+          // [codes...]`) plus real totals (sum of errors.length +
+          // truncatedErrorCount across this loop's attempts). This
+          // replaces the v9 misreport that hid completed-but-invalid
+          // attempts behind a misleading `Last diagnostic` line. The
+          // `code` stays `"repair_exhausted"` and the `failedAt: 4`
+          // retry-hint behavior is preserved (set when the last
+          // reported error carried a sectionSlug).
+          const thisLoopDiagnostics = diagnosticHistory.slice(diagnosticSliceStart);
+          const attemptLines = thisLoopDiagnostics.map((d) => {
+            const stopReason = d.stopReason ?? "-";
+            const codes = d.errors.map((e) => e.code);
+            return `attempt ${d.attempt}: ${stopReason} -> ${d.outcome}` +
+              (codes.length > 0 ? ` [${codes.join(", ")}]` : "");
+          });
+          const totalErrors = thisLoopDiagnostics.reduce(
+            (sum, d) => sum + d.errors.length + d.truncatedErrorCount,
+            0,
+          );
           taskError = {
             code: "repair_exhausted",
             message:
-              `task "${module.id}" exhausted ${totalAttempts} LLM call(s) without producing a verified artifact. ` +
-              `Last diagnostic: ${lastDetail}. ` +
-              `Total errors recorded: ${priorErrors.length}.`,
-            ...(lastError?.sectionSlug ? { failedAt: 4 } : {}),
+              `task "${module.id}" exhausted ${thisLoopDiagnostics.length} LLM call(s) without producing a verified artifact.\n` +
+              `Attempts:\n${attemptLines.join("\n")}\n` +
+              `Total errors recorded: ${totalErrors}.`,
+            ...(lastErrorsForReporting[0]?.sectionSlug ? { failedAt: 4 } : {}),
           };
         }
       }
@@ -654,6 +741,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           startedAt,
           finishedAt: Date.now(),
           usageHistory,
+          diagnosticHistory,
           error: taskError,
         };
         db.prepare(
@@ -676,6 +764,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           startedAt,
           finishedAt: Date.now(),
           usageHistory,
+          diagnosticHistory,
           ...(artifacts ? { artifacts } : {}),
         };
         db.prepare(
@@ -1469,6 +1558,70 @@ function verifyIssuesToValidationErrors(
   });
 }
 
+type DiagnosticErrors = {
+  errors: DiagnosticErrorSummary[];
+  truncatedErrorCount: number;
+};
+
+function summarizeLlmDiagnosticError(error: {
+  code: string;
+  message: string;
+}): DiagnosticErrors {
+  return {
+    errors: [
+      {
+        code: error.code,
+        location: "global",
+        message: error.message.slice(0, DIAGNOSTIC_TEXT_CAP),
+      },
+    ],
+    truncatedErrorCount: 0,
+  };
+}
+
+function summarizeVerifyDiagnosticErrors(
+  issues: ReadonlyArray<VerifyIssue>,
+): DiagnosticErrors {
+  const errors = issues.slice(0, DIAGNOSTIC_MAX_ERRORS).map((issue) => ({
+    code: issue.code,
+    location: issue.code === "broken_anchor" ? "frontmatter" as const : "body" as const,
+    ...(issue.wikiPath
+      ? { offending: issue.wikiPath.slice(0, DIAGNOSTIC_TEXT_CAP) }
+      : {}),
+    message: issue.detail.slice(0, DIAGNOSTIC_TEXT_CAP),
+  }));
+  return {
+    errors,
+    truncatedErrorCount: Math.max(0, issues.length - errors.length),
+  };
+}
+
+function diagnosticAttempt(input: {
+  attemptResult: Stage4AttemptResult;
+  promptKind: "initial" | "repair";
+  outcome: DiagnosticOutcome;
+  errors: DiagnosticErrors;
+}): DiagnosticAttempt {
+  const candidate = input.attemptResult.diagnosticCandidate;
+  return {
+    attempt: input.attemptResult.usageEntry.attempt,
+    ...(input.attemptResult.usageEntry.stopReason !== undefined
+      ? { stopReason: input.attemptResult.usageEntry.stopReason }
+      : {}),
+    ...(input.attemptResult.usageEntry.rawStopReason !== undefined
+      ? { rawStopReason: input.attemptResult.usageEntry.rawStopReason }
+      : {}),
+    outcome: input.outcome,
+    promptKind: input.promptKind,
+    errors: input.errors.errors,
+    truncatedErrorCount: input.errors.truncatedErrorCount,
+    ...(candidate !== null
+      ? { candidateChars: candidate.length, candidateSha256: sha256(candidate) }
+      : {}),
+    finishedAt: Date.now(),
+  };
+}
+
 // === Stage 4 attempt abstraction ===
 
 /**
@@ -1479,7 +1632,7 @@ interface Stage4AttemptResult {
   /**
    * `usageHistory` entry to record. ALWAYS present:
    *   - real usage if the LLM returned a result
-   *   - zero-usage if the LLM call threw (network, 5xx, etc)
+   *   - unknown/null usage if the LLM call threw (network, 5xx, etc)
    */
   usageEntry: UsageAttempt;
   /**
@@ -1487,6 +1640,10 @@ interface Stage4AttemptResult {
    * pass to the repair prompt when the artifact is invalid.
    */
   normalizedRaw: string;
+  /** Candidate representation used only for content-safe size/hash diagnostics. */
+  diagnosticCandidate: string | null;
+  /** Outcome known before the transactional write, or null when write/verify is next. */
+  diagnosticOutcome: DiagnosticOutcome | null;
   /**
    * NORMALIZED and VALIDATED artifact. Null if the artifact is invalid.
    * If valid, it is the content to write.
@@ -1504,7 +1661,7 @@ interface AttemptOpts {
   language: Language;
   llmClient: LlmClient;
   charBudget: number;
-  isRepair: boolean;
+  promptKind: "initial" | "repair";
   priorCandidate: string;
   priorErrors: ArtifactValidationError[];
   absRoot: string;
@@ -1535,7 +1692,7 @@ async function attemptStage4Generation(
 
   // Build prompt
   let prompt: { system: string; user: string };
-  if (opts.isRepair) {
+  if (opts.promptKind === "repair") {
     prompt = buildRepairPrompt(
       opts.module,
       ctx.closedKeyList,
@@ -1583,6 +1740,8 @@ async function attemptStage4Generation(
           finishedAt: Date.now(),
         },
         normalizedRaw: "",
+        diagnosticCandidate: null,
+        diagnosticOutcome: "llm_error",
         artifact: null,
         validationErrors: [],
         llmError: {
@@ -1603,6 +1762,8 @@ async function attemptStage4Generation(
         finishedAt: Date.now(),
       },
       normalizedRaw: "",
+      diagnosticCandidate: null,
+      diagnosticOutcome: "llm_error",
       artifact: null,
       validationErrors: [],
       llmError: {
@@ -1626,9 +1787,9 @@ async function attemptStage4Generation(
     ...(rawStopReason !== undefined ? { rawStopReason } : {}),
   };
 
-  // Provider-declared non-completions use the same bounded repair path as
-  // artifact validation failures. The raw candidate and provider reason are
-  // preserved so the repair prompt and checkpoint explain what happened.
+  // Provider-declared non-completions remain rejected artifacts, but the
+  // caller uses a fresh initial prompt next. The partial text is retained only
+  // long enough to compute content-safe diagnostics, never as repair input.
   if (stopReason === "length" || stopReason === "incomplete") {
     const code =
       stopReason === "length"
@@ -1638,6 +1799,8 @@ async function attemptStage4Generation(
     return {
       usageEntry,
       normalizedRaw: raw,
+      diagnosticCandidate: raw,
+      diagnosticOutcome: code,
       artifact: null,
       validationErrors: [
         {
@@ -1659,6 +1822,8 @@ async function attemptStage4Generation(
     return {
       usageEntry,
       normalizedRaw: raw,
+      diagnosticCandidate: raw,
+      diagnosticOutcome: "normalization_failed",
       artifact: null,
       validationErrors: normalize.errors,
       llmError: null,
@@ -1671,6 +1836,8 @@ async function attemptStage4Generation(
     return {
       usageEntry,
       normalizedRaw: raw,
+      diagnosticCandidate: normalize.content,
+      diagnosticOutcome: "artifact_validation_failed",
       artifact: null,
       validationErrors: validation.errors,
       llmError: null,
@@ -1680,6 +1847,8 @@ async function attemptStage4Generation(
   return {
     usageEntry,
     normalizedRaw: raw,
+    diagnosticCandidate: normalize.content,
+    diagnosticOutcome: null,
     artifact: normalize.content,
     validationErrors: [],
     llmError: null,

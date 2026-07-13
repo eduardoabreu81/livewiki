@@ -16,6 +16,7 @@
  */
 
 import type { LlmUsage } from "./llm/types.js";
+import type { ArtifactValidationError } from "./prompts.js";
 
 /** Stages do pipeline batch. */
 export type BatchStage = 1 | 2 | 3 | 4;
@@ -63,6 +64,78 @@ export interface UsageAttempt {
   rawStopReason?: string;
 }
 
+/** Outcome category of one stage-4 attempt. Exactly one per attempt. */
+export type DiagnosticOutcome =
+  | "llm_error"
+  | "incomplete_generation"
+  | "truncated_by_token_limit"
+  | "normalization_failed"
+  | "artifact_validation_failed"
+  | "verify_failed"
+  | "success";
+
+/** Bounded, content-safe summary of one structured error. */
+export interface DiagnosticErrorSummary {
+  /** ArtifactValidationCode, verify issue code, or llm error code. */
+  code: string;
+  location: "frontmatter" | "section" | "body" | "global";
+  sectionSlug?: string;
+  /** Truncated to DIAGNOSTIC_TEXT_CAP chars. */
+  offending?: string;
+  /** Truncated to DIAGNOSTIC_TEXT_CAP chars. */
+  message: string;
+}
+
+/** One append-only diagnostic record per stage-4 LLM attempt. */
+export interface DiagnosticAttempt {
+  /**
+   * GLOBAL attempt number — same counter as UsageAttempt.attempt.
+   * Join key for the 1:1 invariant.
+   */
+  attempt: number;
+  /** Normalized stop reason, when a provider response arrived. */
+  stopReason?: import("./llm/types.js").StopReason;
+  /** Raw provider value, when known. */
+  rawStopReason?: string;
+  outcome: DiagnosticOutcome;
+  /** Prompt kind actually used on THIS attempt. */
+  promptKind: "initial" | "repair";
+  /** Structured errors, capped at DIAGNOSTIC_MAX_ERRORS entries. Empty on success. */
+  errors: DiagnosticErrorSummary[];
+  /** Number of error entries dropped by the cap. 0 when none. */
+  truncatedErrorCount: number;
+  /** Char count of the candidate text. Absent when no candidate exists (llm_error). */
+  candidateChars?: number;
+  /** SHA-256 (hex) of the candidate text. Absent when no candidate exists. */
+  candidateSha256?: string;
+  finishedAt: number;
+}
+
+export const DIAGNOSTIC_TEXT_CAP = 200;
+export const DIAGNOSTIC_MAX_ERRORS = 50;
+
+/**
+ * Convert artifact errors into persistence-safe summaries without mutating
+ * the caller's errors or retaining unbounded text.
+ */
+export function summarizeDiagnosticErrors(
+  input: ReadonlyArray<ArtifactValidationError>,
+): { errors: DiagnosticErrorSummary[]; truncatedErrorCount: number } {
+  const errors = input.slice(0, DIAGNOSTIC_MAX_ERRORS).map((error) => ({
+    code: error.code,
+    location: error.location,
+    ...(error.sectionSlug !== undefined ? { sectionSlug: error.sectionSlug } : {}),
+    ...(error.offending !== undefined
+      ? { offending: error.offending.slice(0, DIAGNOSTIC_TEXT_CAP) }
+      : {}),
+    message: error.message.slice(0, DIAGNOSTIC_TEXT_CAP),
+  }));
+  return {
+    errors,
+    truncatedErrorCount: Math.max(0, input.length - errors.length),
+  };
+}
+
 /**
  * Checkpoint de uma task. Persistido como JSON em batch_tasks.checkpoint_json.
  *
@@ -84,6 +157,7 @@ export interface TaskCheckpoint {
   startedAt: number;
   finishedAt?: number;
   usageHistory: UsageAttempt[];
+  diagnosticHistory?: DiagnosticAttempt[];
   error?: TaskError;
   artifacts?: TaskArtifacts;
 }
@@ -134,6 +208,13 @@ export interface TaskReportItem {
   /** True if this task had attempts with unknown usage. */
   usageIncomplete?: boolean;
   error?: TaskError;
+  /**
+   * Additive per-task diagnostic history (stage-4 only). Surfaced from
+   * `batch_tasks.checkpoint_json.diagnosticHistory` when present.
+   * Absent for older checkpoints that pre-date the field (backward
+   * compat per CONTRACT I5).
+   */
+  diagnosticHistory?: DiagnosticAttempt[];
   /** Comando pronto pra retry: `livewiki batch --only <target> <runId>` */
   retryCommand: string;
 }

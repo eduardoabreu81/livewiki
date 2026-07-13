@@ -24,12 +24,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
-import { runBatch } from "./batch.js";
+import { runBatch, runOnly } from "./batch.js";
 import * as safeIo from "./safe-io.js";
 import type { LlmClient } from "./llm/index.js";
 import { LlmTimeoutError } from "./llm/index.js";
 import type { GenerateResult } from "./llm/types.js";
 import type { StopReason } from "./llm/types.js";
+import {
+  DIAGNOSTIC_MAX_ERRORS,
+  DIAGNOSTIC_TEXT_CAP,
+  type DiagnosticAttempt,
+  type TaskCheckpoint,
+} from "./batch-state.js";
 
 /**
  * Programmable LLM mock: each call consumes the next response in the queue,
@@ -107,6 +113,36 @@ function makeValidPage(closedKeyList: string[]): string {
   ].join("\n");
 }
 
+function makeInvalidPage(uniqueText: string): string {
+  return `# invalid\n\n${uniqueText}\n`;
+}
+
+async function readStage4Checkpoint(
+  root: string,
+  target = "auth",
+): Promise<TaskCheckpoint> {
+  const Database = (await import("better-sqlite3")).default;
+  const db = new Database(nodePath.join(root, ".livewiki/index.db"), {
+    readonly: true,
+  });
+  try {
+    const row = db
+      .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?")
+      .get(target) as { checkpoint_json: string };
+    return JSON.parse(row.checkpoint_json) as TaskCheckpoint;
+  } finally {
+    db.close();
+  }
+}
+
+function expectJoinedAttempts(checkpoint: TaskCheckpoint): void {
+  expect(checkpoint.diagnosticHistory).toBeDefined();
+  expect(checkpoint.diagnosticHistory).toHaveLength(checkpoint.usageHistory.length);
+  expect(checkpoint.diagnosticHistory!.map((entry) => entry.attempt)).toEqual(
+    checkpoint.usageHistory.map((entry) => entry.attempt),
+  );
+}
+
 let repoRoot: string;
 let llm: ProgrammableMockLlm;
 
@@ -128,7 +164,7 @@ afterEach(async () => {
 
 // === Repair: success path ===
 describe("batch X — repair success (Criterion #6)", () => {
-  it("repairs a provider-declared token-limit truncation within the bounded loop", async () => {
+  it("retries a token-limit truncation with a fresh initial prompt", async () => {
     llm.responses = [
       "# truncated candidate",
       makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
@@ -146,7 +182,8 @@ describe("batch X — repair success (Criterion #6)", () => {
 
     expect(result.status).toBe("completed");
     expect(llm.callCount).toBe(2);
-    expect(llm.callLog[1]?.user).toContain("truncated_by_token_limit");
+    expect(llm.callLog[1]?.system).not.toContain("REPAIR assistant");
+    expect(llm.callLog[1]?.user).not.toContain("# truncated candidate");
 
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), {
@@ -167,6 +204,17 @@ describe("batch X — repair success (Criterion #6)", () => {
     } finally {
       db.close();
     }
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "truncated_by_token_limit",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+    ]);
+    expectJoinedAttempts(checkpoint);
   });
 
   it("unknown anchor → repair prompt; second valid response = 2 entries, no circuit failure", async () => {
@@ -243,6 +291,19 @@ describe("batch X — repair success (Criterion #6)", () => {
     // Totals include the usage of the 2 calls (200 input + 100 output)
     expect(result.totals.inputTokens).toBe(200);
     expect(result.totals.outputTokens).toBe(100);
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "repair",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.errors.map((error) => error.code)).toContain(
+      "anchor_outside_closed_list",
+    );
   });
 
   it("successful repair does NOT increment circuit-breaker failures", async () => {
@@ -262,6 +323,295 @@ describe("batch X — repair success (Criterion #6)", () => {
     });
     expect(result.status).toBe("completed");
     expect(result.failures).toHaveLength(0);
+  });
+});
+
+describe("stage-4 per-attempt diagnostics", () => {
+  it("H1 persists stop-invalid, stop-invalid, abort in order with a 1:1 usage join", async () => {
+    llm.responses = [
+      makeInvalidPage("FIRST_INVALID_CANDIDATE"),
+      makeInvalidPage("SECOND_INVALID_CANDIDATE"),
+      "PARTIAL_ABORT_CANDIDATE",
+    ];
+    llm.stopReasons = ["complete", "complete", "incomplete"];
+    llm.rawStopReasons = ["stop", "stop", "abort"];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    const diagnostics = checkpoint.diagnosticHistory!;
+    expect(diagnostics.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "artifact_validation_failed",
+      "incomplete_generation",
+    ]);
+    expect(diagnostics.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "repair",
+      "repair",
+    ]);
+    expect(diagnostics.map((entry) => entry.rawStopReason)).toEqual([
+      "stop",
+      "stop",
+      "abort",
+    ]);
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("H2 persists abort, stop-invalid, abort with fresh then repair prompts", async () => {
+    llm.responses = [
+      "FIRST_PARTIAL_ABORT",
+      makeInvalidPage("MIDDLE_INVALID_CANDIDATE"),
+      "LAST_PARTIAL_ABORT",
+    ];
+    llm.stopReasons = ["incomplete", "complete", "incomplete"];
+    llm.rawStopReasons = ["abort", "stop", "abort"];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "incomplete_generation",
+      "artifact_validation_failed",
+      "incomplete_generation",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+      "repair",
+    ]);
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("H3 excludes an incomplete candidate from the next fresh prompt", async () => {
+    const partial = "UNIQUE_PARTIAL_TEXT_MUST_NOT_BE_REUSED";
+    llm.responses = [
+      partial,
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+    llm.stopReasons = ["incomplete", "complete"];
+    llm.rawStopReasons = ["abort", "stop"];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(llm.callLog[1]?.system).toContain("documentation generator");
+    expect(llm.callLog[1]?.system).not.toContain("REPAIR assistant");
+    expect(llm.callLog[1]?.user).not.toContain(partial);
+    expect(llm.callLog[1]?.user).not.toContain("# Prior candidate");
+  });
+
+  it("uses a fresh third prompt after invalid then incomplete without resurrecting the invalid candidate", async () => {
+    const invalid = "OLDER_INVALID_CANDIDATE_MUST_NOT_RETURN";
+    const partial = "IMMEDIATE_PARTIAL_CANDIDATE_MUST_NOT_BE_REPAIRED";
+    llm.responses = [
+      makeInvalidPage(invalid),
+      partial,
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+    llm.stopReasons = ["complete", "incomplete", "complete"];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(llm.callLog[1]?.system).toContain("REPAIR assistant");
+    expect(llm.callLog[2]?.system).not.toContain("REPAIR assistant");
+    expect(llm.callLog[2]?.user).not.toContain(invalid);
+    expect(llm.callLog[2]?.user).not.toContain(partial);
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "repair",
+      "initial",
+    ]);
+  });
+
+  it("repairs only the immediately previous invalid candidate after incomplete then invalid", async () => {
+    const partial = "OLDER_PARTIAL_MUST_NOT_RETURN";
+    const invalid = "IMMEDIATE_INVALID_MUST_BE_REPAIRED";
+    llm.responses = [
+      partial,
+      makeInvalidPage(invalid),
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+    llm.stopReasons = ["incomplete", "complete", "complete"];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(llm.callLog[1]?.system).not.toContain("REPAIR assistant");
+    expect(llm.callLog[2]?.system).toContain("REPAIR assistant");
+    expect(llm.callLog[2]?.user).toContain(invalid);
+    expect(llm.callLog[2]?.user).not.toContain(partial);
+    expect(llm.callLog[2]?.user).toContain("no_frontmatter");
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+      "repair",
+    ]);
+  });
+
+  it("I2 appends seeded diagnostics with globally monotonic attempts on --only", async () => {
+    llm.responses = [makeInvalidPage("FIRST_RUN_INVALID")];
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+    });
+
+    const retryLlm = new ProgrammableMockLlm();
+    retryLlm.responses = [
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+    await runOnly({
+      repoRoot,
+      llmClient: retryLlm,
+      noRefine: true,
+      onlyTarget: "auth",
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+    });
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.attempt)).toEqual([1, 2]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("I4 caps persisted errors and text without retaining raw candidate, source, or prompt", async () => {
+    const sourceSecret = "SOURCE_TEXT_MUST_NEVER_BE_PERSISTED";
+    const candidateSecret = "RAW_CANDIDATE_MUST_NEVER_BE_PERSISTED";
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/auth/login.ts"),
+      `export function login() { return "${sourceSecret}"; }`,
+      "utf8",
+    );
+    const fakeKeys = Array.from(
+      { length: 60 },
+      (_, index) => `${"outside-key-".repeat(20)}${index}`,
+    );
+    llm.responses = [
+      [
+        "---",
+        "title: unsafe diagnostic candidate",
+        "owner: generated",
+        "anchors:",
+        ...fakeKeys.map((key) => `  - ${key}`),
+        "---",
+        "",
+        "# Unsafe candidate",
+        `<!-- lw:anchors ${fakeKeys.join(" ")} -->`,
+        "",
+        candidateSecret.repeat(100),
+      ].join("\n"),
+    ];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+    });
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    const diagnostic = checkpoint.diagnosticHistory?.[0];
+    expect(diagnostic?.errors).toHaveLength(DIAGNOSTIC_MAX_ERRORS);
+    const expectedValidationErrors = fakeKeys.length * 2 + 2;
+    expect(diagnostic?.truncatedErrorCount).toBe(
+      expectedValidationErrors - DIAGNOSTIC_MAX_ERRORS,
+    );
+    expect(diagnostic?.errors.every((error) => error.message.length <= DIAGNOSTIC_TEXT_CAP)).toBe(
+      true,
+    );
+    expect(
+      diagnostic?.errors.every(
+        (error) => error.offending === undefined || error.offending.length <= DIAGNOSTIC_TEXT_CAP,
+      ),
+    ).toBe(true);
+    const serialized = JSON.stringify(checkpoint);
+    expect(serialized).not.toContain(candidateSecret);
+    expect(serialized).not.toContain(sourceSecret);
+    expect(serialized).not.toContain("# Closed list of canonical keys");
+    expect(diagnostic?.candidateChars).toBeGreaterThan(candidateSecret.length);
+    expect(diagnostic?.candidateSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("records candidate size/hash and empty errors for success", async () => {
+    llm.responses = [
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+    });
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    const diagnostic = checkpoint.diagnosticHistory?.[0];
+    expect(diagnostic?.outcome).toBe("success");
+    expect(diagnostic?.promptKind).toBe("initial");
+    expect(diagnostic?.errors).toEqual([]);
+    expect(diagnostic?.truncatedErrorCount).toBe(0);
+    expect(diagnostic?.candidateChars).toBeGreaterThan(0);
+    expect(diagnostic?.candidateSha256).toMatch(/^[a-f0-9]{64}$/);
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("classifies normalization rejection separately from artifact validation", async () => {
+    llm.responses = ["<think>unfinished reasoning"];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+    });
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.[0]).toMatchObject({
+      outcome: "normalization_failed",
+      promptKind: "initial",
+      errors: [expect.objectContaining({ code: "unclosed_reasoning" })],
+    });
+    expectJoinedAttempts(checkpoint);
   });
 });
 
@@ -332,6 +682,209 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
     });
     expect(llm.callCount).toBe(1);
     expect(result.status).toBe("completed_with_failures");
+  });
+
+  // H5 (Lot B): the `repair_exhausted` message MUST list the FULL
+  // attempt sequence and the real (summed) totals, not just the last
+  // attempt's error count. This is the v9 misreport regression test.
+  it("H5 repair_exhausted reports the full attempt sequence and real totals", async () => {
+    // Mirrors the handover's failure shape:
+    //   stop + invalid → stop + invalid → abort
+    // 3 attempts, all invalid, exhausted after the third.
+    llm.responses = [
+      makeInvalidPage("FIRST_INVALID_CANDIDATE"),
+      makeInvalidPage("SECOND_INVALID_CANDIDATE"),
+      "PARTIAL_ABORT_CANDIDATE",
+    ];
+    llm.stopReasons = ["complete", "complete", "incomplete"];
+    llm.rawStopReasons = ["stop", "stop", "abort"];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(result.failures).toHaveLength(1);
+    const failure = result.failures[0]!;
+    expect(failure.error.code).toBe("repair_exhausted");
+    const message = failure.error.message;
+
+    // The message lists every attempt in order with its normalized
+    // stop reason, outcome, and error codes (deduplicated, first-seen
+    // order). The H1 test already checks diagnosticHistory outcomes;
+    // here we pin the exact line format so the contract is locked.
+    expect(message).toContain("exhausted 3 LLM call(s) without producing a verified artifact.");
+    expect(message).toContain("attempt 1: complete -> artifact_validation_failed");
+    expect(message).toContain("attempt 2: complete -> artifact_validation_failed");
+    expect(message).toContain("attempt 3: incomplete -> incomplete_generation");
+    // Each attempt line ends with the bracketed codes (comma-separated).
+    expect(message).toMatch(/attempt 1: complete -> artifact_validation_failed \[[^\]]+\]/);
+    expect(message).toMatch(/attempt 3: incomplete -> incomplete_generation \[[^\]]+\]/);
+
+    // Real totals: sum of errors.length + truncatedErrorCount across
+    // THIS loop's attempts. We assert >= the count we know is there
+    // (3 attempts × ≥ 1 error each) and that it is NOT the last
+    // attempt's count.
+    const totalMatch = /Total errors recorded: (\d+)\./.exec(message);
+    expect(totalMatch).not.toBeNull();
+    const totalErrors = Number(totalMatch![1]);
+    expect(totalErrors).toBeGreaterThanOrEqual(3);
+    // The v9 misreport bug: the message would say "Total errors
+    // recorded: 1" when only the last attempt's count was used. With
+    // summed totals that can never happen here (3 attempts each have
+    // at least 1 error, and the third one is `incomplete_generation`).
+    expect(totalErrors).not.toBe(1);
+
+    // failedAt retry-hint behavior is preserved (equivalent to the
+    // pre-Lot B logic): set when the last reported error has a
+    // sectionSlug. The `incomplete_generation` error has no section,
+    // so failedAt should be absent in this scenario. The
+    // `BatchRunResult["failures"]` surface is intentionally minimal
+    // (no `failedAt` field) so we read the persisted checkpoint
+    // directly to inspect the retry-hint.
+    const cp = await readStage4Checkpoint(repoRoot);
+    expect((cp.error as { failedAt?: number } | undefined)?.failedAt).toBeUndefined();
+  });
+
+  // H7 (Lot B): with the new state machine (fresh-then-repair
+  // sequencing driven by outcome category, not positional `i > 0`),
+  // usageHistory MUST stay globally monotonic across runs and the
+  // stage / module / run token totals MUST reconcile exactly with the
+  // sum of usage entries. This guards the v9 misreport class of bugs
+  // where accounting was a side-effect of how the loop happened to
+  // be sequenced.
+  it("H7 usageHistory stays monotonic across --only and totals reconcile exactly with usage entries", async () => {
+    // Run 1: 3 invalid attempts, no success → exhausts the bounded
+    // loop. usageHistory ends with 3 entries (attempts 1, 2, 3).
+    llm.responses = [
+      makeInvalidPage("FIRST_RUN_INVALID_A"),
+      makeInvalidPage("FIRST_RUN_INVALID_B"),
+      makeInvalidPage("FIRST_RUN_INVALID_C"),
+    ];
+    const firstResult = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+    expect(firstResult.status).toBe("completed_with_failures");
+    expect(firstResult.failures).toHaveLength(1);
+    expect(llm.callCount).toBe(3);
+
+    // Run 2 (--only retry): mix of fresh and repair attempts.
+    //   attempt 4 = initial (invalid → repair)
+    //   attempt 5 = repair with the new errors (truncated)
+    //   attempt 6 = fresh initial after length (valid → success)
+    const retryLlm = new ProgrammableMockLlm();
+    retryLlm.responses = [
+      makeInvalidPage("SECOND_RUN_INVALID"),
+      "PARTIAL_TRUNCATED",
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+    retryLlm.stopReasons = ["complete", "length", "complete"];
+    retryLlm.rawStopReasons = ["stop", "max_tokens", "end_turn"];
+
+    const secondResult = await runOnly({
+      repoRoot,
+      llmClient: retryLlm,
+      noRefine: true,
+      onlyTarget: "auth",
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+    expect(secondResult.status).toBe("completed");
+    expect(retryLlm.callCount).toBe(3);
+
+    // 1: Checkpoint now has 6 usage entries with globally monotonic
+    // attempts (1, 2, 3, 4, 5, 6) — exactly the invariant described
+    // in `batch.ts:findings#5` and now in the H7 contract.
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), {
+      readonly: true,
+    });
+    try {
+      const row = db
+        .prepare(
+          "SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?",
+        )
+        .get("auth") as { checkpoint_json: string };
+      const cp = JSON.parse(row.checkpoint_json) as {
+        attempt: number;
+        usageHistory: Array<{
+          attempt: number;
+          usage: { inputTokens: number; outputTokens: number; model: string } | null;
+          usageKnown: boolean;
+        }>;
+        diagnosticHistory: Array<{ attempt: number; outcome: string; promptKind: string }>;
+      };
+      expect(cp.usageHistory).toHaveLength(6);
+      expect(cp.usageHistory.map((u) => u.attempt)).toEqual([1, 2, 3, 4, 5, 6]);
+      // The last attempt is 6 (the success).
+      expect(cp.attempt).toBe(6);
+      // Diagnostic history joins 1:1 with usage history.
+      expect(cp.diagnosticHistory).toHaveLength(6);
+      expect(cp.diagnosticHistory.map((d) => d.attempt)).toEqual([1, 2, 3, 4, 5, 6]);
+      // The new state machine's promptKind for this scenario:
+      //   1: initial (invalid)
+      //   2: repair
+      //   3: repair
+      //   4: initial (invalid)
+      //   5: repair
+      //   6: initial (fresh after `length` truncation)
+      expect(cp.diagnosticHistory.map((d) => d.promptKind)).toEqual([
+        "initial",
+        "repair",
+        "repair",
+        "initial",
+        "repair",
+        "initial",
+      ]);
+      // Outcomes: invalid, invalid, invalid, invalid, length, success.
+      expect(cp.diagnosticHistory.map((d) => d.outcome)).toEqual([
+        "artifact_validation_failed",
+        "artifact_validation_failed",
+        "artifact_validation_failed",
+        "artifact_validation_failed",
+        "truncated_by_token_limit",
+        "success",
+      ]);
+    } finally {
+      db.close();
+    }
+
+    // 2: The per-run result reports only the SECOND run's usage
+    // (3 calls × 100 input = 300 input). The cumulative totals live
+    // in the checkpoint + the status report (below). This is by
+    // design: each `runBatch`/`runOnly` returns its own atomic
+    // result; aggregation across runs happens via `buildStatusReport`.
+    const perRunInput = 3 * 100;
+    const perRunOutput = 3 * 50;
+    expect(secondResult.totals.inputTokens).toBe(perRunInput);
+    expect(secondResult.totals.outputTokens).toBe(perRunOutput);
+    expect(secondResult.byModule[0]?.inputTokens).toBe(perRunInput);
+    expect(secondResult.byModule[0]?.outputTokens).toBe(perRunOutput);
+
+    // 3: buildStatusReport reconciles the CUMULATIVE totals (6 calls
+    // × 100 input = 600 input) — stage 4 + module-level sums match
+    // the run total. This is the "totals reconcile exactly with the
+    // sum of usage entries" guarantee that the H7 contract requires.
+    const { buildStatusReport } = await import("./batch-status.js");
+    const report = await buildStatusReport(repoRoot);
+    const cumulativeInput = 6 * 100;
+    const cumulativeOutput = 6 * 50;
+    const stage4 = report.byStage["4"]!;
+    expect(stage4.inputTokens).toBe(cumulativeInput);
+    expect(stage4.outputTokens).toBe(cumulativeOutput);
+    const authMod = report.byModule.find((m) => m.module === "auth")!;
+    expect(authMod.inputTokens).toBe(cumulativeInput);
+    expect(authMod.outputTokens).toBe(cumulativeOutput);
+    expect(report.totals.inputTokens).toBe(cumulativeInput);
+    expect(report.totals.outputTokens).toBe(cumulativeOutput);
   });
 });
 
@@ -501,6 +1054,13 @@ describe("batch X — verify failure rollbacks a new page", () => {
       // Status reflects the failure
       expect(result.status).toBe("completed_with_failures");
       expect(result.failures).toHaveLength(1);
+      const checkpoint = await readStage4Checkpoint(repoRoot);
+      expect(checkpoint.diagnosticHistory?.[0]).toMatchObject({
+        outcome: "verify_failed",
+        promptKind: "initial",
+        errors: [expect.objectContaining({ code: "broken_anchor" })],
+      });
+      expectJoinedAttempts(checkpoint);
     } finally {
       runVerifySpy.mockRestore();
     }
@@ -622,6 +1182,7 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
 
     // 2 calls total (1 throw + 1 ok)
     expect(llm.callCount).toBe(2);
+    expect(llm.callLog[1]?.system).not.toContain("REPAIR assistant");
 
     const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
     const Database = (await import("better-sqlite3")).default;
@@ -656,6 +1217,16 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
     expect(result.totals.usageIncomplete).toBe(true);
     expect(result.totals.models).not.toContain("(call failed)");
     expect(result.totals.models).not.toContain("(no usage)");
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "llm_error",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+    ]);
+    expectJoinedAttempts(checkpoint);
   });
 });
 
@@ -748,6 +1319,7 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
           usageKnown: boolean;
           attempt: number;
         }>;
+        diagnosticHistory: DiagnosticAttempt[];
       };
       expect(cp.status).toBe("failed");
       expect(cp.error?.code).toBe("llm_timeout");
@@ -757,6 +1329,16 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
       expect(cp.usageHistory[0]!.usageKnown).toBe(false);
       expect(cp.usageHistory[0]!.usage).toBeNull();
       expect(cp.usageHistory[0]!.attempt).toBe(1);
+      expect(cp.diagnosticHistory).toHaveLength(1);
+      expect(cp.diagnosticHistory[0]).toMatchObject({
+        attempt: 1,
+        outcome: "llm_error",
+        promptKind: "initial",
+        errors: [expect.objectContaining({ code: "llm_timeout" })],
+        truncatedErrorCount: 0,
+      });
+      expect(cp.diagnosticHistory[0]!.candidateChars).toBeUndefined();
+      expect(cp.diagnosticHistory[0]!.candidateSha256).toBeUndefined();
 
       const done = db
         .prepare(

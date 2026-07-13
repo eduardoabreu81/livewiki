@@ -228,4 +228,143 @@ describe("key-leak — API key nunca vaza", () => {
     const json = JSON.stringify(summary);
     assertCanaryNotPresent(json, "batch_run.summary_json");
   });
+
+  /**
+   * H8 (Lot B): the diagnosticHistory surface is a NEW persisted
+   * output (checkpoint JSON + `batch status --json`). The contract's
+   * I4 (content safety) and the key-leak guarantee MUST both extend
+   * to it. This test:
+   *   - runs a real stage-4 batch with a stubbed provider whose
+   *     candidate embeds a long sentinel string;
+   *   - serializes the checkpoint JSON + the status report;
+   *   - asserts the canary key never appears in either, AND
+   *   - asserts the long sentinel is only present TRUNCATED to
+   *     DIAGNOSTIC_TEXT_CAP (200) chars inside `offending`/`message`,
+   *     never whole.
+   *
+   * The sentinel has to be LONGER than DIAGNOSTIC_TEXT_CAP so that a
+   * truncated prefix (≤200 chars) is distinguishable from a
+   * whole-string leak. We use 400 chars.
+   */
+  it("H8 — diagnosticHistory in checkpoint + status JSON leaks neither the key nor the whole candidate", async () => {
+    // Build a 400-char sentinel (2× DIAGNOSTIC_TEXT_CAP) so the
+    // truncation is observable.
+    const CANARY_SENTINEL = "SENTINEL-CANDIDATE-LEAK-DONOTUSE-" + "X".repeat(370);
+
+    // Source file (so the heuristic finds a module to document).
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src/auth"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/auth/login.ts"),
+      "export function login() { return 1; }\n",
+      "utf8",
+    );
+
+    // Stub LLM that returns an invalid candidate with the long
+    // sentinel in the frontmatter `anchors:` key. The validator
+    // puts the key into `offending` and embeds it into the message
+    // string, so the diagnostic error summary contains the
+    // (eventually truncated) sentinel.
+    //
+    // Inline stub — `ProgrammableMockLlm` lives in
+    // `batch-repair.test.ts` and is not exported as a shared helper.
+    const stub = {
+      provider: "anthropic" as const,
+      model: "claude-test-mock",
+      async generate() {
+        return {
+          content: [
+            "---",
+            "title: auth",
+            "owner: generated",
+            "anchors:",
+            `  - ${CANARY_SENTINEL}`,
+            "---",
+            "",
+            "# auth",
+            "",
+            `Body with ${CANARY_SENTINEL} inline (this string is also a leak).`,
+            "",
+          ].join("\n"),
+          usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+          stopReason: "complete" as const,
+          rawStopReason: "stop",
+        };
+      },
+    };
+
+    // Run a real batch (single attempt — maxRepairAttempts: 0). The
+    // validator will reject the candidate (the sentinel key is not
+    // in the closed list) and the diagnostic history will record the
+    // truncated sentinel in `offending` and `message`.
+    const { runBatch } = await import("./batch.js");
+    const result = await runBatch({
+      repoRoot,
+      llmClient: stub as unknown as import("./llm/index.js").LlmClient,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+    });
+    expect(result.status).toBe("completed_with_failures");
+
+    // 1. Read the serialized checkpoint JSON (and the status report).
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), {
+      readonly: true,
+    });
+    let checkpointJson: string;
+    let statusJson: string;
+    try {
+      const row = db
+        .prepare(
+          "SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?",
+        )
+        .get("auth") as { checkpoint_json: string };
+      checkpointJson = row.checkpoint_json;
+    } finally {
+      db.close();
+    }
+    assertCanaryNotPresent(checkpointJson, "checkpoint_json (diagnosticHistory present)");
+
+    // 2. The status report JSON MUST also be free of the canary key.
+    const { buildStatusReport } = await import("./batch-status.js");
+    const report = await buildStatusReport(repoRoot);
+    statusJson = JSON.stringify(report);
+    assertCanaryNotPresent(statusJson, "status report JSON (diagnosticHistory present)");
+
+    // 3. The candidate sentinel must NEVER appear WHOLE anywhere in
+    // the serialized surfaces. The contract requires it appears only
+    // truncated to DIAGNOSTIC_TEXT_CAP inside `offending`/`message`.
+    expect(checkpointJson).not.toContain(CANARY_SENTINEL);
+    expect(statusJson).not.toContain(CANARY_SENTINEL);
+
+    // 4. The truncated prefix (first 200 chars) IS allowed (that's
+    // the whole point of the cap), and the second 200 chars are
+    // forbidden.
+    const truncated = CANARY_SENTINEL.slice(0, 200);
+    const overflow = CANARY_SENTINEL.slice(200);
+    // The truncated prefix is fine — it must appear at least once
+    // (the validator includes the key in the diagnostic message).
+    expect(checkpointJson).toContain(truncated);
+    expect(statusJson).toContain(truncated);
+    // The overflow portion must not appear.
+    expect(checkpointJson).not.toContain(overflow);
+    expect(statusJson).not.toContain(overflow);
+
+    // 5. Walk the diagnostic structure: every `offending` and
+    // `message` field, where present, must be ≤ DIAGNOSTIC_TEXT_CAP.
+    const checkpoint = JSON.parse(checkpointJson) as {
+      diagnosticHistory: Array<{
+        errors: Array<{ offending?: string; message: string }>;
+      }>;
+    };
+    expect(checkpoint.diagnosticHistory).toBeDefined();
+    for (const entry of checkpoint.diagnosticHistory) {
+      for (const e of entry.errors) {
+        if (e.offending !== undefined) {
+          expect(e.offending.length).toBeLessThanOrEqual(200);
+        }
+        expect(e.message.length).toBeLessThanOrEqual(200);
+      }
+    }
+  });
 });

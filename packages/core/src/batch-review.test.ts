@@ -1208,8 +1208,16 @@ describe("review #9 — owner must be EXPLICITLY present and 'generated'", () =>
 });
 
 // === Finding #10 — repair_exhausted preserves the last diagnostic ===
-describe("review #10 — repair_exhausted preserves the last structured diagnostic", () => {
-  it("repair_exhausted message includes the last validation error", async () => {
+//
+// Lot B (2026-07-12) re-shaped the `repair_exhausted` message to
+// report the FULL ordered diagnostic sequence (one compact line per
+// attempt) and the REAL error count (summed across this loop's
+// attempts), not just the last attempt's error. The test below is
+// updated to assert the new contract format while keeping the
+// original intent: the terminal message MUST surface the validation
+// errors that the operator needs to diagnose the failure.
+describe("review #10 — repair_exhausted preserves the structured diagnostics", () => {
+  it("repair_exhausted message reports the ordered per-attempt sequence and the real total", async () => {
     // 3 calls: initial + 2 repairs, all invalid
     llm.responses = [
       "---\ntitle: t\nowner: generated\nanchors:\n  - bad-key\n---\n# t\n",
@@ -1227,12 +1235,24 @@ describe("review #10 — repair_exhausted preserves the last structured diagnost
 
     expect(result.failures.length).toBe(1);
     expect(result.failures[0]?.error.code).toBe("repair_exhausted");
-    // The message includes the last diagnostic (anchor_outside_closed_list,
-    // offending: "another-bad", which was the last error before exhaustion)
-    expect(result.failures[0]?.error.message).toMatch(/anchor_outside_closed_list/);
-    expect(result.failures[0]?.error.message).toMatch(/another-bad/);
-    // And also the error count
-    expect(result.failures[0]?.error.message).toMatch(/Total errors recorded: \d+/);
+    const message = result.failures[0]!.error.message;
+
+    // New contract: one ordered line per attempt, codes-only.
+    // Both `bad-key` and `another-bad` raise `anchor_outside_closed_list`,
+    // and attempt 2 raises `wrong_owner` (owner: mixed is not allowed
+    // by the stage-4 validator).
+    expect(message).toMatch(/attempt 1: .* -> artifact_validation_failed/);
+    expect(message).toMatch(/attempt 2: .* -> artifact_validation_failed/);
+    expect(message).toMatch(/attempt 3: .* -> artifact_validation_failed/);
+    // The codes appear in the bracketed list (deduped, first-seen order).
+    expect(message).toMatch(/\[anchor_outside_closed_list/);
+    expect(message).toMatch(/wrong_owner/);
+    // And the real total is reported (sum of errors.length +
+    // truncatedErrorCount across the loop's attempts).
+    expect(message).toMatch(/Total errors recorded: \d+\./);
+    // The "Last diagnostic: ..." single-line tail of the pre-Lot B
+    // message is gone — the per-attempt lines replace it.
+    expect(message).not.toMatch(/Last diagnostic:/);
   });
 });
 
