@@ -185,6 +185,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       opts.stage4MaxOutputTokens ??
       resolvedConfig.stage4MaxOutputTokens ??
       8192;
+    const charBudget = opts.contextCharBudget ?? 60_000;
     const thinkingMode = opts.thinking ?? resolvedConfig.thinking;
     const { maxFiles: maxModuleFiles, maxSymbols: maxModuleSymbols } =
       normalizeSplitLimits(
@@ -212,7 +213,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       const configJson = JSON.stringify({
         language,
         noRefine: opts.noRefine ?? false,
-        contextCharBudget: opts.contextCharBudget ?? 60_000,
+        contextCharBudget: charBudget,
         maxRepairAttempts,
       });
       const res = db
@@ -549,7 +550,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             module,
             language,
             llmClient: llmClient!,
-            charBudget: opts.contextCharBudget ?? 60_000,
+            charBudget,
             promptKind,
             priorCandidate,
             priorErrors,
@@ -627,9 +628,16 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             } else {
               // Only the immediately previous completed-but-invalid candidate
               // may become the next repair input.
-              priorCandidate = attemptResult.normalizedRaw;
-              priorErrors = attemptResult.validationErrors;
-              nextPromptKind = "repair";
+              const candidate = attemptResult.normalizedRaw;
+              if (candidate.length > charBudget) {
+                priorCandidate = "";
+                priorErrors = [];
+                nextPromptKind = "initial";
+              } else {
+                priorCandidate = candidate;
+                priorErrors = attemptResult.validationErrors;
+                nextPromptKind = "repair";
+              }
             }
             continue;
           }
@@ -688,12 +696,20 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
               }),
             );
             // Verify failed → restore/remove the candidate (already done inside
-            // tryWriteAndVerify). Prepare the next attempt for repair.
-            // The "prior candidate" for repair is what was rejected.
-            priorCandidate = attemptResult.artifact;
-            priorErrors = verifyIssuesToValidationErrors(writeResult.issues ?? []);
-            lastErrorsForReporting = priorErrors;
-            nextPromptKind = "repair";
+            // tryWriteAndVerify). Prepare a repair only when the rejected
+            // candidate fits the shared stage-4 character budget.
+            const candidate = attemptResult.artifact;
+            const repairErrors = verifyIssuesToValidationErrors(writeResult.issues ?? []);
+            lastErrorsForReporting = repairErrors;
+            if (candidate.length > charBudget) {
+              priorCandidate = "";
+              priorErrors = [];
+              nextPromptKind = "initial";
+            } else {
+              priorCandidate = candidate;
+              priorErrors = repairErrors;
+              nextPromptKind = "repair";
+            }
             continue;
           }
         }
@@ -1700,6 +1716,7 @@ async function attemptStage4Generation(
       ctx.truncatedSource,
       opts.priorCandidate,
       opts.priorErrors,
+      opts.charBudget,
       opts.language,
     );
   } else {

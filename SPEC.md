@@ -292,15 +292,24 @@ default. The next prompt depends only on the immediately previous attempt:
 | LLM error (non-timeout) | initial | cleared |
 | incomplete generation | initial | cleared |
 | token-limit truncation (`length`) | initial | cleared |
-| normalization, artifact-validation, or verify failure | repair | that attempt's candidate and exact structured errors |
+| normalization, artifact-validation, or verify failure with candidate chars above the stage-4 char budget | initial | cleared |
+| normalization, artifact-validation, or verify failure with candidate chars within the stage-4 char budget | repair | that attempt's full candidate and exact structured errors |
 | LLM timeout | none (terminal for the task) | none |
 
 Incomplete and token-limited responses are not completed artifacts and are
 never embedded as repair candidates. A completed response with normalized stop
-reason `unknown` still flows through normalization and all validators. Repair
-state is never resurrected from an older attempt. A repaired task is `done` and
-does not increment circuit-breaker failures. Only exhaustion becomes one final
-task failure.
+reason `unknown` still flows through normalization and all validators. A repair
+prompt embeds the full prior candidate up to the existing stage-4 char budget;
+an oversized candidate instead triggers a fresh initial prompt with all repair
+inputs cleared. In the embedded repair candidate, an `lw:anchors` marker is
+preserved byte-for-byte only when every key in that marker is an exact member
+of the module's closed key list. Source context remains fully neutralized. The
+injection-defense invariant for every prompt surface is that no other `lw:*`
+syntax may survive: malformed markers, non-anchor marker types, and anchor
+markers containing any invalid key are whitespace-neutralized. Repair state is
+never resurrected from an older attempt. A repaired task is `done` and does not
+increment circuit-breaker failures. Only exhaustion becomes one final task
+failure.
 
 Each stage-4 task checkpoint may include an append-only `diagnosticHistory`,
 with one content-safe record per LLM attempt: the global attempt number,

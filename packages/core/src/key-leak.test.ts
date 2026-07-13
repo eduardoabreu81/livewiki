@@ -367,4 +367,159 @@ describe("key-leak — API key nunca vaza", () => {
       }
     }
   });
+
+  /**
+   * Lot D — D3.1 (extends H8 surface). A candidate containing BOTH a
+   * valid marker (all keys in the closed list) and a fake marker
+   * whose key is a long sentinel. The selective neutralization in
+   * the repair prompt preserves the valid marker and neutralizes
+   * the fake one, but the diagnostic history (which is content-safe
+   * per I4 and lives in the checkpoint + status JSON) MUST still
+   * never contain the whole sentinel — only the 200-char truncated
+   * prefix of the fake key as `offending`. This is the new
+   * "combination" surface for the H8 contract: a valid marker
+   * present alongside a sentinel-bearing fake marker.
+   */
+  it("D3.1 — valid marker + sentinel-bearing fake marker in the same candidate never leaks the sentinel whole", async () => {
+    // 400-char sentinel (2× DIAGNOSTIC_TEXT_CAP) so truncation is
+    // observable. Distinct from the H8 sentinel so we can assert
+    // it independently.
+    const SENTINEL_KEY = "D3-SENTINEL-FAKE-KEY-DONOTUSE-" + "Z".repeat(370);
+    expect(SENTINEL_KEY.length).toBeGreaterThan(200);
+
+    // Source file so the heuristic finds a module to document.
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src/auth"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/auth/login.ts"),
+      "export function login() { return 1; }\n",
+      "utf8",
+    );
+
+    // The candidate contains BOTH:
+    //   1. A valid marker (all keys from the closed list — login
+    //      and logout are the only symbols in this module).
+    //   2. A fake marker whose key IS the SENTINEL_KEY. The
+    //      validator rejects it with `anchor_outside_closed_list`,
+    //      putting the whole SENTINEL_KEY (then truncated to 200)
+    //      into the diagnostic's `offending` field.
+    //
+    // The valid marker is preserved by the selective neutralizer
+    // when this candidate is re-embedded in a repair prompt. The
+    // fake marker is neutralized to whitespace. The candidate is
+    // NOT persisted to the diagnostic history — only its hash +
+    // size and the structured errors.
+    const stub = {
+      provider: "anthropic" as const,
+      model: "claude-test-mock",
+      async generate() {
+        const validMarker =
+          "<!-- lw:anchors src/auth/login.ts#login src/auth/login.ts#logout -->";
+        const fakeMarker = `<!-- lw:anchors ${SENTINEL_KEY} -->`;
+        return {
+          content: [
+            "---",
+            "title: auth",
+            "owner: generated",
+            "anchors:",
+            "  - src/auth/login.ts#login",
+            "  - src/auth/login.ts#logout",
+            "---",
+            "",
+            "# auth",
+            "",
+            validMarker,
+            "",
+            "Body with a poisoned fake marker:",
+            fakeMarker,
+            "",
+          ].join("\n"),
+          usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+          stopReason: "complete" as const,
+          rawStopReason: "stop",
+        };
+      },
+    };
+
+    const { runBatch } = await import("./batch.js");
+    const result = await runBatch({
+      repoRoot,
+      llmClient: stub as unknown as import("./llm/index.js").LlmClient,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+    });
+    expect(result.status).toBe("completed_with_failures");
+
+    // 1. Read the serialized checkpoint JSON + the status report.
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), {
+      readonly: true,
+    });
+    let checkpointJson: string;
+    let statusJson: string;
+    try {
+      const row = db
+        .prepare(
+          "SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?",
+        )
+        .get("auth") as { checkpoint_json: string };
+      checkpointJson = row.checkpoint_json;
+    } finally {
+      db.close();
+    }
+    assertCanaryNotPresent(checkpointJson, "checkpoint_json (D3.1)");
+
+    const { buildStatusReport } = await import("./batch-status.js");
+    const report = await buildStatusReport(repoRoot);
+    statusJson = JSON.stringify(report);
+    assertCanaryNotPresent(statusJson, "status JSON (D3.1)");
+
+    // 2. The whole SENTINEL_KEY never appears in either serialized
+    // surface. The fake marker is NOT in the diagnostic (only its
+    // truncated key as offending, plus a SHA-256 of the candidate).
+    expect(checkpointJson).not.toContain(SENTINEL_KEY);
+    expect(statusJson).not.toContain(SENTINEL_KEY);
+
+    // 3. The truncated prefix (first 200 chars) is allowed; the
+    // overflow portion (chars 201+) is forbidden. This is the
+    // DIAGNOSTIC_TEXT_CAP guarantee applied to the new combination
+    // surface (valid marker + sentinel-bearing fake marker).
+    const truncated = SENTINEL_KEY.slice(0, 200);
+    const overflow = SENTINEL_KEY.slice(200);
+    expect(checkpointJson).toContain(truncated);
+    expect(checkpointJson).not.toContain(overflow);
+    expect(statusJson).toContain(truncated);
+    expect(statusJson).not.toContain(overflow);
+
+    // 4. The valid marker (which would survive selective
+    // neutralization in a repair prompt) is NOT in the diagnostic
+    // history. The diagnostic only persists errors + hash + size —
+    // never the prompt content itself. This is the I4 content-safety
+    // guarantee reasserted under the new selective neutralization.
+    const validMarker =
+      "<!-- lw:anchors src/auth/login.ts#login src/auth/login.ts#logout -->";
+    expect(checkpointJson).not.toContain(validMarker);
+    expect(statusJson).not.toContain(validMarker);
+
+    // 5. Walk the diagnostic structure: every offending/message is
+    // bounded by DIAGNOSTIC_TEXT_CAP.
+    const checkpoint = JSON.parse(checkpointJson) as {
+      diagnosticHistory: Array<{
+        errors: Array<{ offending?: string; message: string; code: string }>;
+      }>;
+    };
+    expect(checkpoint.diagnosticHistory).toBeDefined();
+    for (const entry of checkpoint.diagnosticHistory) {
+      for (const e of entry.errors) {
+        if (e.offending !== undefined) {
+          expect(e.offending.length).toBeLessThanOrEqual(200);
+        }
+        expect(e.message.length).toBeLessThanOrEqual(200);
+      }
+      // The error code MUST be `anchor_outside_closed_list`
+      // (proves the validator caught the fake key).
+      const codes = entry.errors.map((e) => e.code);
+      expect(codes).toContain("anchor_outside_closed_list");
+    }
+  });
 });

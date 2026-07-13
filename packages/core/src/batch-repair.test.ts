@@ -306,6 +306,120 @@ describe("batch X — repair success (Criterion #6)", () => {
     );
   });
 
+  it("uses a fresh initial prompt when the completed invalid candidate exceeds the char budget", async () => {
+    const oversizedFragment = `OVERSIZED_CANDIDATE_${"X".repeat(300)}_TAIL`;
+    llm.responses = [
+      makeInvalidPage(oversizedFragment),
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      contextCharBudget: 128,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(2);
+    expect(llm.callLog[1]?.system).toContain("documentation generator");
+    expect(llm.callLog[1]?.system).not.toContain("REPAIR assistant");
+    expect(llm.callLog[1]?.user).not.toContain("# Prior candidate");
+    expect(llm.callLog[1]?.user).not.toContain("OVERSIZED_CANDIDATE_");
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+    ]);
+    // Lot D — D3.2: I1 (1:1 join between usageHistory and
+    // diagnosticHistory) must still hold under the new
+    // oversized-candidate gate.
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("embeds a completed invalid candidate beyond 16k in full when it fits the char budget", async () => {
+    const fullCandidatePayload = `${"P".repeat(17_000)}FULL_CANDIDATE_TAIL`;
+    llm.responses = [
+      makeInvalidPage(fullCandidatePayload),
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      contextCharBudget: 20_000,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callLog[1]?.system).toContain("REPAIR assistant");
+    expect(llm.callLog[1]?.user).toContain("P".repeat(17_000));
+    expect(llm.callLog[1]?.user).toContain("FULL_CANDIDATE_TAIL");
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "repair",
+    ]);
+  });
+
+  it("recovers the v11 near-miss shape with intact markers and the full candidate", async () => {
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const validMarker = `<!-- lw:anchors ${closedKeys.join(" ")} -->`;
+    const nearMiss = [
+      "---",
+      "title: test",
+      "owner: generated",
+      "anchors:",
+      ...closedKeys.map((key) => `  - ${key}`),
+      "---",
+      "",
+      "# test",
+      "",
+      validMarker,
+      "",
+      "F".repeat(17_000),
+      "FULL_NEAR_MISS_TAIL",
+      "TODO replace this single placeholder.",
+      "",
+    ].join("\n");
+    llm.responses = [nearMiss, makeValidPage(closedKeys)];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      contextCharBudget: 25_000,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(2);
+    expect(llm.callLog[1]?.system).toContain("REPAIR assistant");
+    expect(llm.callLog[1]?.user).toContain(validMarker);
+    expect(llm.callLog[1]?.user).toContain("F".repeat(17_000));
+    expect(llm.callLog[1]?.user).toContain("FULL_NEAR_MISS_TAIL");
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.errors.map((error) => error.code)).toContain(
+      "todo_marker_present",
+    );
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "repair",
+    ]);
+  });
+
   it("successful repair does NOT increment circuit-breaker failures", async () => {
     // Force a repair that fixes it: cb should go to 0 consecutives, 0 fails.
     llm.responses = [
@@ -888,6 +1002,77 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
   });
 });
 
+// === D3 — guard-rails (Lot D) ===
+// The new oversized-candidate gate (Lot C) might silently break the
+// 1:1 join or the seeding invariant if it's wired wrong. Pin both
+// under the gate here.
+describe("batch D3 — guard-rails under the new oversized-candidate gate", () => {
+  it("D3.2 I2 (seeding) still holds: --only after an oversized-gate run keeps globally monotonic attempts + 1:1 join", async () => {
+    // First run: oversized invalid candidate forces the gate to
+    // fire, then a fresh initial succeeds. Seeded diagnosticHistory
+    // has 2 entries (attempts 1, 2).
+    const oversizedFragment = `OVERSIZED_SEEDING_${"Y".repeat(300)}_TAIL`;
+    llm.responses = [
+      makeInvalidPage(oversizedFragment),
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+
+    const firstResult = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      contextCharBudget: 128,
+    });
+    expect(firstResult.status).toBe("completed");
+    expect(llm.callCount).toBe(2);
+
+    // Second run via --only: a fresh initial that succeeds (the
+    // gate still has the same wiring, so it will only fire if the
+    // new candidate is also oversized). Seeded diagnosticHistory
+    // now has 3 entries (attempts 1, 2, 3) — globally monotonic.
+    const retryLlm = new ProgrammableMockLlm();
+    retryLlm.responses = [
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+    const secondResult = await runOnly({
+      repoRoot,
+      llmClient: retryLlm,
+      noRefine: true,
+      onlyTarget: "auth",
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+    expect(secondResult.status).toBe("completed");
+    expect(retryLlm.callCount).toBe(1);
+
+    // 1. I2 (seeding) still holds: diagnostic history is seeded
+    // from the previous checkpoint and appended to — never reset.
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.attempt)).toEqual([
+      1, 2, 3,
+    ]);
+    // The first 2 entries are the gate run; the 3rd is the
+    // seeded fresh initial after --only retry.
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "success",
+      "success",
+    ]);
+    // 1:1 join between usage and diagnostic still holds.
+    expectJoinedAttempts(checkpoint);
+
+    // 2. The cumulative usage on the status report reflects 3
+    // LLM calls × 100 input = 300 input. The gate did not break
+    // accounting.
+    const { buildStatusReport } = await import("./batch-status.js");
+    const report = await buildStatusReport(repoRoot);
+    expect(report.totals.inputTokens).toBe(300);
+    expect(report.totals.outputTokens).toBe(150);
+  });
+});
+
 // === Owner: human (Criterion #8) ===
 describe("batch X — owner: human is untouchable (Criterion #8)", () => {
   it("page with owner: human is NOT regenerated and NO LLM call is made", async () => {
@@ -1453,5 +1638,399 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
     expect(report.totals.usageIncomplete).toBe(true);
     const failed = report.tasks.find((t) => t.stage === 4 && t.status === "failed");
     expect(failed?.error?.code).toBe("llm_timeout");
+  });
+});
+
+// === D2 — v11 evidence replay (Lot D) ===
+// Replays the three v11 stage-4 task shapes with scripted stubs
+// and asserts the NEW outcomes — recovery via one repair with
+// intact markers, instead of the v11 collapse into 50+
+// missing_closed_key errors per attempt.
+describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
+  it("D2.1 core-src-02 shape: 19k candidate, 2 frontmatter-side errors, one repair, done", async () => {
+    // v11 evidence: attempt 1 = complete -> artifact_validation_failed
+    // [anchor_outside_closed_list, missing_closed_key]. With Lot C's
+    // selective preservation, attempt 2 embeds the FULL 19k
+    // candidate with valid section markers intact — and a single
+    // targeted repair fixes both errors.
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const validMarker = `<!-- lw:anchors ${closedKeys.join(" ")} -->`;
+
+    // 19k near-miss candidate: valid section markers preserved
+    // in payload, but two frontmatter-side errors (one invented
+    // anchor that the validator catches as
+    // `anchor_outside_closed_list`, one missing key from the
+    // frontmatter list that the validator catches as
+    // `missing_closed_key`).
+    const nearMiss = [
+      "---",
+      "title: auth",
+      "owner: generated",
+      "anchors:",
+      `  - ${closedKeys[0]}`,
+      // <-- closedKeys[1] is MISSING from frontmatter (one missing_closed_key)
+      "  - src/auth/login.ts#invented-anchor-not-in-closed-list",
+      "---",
+      "",
+      "# auth",
+      "",
+      validMarker,
+      "",
+      "F".repeat(19_000 - 200),
+      "CORE_SRC_02_FULL_NEAR_MISS_TAIL",
+      "",
+    ].join("\n");
+    expect(nearMiss.length).toBeGreaterThan(19_000);
+
+    llm.responses = [nearMiss, makeValidPage(closedKeys)];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      contextCharBudget: 25_000,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(2);
+
+    // Repair prompt: the full candidate is embedded (no 16k
+    // truncation), the valid section marker survives the
+    // selective neutralization, and the structured errors drive
+    // the targeted fix.
+    const repairUser = llm.callLog[1]?.user ?? "";
+    expect(llm.callLog[1]?.system).toContain("REPAIR assistant");
+    expect(repairUser).toContain(validMarker);
+    expect(repairUser).toContain("F".repeat(19_000 - 200));
+    expect(repairUser).toContain("CORE_SRC_02_FULL_NEAR_MISS_TAIL");
+    // The two frontmatter errors are present in the structured
+    // error list of the repair prompt.
+    expect(repairUser).toContain("anchor_outside_closed_list");
+    expect(repairUser).toContain("missing_closed_key");
+    expect(repairUser).toContain("src/auth/login.ts#invented-anchor-not-in-closed-list");
+    expect(repairUser).toContain(closedKeys[1]!);
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "repair",
+    ]);
+    // The attempt 1 errors MUST include both frontmatter-side
+    // codes — and NOT collapse into a 50+ missing_closed_key
+    // wall (the v11 failure mode).
+    const attempt1Codes = checkpoint.diagnosticHistory?.[0]?.errors.map(
+      (error) => error.code,
+    );
+    expect(attempt1Codes).toContain("anchor_outside_closed_list");
+    expect(attempt1Codes).toContain("missing_closed_key");
+    expect(attempt1Codes?.length ?? 0).toBeLessThanOrEqual(10);
+    // Task is done in exactly 2 calls.
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), {
+      readonly: true,
+    });
+    try {
+      const task = db
+        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?")
+        .get("auth") as { checkpoint_json: string };
+      const cp = JSON.parse(task.checkpoint_json) as {
+        status: string;
+        attempt: number;
+      };
+      expect(cp.status).toBe("done");
+      expect(cp.attempt).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("D2.2 core-src-04 shape: >16k candidate, 1 todo_marker_present, one repair, done", async () => {
+    // v11 evidence: attempt 1 = complete -> artifact_validation_failed
+    // [todo_marker_present]. With Lot C's full-candidate embed
+    // (no 16k truncation), attempt 2 sees the full prior candidate
+    // and a single targeted repair fixes the TODO. No collapse into
+    // missing_closed_key errors.
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const validMarker = `<!-- lw:anchors ${closedKeys.join(" ")} -->`;
+
+    const nearMiss = [
+      "---",
+      "title: auth",
+      "owner: generated",
+      "anchors:",
+      ...closedKeys.map((key) => `  - ${key}`),
+      "---",
+      "",
+      "# auth",
+      "",
+      validMarker,
+      "",
+      "F".repeat(17_000),
+      "CORE_SRC_04_FULL_NEAR_MISS_TAIL",
+      "TODO replace this single placeholder.",
+      "",
+    ].join("\n");
+    expect(nearMiss.length).toBeGreaterThan(16_000);
+
+    llm.responses = [nearMiss, makeValidPage(closedKeys)];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      contextCharBudget: 25_000,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(2);
+    const repairUser = llm.callLog[1]?.user ?? "";
+    expect(llm.callLog[1]?.system).toContain("REPAIR assistant");
+    expect(repairUser).toContain(validMarker);
+    expect(repairUser).toContain("F".repeat(17_000));
+    expect(repairUser).toContain("CORE_SRC_04_FULL_NEAR_MISS_TAIL");
+    expect(repairUser).toContain("todo_marker_present");
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "repair",
+    ]);
+    // The single error is the TODO marker — no cascade.
+    const attempt1Codes = checkpoint.diagnosticHistory?.[0]?.errors.map(
+      (error) => error.code,
+    );
+    expect(attempt1Codes).toEqual(["todo_marker_present"]);
+  });
+
+  it("D2.3 core-src-03 shape: invalid -> abort -> fresh initial (previous contract still holds)", async () => {
+    // v11 evidence: attempt 1 = complete -> artifact_validation_failed
+    // [todo_marker_present], attempt 2 = incomplete -> incomplete_generation,
+    // attempt 3 = complete -> artifact_validation_failed [unclosed_markdown].
+    // The previous contract's state machine rule: an `incomplete_generation`
+    // outcome clears repair state, so attempt 3 is a fresh initial
+    // (NOT a degenerate repair). Lot C's changes must not regress
+    // this rule. We also verify that the partial abort content
+    // (which itself contains no anchor markers) is never embedded
+    // into a repair prompt, even though the LLM "had" a partial.
+    //
+    // promptKind semantics: the diagnostic entry's promptKind is the
+    // prompt kind USED for THAT attempt. So:
+    //   attempt 1: initial    (first call, no prior to repair)
+    //   attempt 2: repair     (after attempt 1 invalid)
+    //   attempt 3: initial    (after attempt 2 incomplete_generation
+    //                          cleared repair state per previous
+    //                          contract — even though attempt 1
+    //                          would otherwise have fed it)
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const validMarker = `<!-- lw:anchors ${closedKeys.join(" ")} -->`;
+    const todoPage = [
+      "---",
+      "title: auth",
+      "owner: generated",
+      "anchors:",
+      ...closedKeys.map((key) => `  - ${key}`),
+      "---",
+      "",
+      "# auth",
+      "",
+      validMarker,
+      "",
+      "Body.",
+      "TODO replace this single placeholder.",
+      "",
+    ].join("\n");
+    const partialAbort = "PARTIAL_ABORT_FROM_CORE_SRC_03";
+    // Attempt 3: fresh initial, but the LLM produced an
+    // unclosed-markdown candidate (matches v11 evidence).
+    const unclosedPage = [
+      "---",
+      "title: auth",
+      "owner: generated",
+      "anchors:",
+      ...closedKeys.map((key) => `  - ${key}`),
+      "---",
+      "",
+      "# auth",
+      "",
+      validMarker,
+      "",
+      "Body with an unclosed code span: `foo",
+      "",
+    ].join("\n");
+
+    llm.responses = [todoPage, partialAbort, unclosedPage];
+    llm.stopReasons = ["complete", "incomplete", "complete"];
+    llm.rawStopReasons = ["stop", "abort", "stop"];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    // 3 calls made (1 invalid -> 1 repair -> 1 fresh after abort).
+    expect(llm.callCount).toBe(3);
+
+    // call 1 (index 0): the FRESH initial stage-4 prompt
+    expect(llm.callLog[0]?.system).toContain("documentation generator");
+    expect(llm.callLog[0]?.system).not.toContain("REPAIR assistant");
+
+    // call 2 (index 1): the REPAIR of attempt 1 (because attempt 1
+    // was invalid). The todoPage is embedded as the prior
+    // candidate, with the structured todo_marker_present error.
+    expect(llm.callLog[1]?.system).toContain("REPAIR assistant");
+    expect(llm.callLog[1]?.user).toContain("# Prior candidate");
+    expect(llm.callLog[1]?.user).toContain(todoPage);
+    expect(llm.callLog[1]?.user).toContain("todo_marker_present");
+
+    // call 3 (index 2): the FRESH initial after attempt 2 was
+    // incomplete. The previous contract's rule: an
+    // incomplete_generation outcome clears repair state, so
+    // attempt 3 is a fresh initial — NOT a degenerate repair
+    // built from the partial abort content. The partial abort
+    // content is never embedded.
+    expect(llm.callLog[2]?.system).toContain("documentation generator");
+    expect(llm.callLog[2]?.system).not.toContain("REPAIR assistant");
+    expect(llm.callLog[2]?.user).not.toContain("# Prior candidate");
+    expect(llm.callLog[2]?.user).not.toContain(partialAbort);
+    expect(llm.callLog[2]?.user).not.toContain(todoPage);
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    // promptKind sequence: initial (todo), repair (after invalid),
+    // initial (fresh after abort cleared). The KEY invariant:
+    // attempt 3 is "initial", confirming the previous contract's
+    // rule still holds after Lot C.
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "repair",
+      "initial",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "incomplete_generation",
+      "artifact_validation_failed",
+    ]);
+    // attempt 3's errors include the unclosed_markdown code (matches
+    // the v11 evidence shape).
+    const attempt3Codes = checkpoint.diagnosticHistory?.[2]?.errors.map(
+      (error) => error.code,
+    );
+    expect(attempt3Codes).toContain("unclosed_markdown");
+    // I1 still holds: every attempt has exactly one diagnostic entry.
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("D2.4 oversized path: candidate > contextCharBudget -> next attempt fresh, I5 round-trip", async () => {
+    // Lot C's oversized-candidate gate: when a completed-but-invalid
+    // candidate exceeds the stage-4 char budget, the next attempt is
+    // a fresh initial (not a repair that would embed the truncated
+    // candidate). Verify the diagnostic sequence and the
+    // I5 round-trip of the checkpoint (the diagnosticHistory field
+    // is additive — JSON.parse(JSON.stringify(cp)) must yield the
+    // same shape and the same content).
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const validMarker = `<!-- lw:anchors ${closedKeys.join(" ")} -->`;
+    const oversized = [
+      "---",
+      "title: auth",
+      "owner: generated",
+      "anchors:",
+      `  - ${closedKeys[0]}`,
+      // closedKeys[1] missing -> validator catches it
+      "---",
+      "",
+      "# auth",
+      "",
+      validMarker,
+      "",
+      "X".repeat(5_000),
+      "OVERSIZED_TAIL",
+      "",
+    ].join("\n");
+
+    llm.responses = [oversized, makeValidPage(closedKeys)];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      contextCharBudget: 256, // tiny budget — forces oversized gate
+    });
+
+    // 2 LLM calls: one initial (oversized invalid), one fresh
+    // initial (after gate fires) that succeeds.
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(2);
+
+    // Attempt 2 system is the FRESH stage-4 system, not the
+    // repair system. No candidate fragment is embedded.
+    expect(llm.callLog[1]?.system).toContain("documentation generator");
+    expect(llm.callLog[1]?.system).not.toContain("REPAIR assistant");
+    expect(llm.callLog[1]?.user).not.toContain("# Prior candidate");
+    expect(llm.callLog[1]?.user).not.toContain("OVERSIZED_TAIL");
+    expect(llm.callLog[1]?.user).not.toContain("X".repeat(5_000));
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    // Both attempts are "initial" — gate forced a fresh prompt.
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "success",
+    ]);
+
+    // I5 round-trip: serialize the persisted checkpoint JSON,
+    // re-parse it, and confirm the diagnostic history is
+    // bit-identical. This is the "additive field" guarantee.
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), {
+      readonly: true,
+    });
+    try {
+      const row = db
+        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?")
+        .get("auth") as { checkpoint_json: string };
+      const cpRaw = row.checkpoint_json;
+      const reparsed = JSON.parse(cpRaw) as typeof checkpoint;
+      expect(reparsed.diagnosticHistory).toEqual(checkpoint.diagnosticHistory);
+      // usageHistory also round-trips intact.
+      const cpParsed = JSON.parse(cpRaw) as {
+        usageHistory: Array<{ attempt: number }>;
+      };
+      expect(cpParsed.usageHistory.map((u) => u.attempt)).toEqual(
+        checkpoint.usageHistory.map((u) => u.attempt),
+      );
+    } finally {
+      db.close();
+    }
+
+    // The status report must also surface the diagnostic history
+    // (additive field — no existing field changes shape or meaning).
+    const { buildStatusReport } = await import("./batch-status.js");
+    const report = await buildStatusReport(repoRoot);
+    const authTask = report.tasks.find((t) => t.target === "auth" && t.stage === 4);
+    expect(authTask).toBeDefined();
+    // The task has 2 attempts; the cumulative usage reflects 2
+    // real LLM calls (no fake duplicate zero-usage).
+    expect(authTask!.inputTokens).toBe(200);
+    expect(authTask!.outputTokens).toBe(100);
   });
 });

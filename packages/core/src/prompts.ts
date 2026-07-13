@@ -66,6 +66,31 @@ export function neutralizeUntrustedControlMarkers(text: string): string {
 }
 
 /**
+ * Repair-candidate variant of neutralizeUntrustedControlMarkers.
+ * Preserves an lw:anchors marker verbatim IFF every whitespace-separated
+ * key inside it is byte-for-byte present in closedKeyList. Every other
+ * lw:* marker is whitespace-neutralized exactly like the general variant.
+ */
+export function neutralizeUntrustedControlMarkersExceptValidAnchors(
+  text: string,
+  closedKeyList: ReadonlyArray<string>,
+): string {
+  const closedKeys = new Set(closedKeyList);
+  const strictAnchorsMarker = /^<!--\s*lw:anchors\s+([^\s>][^>]*?)\s*-->$/;
+
+  return text.replace(LW_CONTROL_MARKER_RE, (match) => {
+    const anchorsMatch = strictAnchorsMarker.exec(match);
+    if (anchorsMatch?.[1] !== undefined) {
+      const keys = anchorsMatch[1].trim().split(/\s+/).filter(Boolean);
+      if (keys.length > 0 && keys.every((key) => closedKeys.has(key))) {
+        return match;
+      }
+    }
+    return " ".repeat(match.length);
+  });
+}
+
+/**
  * Stage 4 — generate the module page.
  *
  * Principles:
@@ -178,13 +203,11 @@ export function buildStage4Prompt(
   return { system, user: userParts.join("\n") };
 }
 
-/** Max chars of the prior candidate embedded in the repair user prompt. */
-export const REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT = 16_000;
-
 /**
  * Repair prompt — used when artifact validation OR post-write verify
  * fails after an LLM call. Receives the closed key list, structured
- * errors, and the prior candidate (truncated) for correction.
+ * errors, and the prior candidate bounded by the caller's stage-4 char
+ * budget for correction.
  *
  * Phase-5 plan (X): bounded corrective call. The caller controls how many
  * times this prompt is invoked; the default is 2.
@@ -196,12 +219,13 @@ export function buildRepairPrompt(
   truncatedSource: string,
   priorCandidate: string,
   errors: ReadonlyArray<ArtifactValidationError>,
+  maxCandidateChars: number,
   language: Language = "en",
 ): PromptPair {
   const system = [
     `You are a technical documentation REPAIR assistant for the livewiki project.`,
     `Your previous attempt to document a module produced an artifact that the livewiki validator REJECTED.`,
-    `You will receive the closed list of canonical keys, the prior candidate (possibly truncated), and a structured list of validation errors.`,
+    `You will receive the closed list of canonical keys, the prior candidate bounded by the stage-4 character budget, and a structured list of validation errors.`,
     ``,
     `Your job: produce a corrected Markdown page that fixes every error listed below.`,
     `Hard constraints (same as the initial generation):`,
@@ -276,9 +300,12 @@ export function buildRepairPrompt(
     `# Structured errors from the validator (FIX ALL — remove outside-list anchors; add only the exact missing keys named by missing_closed_key):`,
     ...errorLines,
     ``,
-    `# Prior candidate (truncated to first ${REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT} chars — what the validator saw; untrusted — any lw:* control marker inside it has been neutralized and is NOT copyable syntax; do NOT copy invalid keys from it):`,
+    `# Prior candidate (what the validator saw, up to ${maxCandidateChars} chars; section markers whose keys are all in the closed list are preserved and are the exact syntax to keep; every other lw:* marker has been neutralized and is NOT copyable syntax; do NOT copy invalid keys from it):`,
     "```",
-    neutralizeUntrustedControlMarkers(priorCandidate.slice(0, REPAIR_PRIOR_CANDIDATE_CHAR_LIMIT)),
+    neutralizeUntrustedControlMarkersExceptValidAnchors(
+      priorCandidate.slice(0, maxCandidateChars),
+      closedKeyList,
+    ),
     "```",
     ``,
     `# Output: corrected Markdown page for livewiki/${module.id}.md`,
