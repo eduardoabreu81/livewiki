@@ -46,6 +46,10 @@ export interface SymbolRecord {
   content_hash: string;
 }
 
+interface ExtractedSymbol extends SymbolRecord {
+  source_start_byte: number;
+}
+
 /**
  * Extrai todos os símbolos de uma árvore. `relPath` é o path relativo ao
  * repoRoot com forward slashes (já vindo do walker).
@@ -55,9 +59,27 @@ export function extractSymbols(
   relPath: string,
   source: string,
 ): SymbolRecord[] {
-  const out: SymbolRecord[] = [];
-  walkNode(tree.rootNode, source, relPath, null, out);
-  return out;
+  const candidates: ExtractedSymbol[] = [];
+  walkNode(tree.rootNode, source, relPath, null, candidates);
+
+  const ordered = candidates
+    .map((symbol, discoveryOrder) => ({ symbol, discoveryOrder }))
+    .sort(
+      (left, right) =>
+        left.symbol.start_line - right.symbol.start_line ||
+        left.symbol.source_start_byte - right.symbol.source_start_byte ||
+        left.discoveryOrder - right.discoveryOrder,
+    );
+  const seenKeys = new Set<string>();
+  const unique: SymbolRecord[] = [];
+
+  for (const { symbol } of ordered) {
+    if (seenKeys.has(symbol.key)) continue;
+    seenKeys.add(symbol.key);
+    unique.push(toSymbolRecord(symbol));
+  }
+
+  return unique;
 }
 
 function walkNode(
@@ -65,7 +87,7 @@ function walkNode(
   source: string,
   relPath: string,
   parentClassName: string | null,
-  out: SymbolRecord[],
+  out: ExtractedSymbol[],
 ): void {
   switch (node.type) {
     case "function_declaration":
@@ -197,7 +219,7 @@ function makeRecord(
   relPath: string,
   name: string,
   kind: SymbolKind,
-): SymbolRecord {
+): ExtractedSymbol {
   const startLine = node.startPosition.row + 1; // tree-sitter é 0-based
   const endLine = node.endPosition.row + 1;
   const startByte = node.startIndex;
@@ -211,6 +233,19 @@ function makeRecord(
     start_line: startLine,
     end_line: endLine,
     content_hash: sha256Slice(source, startByte, endByte),
+    source_start_byte: startByte,
+  };
+}
+
+function toSymbolRecord(symbol: ExtractedSymbol): SymbolRecord {
+  return {
+    key: symbol.key,
+    name: symbol.name,
+    kind: symbol.kind,
+    signature: symbol.signature,
+    start_line: symbol.start_line,
+    end_line: symbol.end_line,
+    content_hash: symbol.content_hash,
   };
 }
 

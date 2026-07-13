@@ -7,6 +7,27 @@ import { run as runStatus } from "./status.js";
 let repoRoot: string;
 let sampleRepo: string;
 
+interface ActiveSymbolRow {
+  key: string;
+  kind: string;
+  signature: string | null;
+  start_line: number;
+}
+
+async function activeSymbolsForKey(key: string): Promise<ActiveSymbolRow[]> {
+  const Database = (await import("better-sqlite3")).default;
+  const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+  try {
+    return db
+      .prepare(
+        "SELECT key, kind, signature, start_line FROM symbols WHERE key = ? AND status = 'active'",
+      )
+      .all(key) as ActiveSymbolRow[];
+  } finally {
+    db.close();
+  }
+}
+
 beforeEach(async () => {
   // Resolve do CWD do test runner (packages/core/) — robusto.
   sampleRepo = nodePath.resolve(process.cwd(), "test/fixtures/sample-ts-repo");
@@ -100,5 +121,39 @@ describe("indexer end-to-end", () => {
     expect(report.symbols.byKind.function).toBe(2);
     expect(report.symbols.byKind.export).toBe(1);
     expect(report.meta.schemaVersion).toBe(4);
+  });
+
+  it("indexes duplicate method names and persists one active row per key", async () => {
+    const src = `const first = {
+  shared() { return "first"; },
+};
+const second = {
+  shared() { return "second"; },
+};`;
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src", "collisions.ts"), src);
+
+    await expect(runIndexer(repoRoot, { quiet: true })).resolves.toBeTruthy();
+
+    const rows = await activeSymbolsForKey("src/collisions.ts#shared");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "method", start_line: 2 });
+    expect(rows[0]?.signature).toContain("first");
+  });
+
+  it("indexes the two-stub generate-method trigger without a key collision", async () => {
+    const src = `const firstClient = {
+  async generate() { return { content: "first" }; },
+};
+const secondClient = {
+  async generate() { return { content: "second" }; },
+};`;
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src", "stub-clients.ts"), src);
+
+    await expect(runIndexer(repoRoot, { quiet: true })).resolves.toBeTruthy();
+
+    const rows = await activeSymbolsForKey("src/stub-clients.ts#generate");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "method", start_line: 2 });
+    expect(rows[0]?.signature).toContain("first");
   });
 });

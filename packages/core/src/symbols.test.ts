@@ -101,6 +101,53 @@ describe("symbols — TypeScript", () => {
     const s2 = extractSymbols(tree2, "x.ts", src);
     expect(s1[0]?.content_hash).toBe(s2[0]?.content_hash);
   });
+
+  it("coalesces same-named object methods while preserving qualified class methods", async () => {
+    const src = `class First {
+  generate() { return "class-first"; }
+}
+class Second {
+  generate() { return "class-second"; }
+}
+const firstStub = {
+  generate() { return "object-first"; },
+};
+const secondStub = {
+  generate() { return "object-second"; },
+};`;
+    const tree = await parse(".ts", src);
+
+    const symbols = extractSymbols(tree, "x.ts", src);
+
+    expect(symbols.map((symbol) => symbol.key)).toEqual([
+      "x.ts#First",
+      "x.ts#First.generate",
+      "x.ts#Second",
+      "x.ts#Second.generate",
+      "x.ts#generate",
+    ]);
+    expect(new Set(symbols.map((symbol) => symbol.key)).size).toBe(symbols.length);
+    expect(symbols.find((symbol) => symbol.key === "x.ts#generate")).toMatchObject({
+      kind: "method",
+      start_line: 8,
+    });
+    expect(symbols.find((symbol) => symbol.key === "x.ts#generate")?.signature).toContain(
+      "object-first",
+    );
+    expect(extractSymbols(tree, "x.ts", src)).toEqual(symbols);
+  });
+
+  it("keeps the lowest start byte when a function and method share a key and line", async () => {
+    const src =
+      'const stub = { generate() { return "method-first"; } }; function generate() { return "function-second"; }';
+    const tree = await parse(".ts", src);
+
+    const symbols = extractSymbols(tree, "x.ts", src);
+
+    expect(symbols).toHaveLength(1);
+    expect(symbols[0]).toMatchObject({ key: "x.ts#generate", kind: "method", start_line: 1 });
+    expect(symbols[0]?.signature).toContain("method-first");
+  });
 });
 
 describe("symbols — Python", () => {

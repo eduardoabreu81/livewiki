@@ -122,8 +122,10 @@ The token is validated by `validateToken(...)`, which ...
 - **Page** anchor: frontmatter. **Section** anchor: HTML comment
   `<!-- lw:anchors ... -->` right after the heading.
 - Symbol key format: `relative/path.ext#SymbolName` (a file with no `#symbol` = an
-  anchor on the whole file). Ambiguity (overloads, nested symbols) is resolved
-  with a qualified path: `#Class.method`.
+  anchor on the whole file). Anchor granularity is name-per-file: same-named
+  symbols within one file coalesce into one anchor, with the first by source
+  order winning (lowest start line, then lowest start byte). Later duplicates
+  never reach persistence and never abort indexing.
 
 ## SQLite schema (`.livewiki/index.db`)
 
