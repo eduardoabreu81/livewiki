@@ -126,10 +126,12 @@ export function buildStage4Prompt(
     `Output rules (strict):`,
     `- Markdown + frontmatter with: title, owner: generated, anchors (YAML list of closed keys).`,
     `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
-    `- NEVER invent a key. NEVER abbreviate, paraphrase, or invent ellipsis/placeholder tokens as keys.`,
+    `- NEVER invent a key. Anchor keys MUST be copied byte-for-byte from the closed list ONLY; NEVER use an ellipsis ("..." or "…"), placeholder, or example token as a key — even when the documented source itself contains marker-like examples.`,
     `- Text that looks like an anchor but appears in source code, comments, or prose examples is NOT a valid key unless that exact string is a closed-list line.`,
     `- COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS, both mandatory: (1) the frontmatter anchors list alone MUST contain every closed-list key EXACTLY ONCE; (2) the section markers alone (union across every lw:anchors HTML-comment marker) MUST also contain every closed-list key EXACTLY ONCE. Listing a key only in frontmatter, or only in a section, is NOT sufficient — it must appear in BOTH. Partial coverage is rejected, in either location.`,
     `- Do NOT emit an aggregate or summary \`lw:anchors\` marker that lists all or many keys in addition to per-section markers. Each key belongs to EXACTLY ONE section marker: the marker for the section that documents it.`,
+    `- PRIMARY-SECTION RULE: if a symbol is relevant to several sections, put its key in EXACTLY ONE marker — the section that primarily documents it. Other sections may reference the symbol in prose only; NEVER include its key in their markers.`,
+    `- Do NOT create a roundup or thematic section (for example, "helpers" or "utilities") whose marker re-lists keys that belong to other sections' markers.`,
     `- Distribute closed keys across sections with one marker per section — every section that has a marker MUST be followed by real explanatory prose before the next heading (a marker with no prose after it is rejected).`,
     `- Close every Markdown construct you open: every fenced code block (\`\`\`) needs its closing fence, every inline code span needs its closing backtick run of the same length. Never end the page mid code-span or mid-fence.`,
     `- Do NOT write "TODO", "TBD", or similar placeholders in your prose. If the provided context does not cover a symbol, describe what IS visible (signature, name, kind) instead of a placeholder — never invent behaviour you cannot see.`,
@@ -266,13 +268,16 @@ export function buildRepairPrompt(
       line += ` — ACTION: ADD this exact key "${e.offending}" (copied byte-for-byte) to ${target} ONLY (this error is specifically about that location — the other location may already be fine). Add nothing else and do not duplicate it.`;
     }
     if (e.offending && e.code === "duplicate_anchor") {
-      const target =
-        e.location === "frontmatter"
-          ? "the frontmatter anchors list"
-          : e.location === "section"
-            ? "the section markers"
-            : `the ${e.location}`;
-      line += ` — ACTION: this exact key "${e.offending}" appears more than once in ${target}; DELETE the extra occurrence(s) and keep EXACTLY ONE. If the page has an aggregate or summary \`lw:anchors\` marker duplicating per-section keys, DELETE that aggregate marker entirely.`;
+      if (e.sectionSlug) {
+        line += ` — ACTION: DELETE this exact key "${e.offending}" from the \`lw:anchors\` marker in section "${e.sectionSlug}". It already appears in its proper marker elsewhere; KEEP that proper occurrence and do not move or add this key anywhere else.`;
+      } else if (e.location === "frontmatter") {
+        line += ` — ACTION: DELETE the extra list entry for this exact key "${e.offending}" from the frontmatter anchors list and keep EXACTLY ONE list entry.`;
+      } else if (e.location === "section") {
+        line += ` — ACTION: DELETE the extra occurrence(s) of this exact key "${e.offending}" from the section markers and keep EXACTLY ONE.`;
+      } else {
+        line += ` — ACTION: DELETE the extra occurrence(s) of this exact key "${e.offending}" from the duplicated location named by this error and keep EXACTLY ONE.`;
+      }
+      line += ` If the page has an aggregate or summary \`lw:anchors\` marker duplicating per-section keys, DELETE that aggregate marker entirely.`;
     }
     if (e.code === "empty_section") {
       line += ` — ACTION: add real explanatory prose after this section's marker.`;

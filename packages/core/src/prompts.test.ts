@@ -74,7 +74,7 @@ describe("prompts — todos em inglês (templates)", () => {
     expect(r.system).toMatch(/section markers alone.*MUST also contain every closed-list key/i);
   });
 
-  it("stage 4 system requires exactly-once anchors and forbids aggregate section markers", () => {
+  it("stage 4 system requires primary exactly-once placement and forbids aggregate or roundup markers", () => {
     const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
     expect(r.system).toMatch(
       /frontmatter anchors list alone MUST contain every closed-list key EXACTLY ONCE/i,
@@ -84,6 +84,24 @@ describe("prompts — todos em inglês (templates)", () => {
     );
     expect(r.system).toMatch(/Do NOT emit an aggregate or summary `lw:anchors` marker/i);
     expect(r.system).toMatch(/Each key belongs to EXACTLY ONE section marker/i);
+    expect(r.system).toMatch(/PRIMARY-SECTION RULE/i);
+    expect(r.system).toMatch(
+      /relevant to several sections.*EXACTLY ONE marker.*section that primarily documents it/i,
+    );
+    expect(r.system).toMatch(/Other sections may reference the symbol in prose only/i);
+    expect(r.system).toMatch(/NEVER include its key in their markers/i);
+    expect(r.system).toMatch(/Do NOT create a roundup or thematic section/i);
+    expect(r.system).toMatch(/"helpers" or "utilities"/i);
+    expect(r.system).toMatch(/re-lists keys that belong to other sections' markers/i);
+  });
+
+  it("stage 4 system forbids ellipsis, placeholder, and example anchor keys even for marker-like source", () => {
+    const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
+    expect(r.system).toMatch(/Anchor keys MUST be copied byte-for-byte from the closed list ONLY/i);
+    expect(r.system).toContain(
+      'NEVER use an ellipsis ("..." or "…"), placeholder, or example token as a key',
+    );
+    expect(r.system).toMatch(/even when the documented source itself contains marker-like examples/i);
   });
 
   it("stage 4 system requires prose after every section marker and closed Markdown", () => {
@@ -305,7 +323,7 @@ describe("prompts U — hardening (no copyable fake anchors)", () => {
     expect(rFrontmatter.system).toMatch(/ADD the key ONLY to the location named by that error/i);
   });
 
-  it("repair prompt gives duplicate_anchor an explicit delete-extras action", () => {
+  it("repair prompt gives duplicate_anchor a section-specific deletion action", () => {
     const key = "src/auth.ts#login";
     const r = buildRepairPrompt(
       sampleModule,
@@ -327,8 +345,39 @@ describe("prompts U — hardening (no copyable fake anchors)", () => {
     );
 
     expect(r.user).toContain(`[duplicate_anchor] (section "validation-flow")`);
-    expect(r.user).toContain(`ACTION: this exact key "${key}"`);
-    expect(r.user).toMatch(/appears more than once in the section markers; DELETE the extra occurrence\(s\) and keep EXACTLY ONE/i);
+    expect(r.user).toContain(
+      `ACTION: DELETE this exact key "${key}" from the \`lw:anchors\` marker in section "validation-flow".`,
+    );
+    expect(r.user).toMatch(/already appears in its proper marker elsewhere/i);
+    expect(r.user).toMatch(/KEEP that proper occurrence and do not move or add this key anywhere else/i);
+    expect(r.user).toMatch(/DELETE that aggregate marker entirely/i);
+  });
+
+  it("repair prompt gives frontmatter duplicate_anchor a list-specific deletion action", () => {
+    const key = "src/auth.ts#login";
+    const r = buildRepairPrompt(
+      sampleModule,
+      [key],
+      "sym",
+      "code",
+      `---\nanchors:\n  - ${key}\n  - ${key}\n---`,
+      [
+        {
+          code: "duplicate_anchor",
+          message: "key appears more than once in frontmatter",
+          location: "frontmatter",
+          offending: key,
+        },
+      ],
+      60_000,
+      "en",
+    );
+
+    expect(r.user).toContain(`[duplicate_anchor] (frontmatter)`);
+    expect(r.user).toContain(
+      `ACTION: DELETE the extra list entry for this exact key "${key}" from the frontmatter anchors list and keep EXACTLY ONE list entry.`,
+    );
+    expect(r.user).not.toMatch(/marker in section/i);
     expect(r.user).toMatch(/DELETE that aggregate marker entirely/i);
   });
 
