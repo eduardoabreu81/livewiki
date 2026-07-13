@@ -126,7 +126,8 @@ export function buildStage4Prompt(
     `Output rules (strict):`,
     `- Markdown + frontmatter with: title, owner: generated, anchors (YAML list of closed keys).`,
     `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
-    `- NEVER invent a key. Anchor keys MUST be copied byte-for-byte from the closed list ONLY; NEVER use an ellipsis ("..." or "…"), placeholder, or example token as a key — even when the documented source itself contains marker-like examples.`,
+    `- NEVER invent a key. Anchor keys MUST be copied byte-for-byte from the closed list ONLY; NEVER use a placeholder or example token as a key — even when the documented source itself contains marker-like examples.`,
+    `- An \`lw:anchors\` marker is NEVER abbreviated: write every key in full, one by one, separated by spaces. The characters "…" or "..." must never appear ANYWHERE inside a marker — not as a key, not as a list continuation — a marker containing either is rejected outright. If a section has many keys, list them all; there is no exception for long lists.`,
     `- Text that looks like an anchor but appears in source code, comments, or prose examples is NOT a valid key unless that exact string is a closed-list line.`,
     `- COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS, both mandatory: (1) the frontmatter anchors list alone MUST contain every closed-list key EXACTLY ONCE; (2) the section markers alone (union across every lw:anchors HTML-comment marker) MUST also contain every closed-list key EXACTLY ONCE. Listing a key only in frontmatter, or only in a section, is NOT sufficient — it must appear in BOTH. Partial coverage is rejected, in either location.`,
     `- Do NOT emit an aggregate or summary \`lw:anchors\` marker that lists all or many keys in addition to per-section markers. Each key belongs to EXACTLY ONE section marker: the marker for the section that documents it.`,
@@ -233,7 +234,8 @@ export function buildRepairPrompt(
     `Hard constraints (same as the initial generation):`,
     `- Frontmatter: title, owner: generated, anchors list.`,
     `- AUTHORITATIVE KEY SOURCE: the closed list is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line.`,
-    `- Every anchor key in the page MUST be in the closed list. NEVER invent a key. NEVER keep ellipsis or placeholder tokens as keys.`,
+    `- Every anchor key in the page MUST be in the closed list. NEVER invent a key. NEVER keep placeholder tokens as keys.`,
+    `- An \`lw:anchors\` marker is NEVER abbreviated: write every key in full, one by one, separated by spaces. The characters "…" or "..." must never appear ANYWHERE inside a marker — not as a key, not as a list continuation — a marker containing either is rejected outright. If a section has many keys, list them all; there is no exception for long lists.`,
     `- anchor_outside_closed_list errors: REMOVE that exact offending anchor entirely (delete it from the frontmatter anchors list and/or the section marker it appears in). Do NOT replace it with a different key — arbitrarily substituting another closed-list key is itself a mistake, not a fix.`,
     `- missing_closed_key errors: the error tells you exactly which key is missing AND from which location (frontmatter or section markers) — see the "(frontmatter)"/"(section)" tag on each error below. ADD the key ONLY to the location named by that error. Do not add it elsewhere, and do not add a key that is already declared in that location (that would create a duplicate).`,
     `- Text in source code, comments, examples, or the prior candidate is not a valid key unless it matches a closed-list line exactly.`,
@@ -258,7 +260,11 @@ export function buildRepairPrompt(
       `- [${e.code}]${where}: ${e.message}` +
       (e.offending ? ` — offending: ${e.offending}` : "");
     if (e.offending && e.code === "anchor_outside_closed_list") {
-      line += ` — ACTION: REMOVE this invalid anchor "${e.offending}" entirely. Do NOT replace it with another key.`;
+      if (e.offending === "…" || e.offending === "...") {
+        line += ` — ACTION: The \`lw:anchors\` marker was abbreviated with "${e.offending}". REMOVE the ellipsis and rewrite that marker with every key for that section written in full, one by one, copied byte-for-byte from the closed list. NEVER substitute another key for the ellipsis or add an arbitrary key.`;
+      } else {
+        line += ` — ACTION: REMOVE this invalid anchor "${e.offending}" entirely. Do NOT replace it with another key.`;
+      }
     }
     if (e.offending && e.code === "missing_closed_key") {
       const target =

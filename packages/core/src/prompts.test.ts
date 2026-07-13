@@ -95,12 +95,15 @@ describe("prompts — todos em inglês (templates)", () => {
     expect(r.system).toMatch(/re-lists keys that belong to other sections' markers/i);
   });
 
-  it("stage 4 system forbids ellipsis, placeholder, and example anchor keys even for marker-like source", () => {
+  it("stage 4 system forbids marker abbreviation and placeholder or example anchor keys", () => {
     const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
     expect(r.system).toMatch(/Anchor keys MUST be copied byte-for-byte from the closed list ONLY/i);
-    expect(r.system).toContain(
-      'NEVER use an ellipsis ("..." or "…"), placeholder, or example token as a key',
-    );
+    expect(r.system).toMatch(/An `lw:anchors` marker is NEVER abbreviated/i);
+    expect(r.system).toMatch(/write every key in full, one by one, separated by spaces/i);
+    expect(r.system).toContain('The characters "…" or "..." must never appear ANYWHERE inside a marker');
+    expect(r.system).toMatch(/not as a key, not as a list continuation/i);
+    expect(r.system).toMatch(/no exception for long lists/i);
+    expect(r.system).toMatch(/NEVER use a placeholder or example token as a key/i);
     expect(r.system).toMatch(/even when the documented source itself contains marker-like examples/i);
   });
 
@@ -133,6 +136,24 @@ describe("prompts — todos em inglês (templates)", () => {
     expect(r.system).toMatch(/COMPLETENESS/i);
     expect(r.user).toContain(longPrior);
     expect(r.user).toContain("FULL_CANDIDATE_TAIL");
+  });
+
+  it("repair hard constraints forbid abbreviating any lw:anchors marker", () => {
+    const r = buildRepairPrompt(
+      sampleModule,
+      ["src/a.ts#x"],
+      "sym",
+      "code",
+      "prior",
+      [{ code: "wrong_owner", message: "owner wrong", location: "frontmatter" }],
+      60_000,
+      "en",
+    );
+    expect(r.system).toMatch(/An `lw:anchors` marker is NEVER abbreviated/i);
+    expect(r.system).toMatch(/write every key in full, one by one, separated by spaces/i);
+    expect(r.system).toContain('The characters "…" or "..." must never appear ANYWHERE inside a marker');
+    expect(r.system).toMatch(/not as a key, not as a list continuation/i);
+    expect(r.system).toMatch(/no exception for long lists/i);
   });
 });
 
@@ -220,28 +241,31 @@ describe("prompts U — hardening (no copyable fake anchors)", () => {
     expect(r.user).toContain("fake-key");
   });
 
-  it("repair prompt tells the LLM to REMOVE an invalid anchor, not replace it with an arbitrary key", () => {
+  it.each(["...", "…"])("repair prompt treats %s as a marker abbreviation requiring a full rewrite", (ellipsis) => {
     const closed = ["src/auth.ts#login", "src/auth.ts#logout"];
     const r = buildRepairPrompt(
       sampleModule,
       closed,
       "sym",
       "code",
-      '<!-- lw:anchors ... -->\nBody',
+      `<!-- lw:anchors ${ellipsis} -->\nBody`,
       [
         {
           code: "anchor_outside_closed_list",
-          message: 'section anchor "..." is not in the module\'s closed key list',
+          message: `section anchor "${ellipsis}" is not in the module's closed key list`,
           location: "section",
-          offending: "...",
+          offending: ellipsis,
         },
       ],
       60_000,
       "en",
     );
-    expect(r.user).toContain("offending: ...");
-    expect(r.user).toMatch(/ACTION:\s*REMOVE this invalid anchor "\.\.\."/i);
-    expect(r.user).not.toMatch(/ACTION:.*replace offending/i);
+    expect(r.user).toContain(`offending: ${ellipsis}`);
+    expect(r.user).toContain(`The \`lw:anchors\` marker was abbreviated with "${ellipsis}"`);
+    expect(r.user).toMatch(/REMOVE the ellipsis and rewrite that marker/i);
+    expect(r.user).toMatch(/every key for that section written in full, one by one/i);
+    expect(r.user).toMatch(/NEVER substitute another key for the ellipsis or add an arbitrary key/i);
+    expect(r.user).not.toContain(`REMOVE this invalid anchor "${ellipsis}" entirely`);
     for (const k of closed) {
       expect(r.user).toContain(k);
     }
