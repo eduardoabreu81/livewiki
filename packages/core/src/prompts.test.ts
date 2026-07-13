@@ -74,6 +74,18 @@ describe("prompts — todos em inglês (templates)", () => {
     expect(r.system).toMatch(/section markers alone.*MUST also contain every closed-list key/i);
   });
 
+  it("stage 4 system requires exactly-once anchors and forbids aggregate section markers", () => {
+    const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
+    expect(r.system).toMatch(
+      /frontmatter anchors list alone MUST contain every closed-list key EXACTLY ONCE/i,
+    );
+    expect(r.system).toMatch(
+      /section markers alone.*MUST also contain every closed-list key EXACTLY ONCE/i,
+    );
+    expect(r.system).toMatch(/Do NOT emit an aggregate or summary `lw:anchors` marker/i);
+    expect(r.system).toMatch(/Each key belongs to EXACTLY ONE section marker/i);
+  });
+
   it("stage 4 system requires prose after every section marker and closed Markdown", () => {
     const r = buildStage4Prompt(sampleModule, ["src/a.ts#x"], "sym", "code");
     expect(r.system).toMatch(/followed by real explanatory prose/i);
@@ -291,6 +303,60 @@ describe("prompts U — hardening (no copyable fake anchors)", () => {
 
     expect(rFrontmatter.system).toMatch(/COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS/i);
     expect(rFrontmatter.system).toMatch(/ADD the key ONLY to the location named by that error/i);
+  });
+
+  it("repair prompt gives duplicate_anchor an explicit delete-extras action", () => {
+    const key = "src/auth.ts#login";
+    const r = buildRepairPrompt(
+      sampleModule,
+      [key],
+      "sym",
+      "code",
+      `<!-- lw:anchors ${key} -->\n<!-- lw:anchors ${key} -->`,
+      [
+        {
+          code: "duplicate_anchor",
+          message: "key appears in more than one section marker",
+          location: "section",
+          sectionSlug: "validation-flow",
+          offending: key,
+        },
+      ],
+      60_000,
+      "en",
+    );
+
+    expect(r.user).toContain(`[duplicate_anchor] (section "validation-flow")`);
+    expect(r.user).toContain(`ACTION: this exact key "${key}"`);
+    expect(r.user).toMatch(/appears more than once in the section markers; DELETE the extra occurrence\(s\) and keep EXACTLY ONE/i);
+    expect(r.user).toMatch(/DELETE that aggregate marker entirely/i);
+  });
+
+  it("repair constraints mirror exactly-once rules and preservation requires deleting duplicates", () => {
+    const key = "src/auth.ts#login";
+    const r = buildRepairPrompt(
+      sampleModule,
+      [key],
+      "sym",
+      "code",
+      `<!-- lw:anchors ${key} -->`,
+      [{ code: "duplicate_anchor", message: "duplicate", location: "section", offending: key }],
+      60_000,
+      "en",
+    );
+
+    expect(r.system).toMatch(
+      /frontmatter anchors list alone MUST contain every closed-list key EXACTLY ONCE/i,
+    );
+    expect(r.system).toMatch(
+      /section markers alone.*MUST also contain every closed-list key EXACTLY ONCE/i,
+    );
+    expect(r.system).toMatch(/Do NOT emit an aggregate or summary `lw:anchors` marker/i);
+    expect(r.user).toMatch(/preserved as the correct syntax reference/i);
+    expect(r.user).toMatch(/preservation is NOT an instruction to keep every occurrence/i);
+    expect(r.user).toMatch(
+      /when a duplicate_anchor error names a key, DELETE its extra preserved copies and keep EXACTLY ONE/i,
+    );
   });
 
   it("repair prompt receives the prior candidate within its budget and instructs no reasoning prose", () => {

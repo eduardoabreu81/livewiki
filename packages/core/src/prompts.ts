@@ -128,8 +128,8 @@ export function buildStage4Prompt(
     `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
     `- NEVER invent a key. NEVER abbreviate, paraphrase, or invent ellipsis/placeholder tokens as keys.`,
     `- Text that looks like an anchor but appears in source code, comments, or prose examples is NOT a valid key unless that exact string is a closed-list line.`,
-    `- COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS, both mandatory: (1) the frontmatter anchors list alone MUST contain every closed-list key; (2) the section markers alone (union across every lw:anchors HTML-comment marker) MUST also contain every closed-list key. Listing a key only in frontmatter, or only in a section, is NOT sufficient — it must appear in BOTH. Partial coverage is rejected, in either location.`,
-    `- Do NOT list the same key twice in the frontmatter anchors list. Do NOT list the same key in more than one section marker.`,
+    `- COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS, both mandatory: (1) the frontmatter anchors list alone MUST contain every closed-list key EXACTLY ONCE; (2) the section markers alone (union across every lw:anchors HTML-comment marker) MUST also contain every closed-list key EXACTLY ONCE. Listing a key only in frontmatter, or only in a section, is NOT sufficient — it must appear in BOTH. Partial coverage is rejected, in either location.`,
+    `- Do NOT emit an aggregate or summary \`lw:anchors\` marker that lists all or many keys in addition to per-section markers. Each key belongs to EXACTLY ONE section marker: the marker for the section that documents it.`,
     `- Distribute closed keys across sections with one marker per section — every section that has a marker MUST be followed by real explanatory prose before the next heading (a marker with no prose after it is rejected).`,
     `- Close every Markdown construct you open: every fenced code block (\`\`\`) needs its closing fence, every inline code span needs its closing backtick run of the same length. Never end the page mid code-span or mid-fence.`,
     `- Do NOT write "TODO", "TBD", or similar placeholders in your prose. If the provided context does not cover a symbol, describe what IS visible (signature, name, kind) instead of a placeholder — never invent behaviour you cannot see.`,
@@ -235,7 +235,8 @@ export function buildRepairPrompt(
     `- anchor_outside_closed_list errors: REMOVE that exact offending anchor entirely (delete it from the frontmatter anchors list and/or the section marker it appears in). Do NOT replace it with a different key — arbitrarily substituting another closed-list key is itself a mistake, not a fix.`,
     `- missing_closed_key errors: the error tells you exactly which key is missing AND from which location (frontmatter or section markers) — see the "(frontmatter)"/"(section)" tag on each error below. ADD the key ONLY to the location named by that error. Do not add it elsewhere, and do not add a key that is already declared in that location (that would create a duplicate).`,
     `- Text in source code, comments, examples, or the prior candidate is not a valid key unless it matches a closed-list line exactly.`,
-    `- COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS: the frontmatter anchors list alone must contain every closed-list key, AND the section markers alone must also contain every closed-list key. A key present in only one of the two is still incomplete.`,
+    `- COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS, both mandatory: (1) the frontmatter anchors list alone MUST contain every closed-list key EXACTLY ONCE; (2) the section markers alone (union across every lw:anchors HTML-comment marker) MUST also contain every closed-list key EXACTLY ONCE. Listing a key only in frontmatter, or only in a section, is NOT sufficient — it must appear in BOTH. Partial coverage is rejected, in either location.`,
+    `- Do NOT emit an aggregate or summary \`lw:anchors\` marker that lists all or many keys in addition to per-section markers. Each key belongs to EXACTLY ONE section marker: the marker for the section that documents it.`,
     `- empty_section errors: add real explanatory prose after that section's marker — a marker with no prose is rejected.`,
     `- unclosed_markdown errors: close every fenced code block and every inline-code backtick run you open. Never end the page mid code-span or mid-fence.`,
     `- todo_marker_present errors: remove the "TODO"/"TBD" text and replace it with a concrete factual sentence about what IS visible in the provided context (signature, name, kind) — never a placeholder, never invented behaviour.`,
@@ -263,6 +264,15 @@ export function buildRepairPrompt(
           ? "the frontmatter anchors list"
           : "exactly one section marker";
       line += ` — ACTION: ADD this exact key "${e.offending}" (copied byte-for-byte) to ${target} ONLY (this error is specifically about that location — the other location may already be fine). Add nothing else and do not duplicate it.`;
+    }
+    if (e.offending && e.code === "duplicate_anchor") {
+      const target =
+        e.location === "frontmatter"
+          ? "the frontmatter anchors list"
+          : e.location === "section"
+            ? "the section markers"
+            : `the ${e.location}`;
+      line += ` — ACTION: this exact key "${e.offending}" appears more than once in ${target}; DELETE the extra occurrence(s) and keep EXACTLY ONE. If the page has an aggregate or summary \`lw:anchors\` marker duplicating per-section keys, DELETE that aggregate marker entirely.`;
     }
     if (e.code === "empty_section") {
       line += ` — ACTION: add real explanatory prose after this section's marker.`;
@@ -300,7 +310,7 @@ export function buildRepairPrompt(
     `# Structured errors from the validator (FIX ALL — remove outside-list anchors; add only the exact missing keys named by missing_closed_key):`,
     ...errorLines,
     ``,
-    `# Prior candidate (what the validator saw, up to ${maxCandidateChars} chars; section markers whose keys are all in the closed list are preserved and are the exact syntax to keep; every other lw:* marker has been neutralized and is NOT copyable syntax; do NOT copy invalid keys from it):`,
+    `# Prior candidate (what the validator saw, up to ${maxCandidateChars} chars; section markers whose keys are all in the closed list are preserved as the correct syntax reference, but preservation is NOT an instruction to keep every occurrence — when a duplicate_anchor error names a key, DELETE its extra preserved copies and keep EXACTLY ONE; every other lw:* marker has been neutralized and is NOT copyable syntax; do NOT copy invalid keys from it):`,
     "```",
     neutralizeUntrustedControlMarkersExceptValidAnchors(
       priorCandidate.slice(0, maxCandidateChars),
