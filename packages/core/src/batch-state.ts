@@ -100,6 +100,8 @@ export interface DiagnosticAttempt {
   outcome: DiagnosticOutcome;
   /** Prompt kind actually used on THIS attempt. */
   promptKind: "initial" | "repair";
+  /** False when an incomplete retry did not consume a bounded slot; absent means consumed. */
+  budgetConsumed?: boolean;
   /** Structured errors, capped at DIAGNOSTIC_MAX_ERRORS entries. Empty on success. */
   errors: DiagnosticErrorSummary[];
   /** Number of error entries dropped by the cap. 0 when none. */

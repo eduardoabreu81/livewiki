@@ -456,6 +456,7 @@ describe("stage-4 per-attempt diagnostics", () => {
       noRefine: true,
       skipManifestWrite: true,
       maxRepairAttempts: 2,
+      maxIncompleteRetries: 0,
     });
 
     const checkpoint = await readStage4Checkpoint(repoRoot);
@@ -493,6 +494,7 @@ describe("stage-4 per-attempt diagnostics", () => {
       noRefine: true,
       skipManifestWrite: true,
       maxRepairAttempts: 2,
+      maxIncompleteRetries: 0,
     });
 
     const checkpoint = await readStage4Checkpoint(repoRoot);
@@ -819,6 +821,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
       noRefine: true,
       skipManifestWrite: true,
       maxRepairAttempts: 2,
+      maxIncompleteRetries: 0,
     });
 
     expect(result.status).toBe("completed_with_failures");
@@ -1880,6 +1883,7 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
       noRefine: true,
       skipManifestWrite: true,
       maxRepairAttempts: 2,
+      maxIncompleteRetries: 0,
     });
 
     // 3 calls made (1 invalid -> 1 repair -> 1 fresh after abort).
@@ -2032,5 +2036,271 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
     // real LLM calls (no fake duplicate zero-usage).
     expect(authTask!.inputTokens).toBe(200);
     expect(authTask!.outputTokens).toBe(100);
+  });
+});
+
+describe("Lot I — bounded non-consuming retries for incomplete responses", () => {
+  const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+
+  it("replays three consumed incomplete responses with two default non-consuming retries", async () => {
+    llm.responses = Array.from({ length: 5 }, () => "PARTIAL_ABORT_CANDIDATE");
+    llm.stopReasons = Array.from({ length: 5 }, () => "incomplete" as const);
+    llm.rawStopReasons = Array.from({ length: 5 }, () => "abort");
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(llm.callCount).toBe(5);
+    expect(result.totals.inputTokens).toBe(500);
+    expect(result.totals.outputTokens).toBe(250);
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual(
+      Array.from({ length: 5 }, () => "incomplete_generation"),
+    );
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual(
+      Array.from({ length: 5 }, () => "initial"),
+    );
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.budgetConsumed)).toEqual([
+      false,
+      false,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(result.failures[0]?.error.message).toContain("exhausted 5 LLM call(s)");
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("uses a fresh retry after incomplete, then repairs a completed invalid candidate", async () => {
+    llm.responses = [
+      "PARTIAL_ABORT_CANDIDATE",
+      makeInvalidPage("COMPLETED_INVALID_CANDIDATE"),
+      makeValidPage(closedKeys),
+    ];
+    llm.stopReasons = ["incomplete", "complete", "complete"];
+    llm.rawStopReasons = ["abort", "stop", "stop"];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(3);
+    expect(llm.callLog[1]?.system).toContain("documentation generator");
+    expect(llm.callLog[1]?.system).not.toContain("REPAIR assistant");
+    expect(llm.callLog[1]?.user).not.toContain("PARTIAL_ABORT_CANDIDATE");
+    expect(llm.callLog[2]?.system).toContain("REPAIR assistant");
+    expect(llm.callLog[2]?.user).toContain("COMPLETED_INVALID_CANDIDATE");
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "incomplete_generation",
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+      "repair",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.budgetConsumed)).toEqual([
+      false,
+      undefined,
+      undefined,
+    ]);
+    expect(result.totals.inputTokens).toBe(300);
+    expect(result.totals.outputTokens).toBe(150);
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("maxIncompleteRetries zero preserves the legacy call bound and checkpoint shape", async () => {
+    llm.responses = Array.from({ length: 3 }, () => "PARTIAL_ABORT_CANDIDATE");
+    llm.stopReasons = ["incomplete", "incomplete", "incomplete"];
+    llm.rawStopReasons = ["abort", "abort", "abort"];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      maxIncompleteRetries: 0,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(llm.callCount).toBe(3);
+    expect(result.failures[0]?.error.message).toContain("exhausted 3 LLM call(s)");
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory).toHaveLength(3);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+      "initial",
+    ]);
+    expect(JSON.stringify(checkpoint.diagnosticHistory)).not.toContain("budgetConsumed");
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("never spends the incomplete retry budget on a length-limited response", async () => {
+    llm.responses = ["TRUNCATED_CANDIDATE"];
+    llm.stopReasons = ["length"];
+    llm.rawStopReasons = ["max_tokens"];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+      maxIncompleteRetries: 2,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(llm.callCount).toBe(1);
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "truncated_by_token_limit",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.budgetConsumed).toBeUndefined();
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("consumes the bounded slot when a second incomplete exceeds a retry budget of one", async () => {
+    llm.responses = ["FIRST_PARTIAL", "SECOND_PARTIAL"];
+    llm.stopReasons = ["incomplete", "incomplete"];
+    llm.rawStopReasons = ["abort", "abort"];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+      maxIncompleteRetries: 1,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(llm.callCount).toBe(2);
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.budgetConsumed)).toEqual([
+      false,
+      undefined,
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.promptKind)).toEqual([
+      "initial",
+      "initial",
+    ]);
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("keeps usage and diagnostic attempts globally monotonic across runOnly retries", async () => {
+    llm.responses = ["FIRST_PARTIAL", "SECOND_PARTIAL"];
+    llm.stopReasons = ["incomplete", "incomplete"];
+    llm.rawStopReasons = ["abort", "abort"];
+
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+      maxIncompleteRetries: 1,
+    });
+
+    const retryLlm = new ProgrammableMockLlm();
+    retryLlm.responses = ["THIRD_PARTIAL", makeValidPage(closedKeys)];
+    retryLlm.stopReasons = ["incomplete", "complete"];
+    retryLlm.rawStopReasons = ["abort", "stop"];
+    const result = await runOnly({
+      repoRoot,
+      llmClient: retryLlm,
+      noRefine: true,
+      onlyTarget: "auth",
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+      maxIncompleteRetries: 1,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(retryLlm.callCount).toBe(2);
+    expect(result.totals.inputTokens).toBe(200);
+    expect(result.totals.outputTokens).toBe(100);
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.usageHistory.map((entry) => entry.attempt)).toEqual([1, 2, 3, 4]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.attempt)).toEqual([1, 2, 3, 4]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.budgetConsumed)).toEqual([
+      false,
+      undefined,
+      false,
+      undefined,
+    ]);
+    expectJoinedAttempts(checkpoint);
+  });
+
+  it("seeds and appends an old checkpoint whose diagnostics omit budgetConsumed", async () => {
+    llm.responses = [makeInvalidPage("LEGACY_INVALID_CANDIDATE")];
+    llm.stopReasons = ["complete"];
+    llm.rawStopReasons = ["stop"];
+    await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+      maxIncompleteRetries: 0,
+    });
+
+    const legacyCheckpoint = await readStage4Checkpoint(repoRoot);
+    for (const entry of legacyCheckpoint.diagnosticHistory ?? []) {
+      delete entry.budgetConsumed;
+    }
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"));
+    try {
+      db.prepare(
+        "UPDATE batch_tasks SET checkpoint_json = ? WHERE stage = 4 AND target = ?",
+      ).run(JSON.stringify(legacyCheckpoint), "auth");
+    } finally {
+      db.close();
+    }
+
+    const retryLlm = new ProgrammableMockLlm();
+    retryLlm.responses = [makeValidPage(closedKeys)];
+    retryLlm.stopReasons = ["complete"];
+    retryLlm.rawStopReasons = ["stop"];
+    const result = await runOnly({
+      repoRoot,
+      llmClient: retryLlm,
+      noRefine: true,
+      onlyTarget: "auth",
+      skipManifestWrite: true,
+      maxRepairAttempts: 0,
+      maxIncompleteRetries: 0,
+    });
+
+    expect(result.status).toBe("completed");
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.attempt)).toEqual([1, 2]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.budgetConsumed)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expectJoinedAttempts(checkpoint);
   });
 });

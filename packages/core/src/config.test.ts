@@ -319,6 +319,46 @@ describe("config X — maxRepairAttempts", () => {
   });
 });
 
+describe("config — maxIncompleteRetries", () => {
+  it("defaults to 2 and preserves an explicit zero", () => {
+    expect(CONFIG_DEFAULTS.maxIncompleteRetries).toBe(2);
+    expect(applyDefaults({}).maxIncompleteRetries).toBe(2);
+    expect(applyDefaults({ maxIncompleteRetries: 0 }).maxIncompleteRetries).toBe(0);
+  });
+
+  it("loadConfig accepts a non-negative integer", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        maxIncompleteRetries: 4,
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.maxIncompleteRetries).toBe(4);
+  });
+
+  it.each([
+    ["a fractional value", 2.5],
+    ["a negative value", -1],
+    ["a string", "2"],
+    ["null", null],
+  ])("rejects %s", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        maxIncompleteRetries: value,
+      }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/maxIncompleteRetries/);
+  });
+});
+
 describe("config — timeoutMs", () => {
   it("applyDefaults uses 300_000 when timeoutMs absent", async () => {
     const { applyDefaults, CONFIG_DEFAULTS } = await import("./config.js");

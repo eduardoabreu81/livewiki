@@ -74,6 +74,12 @@ export interface LivewikiConfig {
    */
   maxRepairAttempts?: number;
   /**
+   * Provider-incomplete calls that may retry fresh without consuming a
+   * stage-4 bounded slot. Default 2; 0 disables non-consuming retries.
+   * Must be an integer >= 0.
+   */
+  maxIncompleteRetries?: number;
+  /**
    * Max output tokens for stage-4 (and repair) generation.
    * Default 8192. Override per repo or via BatchOptions.
    */
@@ -150,6 +156,8 @@ export const CONFIG_DEFAULTS = {
    * or by `BatchOptions.maxRepairAttempts` (tests, CLI override).
    */
   maxRepairAttempts: 2,
+  /** Default non-consuming retries for normalized incomplete responses. */
+  maxIncompleteRetries: 2,
   /** Stage-4 completion budget (tokens). Raised from 4k after MiniMax bench. */
   stage4MaxOutputTokens: 8192,
   /** Structural split thresholds for oversized modules. */
@@ -243,6 +251,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     language: CONFIG_DEFAULTS.language,
     languages: [...CONFIG_DEFAULTS.languages],
     maxRepairAttempts: CONFIG_DEFAULTS.maxRepairAttempts,
+    maxIncompleteRetries: CONFIG_DEFAULTS.maxIncompleteRetries,
     stage4MaxOutputTokens: CONFIG_DEFAULTS.stage4MaxOutputTokens,
     maxModuleFiles: CONFIG_DEFAULTS.maxModuleFiles,
     maxModuleSymbols: CONFIG_DEFAULTS.maxModuleSymbols,
@@ -348,6 +357,15 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       );
     }
     out.maxRepairAttempts = v;
+  }
+  if (obj["maxIncompleteRetries"] !== undefined) {
+    const v = obj["maxIncompleteRetries"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `invalid maxIncompleteRetries: must be a non-negative integer, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.maxIncompleteRetries = v;
   }
   if (obj["stage4MaxOutputTokens"] !== undefined) {
     const v = obj["stage4MaxOutputTokens"];

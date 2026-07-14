@@ -278,15 +278,24 @@ copied into the artifact. Before writing, livewiki:
 Adapters normalize provider completion signals as `complete`, `length`,
 `incomplete`, or `unknown` and preserve the raw provider reason in the task
 usage history. `length` and `incomplete` responses are never accepted as
-artifacts; they enter the same bounded correction loop. `unknown` remains
-backward-compatible for providers or proxies that omit the signal and still
-undergoes full structural validation.
+artifacts. Only normalized `incomplete` is eligible for a bounded fresh retry
+that does not consume a repair slot; `length` always consumes its bounded slot
+because it reflects the configured output budget, not provider flakiness.
+`unknown` remains backward-compatible for providers or proxies that omit the
+signal and still undergoes full structural validation.
 
 An invalid artifact, incomplete provider response, or post-write verify failure
 triggers another bounded attempt for the same task. `maxRepairAttempts` defaults
-to `2` in `.livewiki/config.json` conventions and can be overridden per run;
-therefore a task makes at most one initial call plus two further calls by
-default. The next prompt depends only on the immediately previous attempt:
+to `2` in `.livewiki/config.json` conventions and can be overridden per run.
+`maxIncompleteRetries` is an optional non-negative integer, defaults to `2`, and
+may be set to `0` to disable non-consuming retries. While that per-task retry
+budget remains, an `incomplete` outcome gets a fresh initial call without
+consuming one of the `1 + maxRepairAttempts` bounded slots. After the retry
+budget is exhausted, later `incomplete` outcomes consume slots exactly as
+before, so exhaustion degrades to the ordinary bounded-loop behavior. The
+worst-case paid call count per task is
+`1 + maxRepairAttempts + maxIncompleteRetries` (default `5`). The next prompt
+depends only on the immediately previous attempt:
 
 | Previous outcome | Next prompt | Repair inputs |
 |---|---|---|
@@ -317,12 +326,16 @@ Each stage-4 task checkpoint may include an append-only `diagnosticHistory`,
 with one content-safe record per LLM attempt: the global attempt number,
 normalized/raw stop reasons when available, outcome, prompt kind, bounded
 structured error summaries, candidate character count and SHA-256 (never the
-candidate itself), and completion timestamp. It is seeded and appended on
-resume and `--only`, exactly like `usageHistory`; every stage-4 call, including
-a timeout, has one entry in each history with the same global attempt number.
-Diagnostics never persist prompts, source text, raw candidates, or API keys.
-Text excerpts and error lists use fixed persistence caps, while dropped-entry
-counts preserve truthful totals.
+candidate itself), and completion timestamp. A non-consuming incomplete retry
+sets the optional `budgetConsumed` field to `false`; absence means the attempt
+consumed a bounded slot and keeps old checkpoints backward-compatible. It is
+seeded and appended on resume and `--only`, exactly like `usageHistory`; every
+stage-4 call, including a non-consuming retry or timeout, has one entry in each
+history with the same global attempt number. Token and cost totals include every
+call and remain monotonic and exact regardless of slot consumption. Diagnostics
+never persist prompts, source text, raw candidates, or API keys. Text excerpts
+and error lists use fixed persistence caps, while dropped-entry counts preserve
+truthful totals.
 
 When attempts are exhausted, `repair_exhausted` reporting presents the ordered
 per-attempt sequence and real totals across all attempts. It never describes

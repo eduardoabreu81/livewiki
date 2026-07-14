@@ -108,6 +108,8 @@ export interface BatchOptions {
    * `0` disables repair (one single call per task).
    */
   maxRepairAttempts?: number;
+  /** Non-consuming retries for normalized incomplete responses (default 2). */
+  maxIncompleteRetries?: number;
   /** Stage-4 max output tokens (default from config / 8192). */
   stage4MaxOutputTokens?: number;
   /** Override thinking mode for openai-compat (MiniMax-M3 etc.). */
@@ -181,6 +183,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         `invalid maxRepairAttempts: must be a non-negative integer, got ${JSON.stringify(maxRepairAttempts)}`,
       );
     }
+    const maxIncompleteRetries =
+      opts.maxIncompleteRetries ?? resolvedConfig.maxIncompleteRetries ?? 2;
+    if (
+      typeof maxIncompleteRetries !== "number" ||
+      !Number.isInteger(maxIncompleteRetries) ||
+      maxIncompleteRetries < 0
+    ) {
+      throw new Error(
+        `invalid maxIncompleteRetries: must be a non-negative integer, got ${JSON.stringify(maxIncompleteRetries)}`,
+      );
+    }
     const stage4MaxOutputTokens =
       opts.stage4MaxOutputTokens ??
       resolvedConfig.stage4MaxOutputTokens ??
@@ -215,6 +228,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         noRefine: opts.noRefine ?? false,
         contextCharBudget: charBudget,
         maxRepairAttempts,
+        maxIncompleteRetries,
       });
       const res = db
         .prepare(
@@ -523,8 +537,12 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             `Refusing to rewrite untrusted content (rule #6 — operator must repair the page manually).`,
         };
       } else {
-        // Bounded loop: one initial call plus maxRepairAttempts further calls.
-        const totalAttempts = 1 + maxRepairAttempts;
+        // Bounded slots: one initial slot plus maxRepairAttempts repair slots.
+        // Normalized incomplete responses may retry fresh without consuming a
+        // slot while their separate per-task budget remains.
+        const totalConsumedSlots = 1 + maxRepairAttempts;
+        let consumedSlots = 0;
+        let incompleteRetriesUsed = 0;
         let attemptDone = false;
         let priorCandidate = "";
         let priorErrors: ArtifactValidationError[] = [];
@@ -536,7 +554,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         // (not from the seeded history of prior runs/--only calls).
         const diagnosticSliceStart = diagnosticHistory.length;
 
-        for (let i = 0; i < totalAttempts; i++) {
+        while (consumedSlots < totalConsumedSlots) {
           attempt++;
           const promptKind = nextPromptKind;
           // Reviewer revision (finding #5): the `attemptNumber` passed
@@ -573,6 +591,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           );
 
           if (attemptResult.llmError) {
+            consumedSlots++;
             diagnosticHistory.push(
               diagnosticAttempt({
                 attemptResult,
@@ -609,6 +628,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 
           if (attemptResult.artifact === null) {
             const outcome = attemptResult.diagnosticOutcome!;
+            const retryWithoutConsumingSlot =
+              outcome === "incomplete_generation" &&
+              incompleteRetriesUsed < maxIncompleteRetries;
+            if (retryWithoutConsumingSlot) {
+              incompleteRetriesUsed++;
+            } else {
+              consumedSlots++;
+            }
             lastErrorsForReporting = attemptResult.validationErrors;
             diagnosticHistory.push(
               diagnosticAttempt({
@@ -616,6 +643,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
                 promptKind,
                 outcome,
                 errors: summarizeDiagnosticErrors(attemptResult.validationErrors),
+                ...(retryWithoutConsumingSlot ? { budgetConsumed: false } : {}),
               }),
             );
             if (
@@ -643,6 +671,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           }
 
           // Valid artifact → try write + verify
+          consumedSlots++;
           const writeResult = await tryWriteAndVerify(
             absRoot,
             wikiPath,
@@ -1617,6 +1646,7 @@ function diagnosticAttempt(input: {
   promptKind: "initial" | "repair";
   outcome: DiagnosticOutcome;
   errors: DiagnosticErrors;
+  budgetConsumed?: boolean;
 }): DiagnosticAttempt {
   const candidate = input.attemptResult.diagnosticCandidate;
   return {
@@ -1629,6 +1659,9 @@ function diagnosticAttempt(input: {
       : {}),
     outcome: input.outcome,
     promptKind: input.promptKind,
+    ...(input.budgetConsumed !== undefined
+      ? { budgetConsumed: input.budgetConsumed }
+      : {}),
     errors: input.errors.errors,
     truncatedErrorCount: input.errors.truncatedErrorCount,
     ...(candidate !== null
