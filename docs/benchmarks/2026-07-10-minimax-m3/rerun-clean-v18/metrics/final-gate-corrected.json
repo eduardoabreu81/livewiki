@@ -1,0 +1,124 @@
+{
+  "overallGate": "PASS",
+  "gates": {
+    "mechanical": true,
+    "qualitative": true,
+    "statusReadable": true,
+    "stage2Zero": true,
+    "reasoningZero": true,
+    "proxyHadTraffic": true,
+    "proxyZeroErrors": true,
+    "proxyAliveThroughout": true,
+    "accountingReconciled": true,
+    "failedDiagnosticsComplete": true,
+    "recoveredDiagnosticsComplete": true,
+    "nonConsumingRetrySemantics": true
+  },
+  "batch": {
+    "status": "completed",
+    "tasksDone": 13,
+    "tasksFailed": 0,
+    "statusReadError": null,
+    "bootstrapError": null,
+    "stage2": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "costUsd": null,
+      "models": [],
+      "usageIncomplete": false
+    },
+    "stage4": {
+      "inputTokens": 217785,
+      "outputTokens": 35228,
+      "costUsd": null,
+      "models": [
+        "MiniMax-M3"
+      ],
+      "usageIncomplete": false
+    }
+  },
+  "proxy": {
+    "calls": 16,
+    "promptTokens": 217785,
+    "completionTokens": 35228,
+    "reasoningTokens": 0,
+    "callsWithError": 0,
+    "diedMidBatch": false
+  },
+  "mechanicalGate": "PASS",
+  "qualitativeGate": "PASS",
+  "failedTaskDiagnostics": [],
+  "recoveredTaskDiagnostics": [
+    {
+      "target": "core-src-01",
+      "reportedAttempts": 3,
+      "diagnosticAttempts": [
+        1,
+        2,
+        3
+      ],
+      "complete": true,
+      "ordered": true,
+      "successfulAttempt": 3,
+      "nonConsumingRetryAttempts": [
+        1,
+        2
+      ]
+    },
+    {
+      "target": "core-src-05",
+      "reportedAttempts": 2,
+      "diagnosticAttempts": [
+        1,
+        2
+      ],
+      "complete": true,
+      "ordered": true,
+      "successfulRepairAttempt": 2,
+      "successfulAttempt": 2,
+      "nonConsumingRetryAttempts": []
+    }
+  ],
+  "nonConsumingRetryEntries": [
+    {
+      "target": "core-src-01",
+      "attempt": 1,
+      "stopReason": "incomplete",
+      "rawStopReason": "abort",
+      "outcome": "incomplete_generation",
+      "promptKind": "initial",
+      "budgetConsumed": false,
+      "errors": [
+        {
+          "code": "incomplete_generation",
+          "location": "global",
+          "message": "provider stopped before a normal text completion (provider reason: abort)"
+        }
+      ],
+      "truncatedErrorCount": 0,
+      "candidateChars": 1445,
+      "candidateSha256": "48609d136f9d576be0f396082a4ab182cb527191196828032389a95acbf983b1",
+      "finishedAt": 1784033162690
+    },
+    {
+      "target": "core-src-01",
+      "attempt": 2,
+      "stopReason": "incomplete",
+      "rawStopReason": "abort",
+      "outcome": "incomplete_generation",
+      "promptKind": "initial",
+      "budgetConsumed": false,
+      "errors": [
+        {
+          "code": "incomplete_generation",
+          "location": "global",
+          "message": "provider stopped before a normal text completion (provider reason: abort)"
+        }
+      ],
+      "truncatedErrorCount": 0,
+      "candidateChars": 1455,
+      "candidateSha256": "fe76d0d75ec1a29d952a347df5fbf4e3dc15c519bdf2478fe55a797b368e2506",
+      "finishedAt": 1784033166964
+    }
+  ]
+}

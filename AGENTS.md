@@ -5,8 +5,11 @@
 > review (unique module IDs + taken set, owner:mixed retention, multi
 > manual blocks, rollback_failed aborts run, monotonic usage attempts,
 > stage-4 artifact normalize/repair, English-only new U–X text).
-> Benchmark MiniMax raw under `docs/benchmarks/` is evidence only — no
-> public winner claim until a corrected livewiki rerun + quality review.
+> Benchmark: clean v18 (commit 572b8a3) **PASSED** — 13/13 modules,
+> verify 0 issues, 427/427 symbols, exact accounting; evidence under
+> `docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v18/`. Still no
+> public winner claim until the quality review vs frozen OpenWiki
+> (`raw/openwiki/`) is written.
 
 ## Language policy
 
@@ -433,20 +436,25 @@ those files are explicitly out of the `vitest` unit suite).
   already released it). If it persists,
   `mavis-trash .git/index.lock` (do NOT use `Remove-Item`).
 
-## Live state (next: optional MiniMax rerun → Phase 6 export → Phase 7 viewer)
+## Live state (next: quality review vs OpenWiki → Phase 6 export → Phase 7 viewer)
 
 ```bash
-# Last validation (Phase 5 + U–X batch resilience):
-pnpm -r test  → 518 passed + 8 skipped (core 457 + cli 42 + mcp 19)
+# Last validation (post benchmark-hardening lots A–J, commit 572b8a3):
+pnpm -r test  → 723 passed + 8 skipped (core 653 + cli 51 + mcp 19)
 pnpm -r build → green (core + cli + mcp)
 ```
 
+Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
+accounting) at commit 572b8a3 after the v9→v18 hardening series
+(diagnostics, recoverable repair, symbol-key coalescing, anchor-placement
+guidance, incomplete-retry budget, fence-aware markers — task briefs under
+`docs/tasks/`). Failed runs v10–v17 are preserved byte-for-byte as
+evidence.
+
 Next planned steps:
-1. MiniMax livewiki-only **rerun** when maintainer authorizes paid API:
-   runbook `docs/benchmarks/2026-07-10-minimax-m3/RERUN.md`; proxy
-   records per-call cache/reasoning/timestamps/status/errors.
-2. Quality review vs frozen OpenWiki under `raw/` (no public winner claim
-   until then).
+1. Quality review vs frozen OpenWiki under `raw/openwiki/` (independent
+   reviewer; no public winner claim until it is written).
+2. Maintainer decision on a `docs/BENCHMARK.md` note after the review.
 3. Phase 6: export to github-wiki/gitlab-wiki/generic.
 4. Phase 7: local viewer + templates.
 
