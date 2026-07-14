@@ -44,6 +44,8 @@ import {
 export interface CreateServerOptions {
   /** Repo root que o server atende. Default: process.cwd() */
   repoRoot?: string;
+  /** Test seam for forcing verifier failures. Production uses core verify. */
+  verify?: typeof runVerify;
 }
 
 /**
@@ -52,6 +54,7 @@ export interface CreateServerOptions {
  */
 export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
   const repoRoot = nodePath.resolve(opts.repoRoot ?? process.cwd());
+  const verify = opts.verify ?? runVerify;
   const searchIdx = await openAndIndex(repoRoot);
   const server = new McpServer(
     {
@@ -71,6 +74,14 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   }
   function errorResult(message: string) {
     return { content: [{ type: "text" as const, text: `error: ${message}` }], isError: true };
+  }
+  async function rollbackWrittenPage(path: string): Promise<boolean> {
+    try {
+      await nodeFs.unlink(await safeIo.resolveAndValidate(repoRoot, path));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // ─── livewiki_quickstart ───────────────────────────────────────────────
@@ -206,7 +217,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
       //    Só roda se skipVerify !== true.
       if (!skipVerify) {
         try {
-          const verifyResult = await runVerify(repoRoot);
+          const verifyResult = await verify(repoRoot);
           // Falha se há issue error-level tocando esta página.
           const issuesHere = verifyResult.issues.filter(
             (i) => i.severity === "error" && (i.wikiPath === path || i.wikiPath === ""),
@@ -215,13 +226,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
             // Rollback: remove o arquivo que acabamos de escrever pra não
             // deixar estado inconsistente (regra #3: banco é derivado, mas
             // disco é a verdade — não deixe lixo).
-            try {
-              await nodeFs.unlink(
-                await safeIo.resolveAndValidate(repoRoot, path),
-              );
-            } catch {
-              // best-effort rollback
-            }
+            await rollbackWrittenPage(path);
             return errorResult(
               `verify rejected the page (${issuesHere.length} error issue(s)). ` +
                 `First issue: ${issuesHere[0]?.code ?? "?"} — ${issuesHere[0]?.detail ?? "?"}. ` +
@@ -229,10 +234,16 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
             );
           }
         } catch (err) {
-          // Se verify CRASHAR (não é um erro de validação), não bloqueia write —
-          // verify pode falhar por DB corrompido, etc. Reporta o warning.
-          return textResult(
-            `wrote ${path} (verify step crashed: ${err instanceof Error ? err.message : String(err)})`,
+          const crashMessage = err instanceof Error ? err.message : String(err);
+          const rolledBack = await rollbackWrittenPage(path);
+          if (!rolledBack) {
+            return errorResult(
+              `verify crashed: ${crashMessage}. Rollback failed; the disk may hold an ` +
+                `UNVERIFIED page at ${JSON.stringify(path)}. Inspect that path before continuing.`,
+            );
+          }
+          return errorResult(
+            `verify crashed: ${crashMessage}. The page was NOT kept.`,
           );
         }
       }

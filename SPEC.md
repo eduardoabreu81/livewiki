@@ -206,6 +206,13 @@ numeric exit-code semantics remain unchanged.
 | `livewiki_write_doc` | writes/updates a page (path validated by the allowlist; runs `verify` on the content before accepting) |
 | `livewiki_resolve_debt` | marks debt as paid (tied to a write) |
 
+A successful, non-error `livewiki_write_doc` result means the page was written
+and passed `verify`, unless the caller explicitly requested `skipVerify: true`.
+Any verify failure, including a crash of the verifier itself, triggers a
+best-effort rollback so no unverified page is left behind. If rollback fails,
+the tool returns an error that names the suspect path and warns that the disk
+may contain an unverified page requiring operator inspection.
+
 ## Batch pipeline (4 stages, resumable)
 
 1. **Scan**: full `index`; symbol snapshot.

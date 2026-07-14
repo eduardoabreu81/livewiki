@@ -27,7 +27,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createServer } from "./server.js";
+import { createServer, type CreateServerOptions } from "./server.js";
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs/promises";
 import * as nodeOs from "node:os";
@@ -63,8 +63,8 @@ interface Connected {
 
 /** Helper: conecta server + client via InMemoryTransport.
  *  Retorna ambos pra fechar antes do afterEach (libera FTS5 no Windows). */
-async function connect(): Promise<Connected> {
-  const server = await createServer({ repoRoot });
+async function connect(opts: Omit<CreateServerOptions, "repoRoot"> = {}): Promise<Connected> {
+  const server = await createServer({ repoRoot, ...opts });
   const client = new Client({ name: "test-agent", version: "0.0.0" }, { capabilities: {} });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(clientT), server.connect(serverT)]);
@@ -261,6 +261,64 @@ Conteudo.
       await expect(
         nodeFs.access(nodePath.join(repoRoot, "livewiki/broken.md")),
       ).rejects.toThrow();
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_write_doc rolls back and fails closed when verify crashes", async () => {
+    const crashMessage = "synthetic verifier crash";
+    const path = "livewiki/verify-crash.md";
+    const sentinel = "lotkverifycrashsentinel";
+    const c = await connect({
+      verify: async () => {
+        throw new Error(crashMessage);
+      },
+    });
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_write_doc",
+        arguments: { path, content: `# Verify crash\n\n${sentinel}\n` },
+      });
+
+      expect(r.isError).toBe(true);
+      const text = extractText(r);
+      expect(text).toContain(crashMessage);
+      expect(text).toMatch(/not kept/i);
+      await expect(nodeFs.access(nodePath.join(repoRoot, path))).rejects.toThrow();
+
+      const searchResult = await c.client.callTool({
+        name: "livewiki_search",
+        arguments: { query: sentinel },
+      });
+      const parsed = JSON.parse(extractText(searchResult)) as { hits: unknown[] };
+      expect(parsed.hits).toEqual([]);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_write_doc warns about an UNVERIFIED path when crash rollback fails", async () => {
+    const crashMessage = "synthetic verifier crash after external removal";
+    const path = "livewiki/rollback-failure.md";
+    const c = await connect({
+      verify: async () => {
+        await nodeFs.unlink(nodePath.join(repoRoot, path));
+        throw new Error(crashMessage);
+      },
+    });
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_write_doc",
+        arguments: { path, content: "# Rollback failure\n" },
+      });
+
+      expect(r.isError).toBe(true);
+      const text = extractText(r);
+      expect(text).toContain(crashMessage);
+      expect(text).toContain("UNVERIFIED");
+      expect(text).toContain(path);
+      expect(text).toMatch(/inspect/i);
     } finally {
       await teardown(c);
     }
