@@ -452,13 +452,10 @@ describe("batch X — repair success (Criterion #6)", () => {
     expect(result.failures).toHaveLength(0);
   });
 
-  it("repairs a missing page opening through its mechanical ACTION", async () => {
+  it("repairs a granular page-opening failure through its specific mechanical ACTION", async () => {
     const keys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
     const valid = makeValidPage(keys);
-    const invalid = valid.replace(
-      /This page documents[\s\S]*?This module provides one part of the repository implementation\.\n\n/,
-      "",
-    );
+    const invalid = valid.replace("- Change this module's implementation.\n", "");
     llm.responses = [invalid, valid];
 
     const result = await runBatch({
@@ -469,9 +466,15 @@ describe("batch X — repair success (Criterion #6)", () => {
       maxRepairAttempts: 1,
     });
     expect(result.status).toBe("completed");
-    expect(llm.callLog[1]?.user).toMatch(/missing_page_opening.*ACTION: replace the opening/s);
+    expect(llm.callLog[1]?.user).toMatch(
+      /missing_page_opening.*page opening "When to use this page" task list must contain only 2 to 4 non-empty Markdown bullets.*ACTION: SPECIFIC FAILURE: page opening "When to use this page" task list must contain only 2 to 4 non-empty Markdown bullets/s,
+    );
     const checkpoint = await readStage4Checkpoint(repoRoot);
-    expect(checkpoint.diagnosticHistory?.[0]?.errors.map((error) => error.code)).toContain("missing_page_opening");
+    expect(checkpoint.diagnosticHistory?.[0]?.errors).toContainEqual(expect.objectContaining({
+      code: "missing_page_opening",
+      message: 'page opening "When to use this page" task list must contain only 2 to 4 non-empty Markdown bullets',
+      offending: "- Review this module's behavior.",
+    }));
     expect(checkpoint.diagnosticHistory?.[1]?.outcome).toBe("success");
   });
 

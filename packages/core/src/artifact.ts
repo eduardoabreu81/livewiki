@@ -334,13 +334,14 @@ export function validateStage4Artifact(
     ? lastHeadingBefore(headingMatches, firstSectionMarker.index!)
     : null;
   const openingEnd = firstAnchoredHeading?.offset ?? firstSectionMarker?.index ?? markerScanBody.length;
-  if (!hasRequiredPageOpening(markerScanBody.slice(0, openingEnd))) {
+  const openingFailure = checkRequiredPageOpening(markerScanBody.slice(0, openingEnd));
+  if (openingFailure !== null) {
     errors.push(
       err(
         "missing_page_opening",
-        "required page opening is missing or out of order before the first anchored implementation section",
+        openingFailure.message,
         "body",
-        "H1 → responsibility sentence → When to use this page (2-4 bullets) → How it fits paragraph",
+        openingFailure.offending,
       ),
     );
   }
@@ -544,39 +545,146 @@ function hasRealProse(text: string): boolean {
     .some((l) => l.length > 0 && !/^(TODO|TBD)\b/i.test(l));
 }
 
-/** Structural-only recognizer for the required page opening. */
-function hasRequiredPageOpening(text: string): boolean {
-  const lines = text.replace(/^\s*\n/, "").split("\n");
-  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
-  if (lines.length === 0 || !/^#\s+\S/.test(lines[0]!.trim())) return false;
-
-  const whenIndex = lines.findIndex((line, index) =>
-    index > 0 && /^##\s+When to use this page\s*$/.test(line.trim()),
-  );
-  if (whenIndex < 0) return false;
-
-  const responsibility = lines.slice(1, whenIndex);
-  if (!isSingleProseParagraph(responsibility)) return false;
-
-  const howIndex = lines.findIndex((line, index) =>
-    index > whenIndex && /^##\s+How it fits\s*$/.test(line.trim()),
-  );
-  if (howIndex < 0) return false;
-
-  const taskLines = lines
-    .slice(whenIndex + 1, howIndex)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (taskLines.length < 2 || taskLines.length > 4) return false;
-  if (!taskLines.every((line) => /^[-*+]\s+\p{L}/u.test(line))) return false;
-
-  return isSingleProseParagraph(lines.slice(howIndex + 1));
+interface PageOpeningFailure {
+  readonly message: string;
+  readonly offending: string;
 }
 
-function isSingleProseParagraph(lines: ReadonlyArray<string>): boolean {
+/** Structural-only check for the required page opening, in contract order. */
+function checkRequiredPageOpening(text: string): PageOpeningFailure | null {
+  const lines = text.split("\n");
+  while (lines.length > 0 && lines[0]!.trim() === "") lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+
+  const h1Index = lines.findIndex((line) => /^#\s+\S/.test(line.trim()));
+  if (h1Index < 0) {
+    return {
+      message: "required page opening H1 is missing",
+      offending: "(absent)",
+    };
+  }
+  if (h1Index > 0) {
+    return {
+      message: "required page opening H1 appears after other content",
+      offending: lines[h1Index]!.trim(),
+    };
+  }
+
+  const whenIndex = findExactOpeningH2(lines, "When to use this page", 1);
+  const whenCandidateIndex = findOpeningHeadingCandidate(lines, "When to use this page", 1);
+  const firstH2AfterH1 = findNextH2(lines, 1);
+  const responsibilityEnd = firstPresentIndex(whenIndex, whenCandidateIndex, firstH2AfterH1, lines.length);
+  const responsibilityFailure = proseBlockFailure(lines.slice(1, responsibilityEnd), true, false);
+  if (responsibilityFailure !== null) {
+    return {
+      message: responsibilityFailure === "(absent)"
+        ? "page opening responsibility paragraph is missing"
+        : "page opening responsibility block must be exactly one prose paragraph",
+      offending: responsibilityFailure,
+    };
+  }
+
+  if (whenIndex < 0) {
+    return {
+      message: 'required page opening H2 "When to use this page" is missing or malformed',
+      offending: offendingHeading(lines, whenCandidateIndex, firstH2AfterH1),
+    };
+  }
+
+  const howIndex = findExactOpeningH2(lines, "How it fits", whenIndex + 1);
+  const howCandidateIndex = findOpeningHeadingCandidate(lines, "How it fits", whenIndex + 1);
+  const firstH2AfterWhen = findNextH2(lines, whenIndex + 1);
+  const taskEnd = firstPresentIndex(howIndex, howCandidateIndex, firstH2AfterWhen, lines.length);
+  const taskLines = lines
+    .slice(whenIndex + 1, taskEnd)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const malformedTaskLine = taskLines.find((line) => !/^[-*+]\s+\S/.test(line));
+  if (taskLines.length < 2 || taskLines.length > 4 || malformedTaskLine !== undefined) {
+    return {
+      message: 'page opening "When to use this page" task list must contain only 2 to 4 non-empty Markdown bullets',
+      offending: malformedTaskLine ?? openingSnippet(taskLines),
+    };
+  }
+
+  if (howIndex < 0) {
+    return {
+      message: 'required page opening H2 "How it fits" is missing or malformed',
+      offending: offendingHeading(lines, howCandidateIndex, firstH2AfterWhen),
+    };
+  }
+
+  const howFailure = proseBlockFailure(lines.slice(howIndex + 1), false, true);
+  if (howFailure !== null) {
+    return {
+      message: 'page opening "How it fits" must contain one or more prose paragraphs without headings, bullets, or lw: markers',
+      offending: howFailure,
+    };
+  }
+
+  return null;
+}
+
+function findExactOpeningH2(
+  lines: ReadonlyArray<string>,
+  heading: string,
+  start: number,
+): number {
+  const expected = heading.toLocaleLowerCase("en-US");
+  return lines.findIndex((line, index) =>
+    index >= start
+      && /^##\s+\S/.test(line.trim())
+      && line.trim().slice(3).trim().toLocaleLowerCase("en-US") === expected,
+  );
+}
+
+function findOpeningHeadingCandidate(
+  lines: ReadonlyArray<string>,
+  heading: string,
+  start: number,
+): number {
+  const expected = heading.toLocaleLowerCase("en-US");
+  return lines.findIndex((line, index) => {
+    if (index < start) return false;
+    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line.trim());
+    return match?.[2]?.toLocaleLowerCase("en-US") === expected;
+  });
+}
+
+function findNextH2(lines: ReadonlyArray<string>, start: number): number {
+  return lines.findIndex((line, index) => index >= start && /^##\s+\S/.test(line.trim()));
+}
+
+function firstPresentIndex(...indices: number[]): number {
+  return Math.min(...indices.filter((index) => index >= 0));
+}
+
+function offendingHeading(
+  lines: ReadonlyArray<string>,
+  candidateIndex: number,
+  fallbackIndex: number,
+): string {
+  const index = candidateIndex >= 0 ? candidateIndex : fallbackIndex;
+  return index >= 0 ? lines[index]!.trim() : "(absent)";
+}
+
+function openingSnippet(lines: ReadonlyArray<string>): string {
+  return lines.length === 0 ? "(absent)" : lines.slice(0, 5).join("\n");
+}
+
+function proseBlockFailure(
+  lines: ReadonlyArray<string>,
+  requireSingleParagraph: boolean,
+  rejectClosingLwMarker: boolean,
+): string | null {
   const nonblank = lines.map((line) => line.trim()).filter(Boolean);
-  if (nonblank.length === 0) return false;
-  if (nonblank.some((line) => /^#{1,6}\s|^[-*+]\s|^<!--\s*lw:/.test(line))) return false;
+  if (nonblank.length === 0) return "(absent)";
+
+  const forbidden = nonblank.find((line) =>
+    /^#{1,6}\s|^[-*+]\s|^<!--\s*lw:/.test(line)
+      || (rejectClosingLwMarker && /^<!--\s*\/lw:/.test(line)),
+  );
+  if (forbidden !== undefined) return forbidden;
 
   let paragraphCount = 0;
   let inParagraph = false;
@@ -585,10 +693,11 @@ function isSingleProseParagraph(lines: ReadonlyArray<string>): boolean {
       inParagraph = false;
     } else if (!inParagraph) {
       paragraphCount += 1;
+      if (requireSingleParagraph && paragraphCount > 1) return line.trim();
       inParagraph = true;
     }
   }
-  return paragraphCount === 1;
+  return null;
 }
 
 function err(

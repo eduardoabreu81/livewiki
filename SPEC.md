@@ -206,17 +206,22 @@ anchored implementation section, with this exact structural contract:
 
 ## How it fits
 
-<One short paragraph naming the module's role and its immediate repository
-context. No claim of a complete call graph.>
+<One or more short prose paragraphs naming the module's role and its immediate
+repository context. No claim of a complete call graph.>
 ```
 
 The opening contains two to four task bullets, each beginning with an action
-verb. It contains no `lw:anchors` marker; closed keys remain distributed
-exactly once among later anchored reference sections. It does not repeat the
-full path inventory, symbol table, or frontmatter anchors in prose, and it does
-not infer “entry point” status from symbol count. Fixtures, tooling,
-benchmarks, and documentation pages use honest auxiliary task context rather
-than claiming product prominence.
+verb. The structural validator accepts any non-empty Markdown content after
+the bullet marker, including bold text, inline code, and links. The two H2
+labels shown above are canonical; validation matches those exact words
+case-insensitively while still requiring the `##` level. `How it fits` accepts
+one or more prose paragraphs but rejects headings, bullets, and `lw:` markers
+inside its block. The opening contains no `lw:anchors` marker; closed keys
+remain distributed exactly once among later anchored reference sections. It
+does not repeat the full path inventory, symbol table, or frontmatter anchors
+in prose, and it does not infer “entry point” status from symbol count. Fixtures,
+tooling, benchmarks, and documentation pages use honest auxiliary task context
+rather than claiming product prominence.
 
 Architecture overview remains the complete inventory hub, grouped by module
 role. Each module card shows the human display title first, a separately labeled
@@ -391,8 +396,12 @@ copied into the artifact. Before writing, livewiki:
 - rejects an absent or out-of-order required page opening before the first real
   section marker (`missing_page_opening`). This single repairable code checks
   only the H1, responsibility paragraph, ordered `When to use this page`
-  section with two to four bullets, and ordered `How it fits` paragraph. It
-  makes no semantic or prose-quality judgment; and
+  section with two to four non-empty Markdown bullets, and ordered `How it fits`
+  block with one or more prose paragraphs. The H2 labels match their exact words
+  case-insensitively. The validator reports only the first failing opening
+  element; its structured message names that element and `offending` carries the
+  actual line or snippet found, or `"(absent)"` when none exists. It makes no
+  semantic or prose-quality judgment; and
 - rejects `title_equals_module_id` when a **product** module's frontmatter
   `title` exactly equals its stable `Module.id`. Fixture, tooling/benchmark,
   and documentation modules are exempt. The code is repairable and never

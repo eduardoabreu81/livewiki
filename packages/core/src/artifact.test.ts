@@ -928,13 +928,69 @@ The indexed function handles the documented operation.
   });
 
   it.each([
-    ["missing H1", "This page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication."],
-    ["out of order", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## How it fits\n\nThis module provides authentication.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior."],
-    ["too few bullets", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n\n## How it fits\n\nThis module provides authentication."],
-    ["too many bullets", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n- Diagnose behavior.\n- Test behavior.\n- Trace behavior.\n\n## How it fits\n\nThis module provides authentication."],
-  ])("reports one structural code for %s", (_name, opening) => {
+    ["a bold-led bullet", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- **Review** authentication behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication."],
+    ["an inline-code-led bullet", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- `livewiki init` creates the layout.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication."],
+    ["Title Case opening headings", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to Use This Page\n\n- Review behavior.\n- Change behavior.\n\n## How It Fits\n\nThis module provides authentication."],
+    ["two How it fits paragraphs", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication.\n\nIt sits beside the repository's authorization support."],
+  ])("accepts %s", (_name, opening) => {
     const errors = validateStage4Artifact(page(undefined, opening), [key]).errors;
-    expect(errors.filter((error) => error.code === "missing_page_opening")).toHaveLength(1);
+    expect(errors.some((error) => error.code === "missing_page_opening")).toBe(false);
+  });
+
+  it.each([
+    [
+      "missing H1",
+      "This page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication.",
+      "required page opening H1 is missing",
+      "(absent)",
+    ],
+    [
+      "late H1",
+      "Introductory text.\n\n# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication.",
+      "required page opening H1 appears after other content",
+      "# Authentication responsibilities",
+    ],
+    [
+      "missing responsibility",
+      "# Authentication responsibilities\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication.",
+      "page opening responsibility paragraph is missing",
+      "(absent)",
+    ],
+    [
+      "malformed responsibility",
+      "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\nThis second paragraph is not allowed here.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication.",
+      "page opening responsibility block must be exactly one prose paragraph",
+      "This second paragraph is not allowed here.",
+    ],
+    [
+      "missing When to use this page",
+      "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## Usage\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication.",
+      'required page opening H2 "When to use this page" is missing or malformed',
+      "## Usage",
+    ],
+    [
+      "too few bullets",
+      "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n\n## How it fits\n\nThis module provides authentication.",
+      'page opening "When to use this page" task list must contain only 2 to 4 non-empty Markdown bullets',
+      "- Review behavior.",
+    ],
+    [
+      "missing How it fits",
+      "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.",
+      'required page opening H2 "How it fits" is missing or malformed',
+      "(absent)",
+    ],
+    [
+      "malformed How it fits",
+      "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\n- This must be prose, not a bullet.",
+      'page opening "How it fits" must contain one or more prose paragraphs without headings, bullets, or lw: markers',
+      "- This must be prose, not a bullet.",
+    ],
+  ])("reports the first granular opening failure for %s", (_name, opening, message, offending) => {
+    const errors = validateStage4Artifact(page(undefined, opening), [key]).errors;
+    const openingErrors = errors.filter((error) => error.code === "missing_page_opening");
+    expect(openingErrors).toHaveLength(1);
+    expect(openingErrors[0]).toMatchObject({ message, offending, location: "body" });
   });
 
   it("rejects an exact product title/id match only when context is supplied", () => {

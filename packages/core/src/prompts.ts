@@ -33,7 +33,8 @@ export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
 
 /** Shared stage-4 editorial contract. Initial and repair prompts must not drift. */
 export const PAGE_OPENING_PROMPT_RULES = [
-  `- After frontmatter and before the first anchored implementation section, open with this exact structure in order: an H1 human-meaningful title; exactly one sentence stating the page's responsibility; an H2 \`When to use this page\`; two to four task bullets that each begin with an action verb; an H2 \`How it fits\`; and one short paragraph naming the module's role and immediate repository context without claiming a complete call graph.`,
+  `- After frontmatter and before the first anchored implementation section, open with this exact structure in order: an H1 human-meaningful title; exactly one sentence stating the page's responsibility; an H2 \`When to use this page\`; two to four task bullets that each begin with an action verb; an H2 \`How it fits\`; and one or more short prose paragraphs naming the module's role and immediate repository context without claiming a complete call graph. The shown H2 casing is canonical, while structural validation matches those exact words case-insensitively.`,
+  `- Each task bullet must have non-empty content after its Markdown bullet marker. Bold text, inline code, and links are allowed around the leading action or command.`,
   `- The frontmatter title and H1 must be a concise semantic responsibility title. For a product module, neither may be the stable module ID alone.`,
   `- The opening contains no \`lw:anchors\` marker. Put every closed key exactly once in frontmatter and exactly once across later anchored implementation sections.`,
   `- Do not repeat the full path inventory, symbol table, or frontmatter anchors in opening prose, and do not call a module an "entry point" merely because it has many symbols.`,
@@ -284,9 +285,15 @@ export function buildRepairPrompt(
       : e.location === "frontmatter"
         ? " (frontmatter)"
         : ` (${e.location})`;
+    // Lead review (Lot O): `offending` can now carry arbitrary lines from the
+    // model's own page (not just anchor keys), so it is untrusted text and
+    // must not re-introduce a copyable lw:* control marker into the prompt.
+    const offendingSafe = e.offending
+      ? neutralizeUntrustedControlMarkers(e.offending)
+      : e.offending;
     let line =
       `- [${e.code}]${where}: ${e.message}` +
-      (e.offending ? ` — offending: ${e.offending}` : "");
+      (offendingSafe ? ` — offending: ${offendingSafe}` : "");
     if (e.offending && e.code === "anchor_outside_closed_list") {
       if (e.offending === "…" || e.offending === "...") {
         line += ` — ACTION: The \`lw:anchors\` marker was abbreviated with "${e.offending}". REMOVE the ellipsis and rewrite that marker with every key for that section written in full, one by one, copied byte-for-byte from the closed list. NEVER substitute another key for the ellipsis or add an arbitrary key.`;
@@ -323,7 +330,7 @@ export function buildRepairPrompt(
       line += ` — ACTION: remove the TODO/TBD text; write a concrete sentence about what is visible instead.`;
     }
     if (e.code === "missing_page_opening") {
-      line += ` — ACTION: replace the opening after frontmatter with the complete required H1, one responsibility sentence, \`When to use this page\` with two to four verb-led bullets, and \`How it fits\` paragraph, in that order and before the first anchored section. Put no \`lw:anchors\` marker in the opening.`;
+      line += ` — ACTION: SPECIFIC FAILURE: ${e.message}. Replace the opening after frontmatter with the complete required H1, one responsibility sentence, \`When to use this page\` with two to four verb-led bullets, and one or more \`How it fits\` prose paragraphs, in that order and before the first anchored section. Put no \`lw:anchors\` marker in the opening.`;
     }
     if (e.code === "title_equals_module_id") {
       line += ` — ACTION: replace the frontmatter title and H1 with a concise human responsibility title. Keep the stable module ID only for structural identity and the output path.`;
