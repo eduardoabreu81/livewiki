@@ -46,6 +46,27 @@ invalidate ("this diff will invalidate anchors in pages X, Y"), closing
 the document-as-you-go loop at pre-commit time instead of post-commit.
 Read-only: no ledger mutation, no debt creation — preview only.
 
+### 4. GitHub Actions template — "docs-debt on merge"
+
+Source: maintainer-approved evaluation (2026-07-14) of GitHub Agentic
+Workflows for cross-repo documentation
+(github.blog, Aspire team: docs draft-PRs on product merge, SME
+auto-review, 82 merged doc PRs at a 44.8h median). Their pattern validates
+livewiki's document-as-you-go thesis; livewiki's structural advantages to
+preserve: mechanical verification gates hallucination BEFORE human review
+(their only gate is the SME), and the anchor-ledger answers "does this
+merge need docs?" deterministically with ZERO tokens (78% of their runs
+spent a model call to conclude "no docs needed").
+
+The template: on PR merge, run `livewiki index` + debt check
+(deterministic, no LLM); when debt exists, an agent job pays it via MCP
+`livewiki_write_doc` (verify gating as always) and opens a DRAFT PR with
+the original PR author as reviewer. No-debt case costs zero tokens.
+Depends on Phase 6 (export) for the separate-docs-repo variant; the
+same-repo variant could ship earlier. Also adopt their operational-metrics
+discipline (median hours from feature merge to merged docs —
+`update-metrics.ts` is the base).
+
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
 - **Committed graph/cache artifact in the repo** (their
