@@ -104,16 +104,26 @@ function defaultHandler(req: { system: string; user: string }): StubResponse | n
   const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
   const closedKeys = closedKeysFromPrompt(req.user, moduleId);
   const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
+  const displayTitle = `${moduleId.replace(/-/g, " ")} responsibilities`;
   const content = `---
-title: ${moduleId}
+title: ${displayTitle}
 owner: generated
 anchors:
 ${fmAnchors}
 ---
 
-# ${moduleId}
+# ${displayTitle}
 
-Documentation for ${moduleId}.
+This page documents the indexed responsibilities of ${moduleId}.
+
+## When to use this page
+
+- Review ${moduleId} behavior.
+- Change ${moduleId} implementation.
+
+## How it fits
+
+This module provides one part of the repository implementation visible in the supplied source.
 
 ## Details
 <!-- lw:anchors ${closedKeys.join(" ")} -->

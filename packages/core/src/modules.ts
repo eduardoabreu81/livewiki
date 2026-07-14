@@ -38,12 +38,76 @@ export interface Module {
   paths: string[];
   /** Quantos símbolos ativos tem no módulo (heurística de priorização). */
   symbolCount: number;
+  /** Optional presentation-only title suggested by stage 2. Never identity. */
+  displayTitle?: string;
   /**
    * True when a single file exceeds maxModuleSymbols and cannot be
    * path-split further. Batch still schedules the page (does not abort);
    * stage 4 must bound context for that unit.
    */
   unsplittable?: boolean;
+}
+
+export interface RefinedDisplayTitleCandidate {
+  readonly id: string;
+  readonly displayTitle?: unknown;
+}
+
+/**
+ * Accepts advisory stage-2 titles without making them part of partition
+ * validation. Missing, malformed, generic, ID-shaped, or duplicate titles are
+ * omitted so navigation falls back to its deterministic title.
+ */
+export function applyRefinedDisplayTitles(
+  modules: ReadonlyArray<Module>,
+  candidates: ReadonlyArray<RefinedDisplayTitleCandidate>,
+): Module[] {
+  const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate.displayTitle]));
+  const validById = new Map<string, string>();
+  const idsByNormalizedTitle = new Map<string, string[]>();
+
+  for (const module of modules) {
+    const accepted = normalizeRefinedDisplayTitle(candidateById.get(module.id), module.id);
+    if (accepted === null) continue;
+    validById.set(module.id, accepted);
+    const normalized = normalizePresentationLabel(accepted);
+    const ids = idsByNormalizedTitle.get(normalized) ?? [];
+    ids.push(module.id);
+    idsByNormalizedTitle.set(normalized, ids);
+  }
+
+  for (const ids of idsByNormalizedTitle.values()) {
+    if (ids.length > 1) ids.forEach((id) => validById.delete(id));
+  }
+
+  return modules.map((module) => {
+    const displayTitle = validById.get(module.id);
+    return {
+      ...module,
+      ...(displayTitle === undefined ? {} : { displayTitle }),
+    };
+  });
+}
+
+function normalizeRefinedDisplayTitle(value: unknown, moduleId: string): string | null {
+  if (typeof value !== "string") return null;
+  const title = value.trim();
+  if (title.length < 4 || title.length > 120 || /[\r\n\u0000-\u001f\u007f]/.test(title)) return null;
+  if (!/\p{L}/u.test(title)) return null;
+  const normalized = normalizePresentationLabel(title);
+  if (normalized === normalizePresentationLabel(moduleId)) return null;
+  if (["module", "source", "code", "repository-module"].includes(normalized)) return null;
+  return title;
+}
+
+function normalizePresentationLabel(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 export interface ModuleGraphEdge {
@@ -267,13 +331,19 @@ function splitOneModule(
         id: m.id,
         paths,
         symbolCount: fileSc,
+        ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
         ...(unsplittable ? { unsplittable: true } : {}),
       },
     ];
   }
 
   if (fitsLimits(paths.length, sc, maxFiles, maxSymbols)) {
-    return [{ id: m.id, paths, symbolCount: sc }];
+    return [{
+      id: m.id,
+      paths,
+      symbolCount: sc,
+      ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
+    }];
   }
 
   const { prefixLen, groups } = groupPathsByNextSegment(paths);
@@ -316,6 +386,7 @@ function splitOneModule(
           symbolCountByPath,
           m.symbolCount,
         ),
+        ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
       },
       maxFiles,
       maxSymbols,
@@ -936,6 +1007,7 @@ export function makeUniqueDeterministicIds(modules: Module[]): Module[] {
       id: chosen[i]!,
       paths: src.paths,
       symbolCount: src.symbolCount,
+      ...(src.displayTitle ? { displayTitle: src.displayTitle } : {}),
       ...(src.unsplittable ? { unsplittable: true } : {}),
     };
   }

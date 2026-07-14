@@ -14,6 +14,7 @@ import {
   SPLIT_AXIS_DISABLED,
   classifyPathRole,
   classifyModuleRole,
+  applyRefinedDisplayTitles,
 } from "./modules.js";
 import type { ExtractedImport } from "./imports.js";
 import type { Module } from "./modules.js";
@@ -829,5 +830,58 @@ describe("modules W — path→id mapping table (revision #1)", () => {
     // And the 3 ids are globally unique.
     const ids = new Set(out.map((m) => m.id));
     expect(ids.size).toBe(3);
+  });
+});
+
+describe("modules — advisory stage-2 display titles", () => {
+  const modules: Module[] = [
+    { id: "providers", paths: ["src/providers/index.ts"], symbolCount: 1 },
+    { id: "batch", paths: ["src/batch/index.ts"], symbolCount: 1 },
+  ];
+
+  it("accepts distinct concise responsibility titles without changing identity", () => {
+    const result = applyRefinedDisplayTitles(modules, [
+      { id: "providers", displayTitle: "Provider adapters and presets" },
+      { id: "batch", displayTitle: "Batch orchestration and recovery" },
+    ]);
+    expect(result.map(({ id, paths, displayTitle }) => ({ id, paths, displayTitle }))).toEqual([
+      { id: "providers", paths: ["src/providers/index.ts"], displayTitle: "Provider adapters and presets" },
+      { id: "batch", paths: ["src/batch/index.ts"], displayTitle: "Batch orchestration and recovery" },
+    ]);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["malformed", 42],
+    ["multiline", "Provider adapters\nand presets"],
+    ["stable id", "providers"],
+    ["generic", "module"],
+  ])("silently omits a %s title", (_case, displayTitle) => {
+    const result = applyRefinedDisplayTitles(modules, [
+      { id: "providers", displayTitle },
+      { id: "batch", displayTitle: "Batch orchestration and recovery" },
+    ]);
+    expect(result[0]?.displayTitle).toBeUndefined();
+    expect(result[1]?.displayTitle).toBe("Batch orchestration and recovery");
+  });
+
+  it("omits every member of a duplicate normalized-title group", () => {
+    const result = applyRefinedDisplayTitles(modules, [
+      { id: "providers", displayTitle: "Shared Responsibilities" },
+      { id: "batch", displayTitle: "shared responsibilities" },
+    ]);
+    expect(result.every((module) => module.displayTitle === undefined)).toBe(true);
+  });
+
+  it("is deterministic under candidate reordering and does not mutate modules", () => {
+    const snapshot = structuredClone(modules);
+    const candidates = [
+      { id: "providers", displayTitle: "Provider adapters and presets" },
+      { id: "batch", displayTitle: "Batch orchestration and recovery" },
+    ];
+    expect(applyRefinedDisplayTitles(modules, [...candidates].reverse())).toEqual(
+      applyRefinedDisplayTitles(modules, candidates),
+    );
+    expect(modules).toEqual(snapshot);
   });
 });

@@ -48,6 +48,8 @@ import {
   ExactPartitionError,
   assertUniqueModuleIds,
   DuplicateModuleIdError,
+  applyRefinedDisplayTitles,
+  classifyModuleRole,
   type Module,
 } from "./modules.js";
 import { collectImports } from "./imports.js";
@@ -832,7 +834,11 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
           byStage: byStageAcc,
           byModule: moduleUsage,
-          modulesRefined: modules.map((m) => ({ id: m.id, paths: m.paths })),
+          modulesRefined: modules.map((m) => ({
+            id: m.id,
+            paths: m.paths,
+            ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
+          })),
           tasksDone: cb.done,
           tasksFailed: cb.fails,
         });
@@ -849,7 +855,11 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
           byStage: byStageAcc,
           byModule: moduleUsage,
-          modulesRefined: modules.map((m) => ({ id: m.id, paths: m.paths })),
+          modulesRefined: modules.map((m) => ({
+            id: m.id,
+            paths: m.paths,
+            ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
+          })),
           tasksDone: cb.done,
           tasksFailed: cb.fails,
         });
@@ -887,7 +897,11 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
       byStage: byStageAcc,
       byModule: moduleUsage,
-      modulesRefined: modules.map((m) => ({ id: m.id, paths: m.paths })),
+      modulesRefined: modules.map((m) => ({
+        id: m.id,
+        paths: m.paths,
+        ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
+      })),
       tasksDone: cb.done,
       tasksFailed: cb.fails,
     });
@@ -1125,6 +1139,7 @@ function validateRefinedModules(
   const ids = new Set<string>();
   const pathToModule = new Map<string, string>();
   const cleanModules: Module[] = [];
+  const displayTitleCandidates: Array<{ id: string; displayTitle?: unknown }> = [];
   for (const m of parsed.modules) {
     if (!m || typeof m !== "object") {
       return {
@@ -1133,7 +1148,7 @@ function validateRefinedModules(
         errorMessage: "module entry is not an object",
       };
     }
-    const obj = m as { id?: unknown; paths?: unknown };
+    const obj = m as { id?: unknown; paths?: unknown; displayTitle?: unknown };
     if (typeof obj.id !== "string" || obj.id === "") {
       return {
         accepted: false,
@@ -1149,6 +1164,7 @@ function validateRefinedModules(
       };
     }
     ids.add(obj.id);
+    displayTitleCandidates.push({ id: obj.id, displayTitle: obj.displayTitle });
     if (!Array.isArray(obj.paths) || obj.paths.some((p) => typeof p !== "string")) {
       return {
         accepted: false,
@@ -1221,7 +1237,10 @@ function validateRefinedModules(
     };
   }
 
-  return { accepted: true, modules: cleanModules };
+  return {
+    accepted: true,
+    modules: applyRefinedDisplayTitles(cleanModules, displayTitleCandidates),
+  };
 }
 
 async function collectAllImports(
@@ -1881,7 +1900,10 @@ async function attemptStage4Generation(
   }
 
   // Validate against closed key list
-  const validation = validateStage4Artifact(normalize.content, ctx.closedKeyList);
+  const validation = validateStage4Artifact(normalize.content, ctx.closedKeyList, {
+    moduleId: opts.module.id,
+    moduleRole: classifyModuleRole(opts.module),
+  });
   if (!validation.ok) {
     return {
       usageEntry,
@@ -2046,7 +2068,7 @@ function finalizeRun(
     totals: StageUsage;
     byStage: Record<string, StageUsage>;
     byModule: BatchRunResult["byModule"];
-    modulesRefined: Array<{ id: string; paths: string[] }>;
+    modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }>;
     tasksDone: number;
     tasksFailed: number;
   },

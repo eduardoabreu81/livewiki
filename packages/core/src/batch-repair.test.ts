@@ -106,6 +106,19 @@ function makeValidPage(closedKeyList: string[]): string {
     "",
     "# test",
     "",
+    "This page documents the module's indexed responsibilities.",
+    "",
+    "## When to use this page",
+    "",
+    "- Review this module's behavior.",
+    "- Change this module's implementation.",
+    "",
+    "## How it fits",
+    "",
+    "This module provides one part of the repository implementation.",
+    "",
+    "## Details",
+    "",
     `<!-- lw:anchors ${closedKeyList.join(" ")} -->`,
     "",
     "Body.",
@@ -438,6 +451,48 @@ describe("batch X — repair success (Criterion #6)", () => {
     expect(result.status).toBe("completed");
     expect(result.failures).toHaveLength(0);
   });
+
+  it("repairs a missing page opening through its mechanical ACTION", async () => {
+    const keys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const valid = makeValidPage(keys);
+    const invalid = valid.replace(
+      /This page documents[\s\S]*?This module provides one part of the repository implementation\.\n\n/,
+      "",
+    );
+    llm.responses = [invalid, valid];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 1,
+    });
+    expect(result.status).toBe("completed");
+    expect(llm.callLog[1]?.user).toMatch(/missing_page_opening.*ACTION: replace the opening/s);
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.[0]?.errors.map((error) => error.code)).toContain("missing_page_opening");
+    expect(checkpoint.diagnosticHistory?.[1]?.outcome).toBe("success");
+  });
+
+  it("repairs a product title equal to the module ID through its mechanical ACTION", async () => {
+    const keys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const valid = makeValidPage(keys);
+    llm.responses = [valid.replace("title: test", "title: auth"), valid];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 1,
+    });
+    expect(result.status).toBe("completed");
+    expect(llm.callLog[1]?.user).toMatch(/title_equals_module_id.*ACTION: replace the frontmatter title and H1/s);
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.[0]?.errors.map((error) => error.code)).toContain("title_equals_module_id");
+    expect(checkpoint.diagnosticHistory?.[1]?.outcome).toBe("success");
+  });
 });
 
 describe("stage-4 per-attempt diagnostics", () => {
@@ -666,7 +721,8 @@ describe("stage-4 per-attempt diagnostics", () => {
     const checkpoint = await readStage4Checkpoint(repoRoot);
     const diagnostic = checkpoint.diagnosticHistory?.[0];
     expect(diagnostic?.errors).toHaveLength(DIAGNOSTIC_MAX_ERRORS);
-    const expectedValidationErrors = fakeKeys.length * 2 + 2;
+    // Existing anchor/coverage errors plus the new single structural-opening error.
+    const expectedValidationErrors = fakeKeys.length * 2 + 3;
     expect(diagnostic?.truncatedErrorCount).toBe(
       expectedValidationErrors - DIAGNOSTIC_MAX_ERRORS,
     );
@@ -1083,7 +1139,7 @@ describe("batch X — owner: human is untouchable (Criterion #8)", () => {
     await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"), { recursive: true });
     const humanPage = [
       "---",
-      "title: auth",
+      "title: Authentication responsibilities",
       "owner: human",
       "---",
       "",
@@ -1675,7 +1731,20 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
       "  - src/auth/login.ts#invented-anchor-not-in-closed-list",
       "---",
       "",
-      "# auth",
+      "# Authentication responsibilities",
+      "",
+      "This page documents authentication behavior.",
+      "",
+      "## When to use this page",
+      "",
+      "- Review authentication behavior.",
+      "- Change authentication implementation.",
+      "",
+      "## How it fits",
+      "",
+      "This module provides authentication within the repository.",
+      "",
+      "## Details",
       "",
       validMarker,
       "",
@@ -1764,13 +1833,26 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
 
     const nearMiss = [
       "---",
-      "title: auth",
+      "title: Authentication responsibilities",
       "owner: generated",
       "anchors:",
       ...closedKeys.map((key) => `  - ${key}`),
       "---",
       "",
-      "# auth",
+      "# Authentication responsibilities",
+      "",
+      "This page documents authentication behavior.",
+      "",
+      "## When to use this page",
+      "",
+      "- Review authentication behavior.",
+      "- Change authentication implementation.",
+      "",
+      "## How it fits",
+      "",
+      "This module provides authentication within the repository.",
+      "",
+      "## Details",
       "",
       validMarker,
       "",
@@ -2302,5 +2384,82 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       undefined,
     ]);
     expectJoinedAttempts(checkpoint);
+  });
+});
+
+describe("Lot N — stage-2 display title plumbing", () => {
+  it("carries an accepted title into stage 4, the run summary, Tasks, and Overview", async () => {
+    const title = "Authentication session responsibilities";
+    const validPage = makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"])
+      .replace("title: test", `title: ${title}`)
+      .replace("# test", `# ${title}`);
+    llm.responses = [
+      JSON.stringify({
+        modules: [{
+          id: "auth",
+          paths: ["src/auth/login.ts"],
+          displayTitle: title,
+        }],
+      }),
+      validPage,
+    ];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: false,
+      skipManifestWrite: true,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(2);
+    expect(llm.callLog[1]?.user).toContain(`# Suggested display title (presentation only; improve it if the source supports a clearer responsibility): ${title}`);
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), { readonly: true });
+    try {
+      const row = db.prepare("SELECT summary_json FROM batch_runs ORDER BY id DESC LIMIT 1").get() as { summary_json: string };
+      const summary = JSON.parse(row.summary_json) as {
+        modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }>;
+      };
+      expect(summary.modulesRefined).toEqual([{
+        id: "auth",
+        paths: ["src/auth/login.ts"],
+        displayTitle: title,
+      }]);
+    } finally {
+      db.close();
+    }
+
+    expect(await safeIo.readText(repoRoot, "livewiki/tasks.md")).toContain(`[${title}](auth.md)`);
+    expect(await safeIo.readText(repoRoot, "livewiki/architecture/overview.md")).toContain(`### ${title}`);
+  });
+
+  it("does not reject an exact partition when displayTitle is malformed", async () => {
+    llm.responses = [
+      JSON.stringify({
+        modules: [{ id: "auth", paths: ["src/auth/login.ts"], displayTitle: 42 }],
+      }),
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: false,
+      skipManifestWrite: true,
+    });
+    expect(result.status).toBe("completed");
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), { readonly: true });
+    try {
+      const stage2 = db.prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 2").get() as { checkpoint_json: string };
+      expect(JSON.parse(stage2.checkpoint_json).error).toBeUndefined();
+      const run = db.prepare("SELECT summary_json FROM batch_runs ORDER BY id DESC LIMIT 1").get() as { summary_json: string };
+      expect(JSON.parse(run.summary_json).modulesRefined[0].displayTitle).toBeUndefined();
+    } finally {
+      db.close();
+    }
   });
 });

@@ -219,7 +219,20 @@ anchors:
   - src/auth.ts#logout
   - src/auth.ts#validate
 ---
-# auth
+# Authentication responsibilities
+
+This page documents authentication behavior.
+
+## When to use this page
+
+- Review authentication behavior.
+- Change authentication implementation.
+
+## How it fits
+
+This module provides authentication within the repository.
+
+## Details
 
 <!-- lw:anchors src/auth.ts#login -->
 
@@ -350,7 +363,18 @@ anchors:
   - src/auth.ts#logout
   - src/auth.ts#validate
 ---
-# tools
+# Tool marker scanning
+
+This page documents marker scanning behavior.
+
+## When to use this page
+
+- Review marker recognition.
+- Change marker scanning.
+
+## How it fits
+
+This tooling module validates generated documentation artifacts.
 
 ## Marker scanning
 <!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
@@ -412,7 +436,18 @@ anchors:
   - src/auth.ts#logout
   - src/auth.ts#validate
 ---
-# auth
+# Authentication coverage
+
+This page documents authentication coverage.
+
+## When to use this page
+
+- Review authentication coverage.
+- Change authentication behavior.
+
+## How it fits
+
+This module provides authentication within the repository.
 
 ## Coverage
 <!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
@@ -511,7 +546,20 @@ owner: generated
 anchors:
   - src/auth.ts#login
 ---
-# x
+# Authentication responsibilities
+
+This page documents authentication behavior.
+
+## When to use this page
+
+- Review authentication behavior.
+- Change authentication implementation.
+
+## How it fits
+
+This module provides authentication within the repository.
+
+## Details
 
 <!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
 
@@ -657,7 +705,20 @@ anchors:
   - src/auth.ts#logout
   - src/auth.ts#validate
 ---
-# x
+# Authentication responsibilities
+
+This page documents authentication behavior.
+
+## When to use this page
+
+- Review authentication behavior.
+- Change authentication implementation.
+
+## How it fits
+
+This module provides authentication within the repository.
+
+## Details
 
 <!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
 
@@ -830,6 +891,70 @@ Everything here is fully described, nothing pending.
       const r = validateStage4Artifact(art, closedKeys);
       expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(false);
     });
+  });
+});
+
+describe("artifact.validateStage4Artifact — Lot N opening and semantic title", () => {
+  const key = "src/auth.ts#login";
+  const page = (title = "Authentication responsibilities", opening?: string) => `---
+title: ${title}
+owner: generated
+anchors:
+  - ${key}
+---
+
+${opening ?? `# ${title}
+
+This page documents authentication behavior.
+
+## When to use this page
+
+- Review authentication behavior.
+- Change authentication implementation.
+
+## How it fits
+
+This module provides authentication within the repository.`}
+
+## Details
+
+<!-- lw:anchors ${key} -->
+
+The indexed function handles the documented operation.
+`;
+
+  it("accepts the complete opening before the first anchored section", () => {
+    expect(validateStage4Artifact(page(), [key]).errors).toEqual([]);
+  });
+
+  it.each([
+    ["missing H1", "This page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n\n## How it fits\n\nThis module provides authentication."],
+    ["out of order", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## How it fits\n\nThis module provides authentication.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior."],
+    ["too few bullets", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n\n## How it fits\n\nThis module provides authentication."],
+    ["too many bullets", "# Authentication responsibilities\n\nThis page documents authentication behavior.\n\n## When to use this page\n\n- Review behavior.\n- Change behavior.\n- Diagnose behavior.\n- Test behavior.\n- Trace behavior.\n\n## How it fits\n\nThis module provides authentication."],
+  ])("reports one structural code for %s", (_name, opening) => {
+    const errors = validateStage4Artifact(page(undefined, opening), [key]).errors;
+    expect(errors.filter((error) => error.code === "missing_page_opening")).toHaveLength(1);
+  });
+
+  it("rejects an exact product title/id match only when context is supplied", () => {
+    const withoutContext = validateStage4Artifact(page("auth"), [key]);
+    expect(withoutContext.errors.some((error) => error.code === "title_equals_module_id")).toBe(false);
+
+    const withContext = validateStage4Artifact(page("auth"), [key], {
+      moduleId: "auth",
+      moduleRole: "product",
+    });
+    expect(withContext.errors).toContainEqual(expect.objectContaining({
+      code: "title_equals_module_id",
+      location: "frontmatter",
+      offending: "auth",
+    }));
+  });
+
+  it.each(["fixture", "tooling", "docs"] as const)("exempts the %s role", (moduleRole) => {
+    const result = validateStage4Artifact(page("auth"), [key], { moduleId: "auth", moduleRole });
+    expect(result.errors.some((error) => error.code === "title_equals_module_id")).toBe(false);
   });
 });
 

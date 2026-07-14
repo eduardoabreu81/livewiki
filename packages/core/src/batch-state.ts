@@ -247,7 +247,7 @@ export interface BatchRunSummary {
   tasksFailed: number;
   tasksPending: number;
   /** Lista final de módulos (pós-refinamento). Null se ainda não foi gravado. */
-  modulesRefined: Array<{ id: string; paths: string[] }> | null;
+  modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }> | null;
 }
 
 /** Módulo lightweight (sem symbolCount) pra serializar no summary_json. */

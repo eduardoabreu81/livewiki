@@ -175,6 +175,11 @@ Every module has a presentation-only `displayTitle`. The deterministic fallback
 uses the shortest unique directory context plus any split ordinal (for example,
 `Core source — part 3 of 5`) and is never merely the raw module id. An accepted
 module page's frontmatter title may replace the fallback for presentation.
+Stage 4 must emit a concise, human-meaningful responsibility title and must not
+use the stable `Module.id` alone as the product-page title. Stage 2 may suggest
+an optional `displayTitle` independently of `id`; a missing, malformed,
+duplicate, or low-quality suggestion degrades silently to the deterministic
+fallback and never rejects or changes an otherwise exact path partition.
 `displayTitle` has **no role** in:
 
 - the page filename (`livewiki/<module.id>.md`);
@@ -185,6 +190,33 @@ module page's frontmatter title may replace the fallback for presentation.
 - symbol keys, frontmatter anchor values, or section markers.
 
 `Module.id` remains the only structural identity for all of those surfaces.
+
+Every generated module page must begin, after frontmatter and before the first
+anchored implementation section, with this exact structural contract:
+
+```markdown
+# <human-meaningful title>
+
+<One sentence: what responsibility this page covers.>
+
+## When to use this page
+
+- <Verb-led task cue.>
+- <Verb-led task cue.>
+
+## How it fits
+
+<One short paragraph naming the module's role and its immediate repository
+context. No claim of a complete call graph.>
+```
+
+The opening contains two to four task bullets, each beginning with an action
+verb. It contains no `lw:anchors` marker; closed keys remain distributed
+exactly once among later anchored reference sections. It does not repeat the
+full path inventory, symbol table, or frontmatter anchors in prose, and it does
+not infer “entry point” status from symbol count. Fixtures, tooling,
+benchmarks, and documentation pages use honest auxiliary task context rather
+than claiming product prominence.
 
 Architecture overview remains the complete inventory hub, grouped by module
 role. Each module card shows the human display title first, a separately labeled
@@ -301,6 +333,11 @@ may contain an unverified page requiring operator inspection.
    the full heuristic and does **not** abort the batch. The pre-stage-4
    partition assert compares executable modules to the original indexed
    `filePaths`, never to a post-refine subset.
+   A refined module may also carry an optional presentation-only
+   `displayTitle`. Missing, malformed, duplicate, or low-quality title values
+   are discarded without rejecting the refined module partition; the
+   deterministic title fallback remains authoritative when no suggestion is
+   accepted. `--no-refine` does not use this channel.
    Module IDs are deterministic, stable slugs. A unique directory leaf keeps
    its short ID; colliding leaves use the shortest unique path suffix
    (`core-src`, `cli-src`, `mcp-src`, expanding only when necessary). Order:
@@ -350,12 +387,43 @@ copied into the artifact. Before writing, livewiki:
   heading, or end of page (`empty_section`);
 - rejects unclosed fenced code blocks or inline-code spans
   (`unclosed_markdown`) and rejects `TODO`/`TBD` placeholders in generated
-  prose outside code and manual blocks (`todo_marker_present`).
+  prose outside code and manual blocks (`todo_marker_present`);
+- rejects an absent or out-of-order required page opening before the first real
+  section marker (`missing_page_opening`). This single repairable code checks
+  only the H1, responsibility paragraph, ordered `When to use this page`
+  section with two to four bullets, and ordered `How it fits` paragraph. It
+  makes no semantic or prose-quality judgment; and
+- rejects `title_equals_module_id` when a **product** module's frontmatter
+  `title` exactly equals its stable `Module.id`. Fixture, tooling/benchmark,
+  and documentation modules are exempt. The code is repairable and never
+  changes filenames, targets, IDs, partition validation, or fallback titles.
 
   This validation produces structured error codes and details for correction.
   It does not weaken the repository-wide `verify` contract. Stage-4 source
   context is truncated with a **fair per-file share** of the char budget so
   later module paths are not starved of local code context.
+
+Stage-4 initial and repair prompts apply these factual-precision rules:
+
+> When a section asserts behavior of a named function or method and the symbols
+> table supplies a non-empty signature, copy that signature byte-for-byte from
+> the symbols table into inline code or a fenced code block in the same section
+> before the behavioral explanation. Do not reconstruct, normalize, shorten, or
+> “improve” it. One literal signature covers subsequent claims about that symbol
+> within the section. If the table has no signature, do not invent one; limit
+> the prose to facts visible in the supplied source and identify the symbol by
+> its exact closed-list key.
+
+> When the supplied source visibly contains a material `throw`, `catch`,
+> fallback, rollback, early return, or fail-open/fail-closed branch for the
+> documented symbol, describe that branch or explicitly scope the prose to the
+> normal path. Never use “always”, “guarantees”, “mandatory”, or equivalent
+> absolute language while omitting a visible exception. If the relevant source
+> is truncated, say that the excerpt does not establish exhaustive behavior.
+
+These are prompt and output-fixture requirements, not semantic validators.
+No signature-quotation or branch-completeness code is added to artifact
+validation or `verify`.
 
 Adapters normalize provider completion signals as `complete`, `length`,
 `incomplete`, or `unknown` and preserve the raw provider reason in the task

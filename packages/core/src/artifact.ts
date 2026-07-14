@@ -58,6 +58,7 @@
 
 import { parseFrontmatter, getAnchors, type Frontmatter } from "./frontmatter.js";
 import type { ArtifactValidationError, ArtifactValidationCode } from "./prompts.js";
+import type { PathRole } from "./modules.js";
 import {
   maskCodeSpans,
   maskCodeSpansPreservingLength,
@@ -75,6 +76,12 @@ export interface NormalizeResult {
 export interface ValidateResult {
   ok: boolean;
   errors: ArtifactValidationError[];
+}
+
+/** Optional read-only facts for validation rules that depend on module identity. */
+export interface Stage4ValidationContext {
+  readonly moduleId: string;
+  readonly moduleRole: PathRole;
 }
 
 /** Regex for a complete reasoning block: from `<think>` to `</think>`. */
@@ -185,6 +192,7 @@ export function normalizeStage4Artifact(raw: string): NormalizeResult {
 export function validateStage4Artifact(
   artifact: string,
   closedKeyList: ReadonlyArray<string>,
+  context?: Readonly<Stage4ValidationContext>,
 ): ValidateResult {
   const errors: ArtifactValidationError[] = [];
   const closedSet = new Set(closedKeyList);
@@ -236,6 +244,22 @@ export function validateStage4Artifact(
             `owner is "${String(ownerVal)}"; stage-4 must write exactly "owner: generated"`,
             "frontmatter",
             typeof ownerVal === "string" ? ownerVal : undefined,
+          ),
+        );
+      }
+    }
+
+    // Presentation validation is intentionally context-gated. Existing callers
+    // that cannot provide module identity retain the pre-Lot-N behavior.
+    if (context?.moduleRole === "product") {
+      const title = fm["title"];
+      if (typeof title === "string" && title === context.moduleId) {
+        errors.push(
+          err(
+            "title_equals_module_id",
+            `product page title "${title}" exactly equals its stable module ID; use a human responsibility title`,
+            "frontmatter",
+            title,
           ),
         );
       }
@@ -302,6 +326,25 @@ export function validateStage4Artifact(
   const sectionMatches = [...markerScanBody.matchAll(sectionRe)].filter(
     (m) => m.index !== undefined && m[1] !== undefined,
   );
+
+  // The human opening is structural, not editorially scored. Check only the
+  // required block order and cardinalities before the first anchored section.
+  const firstSectionMarker = sectionMatches[0];
+  const firstAnchoredHeading = firstSectionMarker
+    ? lastHeadingBefore(headingMatches, firstSectionMarker.index!)
+    : null;
+  const openingEnd = firstAnchoredHeading?.offset ?? firstSectionMarker?.index ?? markerScanBody.length;
+  if (!hasRequiredPageOpening(markerScanBody.slice(0, openingEnd))) {
+    errors.push(
+      err(
+        "missing_page_opening",
+        "required page opening is missing or out of order before the first anchored implementation section",
+        "body",
+        "H1 → responsibility sentence → When to use this page (2-4 bullets) → How it fits paragraph",
+      ),
+    );
+  }
+
   /** Keys seen in section markers (for cross-section duplicate detection). */
   const sectionKeysSeen = new Set<string>();
   for (const m of sectionMatches) {
@@ -499,6 +542,53 @@ function hasRealProse(text: string): boolean {
     .split("\n")
     .map((l) => l.trim())
     .some((l) => l.length > 0 && !/^(TODO|TBD)\b/i.test(l));
+}
+
+/** Structural-only recognizer for the required page opening. */
+function hasRequiredPageOpening(text: string): boolean {
+  const lines = text.replace(/^\s*\n/, "").split("\n");
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+  if (lines.length === 0 || !/^#\s+\S/.test(lines[0]!.trim())) return false;
+
+  const whenIndex = lines.findIndex((line, index) =>
+    index > 0 && /^##\s+When to use this page\s*$/.test(line.trim()),
+  );
+  if (whenIndex < 0) return false;
+
+  const responsibility = lines.slice(1, whenIndex);
+  if (!isSingleProseParagraph(responsibility)) return false;
+
+  const howIndex = lines.findIndex((line, index) =>
+    index > whenIndex && /^##\s+How it fits\s*$/.test(line.trim()),
+  );
+  if (howIndex < 0) return false;
+
+  const taskLines = lines
+    .slice(whenIndex + 1, howIndex)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (taskLines.length < 2 || taskLines.length > 4) return false;
+  if (!taskLines.every((line) => /^[-*+]\s+\p{L}/u.test(line))) return false;
+
+  return isSingleProseParagraph(lines.slice(howIndex + 1));
+}
+
+function isSingleProseParagraph(lines: ReadonlyArray<string>): boolean {
+  const nonblank = lines.map((line) => line.trim()).filter(Boolean);
+  if (nonblank.length === 0) return false;
+  if (nonblank.some((line) => /^#{1,6}\s|^[-*+]\s|^<!--\s*lw:/.test(line))) return false;
+
+  let paragraphCount = 0;
+  let inParagraph = false;
+  for (const line of lines) {
+    if (line.trim() === "") {
+      inParagraph = false;
+    } else if (!inParagraph) {
+      paragraphCount += 1;
+      inParagraph = true;
+    }
+  }
+  return paragraphCount === 1;
 }
 
 function err(

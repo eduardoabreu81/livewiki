@@ -117,16 +117,33 @@ function defaultHandler(
   const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
   const closedKeys = closedKeysFromPrompt(req.user, moduleId);
   const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
+  const displayTitle = `${moduleId.replace(/-/g, " ")} responsibilities`;
+  const primaryTask = moduleId.includes("provider")
+    ? "Add or configure a provider."
+    : moduleId.includes("verify")
+      ? "Diagnose a failed verify."
+      : moduleId.includes("batch")
+        ? "Document a repository with the batch pipeline."
+        : `Review ${moduleId} behavior.`;
   const content = `---
-title: ${moduleId}
+title: ${displayTitle}
 owner: generated
 anchors:
 ${fmAnchors}
 ---
 
-# ${moduleId}
+# ${displayTitle}
 
-Documentation for ${moduleId}.
+This page documents the indexed responsibilities of ${moduleId}.
+
+## When to use this page
+
+- ${primaryTask}
+- Change ${moduleId} implementation.
+
+## How it fits
+
+This module provides one part of the repository implementation visible in the supplied source.
 
 ## Details
 <!-- lw:anchors ${closedKeys.join(" ")} -->
@@ -744,6 +761,52 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
+  });
+
+  it("(N) full-stack Quickstart → Tasks routes reach provider and verify pages with compliant openings", async () => {
+    await writeCode(
+      "src/providers/index.ts",
+      "export function configureProvider() { return 'configured'; }\n",
+    );
+    await writeCode(
+      "src/batch/index.ts",
+      "export function documentRepository() { return 'documented'; }\n",
+    );
+    await writeCode(
+      "src/verify/index.ts",
+      "export function diagnoseVerify() { return 'diagnosed'; }\n",
+    );
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    stub.setHandler((req) => defaultHandler(req));
+
+    const result = await runCli([
+      "--json", "--repo", repoRoot, "init", "--batch", "--no-refine",
+    ], { ANTHROPIC_API_KEY: "stub-key" });
+    expect(result.status, result.stderr).toBe(0);
+
+    const quickstart = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/quickstart.md"), "utf8");
+    const tasks = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8");
+    expect(quickstart).toContain("[Tasks](tasks.md)");
+    expect(quickstart).toMatch(/## Document a repo[\s\S]*`livewiki init`[\s\S]*`livewiki init --batch`/);
+    expect(tasks).toContain("[providers responsibilities](providers.md)");
+    expect(tasks).toContain("- Add or configure a provider.");
+    expect(tasks).toContain("[verify responsibilities](verify.md)");
+    expect(tasks).toContain("- Diagnose a failed verify.");
+
+    for (const moduleId of ["providers", "batch", "verify"]) {
+      const page = await nodeFs.readFile(nodePath.join(repoRoot, `livewiki/${moduleId}.md`), "utf8");
+      const when = page.indexOf("## When to use this page");
+      const how = page.indexOf("## How it fits");
+      const marker = page.indexOf("<!-- lw:anchors ");
+      expect(when).toBeGreaterThan(0);
+      expect(how).toBeGreaterThan(when);
+      expect(marker).toBeGreaterThan(how);
+      expect(page).toContain(`src/${moduleId}/index.ts#`);
+    }
+
+    const verify = await runCli(["--json", "--repo", repoRoot, "verify"]);
+    expect(verify.status, verify.stderr).toBe(0);
+    expect(JSON.parse(verify.stdout).issues).toEqual([]);
   });
 
   it("(Q) critério 'batch completo' = verify exit 0 + zero issues (incluindo warnings)", async () => {

@@ -146,14 +146,27 @@ describe("batch-status — H6 backward compatibility (no diagnosticHistory)", ()
         return {
           content: [
             "---",
-            "title: auth",
+            "title: Authentication responsibilities",
             "owner: generated",
             "anchors:",
             "  - src/auth/login.ts#login",
             "  - src/auth/login.ts#logout",
             "---",
             "",
-            "# auth",
+            "# Authentication responsibilities",
+            "",
+            "This page documents authentication behavior.",
+            "",
+            "## When to use this page",
+            "",
+            "- Review authentication behavior.",
+            "- Change authentication implementation.",
+            "",
+            "## How it fits",
+            "",
+            "This module provides authentication within the repository.",
+            "",
+            "## Details",
             "",
             "<!-- lw:anchors src/auth/login.ts#login src/auth/login.ts#logout -->",
             "",
@@ -180,6 +193,33 @@ describe("batch-status — H6 backward compatibility (no diagnosticHistory)", ()
     expect(authTask!.diagnosticHistory).toBeDefined();
     expect(authTask!.diagnosticHistory).toHaveLength(1);
     expect(authTask!.diagnosticHistory![0]!.outcome).toBe("success");
+  });
+
+  it("loads an old summary_json whose refined modules have no displayTitle unchanged", async () => {
+    const legacySummary = {
+      totals: { inputTokens: 0, outputTokens: 0, costUsd: null, models: [], usageIncomplete: false },
+      byStage: {},
+      byModule: [],
+      tasksDone: 0,
+      tasksFailed: 0,
+      tasksPending: 0,
+      modulesRefined: [{ id: "auth", paths: ["src/auth/login.ts"] }],
+    };
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath);
+    let runId: number;
+    try {
+      const row = db.prepare(
+        "INSERT INTO batch_runs (started_at, finished_at, started_by, stage, config_json, status, summary_json) VALUES (?, ?, 'test', 4, '{}', 'completed', ?)",
+      ).run(Date.now(), Date.now(), JSON.stringify(legacySummary));
+      runId = Number(row.lastInsertRowid);
+    } finally {
+      db.close();
+    }
+
+    const report = await buildStatusReport(repoRoot, runId!);
+    expect(report.run.summary).toEqual(legacySummary);
+    expect(report.run.summary?.modulesRefined?.[0]).not.toHaveProperty("displayTitle");
   });
 });
 
@@ -241,14 +281,27 @@ describe("batch-status — JSON shape guard (additive field only)", () => {
         return {
           content: [
             "---",
-            "title: auth",
+            "title: Authentication responsibilities",
             "owner: generated",
             "anchors:",
             "  - src/auth/login.ts#login",
             "  - src/auth/login.ts#logout",
             "---",
             "",
-            "# auth",
+            "# Authentication responsibilities",
+            "",
+            "This page documents authentication behavior.",
+            "",
+            "## When to use this page",
+            "",
+            "- Review authentication behavior.",
+            "- Change authentication implementation.",
+            "",
+            "## How it fits",
+            "",
+            "This module provides authentication within the repository.",
+            "",
+            "## Details",
             "",
             "<!-- lw:anchors src/auth/login.ts#login src/auth/login.ts#logout -->",
             "",

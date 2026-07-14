@@ -31,6 +31,21 @@ export const DEFAULT_CONTEXT_TOKEN_BUDGET = 30_000;
 /** Limite default de tokens da resposta (Markdown gerado). */
 export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
 
+/** Shared stage-4 editorial contract. Initial and repair prompts must not drift. */
+export const PAGE_OPENING_PROMPT_RULES = [
+  `- After frontmatter and before the first anchored implementation section, open with this exact structure in order: an H1 human-meaningful title; exactly one sentence stating the page's responsibility; an H2 \`When to use this page\`; two to four task bullets that each begin with an action verb; an H2 \`How it fits\`; and one short paragraph naming the module's role and immediate repository context without claiming a complete call graph.`,
+  `- The frontmatter title and H1 must be a concise semantic responsibility title. For a product module, neither may be the stable module ID alone.`,
+  `- The opening contains no \`lw:anchors\` marker. Put every closed key exactly once in frontmatter and exactly once across later anchored implementation sections.`,
+  `- Do not repeat the full path inventory, symbol table, or frontmatter anchors in opening prose, and do not call a module an "entry point" merely because it has many symbols.`,
+  `- Give fixtures, tooling, benchmarks, and documentation honest task context instead of implying product prominence.`,
+] as const;
+
+export const LITERAL_SIGNATURE_PROMPT_RULE =
+  `- When a section asserts behavior of a named function or method and the symbols table supplies a non-empty signature, copy that signature byte-for-byte from the symbols table into inline code or a fenced code block in the same section before the behavioral explanation. Do not reconstruct, normalize, shorten, or "improve" it. One literal signature covers subsequent claims about that symbol within the section. If the table has no signature, do not invent one; limit the prose to facts visible in the supplied source and identify the symbol by its exact closed-list key.`;
+
+export const EXCEPTION_BRANCH_PROMPT_RULE =
+  `- When the supplied source visibly contains a material \`throw\`, \`catch\`, fallback, rollback, early return, or fail-open/fail-closed branch for the documented symbol, describe that branch or explicitly scope the prose to the normal path. Never use "always", "guarantees", "mandatory", or equivalent absolute language while omitting a visible exception. If the relevant source is truncated, say that the excerpt does not establish exhaustive behavior.`;
+
 /**
  * Neutralize livewiki control-marker syntax (`<!-- lw:anchors ... -->`,
  * `<!-- lw:manual ... -->`, closing `<!-- /lw:manual -->`, etc.) found
@@ -125,6 +140,9 @@ export function buildStage4Prompt(
     ``,
     `Output rules (strict):`,
     `- Markdown + frontmatter with: title, owner: generated, anchors (YAML list of closed keys).`,
+    ...PAGE_OPENING_PROMPT_RULES,
+    LITERAL_SIGNATURE_PROMPT_RULE,
+    EXCEPTION_BRANCH_PROMPT_RULE,
     `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
     `- NEVER invent a key. Anchor keys MUST be copied byte-for-byte from the closed list ONLY; NEVER use a placeholder or example token as a key — even when the documented source itself contains marker-like examples.`,
     `- An \`lw:anchors\` marker is NEVER abbreviated: write every key in full, one by one, separated by spaces. The characters "…" or "..." must never appear ANYWHERE inside a marker — not as a key, not as a list continuation — a marker containing either is rejected outright. If a section has many keys, list them all; there is no exception for long lists.`,
@@ -155,12 +173,17 @@ export function buildStage4Prompt(
     `- Empty page or reasoning-only output.`,
     `- The page is not a real Markdown page (e.g. just a fenced code block with no body).`,
     `- The page contains an lw:manual block (reserved for human content — only the orchestrator can re-inject existing ones).`,
+    `- The required page opening is missing or out of order.`,
+    `- A product page's frontmatter title exactly equals its stable module ID.`,
   ].join("\n");
 
   const userParts: string[] = [
     `# Language: ${language}`,
     ``,
     `# Module: ${module.id}`,
+    ...(module.displayTitle
+      ? [`# Suggested display title (presentation only; improve it if the source supports a clearer responsibility): ${module.displayTitle}`]
+      : []),
     `# Paths (${module.paths.length}): ${module.paths.join(", ")}`,
     `# Symbol count: ${module.symbolCount}`,
     ``,
@@ -234,6 +257,9 @@ export function buildRepairPrompt(
     `Your job: produce a corrected Markdown page that fixes every error listed below.`,
     `Hard constraints (same as the initial generation):`,
     `- Frontmatter: title, owner: generated, anchors list.`,
+    ...PAGE_OPENING_PROMPT_RULES,
+    LITERAL_SIGNATURE_PROMPT_RULE,
+    EXCEPTION_BRANCH_PROMPT_RULE,
     `- AUTHORITATIVE KEY SOURCE: the closed list is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line.`,
     `- Every anchor key in the page MUST be in the closed list. NEVER invent a key. NEVER keep placeholder tokens as keys.`,
     `- An \`lw:anchors\` marker is NEVER abbreviated: write every key in full, one by one, separated by spaces. The characters "…" or "..." must never appear ANYWHERE inside a marker — not as a key, not as a list continuation — a marker containing either is rejected outright. If a section has many keys, list them all; there is no exception for long lists.`,
@@ -296,6 +322,12 @@ export function buildRepairPrompt(
     if (e.code === "todo_marker_present") {
       line += ` — ACTION: remove the TODO/TBD text; write a concrete sentence about what is visible instead.`;
     }
+    if (e.code === "missing_page_opening") {
+      line += ` — ACTION: replace the opening after frontmatter with the complete required H1, one responsibility sentence, \`When to use this page\` with two to four verb-led bullets, and \`How it fits\` paragraph, in that order and before the first anchored section. Put no \`lw:anchors\` marker in the opening.`;
+    }
+    if (e.code === "title_equals_module_id") {
+      line += ` — ACTION: replace the frontmatter title and H1 with a concise human responsibility title. Keep the stable module ID only for structural identity and the output path.`;
+    }
     if (e.code === "truncated_by_token_limit" || e.code === "incomplete_generation") {
       line +=
         " — ACTION: rewrite the complete page concisely; include every required section and close all Markdown constructs.";
@@ -307,6 +339,9 @@ export function buildRepairPrompt(
     `# Language: ${language}`,
     ``,
     `# Module: ${module.id}`,
+    ...(module.displayTitle
+      ? [`# Suggested display title (presentation only; improve it if the source supports a clearer responsibility): ${module.displayTitle}`]
+      : []),
     `# Paths (${module.paths.length}): ${module.paths.join(", ")}`,
     ``,
     `# Closed list of canonical keys (AUTHORITATIVE — USE ONLY THESE; copy byte-for-byte):`,
@@ -346,6 +381,8 @@ export type ArtifactValidationCode =
   | "invalid_frontmatter"           // frontmatter present but didn't parse
   | "missing_owner"                 // frontmatter `owner:` line is absent
   | "wrong_owner"                   // owner is set but is not "generated"
+  | "missing_page_opening"          // required human opening is absent or out of order
+  | "title_equals_module_id"        // product title is exactly its structural module ID
   | "anchor_outside_closed_list"    // anchor in frontmatter or section marker
   | "duplicate_anchor"              // same key listed twice in FM or across section markers
   // Frontmatter and section markers
@@ -395,8 +432,9 @@ export function buildStage2RefinePrompt(
     ``,
     `Output rules (strict):`,
     `- Output JSON only. No prose. No markdown fences.`,
-    `- Schema: { "modules": [{ "id": "<slug>", "paths": ["<rel/path>", ...] }, ...] }`,
+    `- Schema: { "modules": [{ "id": "<slug>", "paths": ["<rel/path>", ...], "displayTitle": "<optional concise responsibility title>" }, ...] }`,
     `- You MAY rename modules, merge adjacent ones, or split large ones.`,
+    `- displayTitle is optional presentation metadata. When supplied, make it a concise human responsibility title and never the stable id alone. Omitting it is valid.`,
     `- Every original path must appear in EXACTLY one module's paths list.`,
     `- "id" must be a valid slug (lowercase, alphanumeric + hyphens).`,
     `- Do not invent paths. Do not drop paths.`,

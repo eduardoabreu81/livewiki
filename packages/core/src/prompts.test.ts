@@ -9,6 +9,9 @@ import {
   neutralizeUntrustedControlMarkersExceptValidAnchors,
   DEFAULT_CONTEXT_TOKEN_BUDGET,
   DEFAULT_OUTPUT_TOKEN_BUDGET,
+  PAGE_OPENING_PROMPT_RULES,
+  LITERAL_SIGNATURE_PROMPT_RULE,
+  EXCEPTION_BRANCH_PROMPT_RULE,
 } from "./prompts.js";
 import type { Module } from "./modules.js";
 
@@ -693,6 +696,8 @@ describe("prompts — stage 2 refine", () => {
     const r = buildStage2RefinePrompt([sampleModule]);
     expect(r.system).toMatch(/"id"/);
     expect(r.system).toMatch(/"paths"/);
+    expect(r.system).toMatch(/"displayTitle"/);
+    expect(r.system).toMatch(/optional presentation metadata/);
   });
 
   it("regra 'every original path appears in EXACTLY one module'", () => {
@@ -708,6 +713,89 @@ describe("prompts — stage 2 refine", () => {
     const r = buildStage2RefinePrompt(mods);
     expect(r.user).toContain("auth");
     expect(r.user).toContain("utils");
+  });
+});
+
+describe("prompts — Lot N page opening and factual precision", () => {
+  const repairPrompt = () => buildRepairPrompt(
+    sampleModule,
+    ["src/auth.ts#login"],
+    "- src/auth.ts#login (function): function login(user: User): Session",
+    "function login(user: User) { try { return create(user); } catch { return fallback(user); } }",
+    "prior",
+    [],
+    60_000,
+    "en",
+  );
+
+  it("carries the identical opening contract in initial and repair prompts", () => {
+    const initial = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "symbols", "source");
+    const repair = repairPrompt();
+    for (const rule of PAGE_OPENING_PROMPT_RULES) {
+      expect(initial.system).toContain(rule);
+      expect(repair.system).toContain(rule);
+    }
+  });
+
+  it("requires literal signatures, no invention for empty signatures, and visible branches in both prompts", () => {
+    const initial = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "symbols", "source");
+    const repair = repairPrompt();
+    for (const prompt of [initial.system, repair.system]) {
+      expect(prompt).toContain(LITERAL_SIGNATURE_PROMPT_RULE);
+      expect(prompt).toContain("copy that signature byte-for-byte");
+      expect(prompt).toContain("If the table has no signature, do not invent one");
+      expect(prompt).toContain(EXCEPTION_BRANCH_PROMPT_RULE);
+      expect(prompt).toContain("explicitly scope the prose to the normal path");
+      expect(prompt).toContain("excerpt does not establish exhaustive behavior");
+    }
+  });
+
+  it("emits mechanical repair actions for both new structural codes", () => {
+    const repair = buildRepairPrompt(
+      sampleModule,
+      ["src/auth.ts#login"],
+      "symbols",
+      "source",
+      "prior",
+      [
+        { code: "missing_page_opening", message: "opening missing", location: "body" },
+        { code: "title_equals_module_id", message: "title equals id", location: "frontmatter", offending: "auth" },
+      ],
+      60_000,
+      "en",
+    );
+    expect(repair.user).toMatch(/missing_page_opening.*ACTION: replace the opening/s);
+    expect(repair.user).toMatch(/title_equals_module_id.*ACTION: replace the frontmatter title and H1/s);
+  });
+
+  it("fixture quotes a supplied signature byte-for-byte before behavior prose", () => {
+    const signature = "function login(user: User, options?: LoginOptions): Promise<Session>";
+    const symbolsTable = `- src/auth.ts#login (function): ${signature}`;
+    const fixtureOutput = [
+      "## Login behavior",
+      `\`${signature}\``,
+      "On the normal path, the function creates a session for the supplied user.",
+    ].join("\n\n");
+    expect(symbolsTable).toContain(signature);
+    expect(fixtureOutput).toContain(`\`${signature}\``);
+    expect(fixtureOutput.indexOf(signature)).toBeLessThan(fixtureOutput.indexOf("On the normal path"));
+  });
+
+  it("fixture with an empty symbol-table signature does not fabricate one", () => {
+    const symbolsTable = "- src/auth.ts#login (function): ";
+    const fixtureOutput = "The supplied source identifies `src/auth.ts#login`; the symbols table supplies no signature.";
+    expect(symbolsTable.endsWith(": ")).toBe(true);
+    expect(fixtureOutput).not.toMatch(/function\s+login\s*\(/);
+    expect(fixtureOutput).toContain("src/auth.ts#login");
+  });
+
+  it("fixture scopes normal-path prose and acknowledges a visible catch fallback", () => {
+    const source = "try { return createSession(user); } catch { return anonymousSession(); }";
+    const fixtureOutput = "On the normal path, the function returns the created session. If creation throws, the visible catch branch falls back to an anonymous session.";
+    expect(source).toContain("catch");
+    expect(fixtureOutput).toMatch(/normal path/i);
+    expect(fixtureOutput).toMatch(/catch branch falls back/i);
+    expect(fixtureOutput).not.toMatch(/\balways\b|\bguarantees\b|\bmandatory\b/i);
   });
 });
 

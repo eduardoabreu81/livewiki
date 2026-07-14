@@ -14,9 +14,11 @@ class MockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
   public callCount = 0;
+  public callLog: Array<{ system: string; user: string }> = [];
 
   async generate(req: import("./llm/types.js").GenerateRequest): Promise<GenerateResult> {
     this.callCount++;
+    this.callLog.push({ system: req.system, user: req.user });
     // Extrai o nome do módulo do user prompt (linha "# Module: <id>")
     const match = req.user.match(/# Module: ([^\s]+)/);
     const moduleId = match ? match[1] : "unknown";
@@ -24,15 +26,24 @@ class MockLlm implements LlmClient {
     const keyMatch = req.user.match(/^- (.+?#[\w.]+)$/m);
     const firstKey = keyMatch ? keyMatch[1] : `${moduleId}.ts#placeholder`;
     const content = `---
-title: ${moduleId}
+title: ${moduleId} responsibilities
 owner: generated
 anchors:
   - ${firstKey}
 ---
 
-# ${moduleId}
+# ${moduleId} responsibilities
 
-Documentation for ${moduleId}.
+This page documents the responsibilities of ${moduleId}.
+
+## When to use this page
+
+- Review ${moduleId} behavior.
+- Change ${moduleId} implementation.
+
+## How it fits
+
+This module provides part of the repository implementation described by the indexed source.
 
 ## Details
 <!-- lw:anchors ${firstKey} -->
@@ -97,6 +108,7 @@ describe("batch.runBatch — orquestrador end-to-end com mock LLM", () => {
     });
     // Mock só foi chamado pra stage 4 (1 módulo = 1 chamada). Sem etapa 2.
     expect(mockLlm.callCount - before).toBe(1);
+    expect(mockLlm.callLog.at(-1)?.user).not.toContain("# Suggested display title");
   });
 
   it("com LLM refine: etapa 2 faz 1 chamada adicional", async () => {
