@@ -1,0 +1,24 @@
+{
+  "overallGate": "FAIL",
+  "checks": {
+    "modulePageStructure": true,
+    "noMissingMmdLinks": true,
+    "quickstartUsesImportantSymbolsHeading": true,
+    "noBenchmarkHelpersInImportantSymbols": true,
+    "noDuplicateDiagramDeclarations": true,
+    "commandsMatchesProcessExitCodeImplementation": false,
+    "noTruncatedPageEndings": true
+  },
+  "modulePagesChecked": 12,
+  "failedPageChecks": [],
+  "missingMmdLinks": [],
+  "quickstartUsesImportantSymbols": true,
+  "quickstartUsesKeyConcepts": false,
+  "benchmarkHelpersInImportantSymbols": [],
+  "duplicateDiagramDeclarations": [],
+  "commandsContradiction": [
+    "`registerInit(program)` attaches `livewiki init`. Options: `--batch` (run the full LLM pipeline), `--plan` (show the heuristic module plan; no LLM, no writes), `--no-refine` (skip LLM refinement of stage 2 — effective only with `--batch`). The action resolves the repo root, translates Commander's `--no-refine` into the `noRefine: true` flag the core expects (`opts.refine === false`, never `opts.noRefine`), invokes `runInit`, and forwards the result to `emit`. The batch exit code is propagated to `process.exitCode` only for the human path; `--json` preserves exit 0 per batch CLI convention. Errors are reported on stderr and `process.exitCode = 1` is set so the event loop can drain (avoids the libuv `STATUS_STACK_BUFFER_OVERRUN` that abrupt `process.exit(1)` can trigger on Windows when async handles — fetch, SQLite WAL, watcher — are still open).",
+    "Global `--json` / `--repo` are read via `optsWithGlobals()`. Errors use `process.exitCode = 1` (not `process.exit(1)`) to keep libuv happy on Windows when async handles are open."
+  ],
+  "truncatedEndings": []
+}

@@ -1,0 +1,74 @@
+{
+  "runStatus": "aborted",
+  "tasksDone": 0,
+  "tasksFailed": 3,
+  "stage2": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "costUsd": null,
+    "models": [],
+    "usageIncomplete": false
+  },
+  "stage4": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "costUsd": null,
+    "models": [],
+    "usageIncomplete": true
+  },
+  "plannedModules": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-03",
+    "core-src-04",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "sample-ts-repo-src",
+    "scripts",
+    "tools"
+  ],
+  "pageIds": [],
+  "missingPages": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-03",
+    "core-src-04",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "sample-ts-repo-src",
+    "scripts",
+    "tools"
+  ],
+  "explosionIds": [],
+  "duplicatePageIds": [],
+  "declaredAnchorCount": 0,
+  "pageInternalDupAnchors": [],
+  "verify": {
+    "ok": true,
+    "pagesChecked": 2,
+    "issues": []
+  },
+  "failures": [
+    {
+      "module": "core-src-02",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-02\" exhausted 3 LLM call(s) without producing a verified artifact. Last diagnostic: [llm_error] LLM openai-compat request failed (status 0): Failed after 3 attempts (last error: network"
+    },
+    {
+      "module": "core-src-03",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-03\" exhausted 3 LLM call(s) without producing a verified artifact. Last diagnostic: [llm_error] LLM openai-compat request failed (status 0): Failed after 3 attempts (last error: network"
+    },
+    {
+      "module": "core-src-04",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-04\" exhausted 3 LLM call(s) without producing a verified artifact. Last diagnostic: [llm_error] LLM openai-compat request failed (status 0): Failed after 3 attempts (last error: network"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "overallGate": "FAIL",
+  "checks": {
+    "modulePageStructure": false,
+    "noMissingMmdLinks": true,
+    "quickstartUsesImportantSymbolsHeading": false,
+    "noBenchmarkHelpersInImportantSymbols": true,
+    "noDuplicateDiagramDeclarations": true,
+    "commandsMatchesProcessExitCodeImplementation": true,
+    "noTruncatedPageEndings": true
+  },
+  "modulePagesChecked": 0,
+  "failedPageChecks": [],
+  "missingMmdLinks": [],
+  "quickstartUsesImportantSymbols": false,
+  "quickstartUsesKeyConcepts": false,
+  "benchmarkHelpersInImportantSymbols": [],
+  "duplicateDiagramDeclarations": [],
+  "commandsContradiction": [],
+  "truncatedEndings": []
+}

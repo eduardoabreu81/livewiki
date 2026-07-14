@@ -1,0 +1,93 @@
+{
+  "runStatus": "completed_with_failures",
+  "tasksDone": 11,
+  "tasksFailed": 2,
+  "stage2": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "costUsd": null,
+    "models": [],
+    "usageIncomplete": false
+  },
+  "stage4": {
+    "inputTokens": 323874,
+    "outputTokens": 57029,
+    "costUsd": null,
+    "models": [
+      "MiniMax-M3"
+    ],
+    "usageIncomplete": false
+  },
+  "plannedModules": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-03",
+    "core-src-04",
+    "core-src-05",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "sample-ts-repo-src",
+    "scripts",
+    "tools"
+  ],
+  "pageIds": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-04",
+    "core-src-05",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "sample-ts-repo-src",
+    "scripts"
+  ],
+  "missingPages": [
+    "core-src-03",
+    "tools"
+  ],
+  "explosionIds": [],
+  "duplicatePageIds": [],
+  "declaredAnchorCount": 333,
+  "plannedSymbols": 423,
+  "realDuplicateAnchors": [],
+  "verify": {
+    "ok": true,
+    "pagesChecked": 13,
+    "issues": []
+  },
+  "proxy": {
+    "calls": 23,
+    "prompt": 323874,
+    "completion": 57029,
+    "reasoning": 0,
+    "errors": 0
+  },
+  "gates": {
+    "statusCompleted": false,
+    "zeroFailed": false,
+    "allModulePages": false,
+    "noExplosion": true,
+    "noDupPageIds": true,
+    "verifyZero": true,
+    "noRealDuplicateAnchors": true,
+    "fullSymbolCoverage": false
+  },
+  "overallGate": "FAIL",
+  "failures": [
+    {
+      "module": "core-src-03",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-03\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [anchor_outside_closed_list, duplicate_anchor, duplicate_anchor, duplicate_anchor, duplicate_ancho"
+    },
+    {
+      "module": "tools",
+      "code": "repair_exhausted",
+      "msg": "task \"tools\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [anchor_outside_closed_list]\nattempt 2: incomplete -> incomplete_generation [incomplete_generation]\natte"
+    }
+  ]
+}

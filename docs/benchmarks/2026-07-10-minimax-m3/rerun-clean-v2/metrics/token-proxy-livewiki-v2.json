@@ -1,0 +1,1838 @@
+{
+  "label": "livewiki-v2",
+  "calls": 63,
+  "promptTokens": 348265,
+  "completionTokens": 82357,
+  "totalTokens": 430622,
+  "cachedPromptTokens": 8468,
+  "reasoningTokens": 0,
+  "callsWithoutUsage": 0,
+  "callsWithError": 0,
+  "updatedAt": "2026-07-10T22:08:25.368Z",
+  "callLog": [
+    {
+      "id": 1,
+      "startedAt": "2026-07-10T21:56:54.773Z",
+      "endedAt": "2026-07-10T21:56:58.294Z",
+      "durationMs": 3521,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 682,
+        "completionTokens": 333,
+        "totalTokens": 1015,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 1015,
+          "total_characters": 0,
+          "prompt_tokens": 682,
+          "completion_tokens": 333,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 2,
+      "startedAt": "2026-07-10T21:56:58.461Z",
+      "endedAt": "2026-07-10T21:57:09.394Z",
+      "durationMs": 10933,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4004,
+        "completionTokens": 1335,
+        "totalTokens": 5339,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5339,
+          "total_characters": 0,
+          "prompt_tokens": 4004,
+          "completion_tokens": 1335,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 3,
+      "startedAt": "2026-07-10T21:57:09.425Z",
+      "endedAt": "2026-07-10T21:57:22.077Z",
+      "durationMs": 12652,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3901,
+        "completionTokens": 1808,
+        "totalTokens": 5709,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5709,
+          "total_characters": 0,
+          "prompt_tokens": 3901,
+          "completion_tokens": 1808,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 4,
+      "startedAt": "2026-07-10T21:57:22.099Z",
+      "endedAt": "2026-07-10T21:57:24.960Z",
+      "durationMs": 2861,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 1044,
+        "completionTokens": 330,
+        "totalTokens": 1374,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 1374,
+          "total_characters": 0,
+          "prompt_tokens": 1044,
+          "completion_tokens": 330,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 5,
+      "startedAt": "2026-07-10T21:57:24.987Z",
+      "endedAt": "2026-07-10T21:57:35.758Z",
+      "durationMs": 10771,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 7315,
+        "completionTokens": 1489,
+        "totalTokens": 8804,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 8804,
+          "total_characters": 0,
+          "prompt_tokens": 7315,
+          "completion_tokens": 1489,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 6,
+      "startedAt": "2026-07-10T21:57:35.779Z",
+      "endedAt": "2026-07-10T21:57:51.123Z",
+      "durationMs": 15344,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 8372,
+        "completionTokens": 2187,
+        "totalTokens": 10559,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 10559,
+          "total_characters": 0,
+          "prompt_tokens": 8372,
+          "completion_tokens": 2187,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 7,
+      "startedAt": "2026-07-10T21:57:51.131Z",
+      "endedAt": "2026-07-10T21:58:13.903Z",
+      "durationMs": 22772,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 8719,
+        "completionTokens": 3226,
+        "totalTokens": 11945,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 11945,
+          "total_characters": 0,
+          "prompt_tokens": 8719,
+          "completion_tokens": 3226,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 8,
+      "startedAt": "2026-07-10T21:58:13.912Z",
+      "endedAt": "2026-07-10T21:58:29.137Z",
+      "durationMs": 15225,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 8655,
+        "completionTokens": 2020,
+        "totalTokens": 10675,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 10675,
+          "total_characters": 0,
+          "prompt_tokens": 8655,
+          "completion_tokens": 2020,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 9,
+      "startedAt": "2026-07-10T21:58:29.148Z",
+      "endedAt": "2026-07-10T21:58:40.319Z",
+      "durationMs": 11171,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2119,
+        "completionTokens": 962,
+        "totalTokens": 3081,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3081,
+          "total_characters": 0,
+          "prompt_tokens": 2119,
+          "completion_tokens": 962,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 10,
+      "startedAt": "2026-07-10T21:58:40.341Z",
+      "endedAt": "2026-07-10T21:58:51.675Z",
+      "durationMs": 11334,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3675,
+        "completionTokens": 1421,
+        "totalTokens": 5096,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5096,
+          "total_characters": 0,
+          "prompt_tokens": 3675,
+          "completion_tokens": 1421,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 11,
+      "startedAt": "2026-07-10T21:58:51.701Z",
+      "endedAt": "2026-07-10T21:59:07.293Z",
+      "durationMs": 15592,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 8579,
+        "completionTokens": 2174,
+        "totalTokens": 10753,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 10753,
+          "total_characters": 0,
+          "prompt_tokens": 8579,
+          "completion_tokens": 2174,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 12,
+      "startedAt": "2026-07-10T21:59:07.323Z",
+      "endedAt": "2026-07-10T21:59:12.804Z",
+      "durationMs": 5481,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2570,
+        "completionTokens": 974,
+        "totalTokens": 3544,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3544,
+          "total_characters": 0,
+          "prompt_tokens": 2570,
+          "completion_tokens": 974,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 13,
+      "startedAt": "2026-07-10T21:59:12.831Z",
+      "endedAt": "2026-07-10T21:59:21.092Z",
+      "durationMs": 8261,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 1872,
+        "completionTokens": 908,
+        "totalTokens": 2780,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 2780,
+          "total_characters": 0,
+          "prompt_tokens": 1872,
+          "completion_tokens": 908,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 14,
+      "startedAt": "2026-07-10T21:59:21.191Z",
+      "endedAt": "2026-07-10T21:59:43.960Z",
+      "durationMs": 22769,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 16956,
+        "completionTokens": 2489,
+        "totalTokens": 19445,
+        "cachedPromptTokens": 114,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 19445,
+          "total_characters": 0,
+          "prompt_tokens": 16956,
+          "completion_tokens": 2489,
+          "prompt_tokens_details": {
+            "cached_tokens": 114
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 15,
+      "startedAt": "2026-07-10T21:59:43.969Z",
+      "endedAt": "2026-07-10T22:00:19.456Z",
+      "durationMs": 35487,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 17276,
+        "completionTokens": 5037,
+        "totalTokens": 22313,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 22313,
+          "total_characters": 0,
+          "prompt_tokens": 17276,
+          "completion_tokens": 5037,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 16,
+      "startedAt": "2026-07-10T22:00:19.466Z",
+      "endedAt": "2026-07-10T22:00:46.241Z",
+      "durationMs": 26775,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 17268,
+        "completionTokens": 3639,
+        "totalTokens": 20907,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 20907,
+          "total_characters": 0,
+          "prompt_tokens": 17268,
+          "completion_tokens": 3639,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 17,
+      "startedAt": "2026-07-10T22:00:46.252Z",
+      "endedAt": "2026-07-10T22:00:53.508Z",
+      "durationMs": 7256,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4787,
+        "completionTokens": 1035,
+        "totalTokens": 5822,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5822,
+          "total_characters": 0,
+          "prompt_tokens": 4787,
+          "completion_tokens": 1035,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 18,
+      "startedAt": "2026-07-10T22:00:53.535Z",
+      "endedAt": "2026-07-10T22:01:07.381Z",
+      "durationMs": 13846,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2387,
+        "completionTokens": 1160,
+        "totalTokens": 3547,
+        "cachedPromptTokens": 114,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3547,
+          "total_characters": 0,
+          "prompt_tokens": 2387,
+          "completion_tokens": 1160,
+          "prompt_tokens_details": {
+            "cached_tokens": 114
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 19,
+      "startedAt": "2026-07-10T22:01:07.410Z",
+      "endedAt": "2026-07-10T22:01:16.646Z",
+      "durationMs": 9236,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2145,
+        "completionTokens": 779,
+        "totalTokens": 2924,
+        "cachedPromptTokens": 114,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 2924,
+          "total_characters": 0,
+          "prompt_tokens": 2145,
+          "completion_tokens": 779,
+          "prompt_tokens_details": {
+            "cached_tokens": 114
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 20,
+      "startedAt": "2026-07-10T22:01:16.674Z",
+      "endedAt": "2026-07-10T22:01:23.269Z",
+      "durationMs": 6595,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2437,
+        "completionTokens": 738,
+        "totalTokens": 3175,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3175,
+          "total_characters": 0,
+          "prompt_tokens": 2437,
+          "completion_tokens": 738,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 21,
+      "startedAt": "2026-07-10T22:01:23.300Z",
+      "endedAt": "2026-07-10T22:01:32.300Z",
+      "durationMs": 9000,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4603,
+        "completionTokens": 1116,
+        "totalTokens": 5719,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5719,
+          "total_characters": 0,
+          "prompt_tokens": 4603,
+          "completion_tokens": 1116,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 22,
+      "startedAt": "2026-07-10T22:01:32.310Z",
+      "endedAt": "2026-07-10T22:01:45.817Z",
+      "durationMs": 13507,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4864,
+        "completionTokens": 1762,
+        "totalTokens": 6626,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 6626,
+          "total_characters": 0,
+          "prompt_tokens": 4864,
+          "completion_tokens": 1762,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 23,
+      "startedAt": "2026-07-10T22:01:45.827Z",
+      "endedAt": "2026-07-10T22:01:55.226Z",
+      "durationMs": 9399,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4862,
+        "completionTokens": 1321,
+        "totalTokens": 6183,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 6183,
+          "total_characters": 0,
+          "prompt_tokens": 4862,
+          "completion_tokens": 1321,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 24,
+      "startedAt": "2026-07-10T22:01:55.235Z",
+      "endedAt": "2026-07-10T22:02:16.762Z",
+      "durationMs": 21527,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 6243,
+        "completionTokens": 2147,
+        "totalTokens": 8390,
+        "cachedPromptTokens": 114,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 8390,
+          "total_characters": 0,
+          "prompt_tokens": 6243,
+          "completion_tokens": 2147,
+          "prompt_tokens_details": {
+            "cached_tokens": 114
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 25,
+      "startedAt": "2026-07-10T22:02:16.796Z",
+      "endedAt": "2026-07-10T22:02:26.552Z",
+      "durationMs": 9756,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4333,
+        "completionTokens": 1089,
+        "totalTokens": 5422,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5422,
+          "total_characters": 0,
+          "prompt_tokens": 4333,
+          "completion_tokens": 1089,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 26,
+      "startedAt": "2026-07-10T22:02:26.563Z",
+      "endedAt": "2026-07-10T22:02:47.222Z",
+      "durationMs": 20659,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4606,
+        "completionTokens": 1970,
+        "totalTokens": 6576,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 6576,
+          "total_characters": 0,
+          "prompt_tokens": 4606,
+          "completion_tokens": 1970,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 27,
+      "startedAt": "2026-07-10T22:02:47.231Z",
+      "endedAt": "2026-07-10T22:03:00.158Z",
+      "durationMs": 12927,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4602,
+        "completionTokens": 1483,
+        "totalTokens": 6085,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 6085,
+          "total_characters": 0,
+          "prompt_tokens": 4602,
+          "completion_tokens": 1483,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 28,
+      "startedAt": "2026-07-10T22:03:00.167Z",
+      "endedAt": "2026-07-10T22:03:09.909Z",
+      "durationMs": 9742,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2995,
+        "completionTokens": 1228,
+        "totalTokens": 4223,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 4223,
+          "total_characters": 0,
+          "prompt_tokens": 2995,
+          "completion_tokens": 1228,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 29,
+      "startedAt": "2026-07-10T22:03:09.942Z",
+      "endedAt": "2026-07-10T22:03:20.101Z",
+      "durationMs": 10159,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2752,
+        "completionTokens": 1320,
+        "totalTokens": 4072,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 4072,
+          "total_characters": 0,
+          "prompt_tokens": 2752,
+          "completion_tokens": 1320,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 30,
+      "startedAt": "2026-07-10T22:03:20.110Z",
+      "endedAt": "2026-07-10T22:03:33.388Z",
+      "durationMs": 13278,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3257,
+        "completionTokens": 1015,
+        "totalTokens": 4272,
+        "cachedPromptTokens": null,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 4272,
+          "total_characters": 0,
+          "prompt_tokens": 3257,
+          "completion_tokens": 1015
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 31,
+      "startedAt": "2026-07-10T22:03:33.399Z",
+      "endedAt": "2026-07-10T22:03:42.758Z",
+      "durationMs": 9359,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3126,
+        "completionTokens": 993,
+        "totalTokens": 4119,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 4119,
+          "total_characters": 0,
+          "prompt_tokens": 3126,
+          "completion_tokens": 993,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 32,
+      "startedAt": "2026-07-10T22:03:42.768Z",
+      "endedAt": "2026-07-10T22:03:48.296Z",
+      "durationMs": 5528,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3187,
+        "completionTokens": 833,
+        "totalTokens": 4020,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 4020,
+          "total_characters": 0,
+          "prompt_tokens": 3187,
+          "completion_tokens": 833,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 33,
+      "startedAt": "2026-07-10T22:03:48.332Z",
+      "endedAt": "2026-07-10T22:03:57.346Z",
+      "durationMs": 9014,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 1961,
+        "completionTokens": 763,
+        "totalTokens": 2724,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 2724,
+          "total_characters": 0,
+          "prompt_tokens": 1961,
+          "completion_tokens": 763,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 34,
+      "startedAt": "2026-07-10T22:03:57.385Z",
+      "endedAt": "2026-07-10T22:04:24.429Z",
+      "durationMs": 27044,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 12325,
+        "completionTokens": 3761,
+        "totalTokens": 16086,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 16086,
+          "total_characters": 0,
+          "prompt_tokens": 12325,
+          "completion_tokens": 3761,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 35,
+      "startedAt": "2026-07-10T22:04:24.466Z",
+      "endedAt": "2026-07-10T22:04:40.901Z",
+      "durationMs": 16435,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 18575,
+        "completionTokens": 1905,
+        "totalTokens": 20480,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 20480,
+          "total_characters": 0,
+          "prompt_tokens": 18575,
+          "completion_tokens": 1905,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 36,
+      "startedAt": "2026-07-10T22:04:40.944Z",
+      "endedAt": "2026-07-10T22:04:53.586Z",
+      "durationMs": 12642,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 5399,
+        "completionTokens": 1497,
+        "totalTokens": 6896,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 6896,
+          "total_characters": 0,
+          "prompt_tokens": 5399,
+          "completion_tokens": 1497,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 37,
+      "startedAt": "2026-07-10T22:04:53.633Z",
+      "endedAt": "2026-07-10T22:04:59.866Z",
+      "durationMs": 6233,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2275,
+        "completionTokens": 744,
+        "totalTokens": 3019,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3019,
+          "total_characters": 0,
+          "prompt_tokens": 2275,
+          "completion_tokens": 744,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 38,
+      "startedAt": "2026-07-10T22:04:59.909Z",
+      "endedAt": "2026-07-10T22:05:12.379Z",
+      "durationMs": 12470,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2480,
+        "completionTokens": 1175,
+        "totalTokens": 3655,
+        "cachedPromptTokens": 114,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3655,
+          "total_characters": 0,
+          "prompt_tokens": 2480,
+          "completion_tokens": 1175,
+          "prompt_tokens_details": {
+            "cached_tokens": 114
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 39,
+      "startedAt": "2026-07-10T22:05:12.420Z",
+      "endedAt": "2026-07-10T22:05:20.218Z",
+      "durationMs": 7798,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4144,
+        "completionTokens": 883,
+        "totalTokens": 5027,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5027,
+          "total_characters": 0,
+          "prompt_tokens": 4144,
+          "completion_tokens": 883,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 40,
+      "startedAt": "2026-07-10T22:05:20.229Z",
+      "endedAt": "2026-07-10T22:05:28.430Z",
+      "durationMs": 8201,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4454,
+        "completionTokens": 960,
+        "totalTokens": 5414,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5414,
+          "total_characters": 0,
+          "prompt_tokens": 4454,
+          "completion_tokens": 960,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 41,
+      "startedAt": "2026-07-10T22:05:28.438Z",
+      "endedAt": "2026-07-10T22:05:35.855Z",
+      "durationMs": 7417,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4449,
+        "completionTokens": 1019,
+        "totalTokens": 5468,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5468,
+          "total_characters": 0,
+          "prompt_tokens": 4449,
+          "completion_tokens": 1019,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 42,
+      "startedAt": "2026-07-10T22:05:35.864Z",
+      "endedAt": "2026-07-10T22:05:43.938Z",
+      "durationMs": 8074,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3625,
+        "completionTokens": 963,
+        "totalTokens": 4588,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 4588,
+          "total_characters": 0,
+          "prompt_tokens": 3625,
+          "completion_tokens": 963,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 43,
+      "startedAt": "2026-07-10T22:05:43.980Z",
+      "endedAt": "2026-07-10T22:06:09.795Z",
+      "durationMs": 25815,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 15005,
+        "completionTokens": 2517,
+        "totalTokens": 17522,
+        "cachedPromptTokens": 114,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 17522,
+          "total_characters": 0,
+          "prompt_tokens": 15005,
+          "completion_tokens": 2517,
+          "prompt_tokens_details": {
+            "cached_tokens": 114
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 44,
+      "startedAt": "2026-07-10T22:06:09.846Z",
+      "endedAt": "2026-07-10T22:06:19.876Z",
+      "durationMs": 10030,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4124,
+        "completionTokens": 1135,
+        "totalTokens": 5259,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5259,
+          "total_characters": 0,
+          "prompt_tokens": 4124,
+          "completion_tokens": 1135,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 45,
+      "startedAt": "2026-07-10T22:06:19.937Z",
+      "endedAt": "2026-07-10T22:06:29.797Z",
+      "durationMs": 9860,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4513,
+        "completionTokens": 1274,
+        "totalTokens": 5787,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5787,
+          "total_characters": 0,
+          "prompt_tokens": 4513,
+          "completion_tokens": 1274,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 46,
+      "startedAt": "2026-07-10T22:06:29.840Z",
+      "endedAt": "2026-07-10T22:06:36.161Z",
+      "durationMs": 6321,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3048,
+        "completionTokens": 1001,
+        "totalTokens": 4049,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 4049,
+          "total_characters": 0,
+          "prompt_tokens": 3048,
+          "completion_tokens": 1001,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 47,
+      "startedAt": "2026-07-10T22:06:36.223Z",
+      "endedAt": "2026-07-10T22:06:40.519Z",
+      "durationMs": 4296,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 1121,
+        "completionTokens": 420,
+        "totalTokens": 1541,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 1541,
+          "total_characters": 0,
+          "prompt_tokens": 1121,
+          "completion_tokens": 420,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 48,
+      "startedAt": "2026-07-10T22:06:40.586Z",
+      "endedAt": "2026-07-10T22:06:42.524Z",
+      "durationMs": 1938,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 960,
+        "completionTokens": 245,
+        "totalTokens": 1205,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 1205,
+          "total_characters": 0,
+          "prompt_tokens": 960,
+          "completion_tokens": 245,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 49,
+      "startedAt": "2026-07-10T22:06:42.609Z",
+      "endedAt": "2026-07-10T22:06:51.327Z",
+      "durationMs": 8718,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 8484,
+        "completionTokens": 1140,
+        "totalTokens": 9624,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 9624,
+          "total_characters": 0,
+          "prompt_tokens": 8484,
+          "completion_tokens": 1140,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 50,
+      "startedAt": "2026-07-10T22:06:51.336Z",
+      "endedAt": "2026-07-10T22:07:02.098Z",
+      "durationMs": 10762,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 8841,
+        "completionTokens": 1377,
+        "totalTokens": 10218,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 10218,
+          "total_characters": 0,
+          "prompt_tokens": 8841,
+          "completion_tokens": 1377,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 51,
+      "startedAt": "2026-07-10T22:07:02.105Z",
+      "endedAt": "2026-07-10T22:07:14.055Z",
+      "durationMs": 11950,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 8884,
+        "completionTokens": 1633,
+        "totalTokens": 10517,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 10517,
+          "total_characters": 0,
+          "prompt_tokens": 8884,
+          "completion_tokens": 1633,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 52,
+      "startedAt": "2026-07-10T22:07:14.067Z",
+      "endedAt": "2026-07-10T22:07:23.615Z",
+      "durationMs": 9548,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 6789,
+        "completionTokens": 1196,
+        "totalTokens": 7985,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 7985,
+          "total_characters": 0,
+          "prompt_tokens": 6789,
+          "completion_tokens": 1196,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 53,
+      "startedAt": "2026-07-10T22:07:23.623Z",
+      "endedAt": "2026-07-10T22:07:28.103Z",
+      "durationMs": 4480,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 7089,
+        "completionTokens": 745,
+        "totalTokens": 7834,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 7834,
+          "total_characters": 0,
+          "prompt_tokens": 7089,
+          "completion_tokens": 745,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 54,
+      "startedAt": "2026-07-10T22:07:28.169Z",
+      "endedAt": "2026-07-10T22:07:39.065Z",
+      "durationMs": 10896,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 4064,
+        "completionTokens": 1039,
+        "totalTokens": 5103,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5103,
+          "total_characters": 0,
+          "prompt_tokens": 4064,
+          "completion_tokens": 1039,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 55,
+      "startedAt": "2026-07-10T22:07:39.126Z",
+      "endedAt": "2026-07-10T22:07:44.156Z",
+      "durationMs": 5030,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 12757,
+        "completionTokens": 494,
+        "totalTokens": 13251,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 13251,
+          "total_characters": 0,
+          "prompt_tokens": 12757,
+          "completion_tokens": 494,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 56,
+      "startedAt": "2026-07-10T22:07:44.212Z",
+      "endedAt": "2026-07-10T22:07:54.218Z",
+      "durationMs": 10006,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2511,
+        "completionTokens": 954,
+        "totalTokens": 3465,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3465,
+          "total_characters": 0,
+          "prompt_tokens": 2511,
+          "completion_tokens": 954,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 57,
+      "startedAt": "2026-07-10T22:07:54.283Z",
+      "endedAt": "2026-07-10T22:07:58.765Z",
+      "durationMs": 4482,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3475,
+        "completionTokens": 486,
+        "totalTokens": 3961,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3961,
+          "total_characters": 0,
+          "prompt_tokens": 3475,
+          "completion_tokens": 486,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 58,
+      "startedAt": "2026-07-10T22:07:58.819Z",
+      "endedAt": "2026-07-10T22:08:03.874Z",
+      "durationMs": 5055,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 3344,
+        "completionTokens": 569,
+        "totalTokens": 3913,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3913,
+          "total_characters": 0,
+          "prompt_tokens": 3344,
+          "completion_tokens": 569,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 59,
+      "startedAt": "2026-07-10T22:08:03.955Z",
+      "endedAt": "2026-07-10T22:08:06.344Z",
+      "durationMs": 2389,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2977,
+        "completionTokens": 225,
+        "totalTokens": 3202,
+        "cachedPromptTokens": 488,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3202,
+          "total_characters": 0,
+          "prompt_tokens": 2977,
+          "completion_tokens": 225,
+          "prompt_tokens_details": {
+            "cached_tokens": 488
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 60,
+      "startedAt": "2026-07-10T22:08:06.424Z",
+      "endedAt": "2026-07-10T22:08:09.430Z",
+      "durationMs": 3006,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 6973,
+        "completionTokens": 263,
+        "totalTokens": 7236,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 7236,
+          "total_characters": 0,
+          "prompt_tokens": 6973,
+          "completion_tokens": 263,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 61,
+      "startedAt": "2026-07-10T22:08:09.507Z",
+      "endedAt": "2026-07-10T22:08:14.679Z",
+      "durationMs": 5172,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 5100,
+        "completionTokens": 502,
+        "totalTokens": 5602,
+        "cachedPromptTokens": 384,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 5602,
+          "total_characters": 0,
+          "prompt_tokens": 5100,
+          "completion_tokens": 502,
+          "prompt_tokens_details": {
+            "cached_tokens": 384
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 62,
+      "startedAt": "2026-07-10T22:08:14.740Z",
+      "endedAt": "2026-07-10T22:08:21.871Z",
+      "durationMs": 7131,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2296,
+        "completionTokens": 834,
+        "totalTokens": 3130,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 3130,
+          "total_characters": 0,
+          "prompt_tokens": 2296,
+          "completion_tokens": 834,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "id": 63,
+      "startedAt": "2026-07-10T22:08:21.952Z",
+      "endedAt": "2026-07-10T22:08:25.367Z",
+      "durationMs": 3415,
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "stream": false,
+      "statusCode": 200,
+      "ok": true,
+      "usage": {
+        "promptTokens": 2030,
+        "completionTokens": 317,
+        "totalTokens": 2347,
+        "cachedPromptTokens": 128,
+        "reasoningTokens": null,
+        "raw": {
+          "total_tokens": 2347,
+          "total_characters": 0,
+          "prompt_tokens": 2030,
+          "completion_tokens": 317,
+          "prompt_tokens_details": {
+            "cached_tokens": 128
+          }
+        }
+      },
+      "error": null
+    }
+  ]
+}

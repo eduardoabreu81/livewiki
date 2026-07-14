@@ -1,0 +1,87 @@
+{
+  "overallGate": "FAIL",
+  "gates": {
+    "mechanical": false,
+    "qualitative": true,
+    "statusReadable": true,
+    "stage2Zero": true,
+    "reasoningZero": true,
+    "proxyHadTraffic": true,
+    "proxyZeroErrors": true,
+    "proxyAliveThroughout": true,
+    "accountingReconciled": true,
+    "failedDiagnosticsComplete": true,
+    "recoveredDiagnosticsComplete": true
+  },
+  "batch": {
+    "status": "completed_with_failures",
+    "tasksDone": 12,
+    "tasksFailed": 1,
+    "statusReadError": null,
+    "bootstrapError": null,
+    "stage2": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "costUsd": null,
+      "models": [],
+      "usageIncomplete": false
+    },
+    "stage4": {
+      "inputTokens": 240379,
+      "outputTokens": 42415,
+      "costUsd": null,
+      "models": [
+        "MiniMax-M3"
+      ],
+      "usageIncomplete": false
+    }
+  },
+  "proxy": {
+    "calls": 18,
+    "promptTokens": 240379,
+    "completionTokens": 42415,
+    "reasoningTokens": 0,
+    "callsWithError": 0,
+    "diedMidBatch": false
+  },
+  "mechanicalGate": "FAIL",
+  "qualitativeGate": "PASS",
+  "failedTaskDiagnostics": [
+    {
+      "target": "tools",
+      "reportedAttempts": 3,
+      "diagnosticAttempts": [
+        1,
+        2,
+        3
+      ],
+      "present": true,
+      "complete": true,
+      "ordered": true
+    }
+  ],
+  "recoveredTaskDiagnostics": [
+    {
+      "target": "core-src-04",
+      "reportedAttempts": 2,
+      "diagnosticAttempts": [
+        1,
+        2
+      ],
+      "complete": true,
+      "ordered": true,
+      "successfulRepairAttempt": 2
+    },
+    {
+      "target": "core-src-01",
+      "reportedAttempts": 2,
+      "diagnosticAttempts": [
+        1,
+        2
+      ],
+      "complete": true,
+      "ordered": true,
+      "successfulRepairAttempt": 2
+    }
+  ]
+}

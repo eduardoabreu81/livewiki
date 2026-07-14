@@ -1,0 +1,33 @@
+{
+  "version": "clean-v11-setup-gates-v1",
+  "commitUnderTest": "efd9b21e0ea902ce4d7f9e4b0ebe89ff65d8e3cc",
+  "credential": {
+    "status": "pass",
+    "valuePersisted": false
+  },
+  "install": {
+    "status": "pass",
+    "exitCode": 0
+  },
+  "coreBuild": {
+    "status": "pass",
+    "exitCode": 0
+  },
+  "cliBuild": {
+    "status": "pass",
+    "exitCode": 0
+  },
+  "proxy": {
+    "status": "pass",
+    "port": 8900,
+    "readyBeforeBatch": true,
+    "diedMidBatch": false
+  },
+  "batch": {
+    "attempted": true,
+    "paidAttempts": 1,
+    "processExitCode": 0,
+    "structuredExitCode": 2
+  },
+  "terminalError": null
+}

@@ -1,0 +1,23 @@
+commitUnderTest=3bd7572275728f4639a744d303566f36296c9310
+message=feat(core): bounded non-consuming retry for provider-incomplete responses
+clonePath=<temporary-working-tree>
+artifactRoot=docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v17
+command=livewiki init --batch --no-refine --json
+timeoutPolicy=product_default_300000_omitted_from_config
+model=MiniMax-M3
+thinking=disabled
+install=pnpm install --frozen-lockfile --prefer-offline
+proxy=http://127.0.0.1:8900/v1 -> https://api.minimax.io
+proxyLabel=livewiki-clean-v17
+harness=single_foreground_orchestration_proxy_plus_batch
+batch_started=2026-07-13T22:20:13.1240665-03:00
+
+batch_ended=2026-07-13T22:28:05.3884259-03:00
+process_exitCode=0
+batchExitCode=1
+batch_durationSec=472.3
+verify_exitCode=0
+proxy_died_mid_batch=False
+install_exitCode=0
+core_build_exitCode=0
+cli_build_exitCode=0

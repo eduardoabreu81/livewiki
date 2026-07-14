@@ -1,0 +1,11 @@
+{
+  "provider": "openai-compat",
+  "language": "en",
+  "model": "MiniMax-M3",
+  "baseUrl": "http://127.0.0.1:8900/v1",
+  "thinking": "disabled",
+  "stage4MaxOutputTokens": 8192,
+  "maxRepairAttempts": 2,
+  "maxModuleFiles": 12,
+  "maxModuleSymbols": 80
+}

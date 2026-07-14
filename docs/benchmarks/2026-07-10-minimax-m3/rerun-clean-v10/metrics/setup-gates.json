@@ -1,0 +1,32 @@
+{
+  "version": "clean-v10-infrastructure-gates-v1",
+  "commitUnderTest": "efd9b21e0ea902ce4d7f9e4b0ebe89ff65d8e3cc",
+  "headMatches": true,
+  "originMainMatches": true,
+  "minimaxApiKeyEnvironmentPresent": false,
+  "openAiApiKeyEnvironmentPresent": false,
+  "effectiveApiKeyEnvironmentPresent": false,
+  "proxyPort8900Free": true,
+  "install": {
+    "status": "not_run",
+    "exitCode": null
+  },
+  "coreBuild": {
+    "status": "not_run",
+    "exitCode": null
+  },
+  "cliBuild": {
+    "status": "not_run",
+    "exitCode": null
+  },
+  "proxy": {
+    "status": "not_started",
+    "calls": 0
+  },
+  "batch": {
+    "status": "not_started",
+    "paidAttempts": 0
+  },
+  "verdict": "INFRASTRUCTURE_FAIL",
+  "reason": "MINIMAX_API_KEY and OPENAI_API_KEY were absent from the caller environment before setup gate 1."
+}

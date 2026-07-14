@@ -1,0 +1,98 @@
+{
+  "runStatus": "completed_with_failures",
+  "tasksDone": 10,
+  "tasksFailed": 3,
+  "stage2": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "costUsd": null,
+    "models": [],
+    "usageIncomplete": false
+  },
+  "stage4": {
+    "inputTokens": 266211,
+    "outputTokens": 49680,
+    "costUsd": null,
+    "models": [
+      "MiniMax-M3"
+    ],
+    "usageIncomplete": false
+  },
+  "plannedModules": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-03",
+    "core-src-04",
+    "core-src-05",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "sample-ts-repo-src",
+    "scripts",
+    "tools"
+  ],
+  "pageIds": [
+    "cli-src",
+    "commands",
+    "core-src-02",
+    "core-src-03",
+    "core-src-05",
+    "llm",
+    "mcp-src",
+    "sample-ts-repo-src",
+    "scripts",
+    "tools"
+  ],
+  "missingPages": [
+    "core-src-01",
+    "core-src-04",
+    "fase2-repo-src"
+  ],
+  "explosionIds": [],
+  "duplicatePageIds": [],
+  "declaredAnchorCount": 292,
+  "plannedSymbols": 423,
+  "realDuplicateAnchors": [],
+  "verify": {
+    "ok": true,
+    "pagesChecked": 12,
+    "issues": []
+  },
+  "proxy": {
+    "calls": 20,
+    "prompt": 266211,
+    "completion": 49680,
+    "reasoning": 0,
+    "errors": 0
+  },
+  "gates": {
+    "statusCompleted": false,
+    "zeroFailed": false,
+    "allModulePages": false,
+    "noExplosion": true,
+    "noDupPageIds": true,
+    "verifyZero": true,
+    "noRealDuplicateAnchors": true,
+    "fullSymbolCoverage": false
+  },
+  "overallGate": "FAIL",
+  "failures": [
+    {
+      "module": "core-src-04",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-04\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [anchor_outside_closed_list]\nattempt 2: complete -> artifact_validation_failed [anchor_outside_clo"
+    },
+    {
+      "module": "core-src-01",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-01\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: incomplete -> incomplete_generation [incomplete_generation]\nattempt 2: complete -> artifact_validation_failed [duplicate_anchor, duplicat"
+    },
+    {
+      "module": "fase2-repo-src",
+      "code": "repair_exhausted",
+      "msg": "task \"fase2-repo-src\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [duplicate_anchor, duplicate_anchor, duplicate_anchor, duplicate_anchor]\nattempt 2: complete ->"
+    }
+  ]
+}

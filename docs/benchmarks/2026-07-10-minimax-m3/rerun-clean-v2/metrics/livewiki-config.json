@@ -1,0 +1,11 @@
+{
+  "baseUrl": "http://127.0.0.1:8900/v1",
+  "stage4MaxOutputTokens": 8192,
+  "maxRepairAttempts": 2,
+  "maxModuleSymbols": 80,
+  "language": "en",
+  "provider": "openai-compat",
+  "maxModuleFiles": 12,
+  "thinking": "disabled",
+  "model": "MiniMax-M3"
+}

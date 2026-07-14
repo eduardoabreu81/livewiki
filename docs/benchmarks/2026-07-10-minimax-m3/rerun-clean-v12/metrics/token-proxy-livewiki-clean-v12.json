@@ -1,0 +1,13 @@
+{
+  "label": "livewiki-clean-v12",
+  "calls": 0,
+  "promptTokens": 0,
+  "completionTokens": 0,
+  "totalTokens": 0,
+  "cachedPromptTokens": 0,
+  "reasoningTokens": 0,
+  "callsWithoutUsage": 0,
+  "callsWithError": 0,
+  "updatedAt": "2026-07-13T19:03:13.268Z",
+  "callLog": []
+}
