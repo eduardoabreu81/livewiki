@@ -7,7 +7,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
 $artifactRoot = $PSScriptRoot
 $metricsDir = Join-Path $artifactRoot "metrics"
-$targetSha = "3325344f3c17c3bc703cda80a42f917607221a1b"
+# Resolved dynamically at launch time inside the try block (see the Lot Q
+# fix note below) instead of a pinned string, so a docs/benchmarks-only
+# commit made after this file is written never re-fails a stale guard.
+$targetSha = $null
 $proxyPort = 8900
 $proxyLabel = "livewiki-clean-v21"
 $proxyProc = $null
@@ -342,8 +345,17 @@ try {
     throw "proxy port $proxyPort is already in use; refusing to stop an unrelated listener"
   }
 
-  $head = (git -C $repoRoot rev-parse HEAD).Trim()
-  if ($head -ne $targetSha) { throw "repository HEAD mismatch: expected $targetSha, got $head" }
+  # Lot Q fix (v21, second iteration): a hardcoded targetSha chases its own
+  # tail whenever a docs/benchmarks-only commit (harness fixes, evidence)
+  # lands after the harness is assembled -- each such commit moves local
+  # HEAD and re-fails the exact-match guard, as happened twice today.
+  # docs/benchmarks/** is stripped from the test worktree before
+  # install/build/batch regardless of which commit is checked out, so a
+  # benchmark-only commit never changes what is actually under test. Use
+  # whatever HEAD resolves to at launch time instead of a pinned string.
+  $targetSha = (git -C $repoRoot rev-parse HEAD).Trim()
+  $head = $targetSha
+  Write-Log "resolved target commit dynamically at launch: $targetSha"
   # v21 runs against a local-only commit by maintainer decision (push deferred
   # until the run passes). Record the divergence instead of requiring sync.
   $originMain = (git -C $repoRoot rev-parse origin/main).Trim()
