@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .livewiki/
+.codegraph/
 *.log
 .env
 *.tsbuildinfo
