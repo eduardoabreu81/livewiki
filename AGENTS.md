@@ -7,9 +7,13 @@
 > stage-4 artifact normalize/repair, English-only new U–X text).
 > Benchmark: clean v18 (commit 572b8a3) **PASSED** — 13/13 modules,
 > verify 0 issues, 427/427 symbols, exact accounting; evidence under
-> `docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v18/`. Still no
-> public winner claim until the quality review vs frozen OpenWiki
-> (`raw/openwiki/`) is written.
+> `docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v18/`. The
+> independent quality review vs frozen OpenWiki is written at
+> `docs/benchmarks/2026-07-10-minimax-m3/QUALITY-REVIEW-V18.md`; no
+> public winner claim until the maintainer decides the
+> `docs/BENCHMARK.md` note. Post-review navigation work is on main:
+> deterministic navigation layer (Lot M, 0746860) and the stage-4
+> page-opening contract + semantic titles (Lot N, 59b1112).
 
 ## Language policy
 
@@ -436,11 +440,11 @@ those files are explicitly out of the `vitest` unit suite).
   already released it). If it persists,
   `mavis-trash .git/index.lock` (do NOT use `Remove-Item`).
 
-## Live state (next: quality review vs OpenWiki → Phase 6 export → Phase 7 viewer)
+## Live state (next: BENCHMARK.md decision → Phase 6 export → Phase 7 viewer)
 
 ```bash
-# Last validation (post benchmark-hardening lots A–J, commit 572b8a3):
-pnpm -r test  → 723 passed + 8 skipped (core 653 + cli 51 + mcp 19)
+# Last validation (post navigation lots M–N, commit 59b1112):
+pnpm -r test  → 768 passed (core 695 + cli 52 + mcp 21)
 pnpm -r build → green (core + cli + mcp)
 ```
 
@@ -451,12 +455,19 @@ guidance, incomplete-retry budget, fence-aware markers — task briefs under
 `docs/tasks/`). Failed runs v10–v17 are preserved byte-for-byte as
 evidence.
 
+The quality review vs frozen OpenWiki (`raw/openwiki/`) is written at
+`docs/benchmarks/2026-07-10-minimax-m3/QUALITY-REVIEW-V18.md`. Its
+navigation findings were implemented as Lot M (deterministic quickstart/
+tasks/navigate, commit 0746860) and Lot N (page-opening contract,
+semantic titles, `missing_page_opening` + `title_equals_module_id`
+validations, commit 59b1112) per
+`docs/tasks/2026-07-14-navigation-investigation/`.
+
 Next planned steps:
-1. Quality review vs frozen OpenWiki under `raw/openwiki/` (independent
-   reviewer; no public winner claim until it is written).
-2. Maintainer decision on a `docs/BENCHMARK.md` note after the review.
-3. Phase 6: export to github-wiki/gitlab-wiki/generic.
-4. Phase 7: local viewer + templates.
+1. Maintainer decision on a `docs/BENCHMARK.md` note after the review
+   (no public winner claim until then).
+2. Phase 6: export to github-wiki/gitlab-wiki/generic.
+3. Phase 7: local viewer + templates.
 
 > **Reminder for the user**: validate doc/spec additions BEFORE coding.
 > When Edu adds something to SPEC (via commit), compare with the current
