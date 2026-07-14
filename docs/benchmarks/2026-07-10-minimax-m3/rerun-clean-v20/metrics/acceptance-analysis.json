@@ -1,0 +1,141 @@
+{
+  "runStatus": "completed_with_failures",
+  "tasksDone": 17,
+  "tasksFailed": 7,
+  "stage2": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "costUsd": null,
+    "models": [],
+    "usageIncomplete": false
+  },
+  "stage4": {
+    "inputTokens": 499136,
+    "outputTokens": 131364,
+    "costUsd": null,
+    "models": [
+      "MiniMax-M3"
+    ],
+    "usageIncomplete": false
+  },
+  "plannedModules": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-03",
+    "core-src-04",
+    "core-src-05",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "rerun-clean-v11",
+    "rerun-clean-v12",
+    "rerun-clean-v13",
+    "rerun-clean-v14",
+    "rerun-clean-v15",
+    "rerun-clean-v16",
+    "rerun-clean-v17",
+    "rerun-clean-v18",
+    "rerun-clean-v19",
+    "rerun-clean-v8",
+    "rerun-clean-v9",
+    "sample-ts-repo-src",
+    "scripts",
+    "tools"
+  ],
+  "pageIds": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-04",
+    "core-src-05",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "rerun-clean-v13",
+    "rerun-clean-v16",
+    "rerun-clean-v18",
+    "rerun-clean-v19",
+    "rerun-clean-v8",
+    "sample-ts-repo-src",
+    "scripts",
+    "tasks",
+    "tools"
+  ],
+  "missingPages": [
+    "core-src-03",
+    "rerun-clean-v11",
+    "rerun-clean-v12",
+    "rerun-clean-v14",
+    "rerun-clean-v15",
+    "rerun-clean-v17",
+    "rerun-clean-v9"
+  ],
+  "explosionIds": [],
+  "duplicatePageIds": [],
+  "declaredAnchorCount": 404,
+  "plannedSymbols": 504,
+  "realDuplicateAnchors": [],
+  "verify": {
+    "ok": true,
+    "pagesChecked": 20,
+    "issues": []
+  },
+  "proxy": {
+    "calls": 53,
+    "prompt": 499136,
+    "completion": 131364,
+    "reasoning": 0,
+    "errors": 0
+  },
+  "gates": {
+    "statusCompleted": false,
+    "zeroFailed": false,
+    "allModulePages": false,
+    "noExplosion": true,
+    "noDupPageIds": true,
+    "verifyZero": true,
+    "noRealDuplicateAnchors": true,
+    "fullSymbolCoverage": false
+  },
+  "overallGate": "FAIL",
+  "failures": [
+    {
+      "module": "core-src-03",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-03\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [missing_closed_key, missing_closed_key, missing_closed_key, missing_closed_key, missing_closed_ke"
+    },
+    {
+      "module": "rerun-clean-v11",
+      "code": "repair_exhausted",
+      "msg": "task \"rerun-clean-v11\" exhausted 5 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [todo_marker_present, model_invented_manual]\nattempt 2: incomplete -> incomplete_generation [i"
+    },
+    {
+      "module": "rerun-clean-v12",
+      "code": "repair_exhausted",
+      "msg": "task \"rerun-clean-v12\" exhausted 4 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [todo_marker_present, model_invented_manual]\nattempt 2: complete -> artifact_validation_failed"
+    },
+    {
+      "module": "rerun-clean-v14",
+      "code": "repair_exhausted",
+      "msg": "task \"rerun-clean-v14\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [todo_marker_present, model_invented_manual]\nattempt 2: complete -> artifact_validation_failed"
+    },
+    {
+      "module": "rerun-clean-v15",
+      "code": "repair_exhausted",
+      "msg": "task \"rerun-clean-v15\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [missing_closed_key, unclosed_markdown, todo_marker_present, model_invented_manual]\nattempt 2:"
+    },
+    {
+      "module": "rerun-clean-v17",
+      "code": "repair_exhausted",
+      "msg": "task \"rerun-clean-v17\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [anchor_outside_closed_list, missing_closed_key, unclosed_markdown, todo_marker_present, model"
+    },
+    {
+      "module": "rerun-clean-v9",
+      "code": "repair_exhausted",
+      "msg": "task \"rerun-clean-v9\" exhausted 4 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [model_invented_manual]\nattempt 2: incomplete -> incomplete_generation [incomplete_generation]\n"
+    }
+  ]
+}
