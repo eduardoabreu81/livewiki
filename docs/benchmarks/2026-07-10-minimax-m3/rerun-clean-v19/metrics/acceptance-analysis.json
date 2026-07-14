@@ -1,0 +1,120 @@
+{
+  "runStatus": "aborted",
+  "tasksDone": 1,
+  "tasksFailed": 2,
+  "stage2": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "costUsd": null,
+    "models": [],
+    "usageIncomplete": false
+  },
+  "stage4": {
+    "inputTokens": 162698,
+    "outputTokens": 42757,
+    "costUsd": null,
+    "models": [
+      "MiniMax-M3"
+    ],
+    "usageIncomplete": false
+  },
+  "plannedModules": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-03",
+    "core-src-04",
+    "core-src-05",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "rerun-clean-v11",
+    "rerun-clean-v12",
+    "rerun-clean-v13",
+    "rerun-clean-v14",
+    "rerun-clean-v15",
+    "rerun-clean-v16",
+    "rerun-clean-v17",
+    "rerun-clean-v18",
+    "rerun-clean-v8",
+    "rerun-clean-v9",
+    "sample-ts-repo-src",
+    "scripts",
+    "tools"
+  ],
+  "pageIds": [
+    "core-src-04",
+    "tasks"
+  ],
+  "missingPages": [
+    "cli-src",
+    "commands",
+    "core-src-01",
+    "core-src-02",
+    "core-src-03",
+    "core-src-05",
+    "fase2-repo-src",
+    "llm",
+    "mcp-src",
+    "rerun-clean-v11",
+    "rerun-clean-v12",
+    "rerun-clean-v13",
+    "rerun-clean-v14",
+    "rerun-clean-v15",
+    "rerun-clean-v16",
+    "rerun-clean-v17",
+    "rerun-clean-v18",
+    "rerun-clean-v8",
+    "rerun-clean-v9",
+    "sample-ts-repo-src",
+    "scripts",
+    "tools"
+  ],
+  "explosionIds": [],
+  "duplicatePageIds": [],
+  "declaredAnchorCount": 80,
+  "plannedSymbols": 493,
+  "realDuplicateAnchors": [
+    {
+      "file": "core-src-04.md",
+      "k": "...",
+      "kind": "cross_section_duplicate"
+    }
+  ],
+  "verify": {
+    "ok": true,
+    "pagesChecked": 4,
+    "issues": []
+  },
+  "proxy": {
+    "calls": 8,
+    "prompt": 162698,
+    "completion": 42757,
+    "reasoning": 0,
+    "errors": 0
+  },
+  "gates": {
+    "statusCompleted": false,
+    "zeroFailed": false,
+    "allModulePages": false,
+    "noExplosion": true,
+    "noDupPageIds": true,
+    "verifyZero": true,
+    "noRealDuplicateAnchors": false,
+    "fullSymbolCoverage": false
+  },
+  "overallGate": "FAIL",
+  "failures": [
+    {
+      "module": "core-src-02",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-02\" exhausted 3 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: complete -> artifact_validation_failed [anchor_outside_closed_list, missing_page_opening]\nattempt 2: complete -> artifact_validation_fail"
+    },
+    {
+      "module": "core-src-03",
+      "code": "repair_exhausted",
+      "msg": "task \"core-src-03\" exhausted 4 LLM call(s) without producing a verified artifact.\nAttempts:\nattempt 1: length -> truncated_by_token_limit [truncated_by_token_limit]\nattempt 2: complete -> artifact_validation_failed [anchor_outside_closed_li"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "version": "clean-v19-setup-gates-v1",
+  "commitUnderTest": "1ce6db6494629e99dfa648ae1dd3a8c54da3e300",
+  "credential": {
+    "status": "pass",
+    "valuePersisted": false
+  },
+  "qualitativeAuditRule": {
+    "status": "pass",
+    "semantics": "claim_of_contradiction_with_negation_and_contrast_exclusions",
+    "source": "corrected_clean_v15_copy"
+  },
+  "install": {
+    "status": "pass",
+    "exitCode": 0
+  },
+  "coreBuild": {
+    "status": "pass",
+    "exitCode": 0
+  },
+  "cliBuild": {
+    "status": "pass",
+    "exitCode": 0
+  },
+  "proxy": {
+    "status": "pass",
+    "port": 8900,
+    "readyBeforeBatch": true,
+    "diedMidBatch": false
+  },
+  "batch": {
+    "attempted": true,
+    "paidAttempts": 1,
+    "processExitCode": 0,
+    "structuredExitCode": 2
+  },
+  "terminalError": "gate combination failed"
+}

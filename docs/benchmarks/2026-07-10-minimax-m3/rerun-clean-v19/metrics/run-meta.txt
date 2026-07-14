@@ -1,0 +1,14 @@
+commitUnderTest=1ce6db6494629e99dfa648ae1dd3a8c54da3e300
+message=chore: gitignore local .codegraph index
+clonePath=<temporary-working-tree>
+artifactRoot=docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v19
+command=livewiki init --batch --no-refine --json
+timeoutPolicy=product_default_300000_omitted_from_config
+model=MiniMax-M3
+thinking=disabled
+install=pnpm install --frozen-lockfile --prefer-offline
+proxy=http://127.0.0.1:8900/v1 -> https://api.minimax.io
+proxyLabel=livewiki-clean-v19
+harness=single_foreground_orchestration_proxy_plus_batch
+originSync=local_only_commit_push_pending
+batch_started=2026-07-14T16:22:27.3030813-03:00
