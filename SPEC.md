@@ -121,6 +121,13 @@ The token is validated by `validateToken(...)`, which ...
 
 - **Page** anchor: frontmatter. **Section** anchor: HTML comment
   `<!-- lw:anchors ... -->` right after the heading.
+- Anchor and section-marker recognition is Markdown-code-aware: marker-shaped
+  text inside fenced code blocks or inline-code spans is a syntax example, not
+  an anchor. Artifact validation, `verify`, and the anchor ledger all apply this
+  same rule; only markers outside Markdown code participate in coverage,
+  duplicate detection, heading association, or persisted anchor offsets.
+  Migration implication: an existing page whose marker is inside Markdown code
+  loses that anchor on its next parse because the marker was never legitimate.
 - Symbol key format: `relative/path.ext#SymbolName` (a file with no `#symbol` = an
   anchor on the whole file). Anchor granularity is name-per-file: same-named
   symbols within one file coalesce into one anchor, with the first by source
@@ -259,7 +266,8 @@ copied into the artifact. Before writing, livewiki:
   key list;
 - rejects **incomplete coverage** independently in both locations: every
   closed-list key must appear exactly once in frontmatter `anchors:` and once
-  in one real `<!-- lw:anchors ... -->` section marker
+  in one real `<!-- lw:anchors ... -->` section marker outside fenced or inline
+  Markdown code
   (`missing_closed_key`);
 - rejects **duplicate** keys in the frontmatter list or the same key in more
   than one section marker (`duplicate_anchor`). The same key may appear once

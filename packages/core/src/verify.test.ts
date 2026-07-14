@@ -83,6 +83,32 @@ anchors:
     expect(result.ok).toBe(true);
     expect(result.issues.filter((i) => i.code === "broken_anchor")).toEqual([]);
   });
+
+  it("ignores a fenced marker example in both the ledger and verify", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+
+## Real section
+<!-- lw:anchors src/foo.ts#bar -->
+
+The page documents the marker syntax below.
+
+\`\`\`markdown
+<!-- lw:anchors src/foo.ts#ghost ... -->
+\`\`\`
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+
+    expect(result.ok).toBe(true);
+    expect(result.issues.filter((issue) => issue.code === "broken_anchor")).toEqual([]);
+  });
 });
 
 describe("verify — link interno aponta para página fora do allowlist", () => {

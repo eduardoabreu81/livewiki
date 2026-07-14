@@ -29,6 +29,7 @@
  */
 
 import { parseFrontmatter, getAnchors, getOwner, type Frontmatter } from "./frontmatter.js";
+import { maskCodeSpansPreservingLength } from "./markdown-mask.js";
 
 export type Owner = "generated" | "human" | "mixed";
 
@@ -77,6 +78,7 @@ const LW_MANUAL_END_RE = /<!--\s*\/lw:manual\s*-->/g;
 export function extractAnchors(source: string): ExtractedAnchors {
   const fm = parseFrontmatter(source);
   const body = fm.body;
+  const markerScanBody = maskCodeSpansPreservingLength(body);
 
   // Comprimento do frontmatter no source original (incluindo --- de fechamento
   // + newline) — usamos pra mapear offsets do body pro source original.
@@ -123,7 +125,7 @@ export function extractAnchors(source: string): ExtractedAnchors {
   // Caminha o body em ordem, identificando headings e anchors intercalados.
   // Para simplicidade, varrar duas vezes: headings primeiro, depois anchors.
   const headingMatches: Array<{ text: string; slug: string; offset: number }> = [];
-  for (const m of body.matchAll(headingRe)) {
+  for (const m of markerScanBody.matchAll(headingRe)) {
     if (m.index === undefined) continue;
     headingMatches.push({
       text: m[2] ?? "",
@@ -132,7 +134,7 @@ export function extractAnchors(source: string): ExtractedAnchors {
     });
   }
 
-  for (const m of body.matchAll(LW_ANCHORS_RE)) {
+  for (const m of markerScanBody.matchAll(LW_ANCHORS_RE)) {
     if (m.index === undefined || m[1] === undefined) continue;
     const anchorOffset = m.index;
     const anchorEnd = m.index + m[0].length;

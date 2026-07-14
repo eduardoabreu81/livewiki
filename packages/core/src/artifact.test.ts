@@ -312,7 +312,7 @@ Body.
     expect(off.some((e) => e.sectionSlug !== undefined)).toBe(true);
   });
 
-  it("ellipsis placeholder '...' in section marker is rejected (clean-v5 finding — not silently stripped)", () => {
+  it("ellipsis placeholder '...' in a real section marker outside code is rejected", () => {
     const art = `---
 title: x
 owner: generated
@@ -339,6 +339,119 @@ Body.
     expect(r.errors.every((e) => e.code !== "missing_closed_key" || e.offending !== "...")).toBe(
       true,
     );
+  });
+
+  it("accepts the v17 tools shape: complete real coverage plus fenced marker examples", () => {
+    const art = `---
+title: tools
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+# tools
+
+## Marker scanning
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+The scanner recognizes real markers outside code and documents its syntax:
+
+\`\`\`markdown
+<!-- lw:anchors ... -->
+<!-- lw:anchors … -->
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout -->
+\`\`\`
+`;
+
+    const result = validateStage4Artifact(art, closedKeys);
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("does not let a fenced marker satisfy closed-list coverage", () => {
+    const art = `---
+title: auth
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+# auth
+
+## Real coverage
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout -->
+
+Real prose for the covered keys.
+
+\`\`\`markdown
+<!-- lw:anchors src/auth.ts#validate -->
+\`\`\`
+`;
+
+    const result = validateStage4Artifact(art, closedKeys);
+    const sectionMissing = result.errors.filter(
+      (error) => error.code === "missing_closed_key" && error.location === "section",
+    );
+
+    expect(result.ok).toBe(false);
+    expect(sectionMissing.map((error) => error.offending)).toEqual([
+      "src/auth.ts#validate",
+    ]);
+    expect(result.errors.some((error) => error.code === "duplicate_anchor")).toBe(false);
+  });
+
+  it("ignores an inline-code marker example", () => {
+    const art = `---
+title: auth
+owner: generated
+anchors:
+  - src/auth.ts#login
+  - src/auth.ts#logout
+  - src/auth.ts#validate
+---
+# auth
+
+## Coverage
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+The syntax \`<!-- lw:anchors fake-key -->\` is shown inline.
+`;
+
+    const result = validateStage4Artifact(art, closedKeys);
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("ignores a fenced heading when associating a later real marker", () => {
+    const key = "src/auth.ts#login";
+    const art = `---
+title: auth
+owner: generated
+anchors:
+  - ${key}
+---
+## Real heading
+
+\`\`\`markdown
+## Fake fenced heading
+\`\`\`
+
+<!-- lw:anchors outside-key -->
+
+Real prose.
+`;
+
+    const result = validateStage4Artifact(art, [key]);
+    const outside = result.errors.find(
+      (error) =>
+        error.code === "anchor_outside_closed_list" && error.offending === "outside-key",
+    );
+
+    expect(outside?.sectionSlug).toBe("real-heading");
   });
 
   it("empty body (frontmatter only, nothing after) → empty_body", () => {

@@ -2,12 +2,12 @@
  * markdown-mask — small, deterministic helpers to mask/inspect Markdown
  * code constructs (fenced code blocks, inline code spans).
  *
- * Shared by `verify.ts` (mask code before scanning for navigable links —
- * `[text](page.md)` inside a code span is a syntax example, not a real
- * link) and `artifact.ts` (mask code before checking for TODO/TBD filler
- * in prose, and detect whether the document was cut mid code-construct).
+ * Shared by `verify.ts` (mask code before scanning for navigable links),
+ * `artifact.ts` (marker validation, TODO/TBD filler, and truncation), and
+ * `anchors.ts` (marker extraction for verify and the ledger). Markdown
+ * code is display text rather than a structural link or marker surface.
  *
- * Extracted from `verify.ts` so both validators share one implementation
+ * Extracted from `verify.ts` so all structural scans share one implementation
  * instead of drifting.
  */
 
@@ -16,37 +16,83 @@ export function maskCodeSpans(text: string): string {
   return maskInlineCode(maskFencedCodeBlocks(text));
 }
 
+interface FenceState {
+  inFence: boolean;
+  fenceChar: string;
+  fenceLen: number;
+}
+
+const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+
+function createFenceState(): FenceState {
+  return { inFence: false, fenceChar: "", fenceLen: 0 };
+}
+
+/**
+ * Advances the shared fenced-block state machine for one line.
+ * Returns true when the complete line belongs to a fenced block,
+ * including its opening and closing fence lines.
+ */
+function consumeFenceLine(line: string, state: FenceState): boolean {
+  if (!state.inFence) {
+    const match = line.match(FENCE_OPEN_RE);
+    if (!match?.[1]) return false;
+    state.inFence = true;
+    state.fenceChar = match[1][0] as string;
+    state.fenceLen = match[1].length;
+    return true;
+  }
+
+  const closeRe = new RegExp(
+    `^[ \\t]{0,3}[${state.fenceChar}]{${state.fenceLen},}[ \\t]*$`,
+  );
+  if (closeRe.test(line)) state.inFence = false;
+  return true;
+}
+
 /** Blanks the body (opening line, content, and closing line) of each fenced code block (``` or ~~~). */
 export function maskFencedCodeBlocks(text: string): string {
   // CRLF-safe: a lone "\n" split leaves a trailing "\r" on each line, which
   // breaks the closing-fence `$` match on CRLF files and lets the fence
   // stay open — masking the rest of the page as a side effect.
   const lines = text.split(/\r?\n/);
-  const fenceOpenRe = /^[ \t]{0,3}(`{3,}|~{3,})/;
-  let inFence = false;
-  let fenceChar = "";
-  let fenceLen = 0;
+  const state = createFenceState();
   const out: string[] = [];
   for (const line of lines) {
-    if (!inFence) {
-      const m = line.match(fenceOpenRe);
-      if (m?.[1]) {
-        inFence = true;
-        fenceChar = m[1][0] as string;
-        fenceLen = m[1].length;
-        out.push("");
-        continue;
-      }
-      out.push(line);
-      continue;
-    }
-    const closeRe = new RegExp(`^[ \\t]{0,3}[${fenceChar}]{${fenceLen},}[ \\t]*$`);
-    if (closeRe.test(line)) {
-      inFence = false;
-    }
-    out.push("");
+    out.push(consumeFenceLine(line, state) ? "" : line);
   }
   return out.join("\n");
+}
+
+/**
+ * Masks fenced blocks and inline-code spans without changing the source
+ * length or any line terminator. Characters inside code become spaces, so
+ * every index in the masked view maps to the same index in the original text.
+ */
+export function maskCodeSpansPreservingLength(text: string): string {
+  return maskInlineCode(maskFencedCodeBlocksPreservingLength(text));
+}
+
+function maskFencedCodeBlocksPreservingLength(text: string): string {
+  const state = createFenceState();
+  let result = "";
+  let lineStart = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "\n") continue;
+    const hasCarriageReturn = i > lineStart && text[i - 1] === "\r";
+    const lineEnd = hasCarriageReturn ? i - 1 : i;
+    const line = text.slice(lineStart, lineEnd);
+    result += consumeFenceLine(line, state) ? " ".repeat(line.length) : line;
+    result += hasCarriageReturn ? "\r\n" : "\n";
+    lineStart = i + 1;
+  }
+
+  const finalLine = text.slice(lineStart);
+  result += consumeFenceLine(finalLine, state)
+    ? " ".repeat(finalLine.length)
+    : finalLine;
+  return result;
 }
 
 /**
@@ -107,24 +153,11 @@ export function maskInlineCode(text: string): string {
  */
 export function hasUnclosedFence(text: string): boolean {
   const lines = text.split(/\r?\n/);
-  const fenceOpenRe = /^[ \t]{0,3}(`{3,}|~{3,})/;
-  let inFence = false;
-  let fenceChar = "";
-  let fenceLen = 0;
+  const state = createFenceState();
   for (const line of lines) {
-    if (!inFence) {
-      const m = line.match(fenceOpenRe);
-      if (m?.[1]) {
-        inFence = true;
-        fenceChar = m[1][0] as string;
-        fenceLen = m[1].length;
-      }
-      continue;
-    }
-    const closeRe = new RegExp(`^[ \\t]{0,3}[${fenceChar}]{${fenceLen},}[ \\t]*$`);
-    if (closeRe.test(line)) inFence = false;
+    consumeFenceLine(line, state);
   }
-  return inFence;
+  return state.inFence;
 }
 
 /**

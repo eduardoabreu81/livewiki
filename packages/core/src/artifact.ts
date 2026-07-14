@@ -58,7 +58,11 @@
 
 import { parseFrontmatter, getAnchors, type Frontmatter } from "./frontmatter.js";
 import type { ArtifactValidationError, ArtifactValidationCode } from "./prompts.js";
-import { maskCodeSpans, hasUnclosedMarkdown } from "./markdown-mask.js";
+import {
+  maskCodeSpans,
+  maskCodeSpansPreservingLength,
+  hasUnclosedMarkdown,
+} from "./markdown-mask.js";
 
 export interface NormalizeResult {
   ok: boolean;
@@ -278,11 +282,14 @@ export function validateStage4Artifact(
 
   // 4. Section anchors: <!-- lw:anchors ... -->
   //    We do not use extractAnchors to avoid coupling — own regex.
+  //    Markdown code is display text: scan markers and their associated
+  //    headings through an offset-stable masked view of the body.
+  const markerScanBody = maskCodeSpansPreservingLength(body);
   const sectionRe = /<!--\s*lw:anchors\s+([^\s>][^>]*?)\s*-->/g;
   // simple tracking of the previous heading for section slug
   const headingRe = /^(#{1,6})\s+(.+?)\s*$/gm;
   const headingMatches: Array<{ text: string; slug: string; offset: number }> = [];
-  for (const m of body.matchAll(headingRe)) {
+  for (const m of markerScanBody.matchAll(headingRe)) {
     if (m.index === undefined || m[2] === undefined) continue;
     headingMatches.push({
       text: m[2],
@@ -292,7 +299,7 @@ export function validateStage4Artifact(
   }
   // Collected once so it can drive BOTH the duplicate-key scan and the
   // per-section prose check below, without re-running the regex.
-  const sectionMatches = [...body.matchAll(sectionRe)].filter(
+  const sectionMatches = [...markerScanBody.matchAll(sectionRe)].filter(
     (m) => m.index !== undefined && m[1] !== undefined,
   );
   /** Keys seen in section markers (for cross-section duplicate detection). */

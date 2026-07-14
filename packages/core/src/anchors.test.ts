@@ -239,4 +239,53 @@ title: T
     const r = extractAnchors(src);
     expect(r.sectionAnchors[0]!.symbolKeys).toEqual(["only#one"]);
   });
+
+  it("ignores fenced markers and fenced headings while preserving a real marker offset", () => {
+    const fencedMarker = "<!-- lw:anchors fake#ellipsis ... real#key -->";
+    const realMarker = "<!-- lw:anchors real#key -->";
+    const src = `---
+title: Fence-aware anchors
+anchors:
+  - real#key
+---
+
+## Real heading
+
+\`\`\`markdown
+## Fake fenced heading
+${fencedMarker}
+\`\`\`
+
+${realMarker}
+Real prose.
+`;
+
+    const result = extractAnchors(src);
+
+    expect(result.sectionAnchors).toHaveLength(1);
+    expect(result.sectionAnchors[0]?.symbolKeys).toEqual(["real#key"]);
+    expect(result.sectionAnchors[0]?.headingText).toBe("Real heading");
+    expect(result.sectionAnchors[0]?.sectionSlug).toBe("real-heading");
+    expect(result.sectionAnchors[0]?.anchorMarkerOffset).toBe(src.indexOf(realMarker));
+  });
+
+  it("ignores an inline-code marker example", () => {
+    const realMarker = "<!-- lw:anchors real#key -->";
+    const src = `---
+title: Inline example
+---
+
+## Real heading
+The syntax \`<!-- lw:anchors fake#key -->\` is display text.
+
+${realMarker}
+Real prose.
+`;
+
+    const result = extractAnchors(src);
+
+    expect(result.sectionAnchors).toHaveLength(1);
+    expect(result.sectionAnchors[0]?.symbolKeys).toEqual(["real#key"]);
+    expect(result.sectionAnchors[0]?.anchorMarkerOffset).toBe(src.indexOf(realMarker));
+  });
 });
