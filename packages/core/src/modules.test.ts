@@ -169,6 +169,24 @@ describe("modules.prioritizeModules", () => {
     expect(ordered.length).toBe(mods.length);
     expect(new Set(ordered.map((m) => m.id))).toEqual(new Set(mods.map((m) => m.id)));
   });
+
+  it("uses Module.id as the deterministic tie-breaker under input reordering", () => {
+    const mods: Module[] = [
+      { id: "charlie", paths: ["src/charlie.ts"], symbolCount: 1 },
+      { id: "alpha", paths: ["src/alpha.ts"], symbolCount: 1 },
+      { id: "bravo", paths: ["src/bravo.ts"], symbolCount: 1 },
+    ];
+    expect(prioritizeModules(mods, []).map((module) => module.id)).toEqual([
+      "alpha",
+      "bravo",
+      "charlie",
+    ]);
+    expect(prioritizeModules([...mods].reverse(), []).map((module) => module.id)).toEqual([
+      "alpha",
+      "bravo",
+      "charlie",
+    ]);
+  });
 });
 
 describe("modules.classifyPathRole", () => {

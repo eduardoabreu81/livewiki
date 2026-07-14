@@ -233,10 +233,14 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/modules.mmd"), "utf8"),
       ).toContain("graph LR");
 
-      // Overview (P): gerado em init base + batch, target dos links do quickstart
+      // Deterministic navigation hubs are regenerated after stage 4.
       expect(
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/overview.md"), "utf8"),
       ).toMatch(/Architecture overview/);
+      const tasks = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8");
+      expect(tasks).toContain("owner: generated");
+      expect(tasks).toMatch(/\[[^\]]+\]\(auth\.md\)/);
+      expect(tasks).toMatch(/\[[^\]]+\]\(utils\.md\)/);
 
       // Manifest
       const manifest = JSON.parse(
@@ -245,10 +249,24 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       expect(manifest.version).toBe(1);
       expect(manifest.snapshotHash).toMatch(/^[a-f0-9]{64}$/);
 
-      // Quickstart
-      expect(
-        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/quickstart.md"), "utf8"),
-      ).toMatch(/Quickstart|Guia/);
+      const quickstart = await nodeFs.readFile(
+        nodePath.join(repoRoot, "livewiki/quickstart.md"),
+        "utf8",
+      );
+      expect([...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1])).toEqual([
+        "Choose a path",
+        "Document a repo",
+        "Query the wiki from an agent",
+        "Pay documentation debt",
+        "Repository facts",
+      ]);
+      for (const moduleId of ["auth", "utils"]) {
+        const page = await nodeFs.readFile(nodePath.join(repoRoot, `livewiki/${moduleId}.md`), "utf8");
+        expect(page).toContain("## Navigate");
+        expect(page).toContain("[Quickstart](quickstart.md)");
+        expect(page).toContain("[Tasks](tasks.md)");
+        expect(page).toContain("[Architecture](architecture/overview.md)");
+      }
 
       // Status report
       const statusR = runCli(["--json", "--repo", repoRoot, "batch"]);
@@ -278,6 +296,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         "livewiki/auth.md",
         "livewiki/utils.md",
         "livewiki/quickstart.md",
+        "livewiki/tasks.md",
         "livewiki/architecture/structure.mmd",
         "livewiki/architecture/modules.mmd",
         "livewiki/architecture/overview.md",
@@ -572,7 +591,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   }, 60_000);
 
-  it("(P) init gera livewiki/architecture/overview.md (target dos links do quickstart)", async () => {
+  it("(P) init generates overview cards with display titles and stable module IDs", async () => {
     // Sem --batch: overview é gerado em init base com módulos heurísticos.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
@@ -586,10 +605,11 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(overview).toMatch(/^---$/m);
     expect(overview).toMatch(/owner: generated/);
     expect(overview).toMatch(/Architecture overview/);
-    // Módulo "auth" presente
-    expect(overview).toMatch(/### auth/);
-    expect(overview).toMatch(/### utils/);
-    // Anchor HTML inline garante match exato com o link do quickstart
+    expect(overview).toMatch(/### Auth source/);
+    expect(overview).toMatch(/### Utils source/);
+    expect(overview).toContain("Module ID: `auth`");
+    expect(overview).toContain("Module ID: `utils`");
+    // Stable HTML identity remains Module.id, independent of display title.
     expect(overview).toMatch(/<a id="auth"><\/a>/);
     expect(overview).toMatch(/<a id="utils"><\/a>/);
     // Function-only modules do not generate `diagrams/<slug>.classes.mmd`,
@@ -602,7 +622,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(overview).toMatch(/%% livewiki\/architecture\/modules\.mmd/);
   });
 
-  it("(P) init --batch gera overview.md com pages dos módulos linkadas", async () => {
+  it("(P) init --batch regenerates overview cards with existing module-page links", async () => {
     // Com --batch: overview é gerado junto com as pages geradas pelo LLM.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
@@ -617,21 +637,16 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
         "utf8",
       );
-      // Modules heurísticos
-      expect(overview).toMatch(/### auth/);
-      expect(overview).toMatch(/### utils/);
-      // Page link existe
-      expect(overview).toMatch(/\[page\]\(\.\.\/auth\.md\)/);
-      expect(overview).toMatch(/\[page\]\(\.\.\/utils\.md\)/);
+      expect(overview).toContain("Module ID: `auth`");
+      expect(overview).toContain("Module ID: `utils`");
+      expect(overview).toMatch(/\[module page\]\(\.\.\/auth\.md\)/);
+      expect(overview).toMatch(/\[module page\]\(\.\.\/utils\.md\)/);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
   }, 60_000);
 
-  it("(P) links do quickstart para architecture/overview.md#<m.id> batem com anchors", async () => {
-    // Os links que o quickstart emite (`architecture/overview.md#auth`) precisam
-    // resolver para anchors reais no overview.md (definidos via `<a id="...">`).
-    // Sem isso, o verify emite WARNs e a navegação fica quebrada.
+  it("(P) Quickstart links both hubs while overview keeps stable Module.id anchors", async () => {
     await writeCode("src/auth/login.ts", "export function a() {}");
     const r = await runCli(["--json", "--repo", repoRoot, "init"]);
     expect(r.status, r.stderr).toBe(0);
@@ -644,17 +659,12 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
       "utf8",
     );
-
-    // Extrai todos os anchors que o quickstart linka
-    const linkMatches = [...quickstart.matchAll(/\(architecture\/overview\.md#([^)]+)\)/g)];
-    expect(linkMatches.length).toBeGreaterThan(0);
-    for (const m of linkMatches) {
-      const anchor = m[1];
-      if (anchor === undefined) continue; // TS narrow: matchAll pode devolver undefined em captura
-      // Cada anchor linkado deve existir como `<a id="X">` no overview
-      const re = new RegExp(`<a id="${anchor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}">`);
-      expect(overview, `quickstart linka #${anchor} mas overview não tem o anchor`).toMatch(re);
-    }
+    const tasks = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8");
+    expect(quickstart).toContain("[Tasks](tasks.md)");
+    expect(quickstart).toContain("[Architecture overview](architecture/overview.md)");
+    expect(overview).toContain('<a id="auth"></a>');
+    expect(tasks).toContain("Module ID: `auth`");
+    expect(tasks).not.toContain("](auth.md)");
   });
 
   it("init --plan funciona SEM config LLM (correção #5)", async () => {
@@ -671,6 +681,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
 
   it("init sem --batch funciona SEM config LLM (sem LLM calls)", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
+    const callsBeforeInit = stub.callCount();
     // SEM .livewiki/config.json
     const r = await runCli(["--json", "--repo", repoRoot, "init"]);
     expect(r.status, r.stderr).toBe(0);
@@ -680,7 +691,17 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     ).toContain("graph TD");
     expect(
       await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/quickstart.md"), "utf8"),
-    ).toMatch(/Quickstart|Guia/);
+    ).toContain("## Document a repo");
+    expect(
+      await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8"),
+    ).toContain("Page unavailable:");
+    await expect(
+      nodeFs.stat(nodePath.join(repoRoot, "livewiki/architecture/overview.md")),
+    ).resolves.toBeDefined();
+    expect(stub.callCount()).toBe(callsBeforeInit);
+    const verify = await runCli(["--json", "--repo", repoRoot, "verify"]);
+    expect(verify.status, verify.stderr).toBe(0);
+    expect(JSON.parse(verify.stdout).issues).toEqual([]);
     // Sem module pages (não chamou LLM)
     await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/foo.md"))).rejects.toThrow();
   });
@@ -753,9 +774,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
         "utf8",
       );
-      expect(overview).toMatch(/\[page\]\(\.\.\/auth\.md\)/);
-      expect(overview).toMatch(/\[page\]\(\.\.\/utils\.md\)/);
-      expect(overview).toMatch(/\[page\]\(\.\.\/api\.md\)/);
+      expect(overview).toMatch(/\[module page\]\(\.\.\/auth\.md\)/);
+      expect(overview).toMatch(/\[module page\]\(\.\.\/utils\.md\)/);
+      expect(overview).toMatch(/\[module page\]\(\.\.\/api\.md\)/);
 
       // 3. Verify limpo: exit 0 + zero issues
       const verifyR = await runCli(["--json", "--repo", repoRoot, "verify"]);

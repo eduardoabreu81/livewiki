@@ -827,7 +827,7 @@ export function prioritizeModules(
   }));
   scored.sort((a, b) => {
     if (a.roleRank !== b.roleRank) return a.roleRank - b.roleRank;
-    return b.score - a.score;
+    return b.score - a.score || a.m.id.localeCompare(b.m.id);
   });
   return scored.map((s) => s.m);
 }

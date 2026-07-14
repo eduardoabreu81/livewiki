@@ -23,7 +23,6 @@
  */
 
 import * as nodePath from "node:path";
-import * as nodeFs from "node:fs/promises";
 import * as safeIo from "./safe-io.js";
 import { openIndex, type SymbolRow } from "./db.js";
 import { ensureGitignoreEntries } from "./gitignore.js";
@@ -38,7 +37,6 @@ import {
   assertExactPathPartition,
   assertUniqueModuleIds,
   classifyModuleRole,
-  classifyPathRole,
   type PathRoleConfig,
   type Module,
 } from "./modules.js";
@@ -56,6 +54,14 @@ import {
   buildManifest,
   readManifest,
 } from "./manifest.js";
+import {
+  generateQuickstart,
+  generateTasksPage,
+  loadModulePresentations,
+  selectRelatedModules,
+  updateModuleNavigateBlocks,
+  type ModulePresentation,
+} from "./navigation.js";
 
 export interface InitOptions {
   repoRoot: string;
@@ -167,38 +173,47 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     }
   }
 
-  // quickstart.md (entry point — sem LLM, determinístico)
-  const quickstart = generateQuickstartDeterministic(
-    modules,
-    ordered,
-    symbols,
-    totalSymbols,
+  // Human navigation is assembled only from the index and existing page metadata.
+  const presentations = await loadModulePresentations(absRoot, modules);
+  const quickstart = generateQuickstart({
     totalFiles,
-    "en",
-    pathRoleConfig,
-  );
+    totalSymbols,
+    moduleCount: modules.length,
+  });
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", quickstart);
   filesWritten.push("livewiki/quickstart.md");
 
-  // architecture/overview.md (P) — alvo do link `[m.id](architecture/overview.md#${m.id})`
-  // que o quickstart emite. Sem este arquivo, links do quickstart quebram e
-  // `verify` emite WARNs em run recém-completado (SPEC §"Pipeline batch":
-  // "Ao final: gera/atualiza quickstart.md e architecture/overview.md").
-  // Gerado em init base (com módulos heurísticos) — batch pode re-gravar depois
-  // com lista de pages adicionadas.
+  const tasks = generateTasksPage({
+    modules,
+    ordered,
+    presentations,
+    ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
+  });
+  await safeIo.writeText(absRoot, "livewiki/tasks.md", tasks);
+  filesWritten.push("livewiki/tasks.md");
+
   const overview = await generateArchitectureOverview({
     absRoot,
     modules,
     ordered,
-    filePaths,
     totalSymbols,
     totalFiles,
     edges,
-    symbols,
+    presentations,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
   filesWritten.push("livewiki/architecture/overview.md");
+
+  const navigationPages = await updateModuleNavigateBlocks({
+    repoRoot: absRoot,
+    modules,
+    ordered,
+    edges,
+    presentations,
+    ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
+  });
+  filesWritten.push(...navigationPages);
 
   // manifest.json (snapshotHash + pendingBatch=null pra init sem batch)
   const snapshotHash = await computeSnapshotHash(absRoot);
@@ -348,196 +363,77 @@ async function buildPlan(absRoot: string): Promise<{
 }
 
 /**
- * Quickstart determinístico (sem LLM). Lista módulos + top symbols + entry points.
- * Linguagem controlada por `language` (default: "en").
- */
-/**
- * Renamed from "Key concepts" to
- * "Important symbols" — a purely mechanical ranking (module centrality +
- * deterministic key order, no semantics/embeddings) does not produce
- * "concepts" (a semantic/domain grouping), and the section header should
- * not claim more than the pipeline can honestly deliver. The SUBSTANCE
- * also changed: symbols are drawn from `ordered` product modules (the
- * same centrality-based ranking already used for "Top entry points"),
- * never a raw unordered DB query slice — and non-product paths (test
- * fixtures, benchmark tooling — see `classifyModuleRole`) never appear
- * here, the same way they can no longer out-rank a product module in
- * `ordered` itself.
- */
-function generateQuickstartDeterministic(
-  modules: Module[],
-  ordered: Module[],
-  symbols: SymbolRow[],
-  totalSymbols: number,
-  totalFiles: number,
-  language: string = "en",
-  pathRoleConfig?: PathRoleConfig,
-): string {
-  const labels: Record<string, { intro: string; entry: string; concepts: string; module: string }> = {
-    en: {
-      intro: "Quickstart",
-      entry: "Top entry points",
-      concepts: "Important symbols",
-      module: "Module",
-    },
-  };
-  const l = labels[language] ?? labels.en!;
-
-  const productModules = ordered.filter(
-    (module) => classifyModuleRole(module, pathRoleConfig) === "product",
-  );
-  const topModules = (productModules.length > 0 ? productModules : ordered).slice(0, 3);
-  const topSymbols = selectImportantSymbols(ordered, symbols, 10, pathRoleConfig);
-
-  const lines: string[] = [];
-  lines.push(`# ${l.intro}`);
-  lines.push("");
-  lines.push(
-    `This repository has **${totalFiles} files** indexed and **${totalSymbols} symbols** extracted, organized into **${modules.length} modules**.`,
-  );
-  lines.push("");
-  lines.push(`## ${l.entry}`);
-  lines.push("");
-  for (const m of topModules) {
-    lines.push(`- [${m.id}](architecture/overview.md#${m.id}) — ${m.paths.length} files, ${m.symbolCount} symbols`);
-  }
-  lines.push("");
-  lines.push(`## ${l.concepts}`);
-  lines.push("");
-  for (const s of topSymbols) {
-    lines.push(`- \`${s.key}\` (${s.kind})`);
-  }
-  lines.push("");
-  lines.push("---");
-  lines.push("");
-  lines.push(
-    "Generated by `livewiki init`. Refresh with `livewiki index` + manual edits.",
-  );
-  lines.push("");
-  return lines.join("\n");
-}
-
-/**
- * Selects up to `limit` function/class symbols from PRODUCT-role modules
- * only, walking `ordered` in its already-computed priority order
- * (centrality + size, product modules first — see `prioritizeModules`).
- * Within a module, symbols are sorted by key (stable, deterministic —
- * never raw SQL row order, which is what let benchmark-tooling helpers
- * appear ahead of real product symbols before this fix).
- */
-function selectImportantSymbols(
-  ordered: Module[],
-  symbols: SymbolRow[],
-  limit: number,
-  pathRoleConfig?: PathRoleConfig,
-): SymbolRow[] {
-  const out: SymbolRow[] = [];
-  for (const m of ordered) {
-    if (classifyModuleRole(m, pathRoleConfig) !== "product") continue;
-    const modulePaths = new Set(m.paths);
-    const moduleSymbols = symbols
-      .filter(
-        (s) =>
-          (s.kind === "function" || s.kind === "class") &&
-          modulePaths.has(s.key.split("#")[0]!),
-      )
-      .sort((a, b) => a.key.localeCompare(b.key));
-    for (const s of moduleSymbols) {
-      out.push(s);
-      if (out.length >= limit) return out;
-    }
-  }
-  return out;
-}
-
-/**
- * (P) `architecture/overview.md` — alvo do link que o quickstart emite
- * (`architecture/overview.md#${module.id}`).
- *
- * Sem este arquivo, links do quickstart quebram e `verify` emite WARNs em
- * run recém-completado. SPEC §"Pipeline batch" explicita: "Ao final:
- * gera/atualiza quickstart.md e architecture/overview.md, grava manifest."
- *
- * Conteúdo:
- *   - Frontmatter `owner: generated` (regra dos diagramas: nunca envelhece)
- *   - Resumo (files / symbols / modules / edges)
- *   - Module index: anchor HTML inline (id exato) + links para diagram
- *     de classes + link para page do módulo (livewiki/<id>.md, se existir)
- *   - Diagrams: embed de structure.mmd e modules.mmd em code fence mermaid
- *   - Per-file index (top N arquivos por número de símbolos) — ajuda a
- *     encontrar entry points antes do batch gerar doc dedicada
- *
- * Anchor HTML inline (`<a id="auth"></a>`) é usado para garantir match
- * EXATO com o link do quickstart, independente de como o renderer markdown
- * slugifica headings (lowercase, remoção de punct, etc.).
- */
-/**
- * Regenera APENAS o `architecture/overview.md` com base no estado atual da wiki.
- *
- * Usado tanto por `runInit` (após criar layout base) quanto por `batch`
- * (após criar as pages dos módulos) — assim os links `[page](../m.id.md)`
- * aparecem quando as páginas existem e somem quando ainda não existem
- * (evita broken_internal_link warnings no `verify`).
- *
- * Idempotente. Lê o índice SQLite pra extrair símbolos/módulos.
+ * Regenerates every deterministic navigation surface from the current index
+ * and accepted page metadata. The historical function name is retained for
+ * the batch hook. No LLM client or network path is involved.
  */
 export async function regenerateArchitectureOverview(repoRoot: string): Promise<void> {
   const absRoot = nodePath.resolve(repoRoot);
-  const { modules, edges, ordered, totalSymbols, totalFiles, symbols, filePaths, pathRoleConfig } =
-    await buildPlan(absRoot);
+  const { modules, edges, ordered, totalSymbols, totalFiles, pathRoleConfig } = await buildPlan(absRoot);
+  const presentations = await loadModulePresentations(absRoot, modules);
+  await safeIo.writeText(absRoot, "livewiki/quickstart.md", generateQuickstart({
+    totalFiles,
+    totalSymbols,
+    moduleCount: modules.length,
+  }));
+  await safeIo.writeText(absRoot, "livewiki/tasks.md", generateTasksPage({
+    modules,
+    ordered,
+    presentations,
+    ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
+  }));
   const overview = await generateArchitectureOverview({
     absRoot,
     modules,
     ordered,
-    filePaths,
     totalSymbols,
     totalFiles,
     edges,
-    symbols,
+    presentations,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
+  await updateModuleNavigateBlocks({
+    repoRoot: absRoot,
+    modules,
+    ordered,
+    edges,
+    presentations,
+    ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
+  });
+
+  // Direct `batch` writes its manifest before this regeneration hook. Refresh
+  // the snapshot after navigation changes while retaining batch handoff state.
+  const manifest = await readManifest(absRoot);
+  if (manifest) {
+    await writeManifestIfChanged(absRoot, buildManifest({
+      lastDocumentedCommit: manifest.lastDocumentedCommit,
+      snapshotHash: await computeSnapshotHash(absRoot),
+      pendingBatch: manifest.pendingBatch,
+    }));
+  }
 }
 
 async function generateArchitectureOverview(opts: {
-  /** Repo root (abs path) — usado pra checar se páginas de módulo já existem. */
   absRoot: string;
   modules: Module[];
   ordered: Module[];
-  filePaths: string[];
   totalSymbols: number;
   totalFiles: number;
   edges: Array<{ from: string; to: string }>;
-  symbols: SymbolRow[];
+  presentations: Map<string, ModulePresentation>;
   pathRoleConfig?: PathRoleConfig;
 }): Promise<string> {
   const {
     absRoot,
     modules,
     ordered,
-    filePaths,
     totalSymbols,
     totalFiles,
     edges,
-    symbols,
+    presentations,
     pathRoleConfig,
   } = opts;
-
-  // Top arquivos por número de símbolos (entry points heurísticos).
-  const symbolsByFile = new Map<string, number>();
-  for (const s of symbols) {
-    const p = s.key.split("#")[0]!;
-    symbolsByFile.set(p, (symbolsByFile.get(p) ?? 0) + 1);
-  }
-  const topFiles = [...symbolsByFile.entries()]
-    .filter(([path]) => classifyPathRole(path, pathRoleConfig) === "product")
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([path, count]) => ({ path, count }));
-
-  // Conta símbolos por módulo (top symbols por módulo pro resumo).
-  const symbolsByModule = new Map<string, number>();
-  for (const m of modules) symbolsByModule.set(m.id, m.symbolCount);
 
   const lines: string[] = [];
   lines.push("---");
@@ -553,7 +449,7 @@ async function generateArchitectureOverview(opts: {
       `between them.`,
   );
   lines.push("");
-  lines.push("Diagrams in this section are deterministic (regenerated by `livewiki init` / `index`); " +
+  lines.push("Diagrams in this section are deterministic (regenerated by `livewiki init`); " +
     "the module pages they link to are written by the batch (`livewiki init --batch`) or " +
     "manually.");
   lines.push("");
@@ -579,41 +475,38 @@ async function generateArchitectureOverview(opts: {
     lines.push(`## ${section.heading}`);
     lines.push("");
     for (const m of sectionModules) {
-    // Anchor HTML inline garante match exato com o link `[id](overview.md#id)` do quickstart.
-    lines.push(`<a id="${escapeHtmlId(m.id)}"></a>`);
-    lines.push("");
-    const classDiagramPath = `../diagrams/${moduleSlug(m.id)}.classes.mmd`;
-    const pageRelPath = `${m.id}.md`;
-    // Page link só é emitido se a página EXISTE — senão vira broken_internal_link
-    // warning no `verify`. init roda ANTES do batch (que cria as pages), então
-    // omitir o link aqui é o correto. Re-rodar init após batch vai popular.
-    // (Fase 5 step E2E: critério é "verify zero issues" — sem isso, sempre falha.)
-    const pageExists = await nodeFs
-      .stat(nodePath.join(absRoot, "livewiki", pageRelPath))
-      .then(() => true)
-      .catch(() => false);
-    // Apply the same existence check to
-    // the class-diagram link — `generateClassDiagram` writes NO file when
-    // the module has zero classes, so the link would otherwise point to a
-    // file that never existed (broken_internal_link, caught by `verify`
-    // once it also checks `.mmd` — but the correct fix is not emitting the
-    // dead link in the first place).
-    const classDiagramExists = await nodeFs
-      .stat(nodePath.join(absRoot, "livewiki", "diagrams", `${moduleSlug(m.id)}.classes.mmd`))
-      .then(() => true)
-      .catch(() => false);
-    const parts: string[] = [];
-    parts.push(`**${m.symbolCount}** symbols across **${m.paths.length}** files`);
-    if (classDiagramExists) {
-      parts.push(`[class diagram](${classDiagramPath})`);
-    }
-    if (pageExists) {
-      parts.push(`[page](../${pageRelPath})`);
-    }
-    lines.push(`### ${m.id}`);
-    lines.push("");
-    lines.push(parts.join(" · "));
+      const presentation = presentations.get(m.id)!;
+      const classDiagramPath = `../diagrams/${moduleSlug(m.id)}.classes.mmd`;
+      const classDiagramExists = await safeIo.exists(
+        absRoot,
+        `livewiki/diagrams/${moduleSlug(m.id)}.classes.mmd`,
+      ).catch(() => false);
+      const related = selectRelatedModules({
+        moduleId: m.id,
+        modules,
+        edges,
+        ordered,
+        ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
+        limit: Number.MAX_SAFE_INTEGER,
+      });
+      const dependencies = related.filter((item) => item.direction === "dependency" || item.direction === "both");
+      const dependents = related.filter((item) => item.direction === "dependent" || item.direction === "both");
+
+      lines.push(`<a id="${escapeHtmlId(m.id)}"></a>`, "", `### ${presentation.displayTitle}`, "");
+      lines.push(`Module ID: \`${m.id}\``);
       lines.push("");
+      lines.push(`**${m.symbolCount}** symbols across **${m.paths.length}** files`);
+      lines.push("");
+      lines.push("Representative paths:");
+      lines.push("");
+      for (const path of [...m.paths].sort().slice(0, 3)) lines.push(`- \`${path}\``);
+      lines.push("");
+      const artifactLinks: string[] = [];
+      if (presentation.pageExists) artifactLinks.push(`[module page](../${m.id}.md)`);
+      if (classDiagramExists) artifactLinks.push(`[class diagram](${classDiagramPath})`);
+      if (artifactLinks.length > 0) lines.push(`Available artifacts: ${artifactLinks.join(" · ")}`, "");
+      lines.push(`Dependencies: ${formatNeighbors(dependencies, presentations)}`, "");
+      lines.push(`Dependents: ${formatNeighbors(dependents, presentations)}`, "");
     }
   }
   lines.push("## Diagrams");
@@ -638,20 +531,25 @@ async function generateArchitectureOverview(opts: {
   lines.push("");
   lines.push("Open the raw file: [modules.mmd](modules.mmd)");
   lines.push("");
-  lines.push("## Top files by symbol count");
-  lines.push("");
-  lines.push("Heuristic entry points — most symbols per file.");
-  lines.push("");
-  for (const f of topFiles) {
-    lines.push(`- \`${f.path}\` (${f.count} symbols)`);
-  }
-  lines.push("");
   lines.push("---");
   lines.push("");
   lines.push("Generated by `livewiki init`. Refresh with `livewiki index` + manual edits, " +
     "or run `livewiki init --batch` to generate per-module documentation.");
   lines.push("");
   return lines.join("\n");
+}
+
+function formatNeighbors(
+  related: Array<{ moduleId: string }>,
+  presentations: Map<string, ModulePresentation>,
+): string {
+  if (related.length === 0) return "none";
+  return related.map((item) => {
+    const presentation = presentations.get(item.moduleId)!;
+    return presentation.pageExists
+      ? `[${presentation.displayTitle}](../${item.moduleId}.md)`
+      : `${presentation.displayTitle} (page unavailable)`;
+  }).join(", ");
 }
 
 /**
