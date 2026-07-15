@@ -55,12 +55,12 @@ jobs:
         # runner's default shell.
         run: pnpm exec livewiki --help
 
-      - name: CLI entry-point smoke (Windows: cmd)
+      - name: "CLI entry-point smoke (Windows: cmd)"
         if: matrix.os == 'windows-latest'
         shell: cmd
         run: pnpm exec livewiki --help
 
-      - name: CLI entry-point smoke (macOS: zsh)
+      - name: "CLI entry-point smoke (macOS: zsh)"
         if: matrix.os == 'macos-latest'
         shell: zsh {0}
         run: pnpm exec livewiki --help
