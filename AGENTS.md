@@ -226,7 +226,7 @@ livewiki/
 
 ## Validation workflow
 
-Before committing any change in Phases 2, 3, 4, or 5:
+Before committing any change in Phases 2, 3, 4, 5, or 6:
 
 ```bash
 pnpm -r build         # core + cli + mcp
@@ -241,12 +241,33 @@ pnpm --filter @livewiki/mcp test
                      # Phase 4: 6 tools E2E (InMemoryTransport)
 pnpm --filter @livewiki/mcp test -- src/phase5-e2e.test.ts
                      # Phase 5: end-to-end + [R] gitignore
+pnpm --filter @livewiki/core test -- src/export.test.ts
+                     # Phase 6 Lot 6A: deterministic export, safe-io allowlist
+pnpm --filter @livewiki/cli test -- src/cli-export-e2e.test.ts
+                     # Phase 6 Lot 6A: CLI E2E
 ```
 
 Current coverage: **80%+ statements / 80%+ branches / 90%+ funcs** (above
 the 80% minimum of rule #5; the drop vs early phases is because
 `init.ts` and `batch.ts` are covered via E2E/subprocess, not unit —
 those files are explicitly out of the `vitest` unit suite).
+
+### Cross-platform validation
+
+The matrix CI lives at `.github/workflows/cross-platform-ci.yml`. It
+runs on `ubuntu-latest`, `windows-latest`, and `macos-latest` (Node 20),
+plus `ubuntu-latest` (Node 24) for a current-runtime sanity check.
+Windows may skip the export symlink tests when the runner cannot
+create symlinks (no Developer Mode, no admin); the same tests run
+(without skipping) on the Ubuntu and macOS jobs. A test-file guard
+in `packages/core/src/export.test.ts` makes any Unix-host skip
+enforceable as a CI failure.
+
+Until the remote matrix has been observed green on all three OS hosts,
+this repo must NOT claim "cross-platform validated", "matrix green",
+or equivalent in any commit, PR description, release note, or
+external message. Local Windows runs are necessary but not sufficient
+for closing the lot.
 
 ## Where to touch for each change type
 

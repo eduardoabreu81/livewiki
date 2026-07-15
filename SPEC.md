@@ -72,6 +72,59 @@
   (prompt caching). Agent tools (Codex, Cursor, Roo Code, Kilo Code, VS Code,
   etc.) are NOT presets — they are consumers via MCP/skills (integration roadmap).
 
+## Cross-platform product contract
+
+The CLI, MCP server, and core library must run on the supported matrix hosts
+without code paths that are shell-specific, OS-specific, or hardcoded to a
+single filesystem layout. The product contract is the source of truth for
+what "portable" means; a host can only be declared supported when these
+conditions are met on it.
+
+- **Supported runtime**: Node.js ≥ 20 on Windows, Linux, and macOS.
+  Architecture-specific support (x64, arm64) is not claimed here; the
+  CI matrix must include a runner for any architecture that is
+  declared supported. The pnpm version is pinned in `package.json`
+  (`packageManager`) and consumed by `pnpm/action-setup`; the workflow
+  never repeats the version.
+- **Supported terminal surfaces**: PowerShell and CMD on Windows; Bash on
+  Linux; Bash and Zsh on macOS. Every command, every flag, and every
+  human/JSON output line must work the same way across these shells. The CLI
+  never depends on shell-specific syntax in its own output.
+- **Core behavior**: no shell-specific syntax. The CLI never invokes `bash -c`,
+  `cmd /c`, or `sh -c` to run product logic. If a future subprocess is needed
+  (e.g. Lot 6B Git push), it must use `child_process.spawn` with the executable
+  plus an argument array and `shell: false`. The CLI never constructs shell
+  command strings from user input.
+- **Filesystem paths**: use `node:path` (`path.posix` for durable keys,
+  `path` for host filesystem operations). Native separators are used only at
+  the I/O boundary; durable wiki keys, generated markers, manifest paths, and
+  Markdown links always use forward slashes.
+- **Line endings**: LF and CRLF inputs are supported. The core reads
+  and writes both; transformations preserve the source line-ending
+  convention when byte stability is part of the contract (the
+  destination file is byte-identical to the source for the unchanged
+  lines, including the line terminator); the export's CRLF tests
+  detect stray bare CR or LF characters so a mixed-line-ending
+  regression cannot pass silently.
+- **Paths with spaces and Unicode**: every CLI entry point and every
+  filesystem operation must accept paths that contain spaces and non-ASCII
+  characters (Portuguese accented letters, CJK, emoji-adjacent code points).
+  Tests cover this on every supported OS.
+- **CLI JSON shape and exit codes**: identical across operating systems. A
+  `livewiki --json export svn-wiki` invocation on Windows, Linux, or macOS
+  emits the same JSON shape, the same `code` values, and the same numeric exit
+  code.
+- **OS-specific skips require equivalent active coverage on another matrix
+  host**. The symlink tests in the export suite are allowed to skip on
+  Windows when the host cannot create symlinks (no Developer Mode, no admin),
+  but they must run (and pass) on at least one Linux and one macOS host. A
+  Unix host that accidentally skips the symlink coverage is a CI contract
+  violation, not a harmless skip; a guard in the test file makes this
+  enforceable.
+- **No telemetry, no network** beyond the LLM HTTP calls in batch mode
+  (rule 4). Cross-platform CI never runs benchmarks, never exercises paid
+  provider calls, never opens a proxy, and never invokes the LLM client.
+
 ## Layout generated in the target repo
 
 ```
