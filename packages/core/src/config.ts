@@ -261,6 +261,31 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
 }
 
 /**
+ * Single source of truth for the configured `ignores` patterns (relative
+ * gitignore-style patterns, forward slashes). Returns an empty array when
+ * the config is missing the field. Callers forward this list to the walker
+ * via `extraIgnores` so the same semantics apply across the entry points
+ * that actually rescan the repo:
+ *
+ *   - `livewiki index`            (CLI command)
+ *   - `livewiki init`             (base + `--plan`, no LLM)
+ *   - `livewiki init --batch`     (init base, then `runBatch` stage 1)
+ *   - `livewiki batch`            (new run — stage 1 rescan)
+ *
+ * The walker also applies its own built-in defaults (`.git`, `.livewiki`,
+ * `node_modules`, `dist`, `coverage`) and the repo's `.gitignore`. This
+ * helper exposes ONLY the configured user-level overrides.
+ *
+ * Resume (`livewiki batch resume <runId>`) and `--only` do NOT rescan:
+ * they operate on the existing run snapshot (SQLite index + checkpoints).
+ * A configured ignored path cannot re-enter via resume; it was already
+ * excluded when the original run's stage-1 indexer walked the repo.
+ */
+export function resolveExtraIgnores(config: LivewikiConfig): readonly string[] {
+  return config.ignores ?? [];
+}
+
+/**
  * Valida que config tem provider + model ANTES de criar LLM client. Lança
  * `MissingProviderConfigError` se faltar algum.
  *

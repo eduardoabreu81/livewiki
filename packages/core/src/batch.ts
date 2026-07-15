@@ -55,7 +55,7 @@ import {
 import { collectImports } from "./imports.js";
 import { createLlmClient, LlmTimeoutError, type LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult, StopReason } from "./llm/types.js";
-import { loadConfig, applyDefaults, validateConfigForBatch } from "./config.js";
+import { loadConfig, applyDefaults, validateConfigForBatch, resolveExtraIgnores } from "./config.js";
 import { calculateCostUsd, lookupPricing } from "./pricing.js";
 import {
   buildStage2RefinePrompt,
@@ -172,6 +172,20 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     const resolvedConfig = applyDefaults(config);
     const language: Language = opts.language ?? resolvedConfig.language ?? "en";
 
+    // Single source of truth for configured `ignores` (relative gitignore
+    // patterns). The batch NEVER exposes a programmatic override of the
+    // configured ignores — a caller cannot bypass repository
+    // configuration. The walker applies these in stage 1 (and the
+    // `.gitignore` and built-in defaults).
+    //
+    // Resume (`mode === "resume"`) and `--only` do NOT rescan: they
+    // operate on the existing run snapshot (SQLite index + checkpoints).
+    // A configured ignored path cannot re-enter via resume; it was
+    // already excluded when the original run's stage-1 indexer walked
+    // the repo. `configuredExtraIgnores` is therefore only forwarded to
+    // `runIndexer` on the `mode === "run"` path below.
+    const configuredExtraIgnores = resolveExtraIgnores(config);
+
     // Phase-5 plan (X): resolve maxRepairAttempts (opts > config > default 2).
     // In opts.maxRepairAttempts=0 → no repair.
     const maxRepairAttempts =
@@ -249,7 +263,16 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 
     // === Stage 1: Scan ===
     if (opts.mode === "run") {
-      await runIndexer(absRoot, { quiet: true });
+      // Forward the configured `ignores` to the walker so a fresh
+      // `livewiki batch` (without prior `init`) still respects
+      // `.livewiki/config.json` `ignores`. Same semantics as
+      // `livewiki index` and `livewiki init`.
+      await runIndexer(absRoot, {
+        ...(configuredExtraIgnores.length > 0
+          ? { extraIgnores: configuredExtraIgnores }
+          : {}),
+        quiet: true,
+      });
       await runLedger(absRoot, { quiet: true });
     }
 

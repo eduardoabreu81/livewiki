@@ -32,9 +32,16 @@ support is optional only, with an explicit cost warning (more concurrent
 languages ⇒ more debt work and token use). See VISION.md §"Out of
 designed scope".
 
-If you're reading older commits you may see PT-BR mixed in product
-code — those are pre-policy. New product code and edits must follow
-English.
+Existing PT-BR source text, comments, tests, CLI/UI messages, or product/user
+documentation are migration debt for a dedicated final normalization pass. Do
+not expand that debt during unrelated work, and do not mix a repository-wide
+translation into a focused feature or bug-fix change.
+
+**External references are not product dependencies:** ideas evaluated from
+GitHub Agentic Workflows, codebase-memory-mcp, CodeGraph, or similar products
+must be implemented natively when adopted. The livewiki core workflow may not
+require any of them to be installed, running, or configured. Git hosts, editors,
+MCP clients, and LLM providers remain optional user-selected surfaces.
 
 **Working tree hygiene:** do NOT revert uncommitted `.md` files that
 appear in the working tree — they may be reviewer's work. If in doubt,

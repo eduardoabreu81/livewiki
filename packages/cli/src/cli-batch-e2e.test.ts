@@ -863,4 +863,75 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       delete process.env.ANTHROPIC_API_KEY;
     }
   }, 60_000);
+
+  /**
+   * Regression: `livewiki init --batch` must honor `config.ignores`.
+   * Configured ignored paths must NOT enter the indexed inventory, the
+   * module plan, batch tasks, the LLM work, or the generated pages.
+   * The stub server records every module the LLM was asked to
+   * document; we assert no ignored module ever shows up in that log.
+   */
+  it("init --batch respects config.ignores (no module/task/page for ignored paths)", async () => {
+    // Product source (must be documented) + ignored dirs (must NOT).
+    await writeCode("src/auth/login.ts", "export function login() { return 'auth'; }");
+    await writeCode(
+      "benchmarks/tooling/harness.ts",
+      "export function runHarness() { return 'bench'; }",
+    );
+    await writeCode(
+      "raw/openwiki/peer.ts",
+      "export function peerImpl() { return 'peer'; }",
+    );
+
+    // Track every module the stub saw, then assert the ignored ones
+    // never appeared.
+    const seenModules: string[] = [];
+    stub.setHandler((req) => {
+      const match = req.user.match(/# Module: ([^\s]+)/);
+      if (match) seenModules.push(match[1]!);
+      return defaultHandler(req);
+    });
+
+    // Config with the same LLM stub URL + ignores list.
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify(
+        {
+          provider: "anthropic",
+          model: "claude-test-mock",
+          baseUrl: stub.url,
+          ignores: ["benchmarks/", "raw/openwiki/"],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-DONOTLEAK";
+    try {
+      const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
+
+      // No batch task for an ignored module.
+      const tasksDir = nodePath.join(repoRoot, "livewiki");
+      const wikiEntries = await nodeFs.readdir(tasksDir);
+      for (const e of wikiEntries) {
+        expect(e).not.toMatch(/benchmarks|openwiki|raw/i);
+      }
+
+      // The LLM was only asked to document the product module.
+      expect(seenModules).toEqual(["auth"]);
+
+      // Verify passes clean — no broken_internal_link / broken_anchor.
+      const verR = await runCli(["--json", "--repo", repoRoot, "verify"]);
+      expect(verR.status, `verify falhou: ${verR.stderr}`).toBe(0);
+      const verReport = JSON.parse(verR.stdout) as { ok: boolean; issues: unknown[] };
+      expect(verReport.issues).toEqual([]);
+      expect(verReport.ok).toBe(true);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
 });

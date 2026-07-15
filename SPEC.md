@@ -31,6 +31,18 @@
    blocks byte for byte after each update; a change = rejected write. Debt on a
    human-content anchor does not trigger a rewrite — it generates a "human review"
    item in `status`.
+7. **English product artifacts**: source code and identifiers, comments, tests,
+   CLI/UI text, templates, internal documentation, and livewiki's own
+   user-facing documentation are written in English. PT-BR is limited to
+   maintainer conversation. Existing PT-BR artifacts are migration debt for a
+   dedicated final normalization pass. This rule is orthogonal to a target
+   repository's `language` setting: generated wiki prose may use the BCP-47
+   language explicitly chosen by that repository.
+8. **No external product dependency**: capabilities inspired by other tools are
+   implemented natively in livewiki. The core CLI/MCP/skills workflow must not
+   require a separate agent framework, MCP server, code-intelligence service,
+   hosted workflow orchestrator, or third-party app. Provider APIs, MCP clients,
+   Git hosts, and editors are optional user-selected interfaces.
 
 ## Stack
 

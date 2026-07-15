@@ -2,8 +2,11 @@
 
 > Founding document. Defines what livewiki is, why it exists, and the design
 > decisions already made. The executable MVP spec lives in [SPEC.md](SPEC.md).
-> All durable project artifacts (docs, code comments, CLI strings, commit
-> messages) are in English; the maintainers' working conversation is in PT-BR.
+> All durable product artifacts are in English: source code and identifiers,
+> comments, tests, CLI/UI text, templates, internal documentation, and
+> user-facing livewiki documentation. The maintainers' working conversation may
+> be in PT-BR. Existing PT-BR artifacts are migration debt for a dedicated final
+> language-normalization pass; new work must not add to that debt.
 
 ## What it is
 
@@ -61,6 +64,12 @@ code symbols.
 5. **Rebuildable**: the database is a derived index. Deleted `.livewiki/`?
    `reindex` rebuilds everything from the repo + wiki. The DB is never the
    source of truth.
+6. **Self-contained**: livewiki may learn from other products, but selected
+   capabilities are implemented inside livewiki. The core workflow never
+   requires another agent framework, MCP server, code-intelligence service,
+   hosted workflow product, or third-party app. LLM providers, MCP clients, Git
+   hosts, and editors are optional surfaces chosen by the user, not runtime
+   dependencies of the product.
 
 ## Key concepts
 
@@ -126,7 +135,7 @@ checkpoints: **scan → module identification → prioritization → coordinated
 documentation**. Each doc unit is a resumable task: if the quota runs out
 midway, the next LLM continues from task 24/61. Who generates the docs in this
 mode: an LLM via configurable API (Anthropic/OpenAI-compatible) OR the in-session
-agent itself working the queue.
+agent itself working the queue through livewiki's CLI, MCP tools, or skills.
 
 ## Surfaces (one core, four faces)
 
@@ -137,6 +146,28 @@ agent itself working the queue.
 | **Skills** | teach the agent the flow: "finished a task → check debt → document" |
 | **Hooks** | ready-made templates: git post-commit + agent hooks (Claude Code, etc.) |
 
+## Native capability boundary
+
+External projects are design references only. When a pattern fits livewiki, it
+is reproduced in the product's own core and exposed through its existing
+surfaces. In particular:
+
+- the local structural index remains persistent, incremental, and rebuildable;
+- agents receive compact, bounded change context instead of reading the whole
+  repository;
+- documentation relevance is decided deterministically from anchors and debt
+  before any optional LLM call;
+- CLI, MCP, and skills expose the same underlying operations rather than
+  requiring a second memory or code-intelligence tool;
+- automated workflows separate generation from a narrow validated write/action
+  boundary; and
+- Git-host automation creates reviewable draft changes and preserves human
+  approval rather than granting an agent unrestricted write or merge access.
+
+This boundary deliberately does not turn livewiki into a general-purpose code
+graph database. It implements the structural intelligence needed to create,
+maintain, verify, navigate, and hand off documentation.
+
 ## Decisions made (with rationale)
 
 | Decision | Choice | Why |
@@ -144,7 +175,7 @@ agent itself working the queue.
 | MVP primary consumer | **Agent** (handoff + economy) | empty market quadrant; human export is a later transformation |
 | Stack | **TypeScript/Node** | first-class MCP ecosystem; `npx` = zero friction; one codebase, four surfaces |
 | Parsing | **web-tree-sitter (WASM)** | multi-language without native compilation; runs smoothly on Windows/Mac/Linux |
-| Indexer | **own, narrow** | we need a symbol inventory + hashes + anchors, not a full call-graph; codegraph is a design reference, not a dependency |
+| Indexer | **own, documentation-focused** | implement the structural context and change-impact capabilities documentation needs; external graph tools are references, never dependencies |
 | Source of truth | **versioned markdown** | tool-agnostic, git-diff friendly, survives any tool |
 | Index | **gitignored SQLite, derived** | queryable, fast, rebuildable; never travels in git |
 | Cross-machine handoff | **versioned JSON manifest** | small, travels in git; the DB rebuilds locally |
@@ -189,8 +220,10 @@ agent itself working the queue.
   hash-tracked without a parser; plus demand-driven grammar expansion.
 - **`HTTP_PROXY`/`HTTPS_PROXY` support** in the LLM client (corporate environments).
 - **Configurable wiki directory** (evaluate carefully — touches the safe-io allowlist).
-- **CI / PR-bot recipe**: documented GitHub Action — `index` + `status`, pay debt
-  via API, open a docs PR. A recipe over existing pieces, not a feature.
+- **Native CI / PR workflow**: an optional GitHub Actions template runs livewiki
+  itself — deterministic `index` + debt gate, optional standalone generation,
+  validation, and a draft docs PR. It does not require GitHub Agentic Workflows,
+  a separate GitHub App, or an external memory/code-intelligence service.
 - **Adapter hardening**: tolerate DeepSeek-style reasoning blocks in
   OpenAI-compat message history (becomes an adapter test).
 - **`openwiki/` format bridge (hypothesis, not decided)**: the OpenWiki on-disk
@@ -219,9 +252,10 @@ market's providers (presets in the SPEC), the user chooses.
 ## Out of designed scope (evaluate later)
 
 - Local embeddings + semantic search (pluggable)
-- Function call-graph (requires cross-file call resolution; when it comes, it
-  will be per-function neighborhood, not the whole repo) and sequence diagrams
-  (require LLM interpretation — an optional batch extra, never automatic truth).
+- General-purpose function call-graph databases, graph query languages, and
+  dead-code analysis. Documentation-focused impact neighborhoods may be
+  implemented natively when required; sequence diagrams require LLM
+  interpretation and remain an optional batch extra, never automatic truth.
   Note: structure, module dependencies, and classes ALREADY ship deterministic
   in Phase 3 — see SPEC.
 - README generated from the wiki

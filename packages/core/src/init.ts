@@ -40,7 +40,7 @@ import {
   type PathRoleConfig,
   type Module,
 } from "./modules.js";
-import { loadConfig, applyDefaults } from "./config.js";
+import { loadConfig, applyDefaults, resolveExtraIgnores, type LivewikiConfig } from "./config.js";
 import { collectImports } from "./imports.js";
 import {
   generateStructure,
@@ -125,8 +125,22 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   // re-init é no-op se já contém.
   await ensureGitignoreEntries(absRoot, [".livewiki/"]);
 
+  // Load config ONCE so the init indexer and the private `buildPlan`
+  // path see the same configured `ignores` and split thresholds.
+  // `runBatch` (called below when `opts.batch`) is a SEPARATE entry
+  // point — it loads the same on-disk config itself, so there is no
+  // risk of init and batch disagreeing on the configured value. The
+  // ledger does not consume ignores (it walks the wiki pages, not
+  // the source tree). loadConfig throws on malformed JSON — that is
+  // intentional (T0 fail-closed: do not silently apply defaults).
+  const rawConfig = await loadConfig(absRoot);
+  const extraIgnores = resolveExtraIgnores(rawConfig);
+
   // 1. Indexa o repo (sempre — é a fonte do plano e dos diagramas)
-  await runIndexer(absRoot, { ...(opts.quiet ? { quiet: true } : {}) });
+  await runIndexer(absRoot, {
+    ...(extraIgnores.length > 0 ? { extraIgnores } : {}),
+    ...(opts.quiet ? { quiet: true } : {}),
+  });
   await runLedger(absRoot, { ...(opts.quiet ? { quiet: true } : {}) });
 
   // 2. Carrega símbolos + módulos heurísticos
@@ -139,7 +153,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     ordered,
     totalSymbols,
     totalFiles,
-  } = await buildPlan(absRoot);
+  } = await buildPlan(absRoot, rawConfig);
 
   // 3. --plan: relatório e sai (sem escrita, sem LLM)
   if (opts.plan) {
@@ -240,7 +254,11 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
       repoRoot: absRoot,
       ...(opts.noRefine ? { noRefine: true } : {}),
       ...(opts.language ? { language: opts.language } : {}),
-      // Não re-cria index (já rodou acima)
+      // Não re-cria index (já rodou acima). The batch loads
+      // `.livewiki/config.json` itself (T0 fail-closed) and forwards
+      // `config.ignores` to its own stage-1 indexer. We do NOT pass
+      // `extraIgnores` from init — there is no programmatic override;
+      // the configured value is the single source of truth.
       skipManifestWrite: true, // init já escreveu; batch não regrava
     });
     batchSummary = {
@@ -283,7 +301,10 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   };
 }
 
-async function buildPlan(absRoot: string): Promise<{
+async function buildPlan(
+  absRoot: string,
+  rawConfig: LivewikiConfig,
+): Promise<{
   symbols: SymbolRow[];
   filePaths: string[];
   modules: Module[];
@@ -314,12 +335,14 @@ async function buildPlan(absRoot: string): Promise<{
     const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath);
     // Unique first, then split oversized, then unique again (see batch.ts).
     // Prefer config thresholds when present so init --plan matches batch.
-    // loadConfig returns {} when missing; throws on malformed JSON — do NOT
-    // swallow parse errors (would silently apply MODULE_SPLIT_DEFAULTS).
+    // The config is loaded ONCE in `runInit` and forwarded here — we do
+    // NOT re-load from disk. applyDefaults fills in only the unset
+    // thresholds; a malformed JSON error already raised in runInit
+    // (T0 fail-closed) so we never silently swallow config errors here.
     const splitOpts: Parameters<typeof splitOversizedModules>[1] = {
       symbolCountByPath,
     };
-    const cfg = applyDefaults(await loadConfig(absRoot));
+    const cfg = applyDefaults(rawConfig);
     if (cfg.maxModuleFiles !== undefined) {
       splitOpts!.maxFiles = cfg.maxModuleFiles;
     }
@@ -369,7 +392,12 @@ async function buildPlan(absRoot: string): Promise<{
  */
 export async function regenerateArchitectureOverview(repoRoot: string): Promise<void> {
   const absRoot = nodePath.resolve(repoRoot);
-  const { modules, edges, ordered, totalSymbols, totalFiles, pathRoleConfig } = await buildPlan(absRoot);
+  // Load the config inside this hook too — the batch.ts caller does not
+  // pass it through. The single-read call from `runInit` is still
+  // private to that path; the public hook is its own entry point and
+  // must not depend on the caller.
+  const rawConfig = await loadConfig(absRoot);
+  const { modules, edges, ordered, totalSymbols, totalFiles, pathRoleConfig } = await buildPlan(absRoot, rawConfig);
   const presentations = await loadModulePresentations(absRoot, modules);
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", generateQuickstart({
     totalFiles,

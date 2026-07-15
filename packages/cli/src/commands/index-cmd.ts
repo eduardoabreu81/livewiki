@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import * as path from "node:path";
 import { run as runIndexer, formatHuman as formatIndexHuman, type IndexResult } from "@livewiki/core/indexer";
 import { run as runLedger, type LedgerResult } from "@livewiki/core/anchor-ledger";
+import { loadConfig, resolveExtraIgnores } from "@livewiki/core/config";
 
 interface IndexOptions {
   json?: boolean;
@@ -43,10 +44,18 @@ export function registerIndex(program: Command): void {
       const quiet = Boolean(opts.quiet);
       const repoRoot = path.resolve(process.cwd(), opts.repo ?? ".");
       try {
+        // Merge `.livewiki/config.json` `ignores` with the CLI `--ignore`
+        // flag so every entry point shares the same semantics. The CLI
+        // flag is additive: the user can still narrow the walk on a
+        // per-invocation basis, but the configured value is always honored.
+        // `loadConfig` throws on malformed JSON — that is intentional
+        // (T0 fail-closed: do not silently ignore a corrupt config).
+        const config = await loadConfig(repoRoot);
+        const configIgnores = resolveExtraIgnores(config);
+        const cliIgnores = opts.ignore ?? [];
+        const extraIgnores = [...configIgnores, ...cliIgnores];
         const indexResult = await runIndexer(repoRoot, {
-          ...(opts.ignore && opts.ignore.length > 0
-            ? { extraIgnores: opts.ignore }
-            : {}),
+          ...(extraIgnores.length > 0 ? { extraIgnores } : {}),
           // quiet = JSON or --quiet (either suppresses human output)
           quiet: json || quiet,
         });

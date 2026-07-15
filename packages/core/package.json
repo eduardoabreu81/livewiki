@@ -93,6 +93,10 @@
     "./gitignore": {
       "types": "./dist/gitignore.d.ts",
       "import": "./dist/gitignore.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js"
     }
   },
   "files": [

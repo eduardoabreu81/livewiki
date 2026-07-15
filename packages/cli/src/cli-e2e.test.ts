@@ -353,3 +353,82 @@ Texto escrito por humano — agente nunca mexe.
     expect(movedItems[0]?.assignee).toBe("human");
   });
 });
+
+/**
+ * Regression: `.livewiki/config.json` `ignores` must be honored by
+ * `livewiki index`, and the CLI `--ignore` flag must be additive
+ * (configured value always wins; flag narrows further on a
+ * per-invocation basis). Same semantics as `livewiki init` and
+ * `livewiki batch` (covered in `packages/core/src/ignores-propagation.test.ts`).
+ *
+ * Uses the JSON output of `livewiki index` (counts) to assert the
+ * inventory size — the indexer exposes the count of scanned/added
+ * files, which is the externally observable signal that a path was
+ * excluded by the ignore machinery.
+ */
+describe("CLI E2E — livewiki index respects config.ignores and adds --ignore", () => {
+  async function writeIgnoresConfig(ignores: string[]): Promise<void> {
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ ignores }),
+      "utf8",
+    );
+  }
+
+  function readIndexCounts(): { scanned: number; added: number } {
+    const r = runCli(["--json", "--repo", repoRoot, "index"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+    const j = JSON.parse(r.stdout) as {
+      ok: boolean;
+      index: { filesScanned: number; filesAdded: number };
+    };
+    expect(j.ok).toBe(true);
+    return { scanned: j.index.filesScanned, added: j.index.filesAdded };
+  }
+
+  it("config.ignores is honored by livewiki index", async () => {
+    await writeCode("src/product.ts", "export function feature() { return 1; }");
+    await writeCode("benchmarks/tooling/harness.ts", "export function bench() {}");
+    await writeCode("raw/openwiki/peer.ts", "export function peer() {}");
+    await writeIgnoresConfig(["benchmarks/", "raw/openwiki/"]);
+
+    // Without config.ignores, all 3 files would be scanned. With it, only
+    // the product source survives.
+    const { scanned, added } = readIndexCounts();
+    expect(scanned).toBe(1);
+    expect(added).toBe(1);
+  });
+
+  it("--ignore is additive to config.ignores (both apply)", async () => {
+    await writeCode("src/product.ts", "export function feature() { return 1; }");
+    await writeCode("src/extra.ts", "export function extra() { return 2; }");
+    await writeCode("benchmarks/tooling/harness.ts", "export function bench() {}");
+    // Config drops the benchmarks/ dir; CLI flag drops src/extra.ts. Both apply.
+    await writeIgnoresConfig(["benchmarks/"]);
+
+    const r = runCli([
+      "--json",
+      "--repo",
+      repoRoot,
+      "index",
+      "--ignore",
+      "src/extra.ts",
+    ]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+    const j = JSON.parse(r.stdout) as { index: { filesScanned: number; filesAdded: number } };
+    // Only src/product.ts survives. The CLI flag narrowed further.
+    expect(j.index.filesScanned).toBe(1);
+    expect(j.index.filesAdded).toBe(1);
+  });
+
+  it("regular non-ignored source files remain indexed", async () => {
+    await writeCode("src/product.ts", "export function feature() { return 1; }");
+    await writeCode("src/util.ts", "export function util() { return 1; }");
+    await writeIgnoresConfig(["benchmarks/"]);
+
+    const { scanned, added } = readIndexCounts();
+    expect(scanned).toBe(2);
+    expect(added).toBe(2);
+  });
+});
