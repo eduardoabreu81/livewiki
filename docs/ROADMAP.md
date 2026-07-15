@@ -7,11 +7,20 @@
 
 ## Committed next (see AGENTS.md)
 
-1. Quality review vs frozen OpenWiki (no public winner claim before it is
-   written). Benchmark harness work is frozen unless a product defect requires
-   a focused reproduction.
-2. Phase 6 — export to github-wiki / gitlab-wiki / generic.
-3. Phase 7 — local viewer + templates.
+1. Phase 6 — export to `github-wiki` / `gitlab-wiki` / `generic` (one-way
+   lossy transformation, idempotent, overwrite-guarded).
+2. Phase 7 — local viewer + templates (self-contained static site, client-side
+   search, rendered Mermaid, no executable template code).
+
+The independent quality review vs frozen OpenWiki
+(`docs/benchmarks/2026-07-10-minimax-m3/QUALITY-REVIEW-V18.md`) is **complete**.
+Its navigation findings were implemented in Lots M (`0746860`, deterministic
+quickstart/tasks/navigate) and N (`59b1112`, page-opening contract + semantic
+titles + `missing_page_opening` / `title_equals_module_id` validations). The
+clean-v18 benchmark run (13/13 modules, verify clean, exact accounting) is the
+final state of the public comparison evidence; no further benchmark or harness
+run is planned unless a product defect requires a focused reproduction. The
+maintainer decides when (and whether) to publish a `docs/BENCHMARK.md` note.
 
 ## Approved backlog (post Phase 7, in priority order)
 
