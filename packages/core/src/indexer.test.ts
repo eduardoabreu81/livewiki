@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
+import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { run as runIndexer } from "./indexer.js";
 import { run as runStatus } from "./status.js";
@@ -32,7 +33,7 @@ beforeEach(async () => {
   // Resolve do CWD do test runner (packages/core/) — robusto.
   sampleRepo = nodePath.resolve(process.cwd(), "test/fixtures/sample-ts-repo");
   repoRoot = await nodeFs.mkdtemp(
-    nodePath.join(process.env.TMPDIR ?? "C:\\Users\\Eduardo\\AppData\\Local\\Temp", "livewiki-indexer-"),
+    nodePath.join(nodeOs.tmpdir(), "livewiki-indexer-"),
   );
   // Copia só os arquivos esperados (sem .livewiki da fixture contaminada).
   // node:fs.cp com recursive traria .livewiki junto se existir na fixture.

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
+import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
@@ -10,7 +11,7 @@ let repoRoot: string;
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(
     nodePath.join(
-      process.env.TMPDIR ?? "C:\\Users\\Eduardo\\AppData\\Local\\Temp",
+      nodeOs.tmpdir(),
       "livewiki-verify-",
     ),
   );

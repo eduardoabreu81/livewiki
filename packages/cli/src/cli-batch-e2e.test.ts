@@ -24,6 +24,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import * as http from "node:http";
 import * as nodePath from "node:path";
+import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 
 interface StubServer {
@@ -195,7 +196,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(
-    nodePath.join(process.env.TMPDIR ?? "C:\\Users\\Eduardo\\AppData\\Local\\Temp", "livewiki-e2e-f3-"),
+    nodePath.join(nodeOs.tmpdir(), "livewiki-e2e-f3-"),
   );
 });
 

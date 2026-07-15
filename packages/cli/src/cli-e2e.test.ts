@@ -26,13 +26,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import * as nodePath from "node:path";
+import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 
 let repoRoot: string;
 
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(
-    nodePath.join(process.env.TMPDIR ?? "C:\\Users\\Eduardo\\AppData\\Local\\Temp", "livewiki-cli-e2e-"),
+    nodePath.join(nodeOs.tmpdir(), "livewiki-cli-e2e-"),
   );
 });
 
