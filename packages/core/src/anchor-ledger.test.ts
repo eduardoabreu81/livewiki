@@ -616,6 +616,27 @@ Texto manual.
       "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
     );
     expect(debts).toContainEqual({ event: "moved", assignee: "human" });
+
+    // Repeat-run idempotency: another ledger pass with no code or
+    // Markdown change must keep exactly one persisted identity for the
+    // moved anchor and not create additional open moved debt. The
+    // canonical newKey row survives (collision handling: the manual
+    // block's oldKey is preserved in the Markdown, so on a repeat
+    // run a fresh oldKey row is inserted but then deleted in favor of
+    // the existing newKey row; moved-debt dedup is by the canonical
+    // newKey id, so the prior open moved debt covers this run).
+    const r2 = await runLedger(repoRoot, { quiet: true });
+    expect(r2.debtCreated).toBe(0);
+    const anchorsAfter = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key FROM anchors",
+    );
+    expect(anchorsAfter).toEqual([{ symbol_key: "src/baz.ts#bar" }]);
+    const movedDebts = nodeSqliteQuery(
+      repoRoot,
+      "SELECT COUNT(*) AS n FROM debt WHERE event = 'moved' AND resolved_at IS NULL",
+    );
+    expect(movedDebts).toEqual([{ n: 1 }]);
   });
 
   it("G2: anchor em página owner=human NÃO é reescrita (regra #6)", async () => {
@@ -649,6 +670,409 @@ anchors:
       "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
     );
     expect(debts).toContainEqual({ event: "moved", assignee: "human" });
+  });
+
+  it("G2-ext: stale generated row must not rewrite surviving manual occurrence", async () => {
+    // Defect 1 regression: a stale generated anchor row at the old
+    // key must not trigger a page-wide oldKey -> newKey rewrite before
+    // being rejected by the pre-move identity check. If the only
+    // surviving occurrence of the old key is inside a manual block,
+    // the rewrite would otherwise silently overwrite that manual
+    // marker, breaking the manual-content rule.
+    await writeCode(
+      "src/foo.ts",
+      "export function bar() { return 42; }\n" +
+        "export function baz() { return 99; }\n",
+    );
+    // Initial page: frontmatter has bar (generated) and a manual
+    // block also has bar. Two persisted rows for the same key.
+    await writeWiki(
+      "livewiki/foo.md",
+      `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+
+## Manual
+<!-- lw:manual -->
+<!-- lw:anchors src/foo.ts#bar -->
+Texto manual.
+<!-- /lw:manual -->
+`,
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    const r0 = await runLedger(repoRoot, { quiet: true });
+    expect(r0.debtCreated).toBe(0);
+    expect(
+      nodeSqliteQuery(repoRoot, "SELECT COUNT(*) AS n FROM anchors"),
+    ).toEqual([{ n: 2 }]);
+
+    // User removes the generated occurrence from Markdown WITHOUT
+    // running the ledger. The persisted generated row is now stale.
+    await writeWiki(
+      "livewiki/foo.md",
+      `---
+title: Foo
+---
+
+## Manual
+<!-- lw:manual -->
+<!-- lw:anchors src/foo.ts#bar -->
+Texto manual.
+<!-- /lw:manual -->
+`,
+    );
+
+    // Source move: bar -> baz.ts (same body).
+    await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
+    await writeCode(
+      "src/baz.ts",
+      "export function bar() { return 42; }\n" +
+        "export function baz() { return 99; }\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // The manual marker must still reference the old key.
+    const mdAfter = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/foo.md"),
+      "utf8",
+    );
+    expect(mdAfter).toMatch(/<!-- lw:anchors src\/foo\.ts#bar -->/);
+    expect(mdAfter).not.toMatch(/src\/baz\.ts#bar/);
+
+    // The DB has exactly one anchor row for the manual block (the
+    // stale generated row was removed by reconciliation), and the
+    // manual row was updated to newKey as part of the standard move
+    // handling. The Markdown still references oldKey (regra #6), so
+    // there is exactly one open moved debt with assignee=human.
+    const anchors = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key, section_slug, in_manual_block FROM anchors",
+    );
+    expect(anchors).toEqual([
+      {
+        symbol_key: "src/baz.ts#bar",
+        section_slug: "manual",
+        in_manual_block: 1,
+      },
+    ]);
+    const debts = nodeSqliteQuery(
+      repoRoot,
+      "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
+    );
+    expect(debts).toEqual([{ event: "moved", assignee: "human" }]);
+  });
+
+  it("G2-ext: owner:human with two distinct moves keeps distinct canonical ids and is repeat-idempotent", async () => {
+    // Defect 2 + 3 regression: with two distinct moves from one file
+    // in a single owner:human frontmatter, the canonical moved-anchor
+    // id map (keyed only by page+section) collapses both moves onto
+    // the same anchor id, and the NULL-sensitive frontmatter
+    // collision lookup misses the existing newKey rows. The result
+    // is duplicate newKey rows and duplicate open moved debts.
+    await writeCode(
+      "src/foo.ts",
+      "export function bar() { return 1; }\n" +
+        "export function baz() { return 2; }\n",
+    );
+    const wikiRel = "livewiki/foo.md";
+    const mdOriginal = `---
+title: Foo
+owner: human
+anchors:
+  - src/foo.ts#bar
+  - src/foo.ts#baz
+---
+`;
+    await writeWiki(wikiRel, mdOriginal);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // Move both symbols to new.ts (same bodies).
+    await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
+    await writeCode(
+      "src/new.ts",
+      "export function bar() { return 1; }\n" +
+        "export function baz() { return 2; }\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    const r1 = await runLedger(repoRoot, { quiet: true });
+
+    // Markdown is unchanged.
+    const mdAfter = await nodeFs.readFile(
+      nodePath.join(repoRoot, wikiRel),
+      "utf8",
+    );
+    expect(mdAfter).toBe(mdOriginal);
+
+    // Exactly one canonical newKey row per moved symbol.
+    const anchors = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key FROM anchors ORDER BY symbol_key",
+    );
+    expect(anchors).toEqual([
+      { symbol_key: "src/new.ts#bar" },
+      { symbol_key: "src/new.ts#baz" },
+    ]);
+
+    // Two distinct open moved debts referencing distinct anchor ids
+    // and the correct new symbol keys.
+    const movedDebts = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key, anchor_id FROM debt WHERE event = 'moved' AND resolved_at IS NULL ORDER BY symbol_key, anchor_id",
+    );
+    expect(movedDebts).toHaveLength(2);
+    const symbolKeys = movedDebts.map((d) => d.symbol_key);
+    expect(symbolKeys).toEqual(["src/new.ts#bar", "src/new.ts#baz"]);
+    const anchorIds = new Set(movedDebts.map((d) => d.anchor_id));
+    expect(anchorIds.size).toBe(2);
+
+    // Repeat run is idempotent: zero additional debt, anchor ids and
+    // symbol keys are preserved, the persisted row count stays at 2.
+    const r2 = await runLedger(repoRoot, { quiet: true });
+    expect(r2.debtCreated).toBe(0);
+    const anchors2 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key FROM anchors ORDER BY symbol_key",
+    );
+    expect(anchors2).toEqual([
+      { symbol_key: "src/new.ts#bar" },
+      { symbol_key: "src/new.ts#baz" },
+    ]);
+    const movedDebts2 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key, anchor_id FROM debt WHERE event = 'moved' AND resolved_at IS NULL ORDER BY symbol_key, anchor_id",
+    );
+    expect(movedDebts2).toEqual(movedDebts);
+  });
+
+  it("G2-ext: rewrite respects manual blocks, code spans, and the anchors list scope", async () => {
+    // Defect 1 + 2 + 3 regression: the same oldKey appears in many
+    // places on a single page, only some of which are allowed
+    // rewrite targets:
+    //   1. the real frontmatter `anchors:` list (allowed rewrite);
+    //   2. a later unrelated frontmatter list under another field
+    //      (`related:`, must stay byte-identical — stop at the
+    //      next top-level frontmatter key);
+    //   3. a generated `<!-- lw:anchors -->` section marker
+    //      (allowed rewrite);
+    //   4. an ordinary Markdown bullet listing the key as text
+    //      (NOT an anchor — must remain byte-identical);
+    //   5. an `<!-- lw:anchors -->` marker inside a fenced code
+    //      example (must remain byte-identical — code spans are
+    //      not a structural rewrite surface);
+    //   6. an `<!-- lw:anchors -->` marker inside an
+    //      `<!-- lw:manual -->` block (must remain byte-identical
+    //      — manual content is human-owned and byte-preserved).
+    //
+    // The fixture also uses CRLF line endings, a new key with
+    // a materially different length from the old key (so any
+    // offset drift caused by editing the frontmatter before
+    // computing body positions would corrupt a marker inside the
+    // manual block — defect 1), the `anchors:` field carries a
+    // trailing YAML comment (a real, parser-accepted form that
+    // the rewrite helper must recognize — defect 2), and the
+    // closing `---` delimiter has trailing spaces (also real, also
+    // parser-accepted — defect 1 of the current helper).
+    await writeCode("src/foo.ts", "export function bar() { return 42; }");
+    const wikiRel = "livewiki/foo.md";
+    // CRLF line endings throughout. The `anchors:` line carries a
+    // trailing comment; the closing `---` line has trailing spaces.
+    const mdOriginal = [
+      "---",
+      "title: Foo",
+      "anchors: # canonical symbol keys",
+      "  - src/foo.ts#bar",
+      "related:",
+      "  - src/foo.ts#bar",
+      "---   ",
+      "",
+      "## Detalhes",
+      "<!-- lw:anchors src/foo.ts#bar -->",
+      "Texto da seção.",
+      "",
+      "- src/foo.ts#bar  # nota em prosa",
+      "",
+      "## Exemplo",
+      "```markdown",
+      "<!-- lw:anchors src/foo.ts#bar -->",
+      "```",
+      "",
+      "## Manual",
+      "<!-- lw:manual -->",
+      "<!-- lw:anchors src/foo.ts#bar -->",
+      "- src/foo.ts#bar  # linha manual",
+      "<!-- /lw:manual -->",
+      "",
+    ].join("\r\n");
+    await writeWiki(wikiRel, mdOriginal);
+
+    await runIndexer(repoRoot, { quiet: true });
+    const r0 = await runLedger(repoRoot, { quiet: true });
+    expect(r0.debtCreated).toBe(0);
+    expect(
+      nodeSqliteQuery(repoRoot, "SELECT COUNT(*) AS n FROM anchors"),
+    ).toEqual([{ n: 3 }]);
+
+    // Move foo.ts -> longer-name.ts. Different length (+7 chars)
+    // forces every body offset to shift, so any offset
+    // pre-computation against the original source must be
+    // carefully isolated from frontmatter edits.
+    await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
+    await writeCode(
+      "src/longer-name.ts",
+      "export function bar() { return 42; }",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    const r1 = await runLedger(repoRoot, { quiet: true });
+
+    const mdAfter = await nodeFs.readFile(
+      nodePath.join(repoRoot, wikiRel),
+      "utf8",
+    );
+
+    // CRLF line endings are preserved end-to-end. The Markdown
+    // must not contain any bare LF outside of an LF that is part
+    // of a CRLF pair (sanity: a leading \n without a preceding \r
+    // would mean the rewrite dropped or normalized line endings).
+    expect(mdAfter).toMatch(/^---/m);
+    expect(mdAfter).toMatch(/\r\n/);
+    // The closing delimiter with trailing spaces must be
+    // recognized as a valid frontmatter end; the frontmatter
+    // region therefore has the same line count before and after.
+    const fmEndRe = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
+    const fmOriginal = mdOriginal.match(fmEndRe)?.[0] ?? "";
+    const fmAfter = mdAfter.match(fmEndRe)?.[0] ?? "";
+    expect(fmOriginal.split(/\r\n/).length).toBe(fmAfter.split(/\r\n/).length);
+    expect(fmOriginal).toContain("\r\n");
+    // The closing delimiter line still carries its trailing
+    // spaces — the rewrite must not eat them.
+    expect(fmAfter).toMatch(/\r\n---   \r?\n/);
+
+    // Allowed rewrites happened:
+    //   - the real frontmatter anchor entry: src/foo.ts#bar -> src/longer-name.ts#bar
+    //     The `anchors:` line itself keeps its trailing comment.
+    const anchorsRe =
+      /^[ \t]*anchors:[^\r\n]*\r?\n([\s\S]*?)(?=^[ \t]*[A-Za-z_][\w-]*[ \t]*:|\r?\n---)/m;
+    const fmAnchorsOriginal = fmOriginal.match(anchorsRe)?.[1] ?? "";
+    const fmAnchorsAfter = fmAfter.match(anchorsRe)?.[1] ?? "";
+    expect(fmAfter).toMatch(/^[ \t]*anchors:[ \t]*# canonical symbol keys\r?$/m);
+    expect(fmAnchorsAfter).toMatch(/^[ \t]*-[ \t]+src\/longer-name\.ts#bar\r?$/m);
+    expect(fmAnchorsAfter).not.toMatch(/src\/foo\.ts#bar/);
+    //   - the real generated section marker
+    expect(mdAfter).toMatch(
+      /<!--\s*lw:anchors\s+src\/longer-name\.ts#bar\s*-->/,
+    );
+
+    // Preserved byte-identical:
+    //   - the later unrelated frontmatter list (`related:`) keeps oldKey
+    const relatedRe = /^[ \t]*related:[ \t]*\r?\n([\s\S]*?)(?=^[ \t]*[A-Za-z_][\w-]*[ \t]*:|\r?\n---)/m;
+    const fmRelatedOriginal = fmOriginal.match(relatedRe)?.[1] ?? "";
+    const fmRelatedAfter = fmAfter.match(relatedRe)?.[1] ?? "";
+    expect(fmRelatedAfter).toBe(fmRelatedOriginal);
+    expect(fmRelatedAfter).toMatch(/^[ \t]*-[ \t]+src\/foo\.ts#bar\r?$/m);
+    expect(fmRelatedAfter).not.toMatch(/src\/longer-name\.ts#bar/);
+    //   - the ordinary body bullet keeps oldKey
+    expect(mdAfter).toMatch(/- src\/foo\.ts#bar  # nota em prosa\r\n/);
+    //   - the fenced code example content is byte-identical
+    const fenceRe = /```markdown\r?\n([\s\S]*?)\r?\n```/;
+    const originalFence = mdOriginal.match(fenceRe)?.[0] ?? "";
+    const afterFence = mdAfter.match(fenceRe)?.[0] ?? "";
+    expect(afterFence).toBe(originalFence);
+    expect(afterFence).toContain("src/foo.ts#bar");
+    expect(afterFence).not.toContain("src/longer-name.ts#bar");
+    //   - the complete manual block is byte-identical (no marker or
+    //     body line inside the manual range changed)
+    const manualRe = /<!--\s*lw:manual\s*-->([\s\S]*?)<!--\s*\/lw:manual\s*-->/;
+    const originalManual = mdOriginal.match(manualRe)?.[0] ?? "";
+    const afterManual = mdAfter.match(manualRe)?.[0] ?? "";
+    expect(afterManual).toBe(originalManual);
+    expect(afterManual).toContain("src/foo.ts#bar");
+    expect(afterManual).not.toContain("src/longer-name.ts#bar");
+
+    // The Markdown is not byte-identical overall (frontmatter and
+    // section marker were rewritten), but every protected region
+    // listed above is.
+    expect(mdAfter).not.toBe(mdOriginal);
+
+    // Canonical database identities: the manual block row is
+    // in_manual_block=1 (rewrite skipped), but it was still updated
+    // to the new symbol key in SQLite by the move handling. The
+    // generated section marker row is in_manual_block=0. The
+    // frontmatter row is in_manual_block=0 (page slot). The
+    // Exemplo section has no row because its marker sits inside
+    // a fenced code block and is masked by the parser.
+    const anchors = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key, section_slug, in_manual_block FROM anchors ORDER BY section_slug NULLS FIRST, rowid",
+    );
+    expect(anchors).toEqual([
+      { symbol_key: "src/longer-name.ts#bar", section_slug: null, in_manual_block: 0 },
+      { symbol_key: "src/longer-name.ts#bar", section_slug: "detalhes", in_manual_block: 0 },
+      { symbol_key: "src/longer-name.ts#bar", section_slug: "manual", in_manual_block: 1 },
+    ]);
+
+    // Moved debt: one per persisted row. Non-manual rows are
+    // assignee=agent (rewritten in Markdown), manual row is
+    // assignee=human (rule #6).
+    const debts = nodeSqliteQuery(
+      repoRoot,
+      "SELECT event, assignee FROM debt WHERE resolved_at IS NULL ORDER BY id",
+    );
+    expect(debts).toEqual([
+      { event: "moved", assignee: "agent" },
+      { event: "moved", assignee: "agent" },
+      { event: "moved", assignee: "human" },
+    ]);
+
+    // Repeat run is idempotent: zero new debt, anchor rows stable.
+    const r2 = await runLedger(repoRoot, { quiet: true });
+    expect(r2.debtCreated).toBe(0);
+    const anchors2 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT COUNT(*) AS n FROM anchors",
+    );
+    expect(anchors2).toEqual([{ n: 3 }]);
+    const debts2 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT COUNT(*) AS n FROM debt WHERE resolved_at IS NULL",
+    );
+    expect(debts2).toEqual([{ n: 3 }]);
+    // The Markdown remains identical after the repeat run (no
+    // second rewrite of the already-rewritten anchors entry).
+    const mdAfter2 = await nodeFs.readFile(
+      nodePath.join(repoRoot, wikiRel),
+      "utf8",
+    );
+    expect(mdAfter2).toBe(mdAfter);
+
+    // Manual-block persistence: the page has exactly one
+    // `<!-- lw:manual -->...<!-- /lw:manual -->` block, so the
+    // ledger must keep exactly one stored row for it across
+    // repeat runs. Duplicate rows make verify compare a stored
+    // multiset against itself and emit false
+    // `manual_block_altered` errors.
+    const manualBlockRows = nodeSqliteQuery(
+      repoRoot,
+      "SELECT id, doc_page_id, start_offset, end_offset, content_hash " +
+        "FROM manual_blocks ORDER BY id",
+    );
+    expect(manualBlockRows).toHaveLength(1);
+
+    // verify must not emit any `manual_block_altered` issues for
+    // this page. We do not assert zero total issues because the
+    // intentionally preserved oldKey (e.g. inside the manual
+    // block) legitimately produces a `broken_anchor`.
+    const { run: runVerify } = await import("./verify.js");
+    const verifyReport = await runVerify(repoRoot);
+    const alteredIssues = verifyReport.issues.filter(
+      (i) => i.code === "manual_block_altered",
+    );
+    expect(alteredIssues).toEqual([]);
   });
 });
 
@@ -755,6 +1179,215 @@ anchors:
     await runLedger(repoRoot, { quiet: true });
     const anchors = nodeSqliteQuery(repoRoot, "SELECT symbol_key FROM anchors");
     expect(anchors).toEqual([]);
+  });
+});
+
+describe("anchor-ledger — reconciliation by stable identity", () => {
+  // Review finding (2026-07-16): the (doc_page_id, section_slug, symbol_key)
+  // map identity correctly supports multiple frontmatter anchors, but the
+  // ledger did NOT reconcile persisted rows against the current Markdown.
+  //   - Replacing A with B in a page slot inserted a new B row but left
+  //     the stale A row behind. The SQLite index drifted from disk; a
+  //     later edit could resurrect debt from an anchor that no longer
+  //     exists in the wiki.
+  //   - Moved-anchor processing updated DB rows + ca.symbolKey but left
+  //     existingAnchors indexed under oldKey, so the immediate diff
+  //     could not find the row under newKey.
+  // This test exercises the full contract: idempotency under repeated
+  // runs, deterministic removal of stale identities, and no spurious
+  // debt when a documentation page deliberately drops an anchor.
+  it("retains A, removes the replaced B, inserts C; B becomes undocumented; no spurious debt", async () => {
+    // 1. Three active symbols in one file.
+    await writeCode(
+      "src/lib.ts",
+      "export function a() { return 1; }\n" +
+        "export function b() { return 2; }\n" +
+        "export function c() { return 3; }\n",
+    );
+    // 2. One wiki page with A and B in the frontmatter + matching section
+    //    markers (so both kinds of slots are exercised).
+    await writeWiki(
+      "livewiki/lib.md",
+      `---
+title: Lib
+owner: generated
+anchors:
+  - src/lib.ts#a
+  - src/lib.ts#b
+---
+
+## Overview
+
+## Reference
+<!-- lw:anchors src/lib.ts#a src/lib.ts#b -->
+`,
+    );
+
+    // 3. Index + ledger twice — must be idempotent: 0 debt, exactly 4
+    //    anchor rows (A and B in frontmatter + A and B in section).
+    await runIndexer(repoRoot, { quiet: true });
+    const r1 = await runLedger(repoRoot, { quiet: true });
+    expect(r1.pagesProcessed).toBe(1);
+    expect(r1.anchorsUpserted).toBe(4);
+    expect(r1.debtCreated).toBe(0);
+
+    const r2 = await runLedger(repoRoot, { quiet: true });
+    expect(r2.debtCreated).toBe(0);
+    expect(r2.anchorsUpserted).toBe(4);
+
+    const identities = (rows: Array<Record<string, unknown>>) =>
+      rows
+        .map((r) => `${r.doc_page_id}|${r.section_slug ?? "null"}|${r.symbol_key}`)
+        .sort();
+    const rows1 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT doc_page_id, section_slug, symbol_key FROM anchors",
+    );
+    // doc_page_id is 1 on a fresh DB (only one page in this test).
+    expect(identities(rows1)).toEqual([
+      "1|null|src/lib.ts#a",
+      "1|null|src/lib.ts#b",
+      "1|reference|src/lib.ts#a",
+      "1|reference|src/lib.ts#b",
+    ]);
+
+    // 4. Rewrite the page: B is removed from the frontmatter, the section
+    //    marker switches B→C, and A is untouched in both slots.
+    await writeWiki(
+      "livewiki/lib.md",
+      `---
+title: Lib
+owner: generated
+anchors:
+  - src/lib.ts#a
+---
+
+## Overview
+
+## Reference
+<!-- lw:anchors src/lib.ts#a src/lib.ts#c -->
+`,
+    );
+
+    // 5. Run the ledger again. No source-code change, so no real change
+    //    debt should appear.
+    const r3 = await runLedger(repoRoot, { quiet: true });
+    expect(r3.debtCreated).toBe(0);
+    expect(r3.debtByEvent.changed).toBe(0);
+    expect(r3.debtByEvent.moved).toBe(0);
+    expect(r3.debtByEvent.deleted).toBe(0);
+
+    // 6. The persisted identities MUST exactly match the current Markdown.
+    const rows3 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT doc_page_id, section_slug, symbol_key FROM anchors",
+    );
+    expect(identities(rows3)).toEqual([
+      "1|null|src/lib.ts#a",
+      "1|reference|src/lib.ts#a",
+      "1|reference|src/lib.ts#c",
+    ]);
+
+    // 7. The stale B rows (frontmatter + section) are GONE — exactly
+    //    zero rows reference src/lib.ts#b.
+    const staleB = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key FROM anchors WHERE symbol_key = 'src/lib.ts#b'",
+    );
+    expect(staleB).toEqual([]);
+
+    // 8. C exists once per legitimate page/section identity (section
+    //    "reference" only — it was never in the frontmatter).
+    const cRows = nodeSqliteQuery(
+      repoRoot,
+      "SELECT section_slug FROM anchors WHERE symbol_key = 'src/lib.ts#c'",
+    );
+    expect(cRows).toEqual([{ section_slug: "reference" }]);
+
+    // 9. B has no other anchor → it must become undocumented.
+    const undoc = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key FROM undocumented",
+    );
+    expect(undoc).toEqual([{ symbol_key: "src/lib.ts#b" }]);
+
+    // 10. A still has 0 debt — the documentation did not stop anchoring
+    //     it, and the source code did not change.
+    const openDebt = nodeSqliteQuery(
+      repoRoot,
+      "SELECT event FROM debt WHERE resolved_at IS NULL",
+    );
+    expect(openDebt).toEqual([]);
+
+    // 11. Repeat-run idempotency: a fourth ledger call must not change
+    //     anything.
+    const r4 = await runLedger(repoRoot, { quiet: true });
+    expect(r4.debtCreated).toBe(0);
+    const rows4 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT doc_page_id, section_slug, symbol_key FROM anchors",
+    );
+    expect(identities(rows4)).toEqual(identities(rows3));
+
+    // 12. Remove the final anchor (A from frontmatter, A from section,
+    //     and C from section): the page keeps no anchors at all. A
+    //     previously-processed page with zero current anchors must still
+    //     be reconciled against an empty expected set, so every
+    //     persisted row for the page is removed.
+    await writeWiki(
+      "livewiki/lib.md",
+      `---
+title: Lib
+owner: generated
+---
+
+## Overview
+`,
+    );
+    const r5 = await runLedger(repoRoot, { quiet: true });
+    expect(r5.debtCreated).toBe(0);
+    expect(r5.debtByEvent.changed).toBe(0);
+    expect(r5.debtByEvent.moved).toBe(0);
+    expect(r5.debtByEvent.deleted).toBe(0);
+
+    const rows5 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT doc_page_id, section_slug, symbol_key FROM anchors",
+    );
+    expect(rows5).toEqual([]);
+
+    // The doc_page row stays — only the anchors were removed.
+    const docPageRows = nodeSqliteQuery(
+      repoRoot,
+      "SELECT wiki_path FROM doc_pages",
+    );
+    expect(docPageRows).toEqual([{ wiki_path: "livewiki/lib.md" }]);
+
+    // All three symbols are now undocumented (no anchors anywhere).
+    const undoc5 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key FROM undocumented ORDER BY symbol_key",
+    );
+    expect(undoc5).toEqual([
+      { symbol_key: "src/lib.ts#a" },
+      { symbol_key: "src/lib.ts#b" },
+      { symbol_key: "src/lib.ts#c" },
+    ]);
+
+    // 13. Repeat-run idempotency: a sixth ledger call does not change
+    //     anything (the empty-page state stays empty, no debt).
+    const r6 = await runLedger(repoRoot, { quiet: true });
+    expect(r6.debtCreated).toBe(0);
+    const rows6 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT COUNT(*) AS n FROM anchors",
+    );
+    expect(rows6).toEqual([{ n: 0 }]);
+    const openDebt6 = nodeSqliteQuery(
+      repoRoot,
+      "SELECT event FROM debt WHERE resolved_at IS NULL",
+    );
+    expect(openDebt6).toEqual([]);
   });
 });
 

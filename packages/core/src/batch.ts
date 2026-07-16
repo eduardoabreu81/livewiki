@@ -280,9 +280,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     const symbols = db
       .prepare("SELECT * FROM symbols WHERE status = 'active'")
       .all() as SymbolRow[];
-    const filePaths = [
-      ...new Set(symbols.map((s) => s.key.split("#")[0]!)),
-    ].sort();
+    // Planning inventory contract (shared with init.ts:buildPlan): the
+    // set of active indexed files (`files.status = 'active'`) is the
+    // single source of truth. The indexer inserts an `active` files row
+    // before any of its symbols, so every active symbol is guaranteed
+    // to point at a file in this set. Re-export-only barrels and any
+    // other active file with zero extracted symbols appear here with
+    // symbolCount=0. Deleted file rows stay excluded.
+    const activeFileRows = db
+      .prepare("SELECT path FROM files WHERE status = 'active'")
+      .all() as Array<{ path: string }>;
+    const filePaths = [...new Set(activeFileRows.map((row) => row.path))].sort();
     const symbolCountByPath = new Map<string, number>();
     for (const s of symbols) {
       const p = s.key.split("#")[0]!;

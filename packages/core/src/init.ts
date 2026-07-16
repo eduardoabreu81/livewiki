@@ -320,9 +320,17 @@ async function buildPlan(
     const symbols = db
       .prepare("SELECT * FROM symbols WHERE status = 'active'")
       .all() as SymbolRow[];
-    const filePaths = [
-      ...new Set(symbols.map((s) => s.key.split("#")[0]!)),
-    ].sort();
+    // Planning inventory: the set of active indexed files
+    // (`files.status = 'active'`) is the single source of truth. The
+    // indexer always inserts an `active` files row before any of its
+    // symbols, so every active symbol is guaranteed to point at a file
+    // that is present in this set. This includes re-export-only barrels
+    // and any other active file with zero extracted symbols (they appear
+    // here with symbolCount=0). Deleted file rows are excluded.
+    const activeFileRows = db
+      .prepare("SELECT path FROM files WHERE status = 'active'")
+      .all() as Array<{ path: string }>;
+    const filePaths = [...new Set(activeFileRows.map((row) => row.path))].sort();
     const symbolCountByPath = new Map<string, number>();
     for (const s of symbols) {
       const p = s.key.split("#")[0]!;

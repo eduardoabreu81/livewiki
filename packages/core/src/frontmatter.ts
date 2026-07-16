@@ -132,9 +132,14 @@ function parseYamlBlock(yaml: string): Frontmatter {
 }
 
 function stripComment(s: string): string {
-  // Comentário "# ..." fora de string. Simplificação: não suportamos # dentro
-  // de string. Se alguém precisar, usamos aspas.
-  const idx = s.indexOf(" #");
+  // Comment "# ..." outside of a string. Simplification: we do not
+  // support `#` inside a string. If that is ever needed, use
+  // explicit quoting.
+  // YAML allows `#` to start a comment at the beginning of a
+  // value (`anchors: # foo`) or preceded by whitespace
+  // (`key: value # foo`). The anchor rewrite scope depends on
+  // this form being recognized.
+  const idx = s.search(/(^|\s)#/);
   return idx === -1 ? s : s.slice(0, idx);
 }
 

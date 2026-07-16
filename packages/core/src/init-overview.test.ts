@@ -191,3 +191,89 @@ describe("deterministic navigation hubs", () => {
     expect(overview).not.toContain("## Test fixtures");
   });
 });
+
+describe("planning inventory — active files with zero extracted symbols", () => {
+  // Regression: an active indexed file (e.g. a re-export-only barrel)
+  // must remain in the plan, the deterministic structure diagram, the
+  // repository facts, and the exact-partition check. Before the fix, the
+  // planning inventory was derived from active symbols only — such a
+  // file would silently disappear from the plan, the quickstart
+  // file-count, the structure diagram, and the deterministic overview.
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await nodeFs.mkdtemp(
+      nodePath.join(nodeOs.tmpdir(), "livewiki-init-barrel-"),
+    );
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("keeps an active re-export-only file in the plan, structure, and exact partition", async () => {
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/counters.ts"),
+      "export function countWords(input: string): number { return input.length; }\n",
+      "utf8",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/format.ts"),
+      "export function formatReport(value: number): string { return String(value); }\n",
+      "utf8",
+    );
+    // `src/index.ts` is active in the index (it is real TypeScript) but
+    // contains ONLY re-exports — the indexer extracts zero symbols from
+    // it. Before the fix it was dropped from the planning inventory.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/index.ts"),
+      'export { countWords } from "./counters.js";\n' +
+        'export { formatReport } from "./format.js";\n',
+      "utf8",
+    );
+
+    const result = await runInit({ repoRoot, plan: true, quiet: true });
+
+    // 1. --plan output includes all three active files, including the barrel.
+    expect(result.plan?.totalFiles).toBe(3);
+    const planPaths = result.plan?.modules.flatMap((m) => m.paths) ?? [];
+    expect(new Set(planPaths)).toEqual(
+      new Set(["src/counters.ts", "src/format.ts", "src/index.ts"]),
+    );
+    // The barrel participates in the exact-partition check and reports 0
+    // symbols; the module still groups by directory.
+    const srcModule = result.plan?.modules.find((m) => m.id === "src");
+    expect(srcModule).toBeDefined();
+    expect(srcModule!.symbolCount).toBe(2);
+
+    // 2. A normal `init` run must keep the same inventory in the
+    //    deterministic structure diagram and in the repository facts.
+    await runInit({ repoRoot, quiet: true });
+
+    const structure = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/architecture/structure.mmd"),
+      "utf8",
+    );
+    expect(structure).toContain("src/index.ts");
+
+    const quickstart = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/quickstart.md"),
+      "utf8",
+    );
+    expect(quickstart).toContain("3 files");
+
+    const overview = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
+      "utf8",
+    );
+    expect(overview).toContain("3 files");
+    expect(overview).toContain("src/index.ts");
+
+    // 3. The plan, structure diagram, and overview all list the same three
+    //    paths exactly once — proving the exact-partition contract still
+    //    holds when zero-symbol files are present.
+    expect(overview).toMatch(/\*\*\d+\*\* symbols across \*\*3\*\* files/);
+    expect(overview.match(/src\/index\.ts/g)?.length).toBe(1);
+  });
+});
