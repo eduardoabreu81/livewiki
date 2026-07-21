@@ -1,0 +1,18 @@
+flowchart LR
+  cli-src["cli-src"]
+  commands["commands"]
+  core-src-05["core-src-05"]
+  core-src-03["core-src-03"]
+  core-src-01["core-src-01"]
+  core-src-02["core-src-02"]
+  core-src-06["core-src-06"]
+  core-src-04["core-src-04"]
+  cli-src --> commands
+  commands --> core-src-05
+  core-src-05 --> core-src-03
+  core-src-03 --> core-src-01
+  core-src-01 --> core-src-02
+  core-src-02 --> commands
+  commands --> core-src-06
+  core-src-06 --> core-src-04
+  core-src-04 --> cli-src

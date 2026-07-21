@@ -13,7 +13,8 @@ export type MechanicalArtifactRepair =
   | "append_missing_section_anchors"
   | "fill_empty_anchored_section"
   | "remove_duplicate_section_anchors"
-  | "strip_invented_manual_markers";
+  | "strip_invented_manual_markers"
+  | "sync_upper_bound_frontmatter_anchors";
 
 export interface MechanicalArtifactRepairResult {
   content: string;
@@ -167,6 +168,174 @@ export function repairStage4ArtifactMechanically(
   const validation = validateStage4Artifact(content, closedKeyList, context);
   if (!validation.ok) return null;
   return { content, repairs };
+}
+
+/**
+ * Mechanical fallback for flow/topic pages ("upper bound" contract: the
+ * closed list caps what MAY be cited, but frontmatter anchors and section-
+ * marker keys only need to equal EACH OTHER, not the full closed list).
+ * Under that contract every `duplicate_anchor`/`missing_closed_key` this
+ * function accepts has an unambiguous mechanical fix — no content
+ * invention required, unlike the module-page `missing_closed_key` (section)
+ * case, which requires a whole new documented section:
+ *
+ *   - `duplicate_anchor` (section): keep the first section-marker
+ *     occurrence, drop the later ones (same routine as stage 4).
+ *   - `missing_closed_key` (frontmatter): the key is already cited in a
+ *     section marker — add it to the frontmatter anchors list.
+ *   - `missing_closed_key` (section): the key is only in the frontmatter
+ *     list with no section citing it — drop it from the frontmatter list
+ *     (the repair prompt already tells the model this is a valid fix for
+ *     an upper-bound contract; the observed failure was the model
+ *     forgetting to apply its own guidance across repair rounds).
+ *
+ * Priority-0 Phase 2 follow-up (2026-07-21 improvement pass): the v22 paid
+ * E2E showed a flow page cascade through 3 repair rounds — an initial
+ * `duplicate_anchor` batch, then the model's OWN repair attempt introducing
+ * `missing_closed_key` errors it never resolved. Applying this fallback
+ * immediately (not just on the final repair slot) removes that whole class
+ * of round-trip before it can cascade.
+ */
+export function repairUpperBoundArtifactMechanically(
+  artifact: string,
+  errors: ReadonlyArray<ArtifactValidationError>,
+  closedKeyList: ReadonlyArray<string>,
+  context: Readonly<Stage4ValidationContext>,
+): MechanicalArtifactRepairResult | null {
+  if (errors.length === 0) return null;
+  const closedSet = new Set(closedKeyList);
+
+  const duplicateSectionKeys: string[] = [];
+  const addToFrontmatter: string[] = [];
+  const removeFromFrontmatter: string[] = [];
+
+  for (const error of errors) {
+    if (
+      error.code === "duplicate_anchor" &&
+      error.location === "section" &&
+      error.offending !== undefined &&
+      closedSet.has(error.offending) &&
+      error.message.includes("appears in more than one section marker")
+    ) {
+      if (!duplicateSectionKeys.includes(error.offending)) {
+        duplicateSectionKeys.push(error.offending);
+      }
+      continue;
+    }
+    if (
+      error.code === "missing_closed_key" &&
+      error.offending !== undefined &&
+      closedSet.has(error.offending)
+    ) {
+      if (error.location === "frontmatter" && !addToFrontmatter.includes(error.offending)) {
+        addToFrontmatter.push(error.offending);
+        continue;
+      }
+      if (error.location === "section" && !removeFromFrontmatter.includes(error.offending)) {
+        removeFromFrontmatter.push(error.offending);
+        continue;
+      }
+    }
+    return null;
+  }
+
+  let content = artifact;
+  const repairs: MechanicalArtifactRepair[] = [];
+
+  if (duplicateSectionKeys.length > 0) {
+    const deduplicated = removeLaterSectionAnchorOccurrences(content, duplicateSectionKeys);
+    if (deduplicated === null || deduplicated === content) return null;
+    content = deduplicated;
+    repairs.push("remove_duplicate_section_anchors");
+  }
+
+  if (addToFrontmatter.length > 0 || removeFromFrontmatter.length > 0) {
+    const synced = syncFrontmatterAnchorsList(content, addToFrontmatter, removeFromFrontmatter);
+    if (synced === null || synced === content) return null;
+    content = synced;
+    repairs.push("sync_upper_bound_frontmatter_anchors");
+  }
+
+  if (repairs.length === 0) return null;
+  const validation = validateStage4Artifact(content, closedKeyList, context);
+  if (!validation.ok) return null;
+  return { content, repairs };
+}
+
+/**
+ * Adds/removes entries in the top-level frontmatter `anchors:` YAML list,
+ * preserving every other byte (indentation style, line endings, comments
+ * on unrelated lines). Fails closed (returns null) rather than guess when
+ * the frontmatter shape is not the plain block-list form every stage-4/5
+ * artifact writes, or when a requested removal names a key that is not
+ * actually present as a list item.
+ */
+function syncFrontmatterAnchorsList(
+  artifact: string,
+  keysToAdd: readonly string[],
+  keysToRemove: readonly string[],
+): string | null {
+  if (!artifact.startsWith("---\n") && !artifact.startsWith("---\r\n")) return null;
+  const parts = artifact.split(/(\r?\n)/);
+  const isAnchorsLine = (line: string): boolean => /^anchors:/.test(line);
+  const isClosingDelimiter = (line: string): boolean => /^---[ \t]*$/.test(line);
+  const isTopLevelKey = (line: string): boolean => /^[A-Za-z_][\w-]*[ \t]*:/.test(line);
+
+  let closingIdx = -1;
+  for (let i = 2; i < parts.length; i += 2) {
+    if (isClosingDelimiter(parts[i] as string)) {
+      closingIdx = i;
+      break;
+    }
+  }
+  if (closingIdx === -1) return null;
+
+  let anchorsIdx = -1;
+  for (let i = 2; i < closingIdx; i += 2) {
+    if (isAnchorsLine(parts[i] as string)) {
+      anchorsIdx = i;
+      break;
+    }
+  }
+  if (anchorsIdx === -1) return null;
+
+  let endIdx = closingIdx;
+  for (let i = anchorsIdx + 2; i < closingIdx; i += 2) {
+    if (isTopLevelKey(parts[i] as string)) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  const itemRe = /^([ \t]*-[ \t]+)(\S.*?)[ \t]*$/;
+  const removeSet = new Set(keysToRemove);
+  let indentPrefix = "  - ";
+  let removedAny = false;
+
+  const before = parts.slice(0, anchorsIdx + 2);
+  const listBody: string[] = [];
+  for (let i = anchorsIdx + 2; i < endIdx; i += 2) {
+    const line = parts[i] as string;
+    const sep = parts[i + 1] as string;
+    const m = itemRe.exec(line);
+    if (m) {
+      indentPrefix = m[1] as string;
+      if (removeSet.has(m[2] as string)) {
+        removedAny = true;
+        continue;
+      }
+    }
+    listBody.push(line, sep);
+  }
+  if (keysToRemove.length > 0 && !removedAny) return null;
+
+  const lineSep = (parts[anchorsIdx + 1] as string) ?? "\n";
+  for (const key of keysToAdd) {
+    listBody.push(`${indentPrefix}${key}`, lineSep);
+  }
+
+  const after = parts.slice(endIdx);
+  return [...before, ...listBody, ...after].join("");
 }
 
 /**

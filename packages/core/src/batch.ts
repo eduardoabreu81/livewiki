@@ -91,12 +91,14 @@ import {
 } from "./artifact.js";
 import {
   repairStage4ArtifactMechanically,
+  repairUpperBoundArtifactMechanically,
   type MechanicalArtifactRepair,
 } from "./artifact-repair.js";
 import { detectFlowCandidates, type FlowCandidate } from "./flows.js";
 import {
   buildTopicPlanningInventory,
   validateTopicPlan,
+  repairTopicPlanSourceBudgetMechanically,
   type TopicCandidate,
   type TopicPlanValidationError,
 } from "./topics.js";
@@ -1963,26 +1965,49 @@ async function runSemanticTopicStage(opts: {
         continue;
       }
       priorCandidate = generated.content;
-      const validation = validateTopicPlan(generated.content, inventory, {
+      const planValidationOpts = {
         maxTopics: opts.maxTopics,
         maxAnchors: opts.maxAnchors,
         maxSourceChars: opts.sourceChars,
-      });
+      };
+      const validation = validateTopicPlan(generated.content, inventory, planValidationOpts);
       planErrors = validation.errors;
+      if (validation.ok) {
+        result.candidates = validation.candidates;
+        acceptedPlanRaw = generated.content;
+        diagnosticHistory.push(topicPlanDiagnostic(
+          attempt, promptKind, "success", generated.content, [], generated.stopReason, generated.rawStopReason,
+        ));
+        break;
+      }
+      // Priority-0 follow-up: a plan whose ONLY problem is
+      // topic_plan_source_budget has an unambiguous, cross-checked
+      // mechanical fix (drop the costliest anchors without breaking the
+      // anchor floor, group coverage, or product ratio) — try it before
+      // spending another repair slot on a full regeneration.
+      const mechanical = repairTopicPlanSourceBudgetMechanically(
+        generated.content,
+        planErrors,
+        inventory,
+        planValidationOpts,
+      );
+      if (mechanical !== null) {
+        result.candidates = mechanical.result.candidates;
+        acceptedPlanRaw = mechanical.content;
+        diagnosticHistory.push(topicPlanDiagnostic(
+          attempt, promptKind, "success", mechanical.content, [], generated.stopReason, generated.rawStopReason,
+        ));
+        break;
+      }
       diagnosticHistory.push(topicPlanDiagnostic(
         attempt,
         promptKind,
-        validation.ok ? "success" : "artifact_validation_failed",
+        "artifact_validation_failed",
         generated.content,
         planErrors,
         generated.stopReason,
         generated.rawStopReason,
       ));
-      if (validation.ok) {
-        result.candidates = validation.candidates;
-        acceptedPlanRaw = generated.content;
-        break;
-      }
     }
 
     if (result.candidates.length === 0) {
@@ -3710,16 +3735,32 @@ async function attemptStage5Generation(
   }
 
   // (b) Validate the page with the fence body substituted by the exact placeholder.
-  const validation = validateStage4Artifact(extraction.pageContent, ctx.closedKeyList, {
-    pageKind: "flow",
+  const validationContext = {
+    pageKind: "flow" as const,
     expectedFlowDiagram: `livewiki/diagrams/flow-${opts.candidate.slug}.mmd`,
     expectedFlowModules: opts.candidate.moduleIds,
     moduleId: opts.candidate.slug,
-    moduleRole: "product",
+    moduleRole: "product" as const,
     flowKeyGroups,
-  });
+  };
+  const validation = validateStage4Artifact(extraction.pageContent, ctx.closedKeyList, validationContext);
+  let pageContent = extraction.pageContent;
   if (!validation.ok) {
-    return invalid(validation.errors);
+    // Priority-0 Phase 2 follow-up: duplicate_anchor and missing_closed_key
+    // are purely mechanical under the flow "upper bound" contract (see
+    // repairUpperBoundArtifactMechanically) — try that BEFORE spending a
+    // full LLM repair round-trip. Falls through to the LLM repair path for
+    // any other error shape.
+    const mechanical = repairUpperBoundArtifactMechanically(
+      extraction.pageContent,
+      validation.errors,
+      ctx.closedKeyList,
+      validationContext,
+    );
+    if (mechanical === null) {
+      return invalid(validation.errors);
+    }
+    pageContent = mechanical.content;
   }
 
   // (c) Diagram gates: source cap → node/edge budget → real Mermaid parse.
@@ -3783,9 +3824,9 @@ async function attemptStage5Generation(
   return {
     usageEntry,
     normalizedRaw: raw,
-    diagnosticCandidate: extraction.pageContent,
+    diagnosticCandidate: pageContent,
     diagnosticOutcome: null,
-    artifact: extraction.pageContent,
+    artifact: pageContent,
     validationErrors: [],
     llmError: null,
     diagramSource,

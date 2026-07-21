@@ -376,6 +376,122 @@ export function validateTopicPlan(
   }
 }
 
+/**
+ * Cross-checked mechanical repair for `topic_plan_source_budget` alone.
+ *
+ * Priority-0 follow-up (2026-07-21 improvement pass): the v22 paid E2E
+ * showed the planner proposing evidence up to ~120k chars against a 40k
+ * cap and never converging in 3 repair rounds. Unlike the flow-diagram
+ * budget (a pure rendering concern), a topic's anchor set is cross-
+ * constrained — dropping anchors blindly can push `keys.length` below the
+ * 5-anchor floor, empty an evidence group, or drop the product-anchor
+ * ratio below the accepted minimum. This function drops the COSTLIEST
+ * anchors first (non-product before product, to protect the ratio) and
+ * re-validates the WHOLE plan afterward — it only returns a result when
+ * every constraint still holds, and only ever activates when EVERY
+ * reported error is `topic_plan_source_budget` (any other code — a
+ * mixed-cause proposal, an unrelated malformed proposal elsewhere in the
+ * same plan — falls through to the existing LLM repair prompt untouched).
+ */
+export function repairTopicPlanSourceBudgetMechanically(
+  raw: string,
+  errors: readonly TopicPlanValidationError[],
+  inventory: TopicPlanningInventory,
+  opts: TopicPlanValidationOptions,
+): { content: string; result: TopicPlanValidationResult } | null {
+  if (errors.length === 0) return null;
+  if (errors.some((e) => e.code !== "topic_plan_source_budget")) return null;
+  if (opts.maxSourceChars === undefined) return null;
+  const maxSourceChars = opts.maxSourceChars;
+
+  let value: unknown;
+  try {
+    value = JSON.parse(stripOuterJsonFence(raw));
+  } catch {
+    return null;
+  }
+  const rawTopics = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value["topics"])
+      ? value["topics"]
+      : null;
+  if (rawTopics === null) return null;
+
+  const flaggedIndexes = new Set(
+    errors.map((e) => e.proposalIndex).filter((i): i is number => i !== undefined),
+  );
+  if (flaggedIndexes.size === 0) return null;
+  const minimumRatio = opts.minimumProductAnchorRatio ?? 0.75;
+
+  for (const index of flaggedIndexes) {
+    const proposalRaw = rawTopics[index];
+    if (!isRecord(proposalRaw) || !isRecord(proposalRaw["groups"])) return null;
+    const groups = proposalRaw["groups"];
+
+    interface Entry {
+      group: TopicGroupName;
+      key: string;
+      chars: number;
+      isProduct: boolean;
+    }
+    const entries: Entry[] = [];
+    for (const groupName of TOPIC_GROUP_NAMES) {
+      const groupKeys = groups[groupName];
+      if (!isStringArray(groupKeys)) return null;
+      for (const key of groupKeys) {
+        entries.push({
+          group: groupName,
+          key,
+          chars: inventory.anchorSourceChars[key] ?? 0,
+          isProduct: inventory.anchorRoles[key] === "product",
+        });
+      }
+    }
+
+    let totalChars = entries.reduce((sum, e) => sum + e.chars, 0);
+    if (totalChars <= maxSourceChars) continue; // nothing to drop for this proposal
+
+    const removed = new Set<Entry>();
+    const canRemove = (entry: Entry): boolean => {
+      const remainingKeys = entries.length - removed.size - 1;
+      if (remainingKeys < 5) return false;
+      const remainingInGroup =
+        entries.filter((e) => e.group === entry.group).length -
+        [...removed].filter((e) => e.group === entry.group).length;
+      if (remainingInGroup <= 1) return false;
+      if (entry.isProduct) {
+        const remainingProduct =
+          entries.filter((e) => e.isProduct && !removed.has(e)).length - 1;
+        if (remainingProduct / remainingKeys < minimumRatio) return false;
+      }
+      return true;
+    };
+
+    const dropPass = (pool: Entry[]): void => {
+      for (const entry of [...pool].sort((a, b) => b.chars - a.chars)) {
+        if (totalChars <= maxSourceChars) break;
+        if (removed.has(entry) || !canRemove(entry)) continue;
+        removed.add(entry);
+        totalChars -= entry.chars;
+      }
+    };
+    dropPass(entries.filter((e) => !e.isProduct));
+    if (totalChars > maxSourceChars) dropPass(entries.filter((e) => e.isProduct));
+    if (totalChars > maxSourceChars) return null; // can't fit without breaking another rule
+
+    for (const groupName of TOPIC_GROUP_NAMES) {
+      groups[groupName] = entries
+        .filter((e) => e.group === groupName && !removed.has(e))
+        .map((e) => e.key);
+    }
+  }
+
+  const repairedRaw = JSON.stringify(value);
+  const result = validateTopicPlan(repairedRaw, inventory, opts);
+  if (!result.ok) return null;
+  return { content: repairedRaw, result };
+}
+
 /** Lower values win overlap conflicts, independent of planner array order. */
 function compareProposalPreference(
   left: TopicPlanProposal,
