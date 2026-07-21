@@ -272,7 +272,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         "utf8",
       );
       expect([...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1])).toEqual([
-        "Choose a path",
+        "Work by intent",
         "Document a repo",
         "Query the wiki from an agent",
         "Pay documentation debt",
@@ -681,8 +681,68 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(quickstart).toContain("[Tasks](tasks.md)");
     expect(quickstart).toContain("[Architecture overview](architecture/overview.md)");
     expect(overview).toContain('<a id="auth"></a>');
-    expect(tasks).toContain("Module ID: `auth`");
+    // R10.1 E: tasks.md has no `Module ID:` line — before the page exists,
+    // the stable id is carried by the unavailable-entry path.
+    expect(tasks).toContain("Page unavailable: `livewiki/auth.md`");
+    expect(tasks).not.toContain("Module ID:");
     expect(tasks).not.toContain("](auth.md)");
+  });
+
+  it("(R10.1 C) init surfaces a skipped human flows hub in JSON and human output", async () => {
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    // One flow page arms the hub write path; the hub itself is human-owned.
+    await writeCode(
+      "livewiki/flows/alpha.md",
+      "---\ntitle: Alpha flow\nowner: generated\n---\n# Alpha flow\n",
+    );
+    const humanHub = "---\ntitle: My flows\nowner: human\n---\n# My flows\n";
+    await writeCode("livewiki/flows/index.md", humanHub);
+
+    const jsonRun = await runCli(["--json", "--repo", repoRoot, "init"]);
+    expect(jsonRun.status, jsonRun.stderr).toBe(0);
+    const report = JSON.parse(jsonRun.stdout);
+    expect(report.skippedFlowsHub).toEqual({
+      path: "livewiki/flows/index.md",
+      owner: "human",
+    });
+    expect(report.filesWritten).not.toContain("livewiki/flows/index.md");
+    const hub = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/flows/index.md"),
+      "utf8",
+    );
+    expect(hub).toBe(humanHub);
+
+    const humanRun = await runCli(["--repo", repoRoot, "init"]);
+    expect(humanRun.status, humanRun.stderr).toBe(0);
+    expect(humanRun.stdout).toContain("flows hub: preserved (owner: human)");
+    expect(humanRun.stdout).toContain("livewiki/flows/index.md");
+  });
+
+  it("(R11-NAV) init surfaces a skipped human auxiliary hub in JSON and human output", async () => {
+    await writeCode("src/auth/login.ts", "export function login() {}\n");
+    await writeCode(
+      "test/fixtures/example/value.ts",
+      "export function fixtureValue() { return 1; }\n",
+    );
+    const humanHub = "---\ntitle: My auxiliary guide\nowner: human\n---\n# My auxiliary guide\n";
+    await writeCode("livewiki/auxiliary/index.md", humanHub);
+
+    const jsonRun = await runCli(["--json", "--repo", repoRoot, "init"]);
+    expect(jsonRun.status, jsonRun.stderr).toBe(0);
+    const report = JSON.parse(jsonRun.stdout);
+    expect(report.skippedAuxiliaryHub).toEqual({
+      path: "livewiki/auxiliary/index.md",
+      owner: "human",
+    });
+    expect(report.filesWritten).not.toContain("livewiki/auxiliary/index.md");
+    expect(
+      await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auxiliary/index.md"), "utf8"),
+    ).toBe(humanHub);
+
+    const humanRun = await runCli(["--repo", repoRoot, "init"]);
+    expect(humanRun.status, humanRun.stderr).toBe(0);
+    expect(humanRun.stdout).toContain("auxiliary hub: preserved (owner: human)");
+    expect(humanRun.stdout).toContain("livewiki/auxiliary/index.md");
   });
 
   it("init --plan funciona SEM config LLM (correção #5)", async () => {
@@ -790,9 +850,13 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(quickstart).toContain("[Tasks](tasks.md)");
     expect(quickstart).toMatch(/## Document a repo[\s\S]*`livewiki init`[\s\S]*`livewiki init --batch`/);
     expect(tasks).toContain("[providers responsibilities](providers.md)");
-    expect(tasks).toContain("- Add or configure a provider.");
+    expect(tasks).not.toContain("This page documents the indexed responsibilities of providers.");
     expect(tasks).toContain("[verify responsibilities](verify.md)");
-    expect(tasks).toContain("- Diagnose a failed verify.");
+    expect(tasks).not.toContain("This page documents the indexed responsibilities of verify.");
+    // tasks.md copies no module-page prose at all: neither the responsibility
+    // sentence nor the `When to use this page` bullets (duplicate-prose audit).
+    expect(tasks).not.toContain("- Add or configure a provider.");
+    expect(tasks).not.toContain("- Diagnose a failed verify.");
 
     for (const moduleId of ["providers", "batch", "verify"]) {
       const page = await nodeFs.readFile(nodePath.join(repoRoot, `livewiki/${moduleId}.md`), "utf8");

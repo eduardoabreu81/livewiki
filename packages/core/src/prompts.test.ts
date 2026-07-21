@@ -5,15 +5,20 @@ import {
   buildQuickstartPrompt,
   buildOverviewPrompt,
   buildRepairPrompt,
+  buildStage5Prompt,
+  buildStage5RepairPrompt,
   neutralizeUntrustedControlMarkers,
   neutralizeUntrustedControlMarkersExceptValidAnchors,
   DEFAULT_CONTEXT_TOKEN_BUDGET,
   DEFAULT_OUTPUT_TOKEN_BUDGET,
   PAGE_OPENING_PROMPT_RULES,
+  FLOW_PAGE_PROMPT_RULES,
   LITERAL_SIGNATURE_PROMPT_RULE,
   EXCEPTION_BRANCH_PROMPT_RULE,
 } from "./prompts.js";
+import type { ArtifactValidationError } from "./prompts.js";
 import type { Module } from "./modules.js";
+import type { FlowCandidate } from "./flows.js";
 
 /** Extract every `<!-- lw:anchors ... -->` marker body from a prompt string. */
 function copyableAnchorMarkers(text: string): string[][] {
@@ -354,9 +359,10 @@ describe("prompts U — hardening (no copyable fake anchors)", () => {
       60_000,
       "en",
     );
-    expect(rFrontmatter.user).toMatch(/ACTION:\s*ADD this exact key "src\/auth\.ts#logout"/i);
-    expect(rFrontmatter.user).toMatch(/frontmatter anchors list ONLY/i);
-    expect(rFrontmatter.user).toMatch(/do not duplicate it/i);
+    expect(rFrontmatter.user).toMatch(/\[missing_closed_key\] \(frontmatter\): 1 exact closed-list key is missing/i);
+    expect(rFrontmatter.user).toMatch(/ACTION:\s*ADD every key below byte-for-byte to the frontmatter anchors list/i);
+    expect(rFrontmatter.user).toMatch(/do not duplicate a key/i);
+    expect(rFrontmatter.user).toMatch(/  - src\/auth\.ts#logout/);
 
     const rSection = buildRepairPrompt(
       sampleModule,
@@ -368,10 +374,51 @@ describe("prompts U — hardening (no copyable fake anchors)", () => {
       60_000,
       "en",
     );
-    expect(rSection.user).toMatch(/exactly one section marker ONLY/i);
+    expect(rSection.user).toMatch(/\[missing_closed_key\] \(section\): 1 exact closed-list key is missing/i);
+    expect(rSection.user).toMatch(/exactly one primary section marker per key ONLY/i);
 
     expect(rFrontmatter.system).toMatch(/COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS/i);
-    expect(rFrontmatter.system).toMatch(/ADD the key ONLY to the location named by that error/i);
+    expect(rFrontmatter.system).toMatch(/ADD every listed key ONLY to that group's named location/i);
+  });
+
+  it("groups a full section-side coverage failure without repeating one action per key", () => {
+    const keys = Array.from(
+      { length: 45 },
+      (_, index) => `packages/core/src/module-${index + 1}.ts#symbol${index + 1}`,
+    );
+    const errors = [
+      ...keys.map((key) => ({
+        code: "missing_closed_key" as const,
+        message: "closed-list key missing from section markers",
+        location: "section" as const,
+        offending: key,
+      })),
+      {
+        code: "unclosed_markdown" as const,
+        message: "unclosed inline-code span opened at line 170 (delimiter length 1)",
+        location: "body" as const,
+        offending: "The final `token",
+      },
+    ];
+
+    const repair = buildRepairPrompt(
+      sampleModule,
+      keys,
+      "symbols",
+      "source",
+      "prior candidate",
+      errors,
+      60_000,
+      "en",
+    );
+
+    expect(repair.user).toContain("[missing_closed_key] (section): 45 exact closed-list keys are missing");
+    expect(repair.user.match(/ACTION: ADD every key below/g)).toHaveLength(1);
+    expect(repair.user).not.toContain("ACTION: ADD this exact key");
+    expect(repair.user).toContain("[unclosed_markdown]");
+    for (const key of keys) {
+      expect(repair.user.split(key)).toHaveLength(3); // closed list + one grouped repair entry
+    }
   });
 
   it("repair prompt gives duplicate_anchor a section-specific deletion action", () => {
@@ -1130,5 +1177,683 @@ describe("prompts D1 — adversarial injection suite (selective neutralization +
     const candidateContent = repair.user.slice(candStart + 3, candEnd);
     expect(candidateContent).toContain(validMarker);
     expect(candidateContent).toContain("# candidate");
+  });
+});
+
+describe("prompts — safe enclosing fence scales with longest inner backtick run", () => {
+  // Defect 1 (fence selector): fixed triple-backtick fences break the
+  // prompt boundary when the enclosed content contains its own
+  // triple-backtick (or longer) fences. The fix must choose an outer
+  // fence strictly longer than every enclosed backtick run, for both
+  // the initial-source block and the repair prior-candidate block.
+  //
+  // Defect 4 (fence amplification): the previous selector had no cap.
+  // A 60,000-character backtick run in the source produced a
+  // 60,001-character outer fence, adding another ~120,000 delimiter
+  // characters to the user prompt. The fix caps the fence length
+  // (preferring backticks, then tildes) and bound-encodes the
+  // enclosed content in the pathologically pathological case where
+  // BOTH character classes have very long runs.
+
+  function outerFenceFor(
+    user: string,
+    header: string,
+  ): { fence: string; content: string } | null {
+    const headerIdx = user.indexOf(header);
+    if (headerIdx < 0) return null;
+    // Find the first line that is JUST a fence (3+ backticks or
+    // 3+ tildes, optional leading/trailing whitespace). The opening
+    // fence is whatever character class the wrap helper picked.
+    const afterHeader = user.slice(headerIdx);
+    const openingMatch = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/m.exec(
+      afterHeader,
+    );
+    if (!openingMatch || !openingMatch[1]) return null;
+    const fence = openingMatch[1];
+    const char = fence[0]!;
+    const len = fence.length;
+    const start = headerIdx + openingMatch.index;
+    const innerStart = start + openingMatch[0].length;
+    // The matching closing fence is on its own line later in the
+    // string, with the same character class and a length ≥ the
+    // opening (CommonMark rule). The wrap helper chose a length
+    // strictly greater than every surviving run in the encoded
+    // content, so the first matching closing fence is the right
+    // one.
+    const closeRe = new RegExp(
+      `^[ \\t]{0,3}\\${char}{${len},}[ \\t]*$`,
+      "m",
+    );
+    const rest = user.slice(innerStart);
+    const closeMatch = closeRe.exec(rest);
+    if (!closeMatch) return null;
+    return {
+      fence,
+      content: rest.slice(0, closeMatch.index),
+    };
+  }
+
+  it("outer fence is strictly longer than any inner backtick run, for both initial-source and repair-candidate (3, 4, 16)", () => {
+    for (const innerRun of [3, 4, 16]) {
+      const innerFence = "`".repeat(innerRun) + "x\ncontent\n" + "`".repeat(innerRun);
+
+      const stage4 = buildStage4Prompt(
+        sampleModule,
+        ["src/a.ts#x"],
+        "sym",
+        innerFence,
+        "en",
+      );
+      const sourceBlock = outerFenceFor(stage4.user, "# Source code");
+      expect(sourceBlock, `inner run ${innerRun} (initial-source)`).toBeDefined();
+      expect(sourceBlock!.fence.length, `inner run ${innerRun} (initial-source)`)
+        .toBeGreaterThan(innerRun);
+      expect(sourceBlock!.content).toContain(innerFence);
+
+      const repair = buildRepairPrompt(
+        sampleModule,
+        ["src/a.ts#x"],
+        "sym",
+        "src content",
+        `prior\n${innerFence}\nrest`,
+        [{ code: "empty_body", message: "x", location: "body" }],
+        60_000,
+        "en",
+      );
+      const candBlock = outerFenceFor(repair.user, "# Prior candidate");
+      expect(candBlock, `inner run ${innerRun} (repair-candidate)`).toBeDefined();
+      expect(candBlock!.fence.length, `inner run ${innerRun} (repair-candidate)`)
+        .toBeGreaterThan(innerRun);
+      expect(candBlock!.content).toContain(innerFence);
+    }
+  });
+
+  it("60,000-character backtick run in source does not amplify the user prompt past a bounded envelope (R3 amplification fix)", () => {
+    // The pathological case: 60,000 consecutive backticks in the
+    // source. The previous selector returned a 60,001-character
+    // fence, inflating the user prompt to ~181,494 chars. The fix
+    // caps wrapper growth by selecting tildes (zero tildes in the
+    // content) and emitting a small fence.
+    const run = "`".repeat(60_000);
+    const stage4 = buildStage4Prompt(
+      sampleModule,
+      ["src/a.ts#x"],
+      "sym",
+      run,
+      "en",
+    );
+    const sourceBlock = outerFenceFor(stage4.user, "# Source code");
+    expect(sourceBlock).toBeDefined();
+    // Tildes are now the chosen delimiter (backticks have a
+    // pathological run); the fence is the minimum 3 tildes.
+    expect(sourceBlock!.fence.startsWith("~")).toBe(true);
+    expect(sourceBlock!.fence.length).toBeLessThanOrEqual(64);
+    // The content is preserved (60,000 backticks) — no bounded
+    // encoding was needed because tildes offered a safe fence.
+    expect(sourceBlock!.content).toContain(run);
+    // The wrapper growth is bounded: even though the content is
+    // 60,000 chars, the total user prompt must not exceed the
+    // content size by more than a small constant factor (other
+    // prompt sections contribute, but the wrapper itself is now
+    // ~10 chars instead of ~120,000).
+    const wrapperOverhead =
+      stage4.user.length - run.length - (stage4.user.length - stage4.user.indexOf(run) - run.length);
+    // Rough check: the content+wrapper should not be ~120,000 chars
+    // larger than the content alone.
+    expect(stage4.user.length).toBeLessThan(run.length + 50_000);
+    // The unused-var assignment is fine; the value documents the
+    // wrapper contribution to the user prompt.
+    void wrapperOverhead;
+
+    // Same for the repair prior-candidate block. Use a larger
+    // maxCandidateChars so the 60k-backtick run is not sliced
+    // before it reaches the wrap helper — the test's intent is to
+    // verify the wrapper behavior, not the slice budget.
+    const repair = buildRepairPrompt(
+      sampleModule,
+      ["src/a.ts#x"],
+      "sym",
+      "src content",
+      `prior\n${run}\nrest`,
+      [{ code: "empty_body", message: "x", location: "body" }],
+      200_000,
+      "en",
+    );
+    const candBlock = outerFenceFor(repair.user, "# Prior candidate");
+    expect(candBlock).toBeDefined();
+    expect(candBlock!.fence.startsWith("~")).toBe(true);
+    expect(candBlock!.fence.length).toBeLessThanOrEqual(64);
+    expect(candBlock!.content).toContain(run);
+    expect(repair.user.length).toBeLessThan(run.length + 50_000);
+  });
+
+  it("60,000-character tilde run also bounded (symmetric to the backtick case)", () => {
+    const run = "~".repeat(60_000);
+    const stage4 = buildStage4Prompt(
+      sampleModule,
+      ["src/a.ts#x"],
+      "sym",
+      run,
+      "en",
+    );
+    const sourceBlock = outerFenceFor(stage4.user, "# Source code");
+    expect(sourceBlock).toBeDefined();
+    // The cheaper character is now backticks (zero backtick runs in
+    // the content); the fence is backticks.
+    expect(sourceBlock!.fence.startsWith("`")).toBe(true);
+    expect(sourceBlock!.fence.length).toBeLessThanOrEqual(64);
+    expect(sourceBlock!.content).toContain(run);
+    expect(stage4.user.length).toBeLessThan(run.length + 50_000);
+  });
+
+  it("pathological case where BOTH characters have long runs uses bound-encoded tildes with no run longer than the fence", () => {
+    // Both backticks AND tildes have 1,000-character runs in the
+    // content. Tildes are picked (less common in real source) and
+    // bound-encoded so no run in the encoded content is longer
+    // than the fence. The CommonMark rule (closing fence must be
+    // ≥ opening fence) means the encoded content cannot close the
+    // capped tilde fence.
+    const content = "`".repeat(1_000) + "\n" + "~".repeat(1_000);
+    const stage4 = buildStage4Prompt(
+      sampleModule,
+      ["src/a.ts#x"],
+      "sym",
+      content,
+      "en",
+    );
+    const sourceBlock = outerFenceFor(stage4.user, "# Source code");
+    expect(sourceBlock).toBeDefined();
+    expect(sourceBlock!.fence.startsWith("~")).toBe(true);
+    expect(sourceBlock!.fence.length).toBeLessThanOrEqual(64);
+    // No run of either delimiter in the encoded content is longer
+    // than the fence (so no run can close it).
+    const encoded = sourceBlock!.content;
+    const backtickRuns = [...encoded.matchAll(/`+/g)].map((m) => m[0].length);
+    const tildeRuns = [...encoded.matchAll(/~+/g)].map((m) => m[0].length);
+    for (const r of backtickRuns) {
+      expect(r, `backtick run length ${r} should be < fence length ${sourceBlock!.fence.length}`).toBeLessThan(sourceBlock!.fence.length);
+    }
+    for (const r of tildeRuns) {
+      expect(r, `tilde run length ${r} should be < fence length ${sourceBlock!.fence.length}`).toBeLessThan(sourceBlock!.fence.length);
+    }
+  });
+});
+
+describe("prompts — zero-key stage-4 instructions are non-contradictory", () => {
+  // Defect 2 (contradictory zero-key instructions): the previous branch
+  // said "emit no anchors" and "the page is rejected without
+  // closed-list anchors" — a direct contradiction. The replacement
+  // must spell out the contract and still require the page opening.
+  //
+  // Defect 5 (zero-key fake marker regression): the previous wording
+  // contained the exact copyable placeholder
+  //   `<!-- lw:anchors ... -->`
+  // in the zero-key branch — an LLM reading that line can copy the
+  // placeholder verbatim into its output, producing a page that
+  // carries a fake anchor marker. The fix replaces the placeholder
+  // with descriptive non-copyable wording. The strengthened test
+  // asserts BOTH the contract is present AND the prompt does not
+  // ship any complete fake marker, ellipsis placeholder offered as
+  // marker syntax, anchor requirement, or relaxed opening rule.
+  it("zero-key branch is non-contradictory, present, and still requires the page opening", () => {
+    const r = buildStage4Prompt(sampleModule, [], "sym", "src content", "en");
+    const repair = buildRepairPrompt(
+      sampleModule,
+      [],
+      "sym",
+      "src content",
+      "prior",
+      [{
+        code: "missing_page_opening",
+        message: 'page opening "How it fits" contains a heading',
+        location: "body",
+        offending: "### Test environment",
+      }],
+      60_000,
+      "en",
+    );
+    // Contradictory text must be gone.
+    expect(r.user).not.toMatch(/rejected without closed-list anchors/i);
+    expect(r.user).not.toMatch(/the page is rejected without/i);
+    // Contract must be present.
+    expect(r.user).toMatch(/zero-key contract/i);
+    expect(r.user).toMatch(/no extracted canonical symbols/i);
+    expect(r.user).toMatch(/still generate a useful/i);
+    expect(r.user).toMatch(/required page opening/i);
+    expect(r.user).toMatch(/unanchored implementation sections/i);
+    expect(r.user).toMatch(/no frontmatter anchor entries/i);
+    // The contract still bans emitting any anchor-surface marker.
+    expect(r.user).toMatch(/no\s+(?:control-marker\s+comments?|lw:anchors)/i);
+    // Page-opening requirement is NOT relaxed.
+    expect(r.system).toMatch(/H1 human-meaningful title/);
+    expect(r.system).toMatch(/When to use this page/);
+    expect(r.system).toMatch(/How it fits/);
+    expect(`${r.system}\n${repair.system}\n${repair.user}`).not.toMatch(
+      /before the first anchored (?:implementation )?section/i,
+    );
+    expect(repair.user).toMatch(/before the first implementation section/i);
+  });
+
+  it("zero-key branch never embeds a complete copyable lw:anchors marker, ellipsis placeholder, or anchor requirement", () => {
+    const r = buildStage4Prompt(sampleModule, [], "sym", "src content", "en");
+    // No complete opening or closing lw:anchors control marker in
+    // either prompt message — the LLM must not see a copyable
+    // fake/ellipsis anchor marker it could copy verbatim.
+    expect(r.user).not.toMatch(/<!--\s*lw:anchors\b/);
+    expect(r.user).not.toMatch(/<!--\s*\/lw:anchors\b/);
+    expect(r.system).not.toMatch(/<!--\s*lw:anchors\b/);
+    expect(r.system).not.toMatch(/<!--\s*\/lw:anchors\b/);
+    // No ellipsis-style placeholder offered as marker syntax.
+    // "..." or "…" appearing as a KEY or as a list-continuation
+    // inside a marker is banned by the system prompt already; the
+    // zero-key branch must not introduce a NEW copyable marker
+    // that includes either glyph.
+    expect(r.user).not.toMatch(/<!--[^>]*?\.{3}[^>]*?-->/);
+    expect(r.user).not.toMatch(/<!--[^>]*?…[^>]*?-->/);
+    // No anchor requirement is asserted for an empty closed list.
+    // The page opening rule is in the system prompt and remains
+    // unchanged; the zero-key branch must not add a new "you must
+    // emit at least one anchor" line.
+    expect(r.user).not.toMatch(/at least one anchor/i);
+    expect(r.user).not.toMatch(/must include.*anchor/i);
+    // Useful unanchored documentation remains required.
+    expect(r.user).toMatch(/useful/i);
+    expect(r.user).toMatch(/unanchored implementation sections/i);
+  });
+});
+
+describe("prompts — repair prompt never ships a copyable lw:manual marker through structured error messages", () => {
+  // Defect 2 (copyable lw:manual marker in repair prompts): the
+  // `model_invented_manual` error's message and offending carry the
+  // exact copyable `<!-- lw:manual -->` marker byte-for-byte, and
+  // the previous buildRepairPrompt interpolated them into the
+  // structured error line unchanged. R3 evidence: the LLM copied
+  // the marker verbatim through every repair attempt. The fix
+  // neutralizes both the message and the offending text before
+  // they reach the prompt. The regression test below supplies a
+  // `model_invented_manual` error whose message and offending
+  // both contain the marker and asserts zero copyable opening or
+  // closing manual markers survive in either the system or the
+  // user prompt.
+  it("model_invented_manual with marker in both message and offending → zero copyable lw:manual markers in either prompt message", () => {
+    const marker = "<!-- lw:manual -->";
+    const closing = "<!-- /lw:manual -->";
+    const errs = [
+      {
+        code: "model_invented_manual" as const,
+        message: `artifact contains a ${marker} block; these are reserved for human content (rule #6) and the orchestrator is the only one allowed to re-inject them from the previous version of the page`,
+        location: "body" as const,
+        offending: marker,
+      },
+    ];
+    const r = buildRepairPrompt(
+      sampleModule,
+      ["src/auth.ts#login"],
+      "sym",
+      "src content",
+      "prior",
+      errs,
+      60_000,
+      "en",
+    );
+    // Defense-in-depth: neither prompt message may contain a
+    // complete copyable opening OR closing lw:manual control
+    // comment, even when the source data was full of them.
+    expect(r.system).not.toMatch(/<!--\s*lw:manual\b/);
+    expect(r.system).not.toMatch(/<!--\s*\/lw:manual\b/);
+    expect(r.user).not.toMatch(/<!--\s*lw:manual\b/);
+    expect(r.user).not.toMatch(/<!--\s*\/lw:manual\b/);
+    // The structured error line is present (so the LLM still
+    // learns about the failure) but the marker bytes are gone.
+    expect(r.user).toContain("[model_invented_manual]");
+    // Sanity: the literal strings passed by the test are
+    // present in the source input — confirms the assertion
+    // would have caught the regression.
+    const neutralizedMessage = neutralizeUntrustedControlMarkers(
+      errs[0]!.message,
+    );
+    expect(neutralizedMessage).not.toContain(marker);
+    expect(neutralizedMessage).not.toContain(closing);
+  });
+});
+
+describe("prompts — repair prompt never ships a copyable lw:* marker through ACTION branches", () => {
+  // Review follow-up: the previous `model_invented_manual` fix
+  // neutralized the leading `${e.message}` and `${e.offending}` on
+  // the structured line, but several ACTION branches re-interpolated
+  // the RAW value into the action text — the `missing_page_opening`
+  // branch for `e.message`, and the `anchor_outside_closed_list`,
+  // `missing_closed_key`, `duplicate_anchor` branches for
+  // `e.offending`. The action branches now interpolate the safe
+  // values, and a defense-in-depth pass re-neutralizes the COMPLETED
+  // line. This regression exercises the most exposed path
+  // (`missing_page_opening` with a marker-bearing message) and
+  // asserts zero complete copyable opening or closing `lw:*`
+  // control comment survives in either prompt message.
+  it("missing_page_opening with marker-bearing message → no copyable lw:* control comment in either prompt message", () => {
+    const marker = "<!-- lw:manual -->";
+    const closing = "<!-- /lw:manual -->";
+    const errs = [
+      {
+        code: "missing_page_opening" as const,
+        // Realistic validator output that itself embeds a copyable
+        // marker (e.g. when the failing page also triggered a
+        // model_invented_manual check earlier). The previous
+        // ACTION branch interpolated this message raw into the
+        // directive text and shipped the marker through.
+        message: `page opening H1 is missing or wrong; saw a copy of ${marker} on line 4`,
+        location: "body" as const,
+      },
+    ];
+    const r = buildRepairPrompt(
+      sampleModule,
+      ["src/auth.ts#login"],
+      "sym",
+      "src content",
+      "prior",
+      errs,
+      60_000,
+      "en",
+    );
+    // Neither prompt message may contain a complete copyable
+    // opening OR closing lw:* control comment, anywhere.
+    expect(r.system).not.toMatch(/<!--\s*lw:[a-zA-Z0-9_-]+/);
+    expect(r.system).not.toMatch(/<!--\s*\/lw:[a-zA-Z0-9_-]+/);
+    expect(r.user).not.toMatch(/<!--\s*lw:[a-zA-Z0-9_-]+/);
+    expect(r.user).not.toMatch(/<!--\s*\/lw:[a-zA-Z0-9_-]+/);
+    // The specific marker the test injected is also gone.
+    expect(r.user).not.toContain(marker);
+    expect(r.user).not.toContain(closing);
+    // The structured error line is still present (so the LLM
+    // still learns about the failure) and the safe-substituted
+    // message survives (with the marker replaced by spaces of
+    // equal length).
+    expect(r.user).toContain("[missing_page_opening]");
+    expect(r.user).toContain("SPECIFIC FAILURE:");
+    // The marker characters are gone but the surrounding prose
+    // is preserved (proves the fix is not over-aggressive).
+    expect(r.user).toMatch(/saw a copy of\s+on line 4/);
+  });
+
+  it("missing_closed_key with marker-bearing offending → no copyable lw:* control comment in either prompt message", () => {
+    const marker = "<!-- lw:manual -->";
+    const errs = [
+      {
+        code: "missing_closed_key" as const,
+        message: "closed-list key not declared",
+        location: "frontmatter" as const,
+        // Defensive: an `offending` value that itself embeds a
+        // copyable marker (e.g. when a hand-written fixture uses
+        // the marker as a placeholder). The action branch used
+        // to interpolate raw `e.offending`.
+        offending: marker,
+      },
+    ];
+    const r = buildRepairPrompt(
+      sampleModule,
+      ["src/auth.ts#login"],
+      "sym",
+      "src content",
+      "prior",
+      errs,
+      60_000,
+      "en",
+    );
+    expect(r.system).not.toMatch(/<!--\s*lw:[a-zA-Z0-9_-]+/);
+    expect(r.user).not.toMatch(/<!--\s*lw:[a-zA-Z0-9_-]+/);
+    expect(r.user).not.toMatch(/<!--\s*\/lw:[a-zA-Z0-9_-]+/);
+  });
+});
+
+describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)", () => {
+  const flowCandidate: FlowCandidate = {
+    slug: "cli-to-core",
+    titleSeed: "Cli to Core",
+    moduleIds: ["cli", "core"],
+    seedKeys: ["src/cli.ts#run", "src/core.ts#batch", "src/store.ts#persist"],
+    // R10.1 K groups (union = closed list).
+    entryKeys: ["src/cli.ts#run"],
+    boundaryKeys: ["src/core.ts#batch"],
+    sinkKeys: ["src/store.ts#persist"],
+    otherProductKeys: [],
+    auxiliaryKeys: [],
+    signals: { entry: ["cli"], persistence: ["core"], external: [] },
+  };
+  const flowClosedKeys = ["src/cli.ts#run", "src/core.ts#batch", "src/store.ts#persist"];
+  const flowGroups = {
+    entryKeys: ["src/cli.ts#run"],
+    boundaryKeys: ["src/core.ts#batch"],
+    sinkKeys: ["src/store.ts#persist"],
+  };
+  const stage5Repair = (errors: ReadonlyArray<ArtifactValidationError>) =>
+    buildStage5RepairPrompt(
+      flowCandidate,
+      flowClosedKeys,
+      "openings",
+      "symbols",
+      "source",
+      "prior",
+      errors,
+      60_000,
+    );
+
+  it("FLOW_PAGE_PROMPT_RULES carries placement, per-section coverage, and group citation in both stage-5 prompts", () => {
+    const initial = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
+    const repair = stage5Repair([]);
+    for (const rule of FLOW_PAGE_PROMPT_RULES) {
+      expect(initial.system).toContain(rule);
+      expect(repair.system).toContain(rule);
+    }
+    const rules = FLOW_PAGE_PROMPT_RULES.join("\n");
+    expect(rules).toContain("H3+ subsection");
+    expect(rules).toContain("must carry at least one `lw:anchors` marker of its own");
+    expect(rules).toContain("entry/boundary/sink key groups");
+  });
+
+  it("buildStage5Prompt renders the semantic key groups when supplied", () => {
+    const r = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source", "en", undefined, flowGroups);
+    expect(r.user).toContain("# Semantic key groups");
+    expect(r.user).toContain("- entry keys: src/cli.ts#run");
+    expect(r.user).toContain("- boundary keys: src/core.ts#batch");
+    expect(r.user).toContain("- sink keys: src/store.ts#persist");
+  });
+
+  it("buildStage5Prompt omits the groups block when groups are not supplied", () => {
+    const r = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
+    expect(r.user).not.toContain("# Semantic key groups");
+  });
+
+  it("group keys outside the closed list are not rendered (treated as absent)", () => {
+    const r = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source", "en", undefined, {
+      entryKeys: ["src/ghost.ts#nope"],
+      boundaryKeys: ["src/core.ts#batch", "src/ghost.ts#nope"],
+      sinkKeys: [],
+    });
+    expect(r.user).toContain("- boundary keys: src/core.ts#batch");
+    expect(r.user).not.toContain("src/ghost.ts#nope");
+    expect(r.user).not.toContain("- entry keys:");
+    expect(r.user).not.toContain("- sink keys:");
+  });
+
+  it("repair prompt carries ACTION directives for the three new placement/tier codes", () => {
+    const repair = stage5Repair([
+      {
+        code: "anchor_in_disallowed_section",
+        message:
+          'lw:anchors marker is inside section "Diagram"; flow pages allow anchor markers only inside "Purpose", "Ordered flow", and "Failure and recovery"',
+        location: "section",
+        offending: "<!-- lw:anchors src/core.ts#batch -->",
+      },
+      {
+        code: "anchor_missing_in_required_section",
+        message: 'required flow section "Ordered flow" carries no lw:anchors marker',
+        location: "section",
+        offending: "Ordered flow",
+      },
+      {
+        code: "anchor_missing_required_tier",
+        message:
+          'the page cites no key from the "boundary" group — cite at least one of its closed-list keys (src/core.ts#batch)',
+        location: "section",
+        offending: "boundary",
+      },
+    ]);
+    expect(repair.user).toMatch(/anchor_in_disallowed_section.*ACTION: relocate this marker/s);
+    expect(repair.user).toMatch(/anchor_missing_in_required_section.*ACTION: the named section carries no/s);
+    expect(repair.user).toMatch(/anchor_missing_required_tier.*ACTION: the named semantic group has no cited key\. PICK one key/s);
+    // The D1 offending was a full marker: no copyable lw:* comment survives.
+    expect(repair.user).not.toMatch(/<!--\s*lw:[a-zA-Z0-9_-]+/);
+    expect(repair.system).not.toMatch(/<!--\s*lw:[a-zA-Z0-9_-]+/);
+  });
+
+  it("stage-5 repair prompt states the upper-bound citation rule and carries no strict-completeness instruction", () => {
+    const variants = [
+      stage5Repair([]), // attempt 1 of 1 → final attempt (audit block rendered)
+      buildStage5RepairPrompt(
+        flowCandidate,
+        flowClosedKeys,
+        "openings",
+        "symbols",
+        "source",
+        "prior",
+        [],
+        60_000,
+        "en",
+        { attempt: 1, total: 3 }, // non-final audit line rendered
+      ),
+    ];
+    for (const r of variants) {
+      // The citation rule, verbatim-consistent with the initial prompt.
+      expect(r.system).toContain("CITE ONLY WHAT THE PAGE USES");
+      expect(r.system).toContain("upper bound, not an assignment");
+      expect(r.system).toContain("a key cited on only one side is rejected");
+      expect(r.system).toContain("Closed-list keys the page does not use are fine");
+      // No strict-completeness leftover (system or user, either variant).
+      expect(r.system).not.toMatch(/every closed key/i);
+      expect(r.user).not.toMatch(/every closed key/i);
+      expect(r.system).not.toMatch(/equal the closed list/i);
+      expect(r.user).not.toMatch(/equal the closed list/i);
+      expect(r.system).not.toContain("COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS");
+      expect(r.user).not.toContain("COMPLETENESS IS TWO INDEPENDENT REQUIREMENTS");
+    }
+    expect(variants[0]!.user).toContain("Every CITED key declared in the frontmatter anchors list");
+    expect(variants[0]!.user).toContain("Every CITED key declared exactly once across");
+    expect(variants[1]!.user).toContain("every CITED key in frontmatter");
+    expect(variants[1]!.user).toContain("every CITED key exactly once across section markers");
+  });
+
+  it("stage-5 repair prompt renders the semantic key groups when supplied", () => {
+    const r = buildStage5RepairPrompt(
+      flowCandidate,
+      flowClosedKeys,
+      "openings",
+      "symbols",
+      "source",
+      "prior",
+      [],
+      60_000,
+      "en",
+      { attempt: 1, total: 2 },
+      undefined,
+      flowGroups,
+    );
+    expect(r.user).toContain("# Semantic key groups");
+    expect(r.user).toContain("- entry keys: src/cli.ts#run");
+    expect(r.user).toContain("- boundary keys: src/core.ts#batch");
+    expect(r.user).toContain("- sink keys: src/store.ts#persist");
+    // The tier rule: at least one cited key from each listed non-empty group.
+    expect(r.user).toContain("at least one key from EACH group listed below");
+  });
+
+  it("stage-5 repair prompt omits the groups block when not supplied and filters out-of-list keys", () => {
+    expect(stage5Repair([]).user).not.toContain("# Semantic key groups");
+    const r = buildStage5RepairPrompt(
+      flowCandidate,
+      flowClosedKeys,
+      "openings",
+      "symbols",
+      "source",
+      "prior",
+      [],
+      60_000,
+      "en",
+      { attempt: 1, total: 2 },
+      undefined,
+      {
+        entryKeys: ["src/ghost.ts#nope"],
+        boundaryKeys: ["src/core.ts#batch", "src/ghost.ts#nope"],
+        sinkKeys: [],
+      },
+    );
+    expect(r.user).toContain("- boundary keys: src/core.ts#batch");
+    expect(r.user).not.toContain("src/ghost.ts#nope");
+    expect(r.user).not.toContain("- entry keys:");
+    expect(r.user).not.toContain("- sink keys:");
+  });
+
+  it("stage-5 repair missing_closed_key block offers add-or-remove (no forced completeness)", () => {
+    const r = stage5Repair([
+      {
+        code: "missing_closed_key",
+        message: 'closed-list key "src/core.ts#batch" is not declared in any section marker',
+        location: "section",
+        offending: "src/core.ts#batch",
+      },
+    ]);
+    expect(r.user).toContain("[missing_closed_key] (section): 1 exact closed-list key is missing");
+    expect(r.user).toContain("REMOVE it from the opposite location");
+  });
+
+  it("stage-5 initial prompt pins the flows hub link to the bare `index.md` target", () => {
+    const initial = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
+    // E2E evidence: the model generalized the module-link form `../<moduleId>.md`
+    // to the hub and wrote `../index.md`, which resolves outside `flows/`.
+    expect(initial.system).toContain("[How it works](index.md)");
+    expect(initial.system).toContain("the bare `index.md` target");
+    expect(initial.system).toContain("NEVER write `../index.md`");
+  });
+
+  it("stage-5 repair prompt carries the hub rule and the verify_failed bare-target ACTION (final and non-final)", () => {
+    const errors: ReadonlyArray<ArtifactValidationError> = [
+      {
+        code: "verify_failed",
+        message:
+          'broken_internal_link: the link "../index.md" in "Related pages" resolves to livewiki/index.md, which does not exist',
+        location: "section",
+        offending: "../index.md",
+      },
+    ];
+    const variants = [
+      stage5Repair(errors), // attempt 1 of 1 → final attempt (audit block rendered)
+      buildStage5RepairPrompt(
+        flowCandidate,
+        flowClosedKeys,
+        "openings",
+        "symbols",
+        "source",
+        "prior",
+        errors,
+        60_000,
+        "en",
+        { attempt: 1, total: 3 }, // non-final audit line rendered
+      ),
+    ];
+    for (const r of variants) {
+      // The shared FLOW_PAGE_PROMPT_RULES carry the hub rule in the system prompt.
+      expect(r.system).toContain("[How it works](index.md)");
+      expect(r.system).toContain("NEVER write `../index.md`");
+      // The per-error ACTION directs the bare target for broken_internal_link.
+      expect(r.user).toMatch(/verify_failed.*ACTION: fix the exact verify issue/s);
+      expect(r.user).toContain("must be the bare `index.md` target");
+    }
+  });
+
+  it("stage-5 diagram rule carries the module-granularity guidance for walks over 6 modules", () => {
+    const initial = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
+    const repair = stage5Repair([]);
+    for (const r of [initial, repair]) {
+      expect(r.system).toContain("more than 6 modules");
+      expect(r.system).toContain("MODULE-granularity nodes");
+    }
   });
 });

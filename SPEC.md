@@ -132,13 +132,22 @@ target-repo/
 ├── livewiki/
 │   ├── .manifest.json
 │   ├── quickstart.md
-│   ├── tasks.md                    # deterministic task-oriented module index
+│   ├── tasks.md                    # deterministic intent-oriented work index
 │   ├── architecture/
 │   │   ├── overview.md
 │   │   ├── structure.mmd          # Mermaid org chart of directories/modules
 │   │   └── modules.mmd            # Mermaid dependency graph (imports)
 │   ├── diagrams/
-│   │   └── <module>.classes.mmd   # per-module classDiagram (when classes exist)
+│   │   ├── <module>.classes.mmd   # per-module classDiagram (when classes exist)
+│   │   └── flow-<slug>.mmd        # companion diagram per flow page
+│   ├── flows/
+│   │   ├── index.md               # deterministic "How it works" hub
+│   │   └── <slug>.md              # one bounded flow page per candidate
+│   ├── topics/
+│   │   ├── index.md               # deterministic title+link concept hub
+│   │   └── <slug>-<hash>.md        # bounded cross-module behavioral contract
+│   ├── auxiliary/
+│   │   └── index.md               # deterministic non-product inventory
 │   ├── files/<path-slug>.md       # e.g. src-auth-login.md
 │   └── decisions/<date>-<slug>.md
 └── .livewiki/
@@ -211,7 +220,10 @@ MCP `livewiki_quickstart` tool. Its deterministic outline is, in this exact
 order:
 
 1. `# Quickstart` plus one orientation paragraph;
-2. `## Choose a path`, linking to `architecture/overview.md` and `tasks.md`;
+2. optional `## Understand the product`, linking every accepted topic directly
+   plus the topic hub; then `## Work by intent`, linking to product work,
+   architecture, the auxiliary hub when auxiliary modules exist, and each
+   accepted flow page directly;
 3. `## Document a repo`, covering `livewiki init` and
    `livewiki init --batch`;
 4. `## Query the wiki from an agent`, covering
@@ -227,14 +239,29 @@ or below 100 nonblank lines and 700 words. It needs no provider configuration
 and constructs no LLM client.
 
 `livewiki/tasks.md` is `owner: generated`, has no code anchors and no
-`lw:anchors` markers, and is included in the manifest snapshot. Product modules
-come first, exactly once each; fixtures, tooling/benchmarks, and documentation
-modules use separate auxiliary sections. When an accepted module page has a
-`When to use this page` bullet list, Tasks reuses those bullets verbatim.
-Otherwise it shows the deterministic module display title. Links are emitted
-only for module pages that exist; a missing page is labeled unavailable rather
-than producing a dead link. `verify` checks its internal links like any other
-Markdown page, but Tasks never enters the stage-4 closed-key denominator.
+`lw:anchors` markers, and is included in the manifest snapshot. Existing topics
+appear first as title-and-link entries, followed by accepted flows under
+`## End-to-end behavior`. Product modules follow under
+`## Implementation reference`, exactly once each.
+When an accepted product module page exists, Tasks shows its linked display
+title and nothing more: no `When to use this page` bullets, no responsibility
+sentence, and no other module-page prose. Otherwise it shows the deterministic
+display title and labels the page unavailable without emitting a dead link.
+When any fixture, tooling/benchmark, or repository-documentation module exists,
+`## Auxiliary work` contains exactly one link to `auxiliary/index.md`; Tasks
+never lists individual auxiliary modules. `verify` checks its internal links
+like any other Markdown page, but Tasks never enters the stage-4 closed-key
+denominator.
+
+`livewiki/auxiliary/index.md` is the deterministic inventory of every
+non-product module, grouped as test fixtures, tooling/benchmarks, and repository
+documentation. Existing module pages use their display title and an
+existence-gated link; missing pages are labeled unavailable without a link. An
+existing human, mixed, ownerless, or unparseable non-empty auxiliary hub is
+preserved byte-for-byte. The skipped rewrite is reported with path and owner in
+the current init/batch human and JSON result and is not persisted. A generated
+hub is removed when no auxiliary modules remain; a protected hub is never
+removed.
 
 Every module has a presentation-only `displayTitle`. The deterministic fallback
 uses the shortest unique directory context plus any split ordinal (for example,
@@ -288,11 +315,14 @@ in prose, and it does not infer “entry point” status from symbol count. Fixt
 tooling, benchmarks, and documentation pages use honest auxiliary task context
 rather than claiming product prominence.
 
-Architecture overview remains the complete inventory hub, grouped by module
-role. Each module card shows the human display title first, a separately labeled
-module id, file/symbol counts, up to three deterministic representative paths,
+Architecture overview remains the detailed product inventory. Each product
+module card shows the human display title first, a separately labeled module
+id, file/symbol counts, up to three deterministic representative paths,
 existence-only page/class-diagram links, and direct dependencies/dependents by
-display title. Its explicit HTML id remains the stable `Module.id`.
+display title. Its explicit HTML id remains the stable `Module.id`. Auxiliary
+modules do not receive individual cards there; when present, they are
+represented by their count and exactly one existence-gated link to
+`../auxiliary/index.md`.
 
 After stage 4, every existing `owner: generated` or `owner: mixed` module page
 gets a deterministic final `## Navigate` block. The block links to Quickstart,
@@ -302,6 +332,82 @@ role, then existing prioritization order, and are deterministic under input
 reordering. The block has no anchors and no LLM-authored path. Rewriting it
 preserves every `lw:manual` block byte-for-byte and retains `owner: mixed`;
 `owner: human` pages are never modified.
+
+### Semantic product-flow layer
+
+Stage 5 (flows) synthesizes a bounded set of cross-module semantic
+product-flow artifacts after stage 4: one flow page
+(`livewiki/flows/<slug>.md`) and one companion Mermaid diagram
+(`livewiki/diagrams/flow-<slug>.mmd`) per candidate, plus a deterministic hub
+(`livewiki/flows/index.md`). Candidates are detected deterministically from
+the index — entry modules, module-graph walks, persistence and
+external-boundary signals (gitignore-style pattern overrides in
+`config.flowSignals`) — never from repository-specific names. Detection,
+slugs, hub, and links are deterministic under input reordering. The set is
+capped by `maxFlows` (default 4; 0 disables). Synthesis is an ordinary gated
+batch task kind (stage 5, target `flow:<slug>`): closed key list (≤
+`flowMaxAnchors`, default 25) as an **upper bound, not an assignment** —
+the page cites only the keys it uses, each exactly once in frontmatter and
+exactly once across section markers; the shared artifact validator
+parameterized by
+page kind, bounded repair, transactional write with rollback, token
+accounting, and the run failure policy — all identical to stage 4. One
+deliberate asymmetry: the stage-5 write gate rejects on ANY verify issue —
+error or warning — scoped to the written page and diagram, while stage 4
+keeps the error-only filter (R9 contract); pre-existing issues on other
+paths never block either gate. Diagrams
+are parsed pre-write and bounded (`flowMaxDiagramNodes` 12 /
+`flowMaxDiagramEdges` 20); every diagram has a numbered-step textual fallback
+in the page. Flow claims cite only closed-list anchors, so flow pages enter
+the debt ledger like any page. Structural source maps (structure/import/class
+diagrams) are retained and do not count as flow coverage; automatic
+whole-repository call-graphs remain out of scope. Quickstart links every
+accepted flow page directly and also links the complete hub when at least one
+flow page exists; CLI, MCP, export, and the Phase 7 viewer
+consume the same files with no separate agent/human truths. The hub is a flat
+list without anchored sections, so slug-mapped manual-block reinsertion is
+unreliable; as a hub-specific conservative exception to §"Manual-block
+preservation", a human, mixed, or unparseable `flows/index.md` is never
+rewritten — the regeneration is skipped and the skip is reported (path and
+owner) in the current init/batch output, never persisted for later status
+queries. `verify` still detects broken links in a preserved hub but cannot
+detect semantic omissions (for example, a flow page missing from the list).
+
+### Semantic concept-topic layer
+
+After accepted module and flow artifacts exist, stage 5 runs one bounded
+`topic-plan` task over a closed deterministic inventory. The inventory contains
+accepted module titles/openings/anchors, import neighbors, generic
+configuration/state/output/validation signals, and accepted flow evidence. The
+planner may name concepts, but every proposed module, flow, and anchor must be
+copied from that inventory. Product code contains no repository-specific topic
+table. `maxTopics` defaults to 4 and accepts 0..8; 0 disables planning and topic
+generation. Each accepted topic uses 2..6 modules, 0..2 flows, and 5..18 anchors
+grouped as contract/state/output/failure, with at least 75% product-role
+anchors, no duplicate group membership, no pair above 75% anchor overlap, and
+source-span cost within `topicMaxSourceChars` (default 40,000). The accepted raw
+plan and derived candidates are persisted in the task checkpoint and reused by
+resume and `--only topic:<evidence-hash>`. An inventory with fewer than five
+active anchors, or without either two product modules or one accepted flow
+spanning at least three modules, skips topic planning deterministically without
+creating a failed task or calling the LLM.
+
+Each candidate becomes `livewiki/topics/<title-slug>-<hash>.md`. Topic
+frontmatter declares `kind: topic`, its accepted plan order and intent, exact module/flow sets,
+and the closed anchors it actually cites. Required H2s are Purpose, When to use
+this page, Behavioral contract, Failure and recovery, Change map, and Related
+pages. Every factual H2 through Change map carries evidence; the closed list is
+an upper bound with exact dual citation for every used key. Topic generation
+uses bounded repair, monotonic usage accounting, safe-io, an any-severity
+page-scoped verify gate, and transactional rollback. Human/mixed topic pages
+and hubs are preserved; stale cleanup removes generated pages only. The hard
+prose maximum is 1,400 words, and non-Mermaid code fences are rejected.
+
+Quickstart and Tasks route to topics before implementation references. Module
+Navigate blocks link at most two supporting topics, and flow pages link at most
+two topics that cite them. Hubs contain title+link only. Auxiliary module pages
+retain exact anchor coverage but use the compact Reference/H3 contract; role
+classification changes depth and prominence, never inventory membership.
 
 ## SQLite schema (`.livewiki/index.db`)
 
@@ -382,7 +488,7 @@ best-effort rollback so no unverified page is left behind. If rollback fails,
 the tool returns an error that names the suspect path and warns that the disk
 may contain an unverified page requiring operator inspection.
 
-## Batch pipeline (4 stages, resumable)
+## Batch pipeline (5 stages, resumable)
 
 1. **Scan**: full `index`; symbol snapshot.
 2. **Module identification**: grouping by directory + import graph (deterministic
@@ -422,8 +528,8 @@ may contain an unverified page requiring operator inspection.
 3. **Prioritization**: product modules are ordered before auxiliary modules,
    then by centrality (how many others depend on them) and size. Path roles are
    deterministic (`product`, `fixture`, `tooling`, `docs`) with optional
-   gitignore-style overrides in `config.pathRoles`. Roles affect ranking and
-   presentation only: they never remove files, modules, symbols, or closed-list
+   gitignore-style overrides in `config.pathRoles`. Roles affect ranking,
+   navigation, and compact-vs-product presentation depth only: they never remove files, modules, symbols, or closed-list
    obligations. The user can reorder/exclude (`--plan` shows the plan before
    running).
 4. **Coordinated documentation**: for each module (task): context = symbols +
@@ -622,10 +728,12 @@ status `completed_with_failures`, exit ≠ 0, the report lists each failed task 
 the reason + a ready retry command.
 
 At the end: regenerates `quickstart.md`, `tasks.md`,
-`architecture/overview.md`, and the deterministic per-module `## Navigate`
-blocks, then writes the manifest. Navigation adds no LLM call. Architecture
-overview and Tasks group product modules separately from fixtures,
-tooling/benchmarks, and docs; every emitted link targets an artifact that exists.
+`architecture/overview.md`, `flows/index.md`, `topics/index.md`, `auxiliary/index.md`, and the
+deterministic per-module `## Navigate` blocks, then writes the manifest.
+Navigation adds no LLM call. Tasks and the architecture overview expose product
+work directly and route all fixtures, tooling/benchmarks, and repository docs
+through the single auxiliary inventory; every emitted link targets an artifact
+that exists.
 
 ### Token accounting (Phase 3)
 
@@ -681,7 +789,7 @@ product.** Exhaustive tests here.
 
 ### Phase 3 — Init and batch ✅ criterion: `livewiki init --batch` on a medium repo generates a complete wiki; interrupting midway and running `batch resume` continues from the right task
 Wiki structure, quickstart/structure.mmd without LLM, LLM client (Anthropic +
-OpenAI-compat), 4-stage pipeline with checkpoints, manifest + snapshot hash.
+OpenAI-compat), 5-stage pipeline with checkpoints, manifest + snapshot hash.
 
 **Deterministic diagrams (no LLM, regenerated on every `index`/`init`)**:
 `structure.mmd` (org chart of directories/modules), `modules.mmd` (dependency
@@ -689,8 +797,14 @@ graph by imports — a byproduct of pipeline stage 2), and
 `diagrams/<module>.classes.mmd` (Mermaid classDiagram: classes/methods/inheritance,
 straight from the `symbols` table). These are pure `owner: generated`: they never
 age, never enter debt — the generator is what changes. Large graphs: one diagram
-per module, never a mega-diagram of the whole repo. Function call-graph and
-sequence diagrams are OUT (see "Out of designed scope" in VISION).
+per module, never a mega-diagram of the whole repo. These deterministic
+diagrams are structural source maps: they answer what exists and what depends
+on what, and by themselves they do not explain behavior. Automatic
+whole-repository function call-graphs and edge-dense mega-diagrams remain OUT
+(see "Out of designed scope" in VISION). A small number of bounded,
+source-anchored semantic product-flow artifacts — including
+component/data-flow, sequence, or state diagrams synthesized as gated batch
+artifacts — are IN when they satisfy §"Semantic product-flow layer".
 Generators deduplicate node/edge declarations and keep same-named classes from
 different source files distinct. Class-diagram links are emitted only when the
 diagram file exists. `verify` checks navigable `.md` and `.mmd` targets while

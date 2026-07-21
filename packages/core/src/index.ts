@@ -34,3 +34,6 @@ export * as pointer from "./pointer.js";
 export * as presets from "./presets.js";
 export * as gitignore from "./gitignore.js";
 export * as exporter from "./export.js";
+export * as flows from "./flows.js";
+export * as topics from "./topics.js";
+export * as importResolution from "./import-resolution.js";

@@ -222,6 +222,7 @@ async function writeOpenAiConfig(model: string, baseUrl: string): Promise<void> 
       provider: "openai-compat",
       model,
       baseUrl,
+      maxTopics: 0,
       pricing: { inputUsdPerMtok: 3.0, outputUsdPerMtok: 15.0 },
     }, null, 2),
     "utf8",

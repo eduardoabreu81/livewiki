@@ -13,12 +13,14 @@
  *   anchors:                             # lista de strings
  *     - src/auth/login.ts
  *     - src/auth/login.ts#validateToken
+ *   modules: [hooks, services, lib]      # lista inline (flow-style, 1 nível)
  *   updated: 2026-07-08                  # string (não interpretamos data)
  *   ---
  *   body markdown aqui...
  *
  * Limitações intencionais (não implementamos YAML completo):
  *   - Sem listas aninhadas, mapas aninhados, strings multi-linha (| >)
+ *   - Listas inline são de strings simples (sem aspas, sem vírgula interna)
  *   - Sem booleans/null tipados (são strings: "true"/"false"/"null")
  *   - Sem âncoras/aliases `&foo` / `*foo`
  *   - Sem escape `\"` em strings
@@ -120,9 +122,22 @@ function parseYamlBlock(yaml: string): Frontmatter {
       currentList = [];
       out[key] = currentList;
     } else {
-      // Valor string
       const value = restRaw.trim();
-      out[key] = value;
+      // Inline flow-style list (`key: [a, b, c]`): single-level, unquoted
+      // strings — same subset philosophy, and the form LLMs most often emit.
+      if (value.startsWith("[") && value.endsWith("]")) {
+        const inner = value.slice(1, -1).trim();
+        out[key] =
+          inner === ""
+            ? []
+            : inner
+                .split(",")
+                .map((item) => item.trim())
+                .filter((item) => item !== "");
+      } else {
+        // Valor string
+        out[key] = value;
+      }
       currentListKey = null;
       currentList = null;
     }

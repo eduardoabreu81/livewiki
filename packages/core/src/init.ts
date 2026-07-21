@@ -22,6 +22,7 @@
  * também não. init --batch só exige se for chamar LLM.
  */
 
+import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import { openIndex, type SymbolRow } from "./db.js";
@@ -42,6 +43,14 @@ import {
 } from "./modules.js";
 import { loadConfig, applyDefaults, resolveExtraIgnores, type LivewikiConfig } from "./config.js";
 import { collectImports } from "./imports.js";
+import { parseFrontmatter } from "./frontmatter.js";
+import type { FlowCandidate } from "./flows.js";
+import type { TopicCandidate } from "./topics.js";
+import {
+  loadEffectiveTsconfig,
+  loadWorkspacePackages,
+  resolveImportEdges,
+} from "./import-resolution.js";
 import {
   generateStructure,
   generateModulesGraph,
@@ -57,9 +66,18 @@ import {
 import {
   generateQuickstart,
   generateTasksPage,
+  loadFlowPresentations,
   loadModulePresentations,
+  loadTopicPresentations,
   selectRelatedModules,
+  syncAuxiliaryIndexHub,
+  syncFlowsIndexHub,
+  syncTopicsIndexHub,
+  updateFlowTopicLinks,
   updateModuleNavigateBlocks,
+  type AuxiliaryHubSyncResult,
+  type FlowsHubSyncResult,
+  type TopicsHubSyncResult,
   type ModulePresentation,
 } from "./navigation.js";
 
@@ -106,6 +124,22 @@ export interface InitResult {
    * Cálculo delegado a core/batch.ts:statusToExitCode — fonte única de verdade.
    */
   batchExitCode?: 0 | 1 | 2;
+  /**
+   * R10.1 C: the stage-5 flows hub was preserved because of ownership
+   * (human/mixed or unparseable). Never a silent skip — reported here and
+   * in the CLI output, never persisted for status queries.
+   */
+  skippedFlowsHub?: { path: string; owner: "human" | "mixed" | null };
+  /** R11-NAV: the auxiliary hub was preserved because automation does not own it. */
+  skippedAuxiliaryHub?: { path: string; owner: "human" | "mixed" | null };
+  /** R11-A: the concept hub was preserved because automation does not own it. */
+  skippedTopicsHub?: { path: string; owner: "human" | "mixed" | null };
+  /**
+   * R10.1 K: flow candidates skipped deterministically before any LLM
+   * call during --batch (K-a/K-b). Never silent — reported here and in
+   * the CLI output, never persisted for status queries.
+   */
+  skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }>;
 }
 
 /**
@@ -165,6 +199,10 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
 
   // 4. Gera layout determinístico
   const filesWritten: string[] = [];
+  let skippedFlowsHub: InitResult["skippedFlowsHub"];
+  let skippedAuxiliaryHub: InitResult["skippedAuxiliaryHub"];
+  let skippedTopicsHub: InitResult["skippedTopicsHub"];
+  let skippedFlowCandidates: InitResult["skippedFlowCandidates"];
 
   // structure.mmd (organograma de diretórios)
   const structureMmd = generateStructure(filePaths);
@@ -176,23 +214,48 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   await safeIo.writeText(absRoot, "livewiki/architecture/modules.mmd", modulesMmd);
   filesWritten.push("livewiki/architecture/modules.mmd");
 
-  // diagrams/<slug>.classes.mmd — 1 por módulo com classes
-  for (const module of modules) {
-    const diagram = generateClassDiagram(module, symbols);
-    if (diagram) {
-      const slug = moduleSlug(module.id);
-      const path = `livewiki/diagrams/${slug}.classes.mmd`;
-      await safeIo.writeText(absRoot, path, diagram);
-      filesWritten.push(path);
-    }
-  }
+  // diagrams/<slug>.classes.mmd — one per module with classes. Synchronizing
+  // the whole deterministic surface also removes files left behind by an older
+  // module plan (for example `src.classes.mmd` after IDs become `core-src-*`).
+  const classDiagrams = await syncClassDiagrams(absRoot, modules, symbols);
+  filesWritten.push(...classDiagrams.written);
 
   // Human navigation is assembled only from the index and existing page metadata.
   const presentations = await loadModulePresentations(absRoot, modules);
+  // Stage-5 surface: keep the flows hub consistent with the flow pages
+  // on disk so a plain init neither points at a stale hub nor drops a
+  // live one.
+  const flowPresentations = await loadFlowPresentations(absRoot);
+  const flowsHub = await syncFlowsIndexHub(absRoot, flowPresentations);
+  if (flowsHub.outcome === "written") filesWritten.push("livewiki/flows/index.md");
+  // R10.1 C: a human/mixed/unparseable hub is preserved — never a silent skip.
+  if (flowsHub.outcome === "skipped-owner") {
+    skippedFlowsHub = { path: flowsHub.path!, owner: flowsHub.owner ?? null };
+  }
+  const topicPresentations = await loadTopicPresentations(absRoot);
+  const topicsHub = await syncTopicsIndexHub(absRoot, topicPresentations);
+  if (topicsHub.outcome === "written") filesWritten.push("livewiki/topics/index.md");
+  if (topicsHub.outcome === "skipped-owner") {
+    skippedTopicsHub = { path: topicsHub.path!, owner: topicsHub.owner ?? null };
+  }
+  const auxiliaryHub = await syncAuxiliaryIndexHub({
+    repoRoot: absRoot,
+    modules,
+    ordered,
+    presentations,
+    ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
+  });
+  if (auxiliaryHub.outcome === "written") filesWritten.push("livewiki/auxiliary/index.md");
+  if (auxiliaryHub.outcome === "skipped-owner") {
+    skippedAuxiliaryHub = { path: auxiliaryHub.path!, owner: auxiliaryHub.owner ?? null };
+  }
   const quickstart = generateQuickstart({
     totalFiles,
     totalSymbols,
     moduleCount: modules.length,
+    flowPresentations,
+    topicPresentations,
+    hasAuxiliary: modules.some((module) => classifyModuleRole(module, pathRoleConfig) !== "product"),
   });
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", quickstart);
   filesWritten.push("livewiki/quickstart.md");
@@ -201,6 +264,8 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     modules,
     ordered,
     presentations,
+    flowPresentations,
+    topicPresentations,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   await safeIo.writeText(absRoot, "livewiki/tasks.md", tasks);
@@ -214,6 +279,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     totalFiles,
     edges,
     presentations,
+    hasTopics: topicPresentations.size > 0,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
@@ -225,9 +291,11 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     ordered,
     edges,
     presentations,
+    topicPresentations,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   filesWritten.push(...navigationPages);
+  filesWritten.push(...await updateFlowTopicLinks(absRoot, topicPresentations));
 
   // manifest.json (snapshotHash + pendingBatch=null pra init sem batch)
   const snapshotHash = await computeSnapshotHash(absRoot);
@@ -261,15 +329,25 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
       // the configured value is the single source of truth.
       skipManifestWrite: true, // init já escreveu; batch não regrava
     });
+    // Priority-0 fix: `byModule.length`/`failures.length` mixed done+failed
+    // entries across stages and disagreed with `batch status`'s own (also
+    // wrong, stage-4-only) count. `result.tasksDone`/`tasksFailed` are the
+    // authoritative per-task counters (`cb.done`/`cb.fails`), the same ones
+    // `finalizeRun` persists to `batch_runs.summary_json`.
     batchSummary = {
       runId: result.runId,
       status: result.status,
-      tasksDone: result.byModule.length,
-      tasksFailed: result.failures.length,
+      tasksDone: result.tasksDone,
+      tasksFailed: result.tasksFailed,
     };
     // (O): propagar exit code do batch (antes fix: init --batch sempre
     // retornava 0, escondendo completed_with_failures/aborted).
     batchExitCode = statusToExitCode(result.status);
+    // R10.1 C: a skipped flows hub in the batch regeneration is surfaced too.
+    if (result.skippedFlowsHub) skippedFlowsHub = result.skippedFlowsHub;
+    if (result.skippedAuxiliaryHub) skippedAuxiliaryHub = result.skippedAuxiliaryHub;
+    if (result.skippedTopicsHub) skippedTopicsHub = result.skippedTopicsHub;
+    if (result.skippedFlowCandidates) skippedFlowCandidates = result.skippedFlowCandidates;
     // Atualiza manifest com pendingBatch se houve falhas (handoff)
     if (result.status === "completed_with_failures" || result.status === "aborted") {
       const totalsDone = result.byModule.reduce((a, m) => a + (m.costUsd !== null ? 1 : 0), 0);
@@ -298,7 +376,170 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     filesWritten,
     ...(batchSummary ? { batchSummary } : {}),
     ...(batchExitCode !== undefined ? { batchExitCode } : {}),
+    ...(skippedFlowsHub ? { skippedFlowsHub } : {}),
+    ...(skippedAuxiliaryHub ? { skippedAuxiliaryHub } : {}),
+    ...(skippedTopicsHub ? { skippedTopicsHub } : {}),
+    ...(skippedFlowCandidates ? { skippedFlowCandidates } : {}),
   };
+}
+
+export interface ClassDiagramSyncResult {
+  written: string[];
+  removed: string[];
+}
+
+/**
+ * Synchronize the generated class-diagram surface with one complete module
+ * plan. Files ending in `.classes.mmd` under `livewiki/diagrams/` are owned by
+ * this deterministic generator; other files in that directory are preserved.
+ */
+export async function syncClassDiagrams(
+  repoRoot: string,
+  modules: Module[],
+  symbols: SymbolRow[],
+): Promise<ClassDiagramSyncResult> {
+  const absRoot = nodePath.resolve(repoRoot);
+  const directory = "livewiki/diagrams";
+  await safeIo.mkdir(absRoot, directory);
+
+  const desired = new Map<string, string>();
+  for (const module of modules) {
+    const diagram = generateClassDiagram(module, symbols);
+    if (!diagram) continue;
+    const relPath = `${directory}/${moduleSlug(module.id)}.classes.mmd`;
+    desired.set(relPath, diagram);
+  }
+
+  const written: string[] = [];
+  for (const [relPath, diagram] of desired) {
+    await safeIo.writeText(absRoot, relPath, diagram);
+    written.push(relPath);
+  }
+
+  const removed: string[] = [];
+  const absDirectory = await safeIo.resolveAndValidate(absRoot, directory);
+  const entries = await nodeFs.readdir(absDirectory, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".classes.mmd")) continue;
+    const relPath = `${directory}/${entry.name}`;
+    if (desired.has(relPath)) continue;
+    await safeIo.remove(absRoot, relPath);
+    removed.push(relPath);
+  }
+
+  return { written, removed };
+}
+
+export interface StaleFlowSyncResult {
+  removed: string[];
+}
+
+/**
+ * Stage 5 counterpart of syncClassDiagrams (SPEC §"Semantic product-flow
+ * layer"): removes flow artifacts whose slug is no longer in the current
+ * candidate set. Safety contract (same philosophy as the class-diagram
+ * prefix ownership):
+ *
+ *   - A flow page is removed ONLY when its frontmatter parses and declares
+ *     exactly `owner: generated`. Human, mixed, unparseable, or
+ *     ownerless pages are preserved byte-for-byte.
+ *   - A companion `flow-<slug>.mmd` diagram (no frontmatter of its own)
+ *     is removed only when the companion page is absent or was itself
+ *     removed above — the diagram of a preserved human/mixed page is
+ *     never touched.
+ *   - `flows/index.md` (the deterministic hub) and any non-matching
+ *     file are never touched.
+ */
+export async function syncStaleFlowArtifacts(
+  repoRoot: string,
+  candidates: FlowCandidate[],
+): Promise<StaleFlowSyncResult> {
+  const absRoot = nodePath.resolve(repoRoot);
+  const keep = new Set(candidates.map((candidate) => candidate.slug));
+  const removed: string[] = [];
+
+  const flowsDir = "livewiki/flows";
+  const stalePageSlugs = new Set<string>();
+  if (await safeIo.exists(absRoot, flowsDir).catch(() => false)) {
+    const absFlows = await safeIo.resolveAndValidate(absRoot, flowsDir);
+    for (const entry of await nodeFs.readdir(absFlows, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") continue;
+      const slug = entry.name.slice(0, -".md".length);
+      if (keep.has(slug)) continue;
+      const relPath = `${flowsDir}/${entry.name}`;
+      const content = await safeIo.readText(absRoot, relPath).catch(() => null);
+      if (content === null || readFlowPageOwner(content) !== "generated") continue;
+      await safeIo.remove(absRoot, relPath);
+      stalePageSlugs.add(slug);
+      removed.push(relPath);
+    }
+  }
+
+  const diagramsDir = "livewiki/diagrams";
+  if (await safeIo.exists(absRoot, diagramsDir).catch(() => false)) {
+    const absDiagrams = await safeIo.resolveAndValidate(absRoot, diagramsDir);
+    for (const entry of await nodeFs.readdir(absDiagrams, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith("flow-") || !entry.name.endsWith(".mmd")) continue;
+      const slug = entry.name.slice("flow-".length, -".mmd".length);
+      if (keep.has(slug)) continue;
+      // Ownership proxy: the companion page. Remove the diagram only when
+      // the page is absent or was removed above as owner: generated.
+      if (!stalePageSlugs.has(slug)) {
+        const pageContent = await safeIo
+          .readText(absRoot, `${flowsDir}/${slug}.md`)
+          .catch(() => null);
+        if (pageContent !== null) continue;
+      }
+      await safeIo.remove(absRoot, `${diagramsDir}/${entry.name}`);
+      removed.push(`${diagramsDir}/${entry.name}`);
+    }
+  }
+
+  return { removed };
+}
+
+/** Removes stale generated topic pages while preserving human/mixed content. */
+export async function syncStaleTopicArtifacts(
+  repoRoot: string,
+  candidates: ReadonlyArray<TopicCandidate>,
+): Promise<string[]> {
+  const absRoot = nodePath.resolve(repoRoot);
+  const topicsDir = "livewiki/topics";
+  const keep = new Set(candidates.map((candidate) => candidate.slug));
+  const removed: string[] = [];
+  if (!(await safeIo.exists(absRoot, topicsDir).catch(() => false))) return removed;
+  const absTopics = await safeIo.resolveAndValidate(absRoot, topicsDir);
+  for (const entry of await nodeFs.readdir(absTopics, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") continue;
+    const slug = entry.name.slice(0, -".md".length);
+    if (keep.has(slug)) continue;
+    const relPath = `${topicsDir}/${entry.name}`;
+    const content = await safeIo.readText(absRoot, relPath).catch(() => null);
+    if (content === null || readFlowPageOwner(content) !== "generated") continue;
+    await safeIo.remove(absRoot, relPath);
+    removed.push(relPath);
+  }
+  return removed.sort();
+}
+
+/**
+ * Frontmatter owner of a flow page for stale cleanup. Returns "generated"
+ * ONLY for a parseable page declaring exactly `owner: generated`;
+ * anything else (human, mixed, missing, invalid, unparseable) is "other"
+ * and preserved. BOM- and CRLF-tolerant, same as the batch pre-owner gate.
+ */
+function readFlowPageOwner(content: string): "generated" | "other" {
+  let s = content;
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
+  if (!s.startsWith("---\n") && !s.startsWith("---\r\n")) return "other";
+  s = s.replace(/\r\n/g, "\n");
+  try {
+    const fm = parseFrontmatter(s).frontmatter;
+    if (fm === null) return "other";
+    return fm["owner"] === "generated" ? "generated" : "other";
+  } catch {
+    return "other";
+  }
 }
 
 async function buildPlan(
@@ -375,7 +616,18 @@ async function buildPlan(
         // skip
       }
     }
-    const edges = resolveModuleEdges(modules, importsByFile, new Set(filePaths));
+    // R10.1 (J): same one-resolver wiring as batch stage 3, so
+    // init --plan and batch agree on module edges (relative AND
+    // declared-workspace specifiers).
+    const knownFiles = new Set(filePaths);
+    const workspacePackages = await loadWorkspacePackages(absRoot);
+    const resolvedImportEdges = resolveImportEdges({
+      importsByFile,
+      knownFiles,
+      workspacePackages,
+      tsconfig: await loadEffectiveTsconfig(absRoot, workspacePackages),
+    });
+    const edges = resolveModuleEdges(modules, importsByFile, knownFiles, resolvedImportEdges);
     const ordered = prioritizeModules(modules, edges, cfg.pathRoles);
 
     return {
@@ -396,9 +648,14 @@ async function buildPlan(
 /**
  * Regenerates every deterministic navigation surface from the current index
  * and accepted page metadata. The historical function name is retained for
- * the batch hook. No LLM client or network path is involved.
+ * the batch hook. No LLM client or network path is involved. Returns the
+ * generated-hub sync outcomes so the caller can surface protected hubs that
+ * were preserved instead of rewritten (R10.1 C / R11-NAV).
  */
-export async function regenerateArchitectureOverview(repoRoot: string): Promise<void> {
+export async function regenerateArchitectureOverview(
+  repoRoot: string,
+  opts: { acceptedTopicSlugs?: ReadonlySet<string> } = {},
+): Promise<{ flowsHub: FlowsHubSyncResult; topicsHub: TopicsHubSyncResult; auxiliaryHub: AuxiliaryHubSyncResult }> {
   const absRoot = nodePath.resolve(repoRoot);
   // Load the config inside this hook too — the batch.ts caller does not
   // pass it through. The single-read call from `runInit` is still
@@ -407,15 +664,33 @@ export async function regenerateArchitectureOverview(repoRoot: string): Promise<
   const rawConfig = await loadConfig(absRoot);
   const { modules, edges, ordered, totalSymbols, totalFiles, pathRoleConfig } = await buildPlan(absRoot, rawConfig);
   const presentations = await loadModulePresentations(absRoot, modules);
+  // Sync the stage-5 flows hub with the flow pages on disk before any
+  // gated link (quickstart, overview) is regenerated.
+  const flowPresentations = await loadFlowPresentations(absRoot);
+  const flowsHub = await syncFlowsIndexHub(absRoot, flowPresentations);
+  const topicPresentations = await loadTopicPresentations(absRoot, opts.acceptedTopicSlugs);
+  const topicsHub = await syncTopicsIndexHub(absRoot, topicPresentations);
+  const auxiliaryHub = await syncAuxiliaryIndexHub({
+    repoRoot: absRoot,
+    modules,
+    ordered,
+    presentations,
+    ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
+  });
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", generateQuickstart({
     totalFiles,
     totalSymbols,
     moduleCount: modules.length,
+    flowPresentations,
+    topicPresentations,
+    hasAuxiliary: modules.some((module) => classifyModuleRole(module, pathRoleConfig) !== "product"),
   }));
   await safeIo.writeText(absRoot, "livewiki/tasks.md", generateTasksPage({
     modules,
     ordered,
     presentations,
+    flowPresentations,
+    topicPresentations,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   }));
   const overview = await generateArchitectureOverview({
@@ -426,6 +701,7 @@ export async function regenerateArchitectureOverview(repoRoot: string): Promise<
     totalFiles,
     edges,
     presentations,
+    hasTopics: topicPresentations.size > 0,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
@@ -435,8 +711,10 @@ export async function regenerateArchitectureOverview(repoRoot: string): Promise<
     ordered,
     edges,
     presentations,
+    topicPresentations,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
+  await updateFlowTopicLinks(absRoot, topicPresentations);
 
   // Direct `batch` writes its manifest before this regeneration hook. Refresh
   // the snapshot after navigation changes while retaining batch handoff state.
@@ -448,6 +726,7 @@ export async function regenerateArchitectureOverview(repoRoot: string): Promise<
       pendingBatch: manifest.pendingBatch,
     }));
   }
+  return { flowsHub, topicsHub, auxiliaryHub };
 }
 
 async function generateArchitectureOverview(opts: {
@@ -458,6 +737,7 @@ async function generateArchitectureOverview(opts: {
   totalFiles: number;
   edges: Array<{ from: string; to: string }>;
   presentations: Map<string, ModulePresentation>;
+  hasTopics: boolean;
   pathRoleConfig?: PathRoleConfig;
 }): Promise<string> {
   const {
@@ -468,6 +748,7 @@ async function generateArchitectureOverview(opts: {
     totalFiles,
     edges,
     presentations,
+    hasTopics,
     pathRoleConfig,
   } = opts;
 
@@ -490,27 +771,32 @@ async function generateArchitectureOverview(opts: {
     "manually.");
   lines.push("");
   lines.push(
-    "Modules are grouped by repository role and ordered by prioritization " +
-      "within each group. Each module links to artifacts that exist on disk.",
+    "Product modules are ordered by prioritization and link only to artifacts " +
+      "that exist on disk. Auxiliary modules are kept in a separate inventory.",
   );
   lines.push("");
-  const roleSections: Array<{
-    role: ReturnType<typeof classifyModuleRole>;
-    heading: string;
-  }> = [
-    { role: "product", heading: "Product modules" },
-    { role: "fixture", heading: "Test fixtures" },
-    { role: "tooling", heading: "Tooling and benchmarks" },
-    { role: "docs", heading: "Documentation modules" },
-  ];
-  for (const section of roleSections) {
-    const sectionModules = ordered.filter(
-      (module) => classifyModuleRole(module, pathRoleConfig) === section.role,
-    );
-    if (sectionModules.length === 0) continue;
-    lines.push(`## ${section.heading}`);
+  if (hasTopics && await safeIo.exists(absRoot, "livewiki/topics/index.md").catch(() => false)) {
+    lines.push("## Concept topics");
     lines.push("");
-    for (const m of sectionModules) {
+    lines.push("Behavioral contracts spanning implementation modules: [Concept topics](../topics/index.md)");
+    lines.push("");
+  }
+  // Existence-gated link to the stage-5 flows hub (same discipline as
+  // the per-module artifact links below): emitted only when
+  // flows/index.md is present on disk.
+  if (await safeIo.exists(absRoot, "livewiki/flows/index.md").catch(() => false)) {
+    lines.push("## Flows");
+    lines.push("");
+    lines.push("End-to-end behavior across modules: [How it works](../flows/index.md)");
+    lines.push("");
+  }
+  const productModules = ordered.filter(
+    (module) => classifyModuleRole(module, pathRoleConfig) === "product",
+  );
+  if (productModules.length > 0) {
+    lines.push("## Product modules");
+    lines.push("");
+    for (const m of productModules) {
       const presentation = presentations.get(m.id)!;
       const classDiagramPath = `../diagrams/${moduleSlug(m.id)}.classes.mmd`;
       const classDiagramExists = await safeIo.exists(
@@ -544,6 +830,20 @@ async function generateArchitectureOverview(opts: {
       lines.push(`Dependencies: ${formatNeighbors(dependencies, presentations)}`, "");
       lines.push(`Dependents: ${formatNeighbors(dependents, presentations)}`, "");
     }
+  }
+  const auxiliaryCount = modules.length - productModules.length;
+  if (
+    auxiliaryCount > 0 &&
+    await safeIo.exists(absRoot, "livewiki/auxiliary/index.md").catch(() => false)
+  ) {
+    lines.push("## Auxiliary modules");
+    lines.push("");
+    lines.push(
+      `This repository has **${auxiliaryCount} auxiliary modules** for tests, fixtures, ` +
+        "tooling, benchmarks, or repository documentation. " +
+        "Open the complete [Auxiliary modules](../auxiliary/index.md) inventory.",
+    );
+    lines.push("");
   }
   lines.push("## Diagrams");
   lines.push("");

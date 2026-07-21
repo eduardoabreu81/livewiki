@@ -17,7 +17,7 @@
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import type { PricingOverride } from "./pricing.js";
-import type { PathRoleConfig } from "./modules.js";
+import type { FlowSignalConfig, PathRoleConfig } from "./modules.js";
 import { isKnownPreset, resolvePreset, resolveProviderConfig, type PresetName } from "./presets.js";
 
 /** Provideres suportados pelo client LLM (Fase 3). */
@@ -111,12 +111,46 @@ export interface LivewikiConfig {
    */
   timeoutMs?: number;
   /**
-   * Optional gitignore-style path-role patterns. Roles affect navigation and
-   * prioritization only; they never remove files, modules, or symbols from
-   * the exact documentation inventory. A supplied category replaces its
+   * Optional gitignore-style path-role patterns. Roles affect navigation,
+   * prioritization, and compact-vs-product presentation depth; they never
+   * remove files, modules, or symbols from the exact documentation inventory. A supplied category replaces its
    * built-in patterns; an empty array disables that category.
    */
   pathRoles?: PathRoleConfig;
+  /**
+   * Stage-5 flow synthesis cap (SPEC §"Semantic product-flow layer").
+   * Default 4; 0 disables flow synthesis. Must be an integer >= 0.
+   */
+  maxFlows?: number;
+  /**
+   * Closed-list cap for a flow candidate's seed key set. Default 25.
+   * Must be an integer >= 1.
+   */
+  flowMaxAnchors?: number;
+  /**
+   * Per-diagram node budget for flow companion diagrams. Default 12.
+   * Must be an integer >= 1.
+   */
+  flowMaxDiagramNodes?: number;
+  /**
+   * Per-diagram edge budget for flow companion diagrams. Default 20.
+   * Must be an integer >= 1.
+   */
+  flowMaxDiagramEdges?: number;
+  /**
+   * Optional gitignore-style flow-signal patterns. Same per-category
+   * replacement semantics as pathRoles: a supplied category replaces its
+   * built-in patterns; an empty array disables that category.
+   */
+  flowSignals?: FlowSignalConfig;
+  /** Maximum semantic topic pages planned in stage 5. Default 4; 0 disables topics. */
+  maxTopics?: number;
+  /** Closed-list anchor cap for one topic. Default 18; valid range 5..32. */
+  topicMaxAnchors?: number;
+  /** Maximum source-evidence characters supplied to one topic task. Default 40,000. */
+  topicMaxSourceChars?: number;
+  /** Maximum output tokens for topic generation and repair. Default 4,096. */
+  topicMaxOutputTokens?: number;
 }
 
 /** Max safe timeout for Node `setTimeout` (signed 32-bit ms). */
@@ -168,6 +202,18 @@ export const CONFIG_DEFAULTS = {
    * Local providers may set 900_000; 0 disables the abort timer.
    */
   timeoutMs: 300_000,
+  /** Stage-5 flow candidate cap; 0 disables flow synthesis. */
+  maxFlows: 4,
+  /** Closed-list cap for a flow candidate's seed key set. */
+  flowMaxAnchors: 25,
+  /** Flow companion diagram budgets (nodes / edges). */
+  flowMaxDiagramNodes: 12,
+  flowMaxDiagramEdges: 20,
+  /** Semantic topic synthesis budgets. */
+  maxTopics: 4,
+  topicMaxAnchors: 18,
+  topicMaxSourceChars: 40_000,
+  topicMaxOutputTokens: 4_096,
 } as const;
 
 /**
@@ -256,6 +302,14 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     maxModuleFiles: CONFIG_DEFAULTS.maxModuleFiles,
     maxModuleSymbols: CONFIG_DEFAULTS.maxModuleSymbols,
     timeoutMs: CONFIG_DEFAULTS.timeoutMs,
+    maxFlows: CONFIG_DEFAULTS.maxFlows,
+    flowMaxAnchors: CONFIG_DEFAULTS.flowMaxAnchors,
+    flowMaxDiagramNodes: CONFIG_DEFAULTS.flowMaxDiagramNodes,
+    flowMaxDiagramEdges: CONFIG_DEFAULTS.flowMaxDiagramEdges,
+    maxTopics: CONFIG_DEFAULTS.maxTopics,
+    topicMaxAnchors: CONFIG_DEFAULTS.topicMaxAnchors,
+    topicMaxSourceChars: CONFIG_DEFAULTS.topicMaxSourceChars,
+    topicMaxOutputTokens: CONFIG_DEFAULTS.topicMaxOutputTokens,
     ...config,
   };
 }
@@ -293,7 +347,10 @@ export function resolveExtraIgnores(config: LivewikiConfig): readonly string[] {
  */
 export function validateConfigForBatch(repoRoot: string, config: LivewikiConfig): void {
   const missing: Array<"provider" | "model"> = [];
-  if (!config.provider) missing.push("provider");
+  // A preset reference satisfies the provider requirement: it expands to
+  // adapter/baseUrl/envVar downstream (SPEC §"Stack": config.json references
+  // the preset by name and may override any field).
+  if (!config.provider && !config.preset) missing.push("provider");
   if (!config.model) missing.push("model");
   if (missing.length > 0) {
     throw new MissingProviderConfigError(repoRoot, missing);
@@ -432,6 +489,72 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
     assertValidTimeoutMs(obj["timeoutMs"]);
     out.timeoutMs = obj["timeoutMs"] as number;
   }
+  // Stage-5 flow knobs (SPEC §"Semantic product-flow layer"): strict integer
+  // ranges, rejected instead of silently falling back to the defaults.
+  if (obj["maxFlows"] !== undefined) {
+    const v = obj["maxFlows"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `invalid maxFlows: must be a non-negative integer, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.maxFlows = v;
+  }
+  if (obj["flowMaxAnchors"] !== undefined) {
+    const v = obj["flowMaxAnchors"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+      throw new Error(
+        `invalid flowMaxAnchors: must be an integer >= 1, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.flowMaxAnchors = v;
+  }
+  if (obj["maxTopics"] !== undefined) {
+    const v = obj["maxTopics"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 8) {
+      throw new Error(`invalid maxTopics: must be an integer 0..8, got ${JSON.stringify(v)}`);
+    }
+    out.maxTopics = v;
+  }
+  if (obj["topicMaxAnchors"] !== undefined) {
+    const v = obj["topicMaxAnchors"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 5 || v > 32) {
+      throw new Error(`invalid topicMaxAnchors: must be an integer 5..32, got ${JSON.stringify(v)}`);
+    }
+    out.topicMaxAnchors = v;
+  }
+  if (obj["topicMaxSourceChars"] !== undefined) {
+    const v = obj["topicMaxSourceChars"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 200_000) {
+      throw new Error(`invalid topicMaxSourceChars: must be an integer 1..200000, got ${JSON.stringify(v)}`);
+    }
+    out.topicMaxSourceChars = v;
+  }
+  if (obj["topicMaxOutputTokens"] !== undefined) {
+    const v = obj["topicMaxOutputTokens"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 256 || v > 32_768) {
+      throw new Error(`invalid topicMaxOutputTokens: must be an integer 256..32768, got ${JSON.stringify(v)}`);
+    }
+    out.topicMaxOutputTokens = v;
+  }
+  if (obj["flowMaxDiagramNodes"] !== undefined) {
+    const v = obj["flowMaxDiagramNodes"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+      throw new Error(
+        `invalid flowMaxDiagramNodes: must be an integer >= 1, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.flowMaxDiagramNodes = v;
+  }
+  if (obj["flowMaxDiagramEdges"] !== undefined) {
+    const v = obj["flowMaxDiagramEdges"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+      throw new Error(
+        `invalid flowMaxDiagramEdges: must be an integer >= 1, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.flowMaxDiagramEdges = v;
+  }
   if (obj["pathRoles"] !== undefined) {
     const value = obj["pathRoles"];
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -454,6 +577,29 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       pathRoles[key as keyof PathRoleConfig] = patterns as string[];
     }
     out.pathRoles = pathRoles;
+  }
+  if (obj["flowSignals"] !== undefined) {
+    const value = obj["flowSignals"];
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("invalid flowSignals: must be an object");
+    }
+    const signalObject = value as Record<string, unknown>;
+    const allowed = new Set(["entryPatterns", "persistencePatterns", "persistenceImportPatterns"]);
+    for (const key of Object.keys(signalObject)) {
+      if (!allowed.has(key)) {
+        throw new Error(`invalid flowSignals key "${key}"`);
+      }
+    }
+    const flowSignals: FlowSignalConfig = {};
+    for (const key of allowed) {
+      const patterns = signalObject[key];
+      if (patterns === undefined) continue;
+      if (!Array.isArray(patterns) || patterns.some((item) => typeof item !== "string")) {
+        throw new Error(`invalid flowSignals.${key}: must be an array of strings`);
+      }
+      flowSignals[key as keyof FlowSignalConfig] = patterns as string[];
+    }
+    out.flowSignals = flowSignals;
   }
   return out;
 }

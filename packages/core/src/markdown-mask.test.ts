@@ -77,3 +77,82 @@ describe("maskCodeSpansPreservingLength", () => {
     expect(maskCodeSpans(source)).toBe("before\n\n\n\nafter");
   });
 });
+
+import { unclosedMarkdownDiagnostic } from "./markdown-mask.js";
+
+describe("unclosedMarkdownDiagnostic — bounded excerpt centers on the unmatched delimiter", () => {
+  // Review blocker: boundedExcerpt() previously returned
+  // `line.slice(0, cap)`. For a long line whose unmatched backtick
+  // occurs after column 200, the 200-char prefix contained no
+  // delimiter and the repair prompt had no actionable pointer.
+  // The fix centers the excerpt on the delimiter (fence: the first
+  // backtick/tilde of the opening fence; inline-code: the unmatched
+  // backtick run) and includes left/right truncation markers.
+  it("inline-code with unmatched backtick after column 500 still puts the delimiter in the excerpt", () => {
+    const text = "A".repeat(500) + "`oops";
+    const diag = unclosedMarkdownDiagnostic(text);
+    expect(diag).toBeDefined();
+    expect(diag!.kind).toBe("inline-code");
+    expect(diag!.lineNumber).toBe(1);
+    expect(diag!.offending).toBeDefined();
+    expect(diag!.offending!.length).toBeLessThanOrEqual(200);
+    // The unmatched backtick must be present (this is what failed
+    // before the fix — the 200-char prefix was 500 A's and the
+    // backtick was cut off).
+    expect(diag!.offending).toContain("`");
+    // Visible left/right truncation — both ends were clipped.
+    expect(diag!.offending).toMatch(/…/);
+  });
+
+  it("fence diagnostic excerpt still contains the opening fence", () => {
+    const text = "before\n```ts\nconst x = 1;\nrest of the line that could be very long and might exceed 200 chars if the validator went down that path, but fence openers are short by design so this is a sanity check not a length check";
+    const diag = unclosedMarkdownDiagnostic(text);
+    expect(diag).toBeDefined();
+    expect(diag!.kind).toBe("fence");
+    expect(diag!.lineNumber).toBe(2);
+    expect(diag!.offending).toContain("```");
+  });
+
+  it("inline-code diagnostic carries exact delimiterLength for a 198-backtick run, with content on both sides", () => {
+    // R4 follow-up: a 198-backtick run plus 500 chars of content on
+    // each side was the exact reproduction. The diagnostic must carry
+    // the exact length (198) in addition to the bounded excerpt; the
+    // excerpt itself is allowed to show only a visible portion of the
+    // run.
+    const before = "A".repeat(500);
+    const after = "Z".repeat(500);
+    const run = "`".repeat(198);
+    const text = `${before}${run}${after}`;
+    const diag = unclosedMarkdownDiagnostic(text);
+    expect(diag).toBeDefined();
+    expect(diag!.kind).toBe("inline-code");
+    expect(diag!.lineNumber).toBe(1);
+    expect(diag!.delimiterLength).toBe(198);
+    expect(diag!.offending!.length).toBeLessThanOrEqual(200);
+    expect(diag!.offending!.includes("`")).toBe(true);
+  });
+
+  it("inline-code diagnostic carries exact delimiterLength for a >200-backtick run", () => {
+    // Run strictly longer than the cap. The diagnostic still carries
+    // the exact length; the excerpt shows a visible portion only.
+    const before = "A".repeat(100);
+    const after = "Z".repeat(100);
+    const run = "`".repeat(260);
+    const text = `${before}${run}${after}`;
+    const diag = unclosedMarkdownDiagnostic(text);
+    expect(diag).toBeDefined();
+    expect(diag!.kind).toBe("inline-code");
+    expect(diag!.lineNumber).toBe(1);
+    expect(diag!.delimiterLength).toBe(260);
+    expect(diag!.offending!.length).toBeLessThanOrEqual(200);
+    expect(diag!.offending!.includes("`")).toBe(true);
+  });
+
+  it("fence diagnostic carries exact delimiterLength", () => {
+    const text = "before\n`````ts\nconst x = 1;";
+    const diag = unclosedMarkdownDiagnostic(text);
+    expect(diag).toBeDefined();
+    expect(diag!.kind).toBe("fence");
+    expect(diag!.delimiterLength).toBe(5);
+  });
+});

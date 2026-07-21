@@ -20,6 +20,39 @@ import type { GenerateResult } from "./llm/types.js";
 import type { PricingOverride } from "./pricing.js";
 import { computeSnapshotHash, readManifest } from "./manifest.js";
 
+function makeCompactAuxiliaryPage(closedKeys: string[]): string {
+  return [
+    "---",
+    "title: Auxiliary reference",
+    "owner: generated",
+    "anchors:",
+    ...closedKeys.map((key) => `  - ${key}`),
+    "---",
+    "",
+    "# Auxiliary reference",
+    "",
+    "This page documents auxiliary repository code.",
+    "",
+    "## When to use this page",
+    "",
+    "- Review the auxiliary implementation.",
+    "- Change the supporting code safely.",
+    "",
+    "## How it fits",
+    "",
+    "This code supports development and is not a product runtime path.",
+    "",
+    "## Reference",
+    "",
+    ...closedKeys.flatMap((key) => [
+      `### ${key}`,
+      `<!-- lw:anchors ${key} -->`,
+      "This indexed symbol belongs to the auxiliary implementation.",
+      "",
+    ]),
+  ].join("\n");
+}
+
 class MockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
@@ -35,10 +68,11 @@ class MockLlm implements LlmClient {
       const m = /^- (\S+)$/.exec(line);
       if (m && m[1]) closedKeys.push(m[1]);
     }
-    const content =
-      this.responses[this.callCount - 1] ??
+    const content = this.responses[this.callCount - 1] ??
       (closedKeys.length > 0
-        ? [
+        ? /compact auxiliary contract/i.test(`${req.system}\n${req.user}`)
+          ? makeCompactAuxiliaryPage(closedKeys)
+          : [
             "---",
             "title: Module responsibilities",
             "owner: generated",
@@ -65,7 +99,7 @@ class MockLlm implements LlmClient {
             "",
             "Body.",
             "",
-          ].join("\n")
+            ].join("\n")
         : "# t\n");
     const result: GenerateResult = {
       content,
@@ -308,10 +342,11 @@ describe("review #2 — unique IDs applied before edges/overview/tasks", () => {
     expect(overview).toMatch(/cli-src/);
     expect(overview).toMatch(/mcp-src/);
     const navigationTasks = await safeIo.readText(repoRoot, "livewiki/tasks.md");
-    expect(navigationTasks).toContain("Module ID: `core-src`");
-    expect(navigationTasks).toContain("Module ID: `cli-src`");
-    expect(navigationTasks).toContain("Module ID: `mcp-src`");
-    expect(navigationTasks).not.toContain("Module ID: `src`");
+    // R10.1 E: tasks.md identity is the link target (no `Module ID:` line).
+    expect(navigationTasks).toContain("](core-src.md)");
+    expect(navigationTasks).toContain("](cli-src.md)");
+    expect(navigationTasks).toContain("](mcp-src.md)");
+    expect(navigationTasks).not.toContain("](src.md)");
 
     // Task IDs in the DB
     const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
@@ -1364,30 +1399,46 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
       // no `batch: true` — we only want the initial structure
     });
 
-    // Init already applied uniqueness (via buildPlan). Tasks lists every
-    // unique stable ID before pages exist, while Quickstart stays task-oriented.
+    // Init already applied uniqueness (via buildPlan). R11-NAV keeps product
+    // modules in Tasks and moves auxiliary modules to one separate hub.
     const initQuickstart = await safeIo.readText(repoRoot, "livewiki/quickstart.md");
     expect(initQuickstart).toContain("[Tasks](tasks.md)");
     expect(initQuickstart).toContain("[Architecture overview](architecture/overview.md)");
     const initTasks = await safeIo.readText(repoRoot, "livewiki/tasks.md");
     const initTaskIds = new Set<string>();
-    for (const m of initTasks.matchAll(/Module ID: `([\w-]+)`/g)) {
+    // R10.1 E: before pages exist, tasks.md carries each stable id in the
+    // `Page unavailable` path (the `Module ID:` line is gone).
+    for (const m of initTasks.matchAll(/Page unavailable: `livewiki\/([\w-]+)\.md`/g)) {
       if (m[1]) initTaskIds.add(m[1]);
     }
-    expect(initTaskIds.size).toBe(5);
+    expect(initTaskIds.size).toBe(3);
     for (const id of initTaskIds) {
       expect(id).not.toBe("src"); // leaf "src" alone NEVER appears
     }
+    const initAuxiliary = await safeIo.readText(repoRoot, "livewiki/auxiliary/index.md");
+    expect(initAuxiliary.match(/ — page unavailable$/gm)).toHaveLength(2);
+    expect(initTasks).toContain("[Auxiliary modules](auxiliary/index.md)");
+    expect(initTasks).not.toContain("## Test fixtures");
+    expect(initTasks).not.toContain("## Tooling and benchmarks");
 
     // Run batch (generates pages, regenerates overview with links)
+    await safeIo.writeText(
+      repoRoot,
+      ".livewiki/config.json",
+      JSON.stringify({ maxTopics: 0 }),
+    );
     const result = await runBatch({
       repoRoot,
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: false,
     });
+    expect(result.failures).toEqual([]);
     expect(result.status).toBe("completed");
-    expect(llm.callCount).toBe(5);
+    // Priority-0 fix: the 2 auxiliary modules (fixture + tooling) no longer
+    // call the LLM — they're assembled deterministically. Only the 3 product
+    // modules go through the stage-4 LLM loop.
+    expect(llm.callCount).toBe(3);
     expect((await readManifest(repoRoot))?.snapshotHash).toBe(await computeSnapshotHash(repoRoot));
 
     // === Collect IDs from each FINAL surface ===
@@ -1424,18 +1475,30 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     const mmd = await safeIo.readText(repoRoot, "livewiki/architecture/modules.mmd");
     expect(mmd).not.toMatch(/^\s*src\s*\[/m);
 
-    // 4. tasks.md uses stable IDs as targets while display titles stay presentational.
+    // 4. R11-NAV routes product IDs through tasks.md and auxiliary IDs through
+    //    the single auxiliary hub. Both use the same stable IDs as pages/tasks.
     const quickstart = await safeIo.readText(repoRoot, "livewiki/quickstart.md");
     expect(quickstart).not.toMatch(/overview\.md#[\w-]+/);
     const tasks = await safeIo.readText(repoRoot, "livewiki/tasks.md");
     const navigationTaskIds = new Set<string>();
-    for (const m of tasks.matchAll(/Module ID: `([\w-]+)`/g)) {
+    for (const m of tasks.matchAll(/\]\(([\w-]+)\.md\)/g)) {
       if (m[1]) navigationTaskIds.add(m[1]);
     }
-    expect(navigationTaskIds.size).toBe(5);
+    expect(navigationTaskIds.size).toBe(3);
     for (const id of navigationTaskIds) {
       expect(id).not.toBe("src"); // leaf "src" alone NEVER appears
     }
+    const auxiliary = await safeIo.readText(repoRoot, "livewiki/auxiliary/index.md");
+    const auxiliaryIds = new Set<string>();
+    for (const m of auxiliary.matchAll(/\]\(\.\.\/([\w-]+)\.md\)/g)) {
+      if (m[1]) auxiliaryIds.add(m[1]);
+    }
+    expect(auxiliaryIds.size).toBe(2);
+    for (const id of auxiliaryIds) expect(id).not.toBe("src");
+    const navigationIds = new Set([...navigationTaskIds, ...auxiliaryIds]);
+    // R10.1 E: tasks.md carries no `Module ID:` line at all — the stable
+    // module id lives in the architecture overview (asserted below).
+    expect(tasks).not.toContain("Module ID:");
 
     // 5. overview.md (regenerated by batch): lists pages with `[page](../<id>.md)`
     const overview = await safeIo.readText(repoRoot, "livewiki/architecture/overview.md");
@@ -1445,7 +1508,8 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
         overviewIds.add(m[1]);
       }
     }
-    expect(overviewIds.size).toBe(5);
+    expect(overviewIds.size).toBe(3);
+    expect(overview).toContain("[Auxiliary modules](../auxiliary/index.md)");
 
     // 6. summary.modulesRefined (batch persisted): IDs of the run
     const summaryIds = new Set(
@@ -1453,18 +1517,20 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     );
     expect(summaryIds.size).toBe(5);
 
-    // === Critical IDs (pages, batch tasks, navigation tasks, overview, summary) must match ===
+    // === Critical IDs still match; primary overview/tasks intentionally carry
+    // only the product subset while their union with the auxiliary hub is full. ===
     expect(pageIds.size).toBe(5);
     expect(taskIds.size).toBe(5);
-    expect(overviewIds.size).toBe(5);
+    expect(navigationIds.size).toBe(5);
+    expect(overviewIds.size).toBe(3);
     expect(summaryIds.size).toBe(5);
 
     // pages === tasks (batch creates pages based on module ID)
     expect(taskIds).toEqual(pageIds);
-    // pages === Tasks navigation targets (display titles never become identity)
-    expect(navigationTaskIds).toEqual(pageIds);
-    // pages === overview (overview lists the pages)
-    expect(overviewIds).toEqual(pageIds);
+    // pages === all navigation targets (display titles never become identity)
+    expect(navigationIds).toEqual(pageIds);
+    // product Tasks === product overview; auxiliary pages stay one hop away.
+    expect(overviewIds).toEqual(navigationTaskIds);
     // pages === summary.modulesRefined (summary persists what was processed)
     expect(summaryIds).toEqual(pageIds);
   });

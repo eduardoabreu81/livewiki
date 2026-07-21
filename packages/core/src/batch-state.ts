@@ -17,9 +17,11 @@
 
 import type { LlmUsage } from "./llm/types.js";
 import type { ArtifactValidationError } from "./prompts.js";
+import type { MechanicalArtifactRepair } from "./artifact-repair.js";
+import type { TopicCandidate } from "./topics.js";
 
 /** Stages do pipeline batch. */
-export type BatchStage = 1 | 2 | 3 | 4;
+export type BatchStage = 1 | 2 | 3 | 4 | 5;
 
 export type BatchTaskStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
@@ -72,6 +74,7 @@ export type DiagnosticOutcome =
   | "normalization_failed"
   | "artifact_validation_failed"
   | "verify_failed"
+  | "write_verify_exception"
   | "success";
 
 /** Bounded, content-safe summary of one structured error. */
@@ -110,6 +113,8 @@ export interface DiagnosticAttempt {
   candidateChars?: number;
   /** SHA-256 (hex) of the candidate text. Absent when no candidate exists. */
   candidateSha256?: string;
+  /** Deterministic last-slot repairs applied after this LLM response. */
+  mechanicalRepairs?: MechanicalArtifactRepair[];
   finishedAt: number;
 }
 
@@ -162,6 +167,10 @@ export interface TaskCheckpoint {
   diagnosticHistory?: DiagnosticAttempt[];
   error?: TaskError;
   artifacts?: TaskArtifacts;
+  /** Accepted semantic plan persisted byte-for-byte for resume/--only. */
+  topicPlan?: TopicCandidate[];
+  /** Exact accepted planner response, retained for audit and deterministic reuse. */
+  topicPlanRaw?: string;
 }
 
 export interface TaskError {
@@ -176,6 +185,10 @@ export interface TaskArtifacts {
   wikiPath?: string;
   /** SHA-256 do conteúdo final da página (pós-verify). */
   pageHash?: string;
+  /** Stage 5: companion flow diagram path (relative to repoRoot). */
+  diagramPath?: string;
+  /** Stage 5: SHA-256 of the diagram source as written. */
+  diagramHash?: string;
 }
 
 /** Item do reporte `byStage` (agregado por stage). */

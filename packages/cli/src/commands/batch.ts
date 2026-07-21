@@ -188,6 +188,16 @@ export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusR
   if (report.run.finishedAt) {
     lines.push(`  finished: ${new Date(report.run.finishedAt).toISOString()}`);
   }
+  // Priority-0 fix: authoritative task counts (all stages: 4 + 5 flows +
+  // 5 topics), from the same persisted `cb.done`/`cb.fails` `finalizeRun`
+  // wrote — not `byModule.length` (a usage-tracking array that, further
+  // below, is scoped to stage 4 only and previously disagreed with
+  // `livewiki batch`'s own end-of-run "tasks done" line for the same run).
+  if (report.run.summary) {
+    lines.push(
+      `  tasks: ${report.run.summary.tasksDone} done, ${report.run.summary.tasksFailed} failed`,
+    );
+  }
   lines.push("");
   lines.push("Tokens (primary metric):");
   const t = report.totals;
@@ -267,10 +277,34 @@ export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>):
         : `  USD: omitted (model without pricing)`,
     );
   }
-  lines.push(`  tasks done: ${result.byModule.length}`);
+  // Priority-0 fix: `byModule.length` mixed done+failed entries across
+  // stages 4/5 and disagreed with `batch status`'s stage-4-only count for
+  // the same run. `tasksDone`/`tasksFailed` are the authoritative
+  // per-task counters, consistent everywhere they're reported.
+  lines.push(`  tasks done: ${result.tasksDone}`);
   lines.push(`  failures: ${result.failures.length}`);
   if (result.circuitBreakerTriggered) {
     lines.push(`  circuit breaker: TRIGGERED`);
+  }
+  // R10.1 C: a preserved human/mixed/unparseable flows hub is never silent.
+  if (result.skippedFlowsHub) {
+    lines.push(
+      `  flows hub: preserved (owner: ${result.skippedFlowsHub.owner ?? "unknown"}) — ${result.skippedFlowsHub.path} not overwritten`,
+    );
+  }
+  if (result.skippedAuxiliaryHub) {
+    lines.push(
+      `  auxiliary hub: preserved (owner: ${result.skippedAuxiliaryHub.owner ?? "unknown"}) — ${result.skippedAuxiliaryHub.path} not overwritten`,
+    );
+  }
+  if (result.skippedTopicsHub) {
+    lines.push(
+      `  topics hub: preserved (owner: ${result.skippedTopicsHub.owner ?? "unknown"}) — ${result.skippedTopicsHub.path} not overwritten`,
+    );
+  }
+  // R10.1 K: deterministic pre-LLM flow skips are never silent either.
+  for (const s of result.skippedFlowCandidates ?? []) {
+    lines.push(`  flow skipped: ${s.slug} (${s.code}) — ${s.message}`);
   }
   if (result.failures.length > 0) {
     lines.push("");

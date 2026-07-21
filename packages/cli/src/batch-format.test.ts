@@ -84,6 +84,8 @@ describe("batch human format — usageIncomplete", () => {
         },
       ],
       circuitBreakerTriggered: false,
+      tasksDone: 1,
+      tasksFailed: 1,
     });
     expect(out).toContain(USAGE_INCOMPLETE_NOTE);
     expect(out).toContain("incomplete");
@@ -97,6 +99,8 @@ describe("batch human format — usageIncomplete", () => {
       byModule: [],
       failures: [],
       circuitBreakerTriggered: false,
+      tasksDone: 0,
+      tasksFailed: 0,
     });
     expect(out).not.toContain(USAGE_INCOMPLETE_NOTE);
   });
@@ -281,5 +285,58 @@ describe("batch human format — diagnosticHistory surfacing", () => {
     });
     expect(out).not.toContain("attempts:");
     expect(out).toContain("refused_human_page");
+  });
+});
+
+// === R10.1 C / R11-NAV: protected generated hubs are never silent ===
+describe("batch human format — skipped generated hubs", () => {
+  it("formatResultHuman surfaces a preserved hub with path and owner", () => {
+    const out = formatResultHuman({
+      runId: 1,
+      status: "completed",
+      totals: { ...baseTotals },
+      byModule: [],
+      failures: [],
+      circuitBreakerTriggered: false,
+      tasksDone: 0,
+      tasksFailed: 0,
+      skippedFlowsHub: { path: "livewiki/flows/index.md", owner: "human" },
+    });
+    expect(out).toContain("flows hub: preserved (owner: human)");
+    expect(out).toContain("livewiki/flows/index.md");
+  });
+
+  it("formatResultHuman surfaces a preserved auxiliary hub with path and owner", () => {
+    const out = formatResultHuman({
+      runId: 1,
+      status: "completed",
+      totals: { ...baseTotals },
+      byModule: [],
+      failures: [],
+      circuitBreakerTriggered: false,
+      tasksDone: 0,
+      tasksFailed: 0,
+      skippedAuxiliaryHub: {
+        path: "livewiki/auxiliary/index.md",
+        owner: "mixed",
+      },
+    });
+    expect(out).toContain("auxiliary hub: preserved (owner: mixed)");
+    expect(out).toContain("livewiki/auxiliary/index.md");
+  });
+
+  it("formatResultHuman prints no hub line when nothing was skipped", () => {
+    const out = formatResultHuman({
+      runId: 1,
+      status: "completed",
+      totals: { ...baseTotals },
+      byModule: [],
+      failures: [],
+      circuitBreakerTriggered: false,
+      tasksDone: 0,
+      tasksFailed: 0,
+    });
+    expect(out).not.toContain("flows hub");
+    expect(out).not.toContain("auxiliary hub");
   });
 });

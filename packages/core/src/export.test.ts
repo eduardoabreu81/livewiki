@@ -1097,3 +1097,51 @@ describe("destination root is a regular file (not a directory)", () => {
     expect(onDisk).toBe(original);
   });
 });
+
+describe("flow artifacts (stage-5 surface)", () => {
+  it("exports flows/*.md and diagrams/flow-*.mmd without collision, rewriting the placeholder and cross-links", async () => {
+    await writeWiki(
+      "livewiki/flows/cli-to-db.md",
+      [
+        "---",
+        "title: CLI to DB",
+        "owner: generated",
+        "modules:",
+        "  - cli",
+        "  - db",
+        "---",
+        "",
+        "# CLI to DB",
+        "",
+        "How a CLI invocation reaches the database.",
+        "",
+        "```mermaid",
+        "%% livewiki/diagrams/flow-cli-to-db.mmd",
+        "```",
+        "",
+        "See [the CLI module](../cli.md).",
+        "",
+      ].join("\n"),
+    );
+    await writeWiki("livewiki/diagrams/flow-cli-to-db.mmd", "flowchart LR\n  CLI --> DB\n");
+    await writeWiki("livewiki/cli.md", "# CLI\n\nSee [the flow](flows/cli-to-db.md).\n");
+    const r = await exportWiki({ repoRoot, target: "generic" });
+    expect(r.ok).toBe(true);
+    expect(r.issues).toEqual([]);
+    // The flows/ and diagrams/ prefixes flatten to distinct names — no collision.
+    const flow = await readDest("generic", "flows-cli-to-db.md");
+    const diagram = await readDest("generic", "diagrams-flow-cli-to-db.md");
+    const cli = await readDest("generic", "cli.md");
+    expect(flow).not.toBeNull();
+    expect(diagram).toContain("```mermaid");
+    expect(diagram).toContain("CLI --> DB");
+    // The mermaid placeholder is rewritten to the flattened diagram page.
+    expect(flow).toContain(
+      "[View diagram (diagrams/flow-cli-to-db.mmd)](diagrams-flow-cli-to-db.md)",
+    );
+    expect(flow).not.toContain("%% livewiki/");
+    // Internal links between flows/ and module pages resolve after flattening.
+    expect(flow).toContain("(cli.md)");
+    expect(cli).toContain("(flows-cli-to-db.md)");
+  });
+});

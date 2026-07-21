@@ -759,7 +759,8 @@ Real prose for logout and validate.
 `);
       const r = validateStage4Artifact(art, closedKeys);
       expect(r.ok).toBe(false);
-      expect(r.errors.some((e) => e.code === "empty_section")).toBe(true);
+      const error = r.errors.find((e) => e.code === "empty_section");
+      expect(error?.offending).toBe("<!-- lw:anchors src/auth.ts#login -->");
     });
 
     it("marker followed only by a TODO/TBD line (no other prose) → empty_section", () => {
@@ -799,10 +800,24 @@ const x = 1;
 `);
       const r = validateStage4Artifact(art, closedKeys);
       expect(r.ok).toBe(false);
-      expect(r.errors.some((e) => e.code === "unclosed_markdown")).toBe(true);
+      const errs = r.errors.filter((e) => e.code === "unclosed_markdown");
+      expect(errs).toHaveLength(1);
+      // Actionable diagnostic: kind, 1-based line of the OPENING
+      // fence, exact delimiter length, and an `offending` excerpt
+      // that points to the opening delimiter line. R3 evidence:
+      // the LLM kept the same unclosed construct through every
+      // repair attempt because the previous generic message had
+      // no opening pointer and no length.
+      expect(errs[0]!.message).toMatch(/fenced code block/);
+      expect(errs[0]!.message).toMatch(/line\s+7/);
+      expect(errs[0]!.message).toMatch(/delimiter length 3/);
+      // Fence closing rule: same character, run of at least K.
+      expect(errs[0]!.message).toMatch(/at least 3 characters/);
+      expect(errs[0]!.message).not.toMatch(/exactly \d+ backticks/);
+      expect(errs[0]!.offending).toBe("```ts");
     });
 
-    it("unclosed inline code span (cut mid-token, the tools.md finding) → unclosed_markdown", () => {
+    it("unclosed inline code span (cut mid-token, the tools.md finding) → unclosed_markdown with the unmatched run on its own line", () => {
       const art = fullArt(`# x
 
 <!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
@@ -811,7 +826,27 @@ Run with \`node acceptance-analysis.mjs <artifactRoot
 `);
       const r = validateStage4Artifact(art, closedKeys);
       expect(r.ok).toBe(false);
-      expect(r.errors.some((e) => e.code === "unclosed_markdown")).toBe(true);
+      const errs = r.errors.filter((e) => e.code === "unclosed_markdown");
+      expect(errs).toHaveLength(1);
+      // Actionable diagnostic: kind, 1-based line of the unmatched
+      // backtick run, exact delimiter length (1 backtick here),
+      // and an `offending` excerpt. Body lines:
+      //   1: "# x"
+      //   2: (empty)
+      //   3: "<!-- lw:anchors ... -->"
+      //   4: (empty)
+      //   5: "Run with `node acceptance-analysis.mjs <artifactRoot"
+      expect(errs[0]!.message).toMatch(/inline-code span/);
+      expect(errs[0]!.message).toMatch(/line\s+5/);
+      expect(errs[0]!.message).toMatch(/delimiter length 1/);
+      // Inline-code closing rule: EXACTLY K backticks, not "at least".
+      // `maskInlineCode` requires an exact-length match; K+1 leaves
+      // the span open.
+      expect(errs[0]!.message).toMatch(/exactly 1 backticks/);
+      expect(errs[0]!.message).not.toMatch(/at least \d+ characters/);
+      expect(errs[0]!.offending).toBe(
+        "Run with `node acceptance-analysis.mjs <artifactRoot",
+      );
     });
 
     it("properly closed fences and inline code → no unclosed_markdown", () => {
@@ -827,6 +862,102 @@ const x = 1;
 `);
       const r = validateStage4Artifact(art, closedKeys);
       expect(r.errors.some((e) => e.code === "unclosed_markdown")).toBe(false);
+    });
+
+    it("unclosed inline-code span with 198 backticks and content on both sides → bounded excerpt with visible representative portion, message states exact length", () => {
+      // R4 follow-up: the previous `boundedExcerpt` overwrote the
+      // trailing 2 delimiter characters with the right truncation
+      // marker when the run was longer than the cap. The fix carries
+      // the exact length in the diagnostic message so the repair
+      // model can emit a closing run of equal or greater length;
+      // the bounded excerpt shows a visible portion of the run.
+      const before = "A".repeat(500);
+      const after = "Z".repeat(500);
+      const run = "`".repeat(198);
+      const body = `${before}${run}${after}`;
+      const r = validateStage4Artifact(fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+${body}
+`), closedKeys);
+      const errs = r.errors.filter((e) => e.code === "unclosed_markdown");
+      expect(errs).toHaveLength(1);
+      // Exact delimiter length in the message (this is what the
+      // bounded excerpt CANNOT encode when the run is longer than
+      // the cap).
+      expect(errs[0]!.message).toMatch(/delimiter length 198/);
+      // Bounded excerpt: stays within the cap.
+      expect(errs[0]!.offending!.length).toBeLessThanOrEqual(200);
+      // Visible representative portion of the delimiter run.
+      expect(errs[0]!.offending!.includes("`")).toBe(true);
+    });
+
+    it("unclosed inline-code span with >200 backticks and content on both sides → bounded excerpt with visible portion, message states exact length", () => {
+      // Run is strictly longer than the diagnostic cap. The excerpt
+      // can only show a visible portion; the message carries the
+      // exact length so the repair model can close it correctly.
+      const before = "A".repeat(100);
+      const after = "Z".repeat(100);
+      const run = "`".repeat(260);
+      const body = `${before}${run}${after}`;
+      const r = validateStage4Artifact(fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+${body}
+`), closedKeys);
+      const errs = r.errors.filter((e) => e.code === "unclosed_markdown");
+      expect(errs).toHaveLength(1);
+      expect(errs[0]!.message).toMatch(/delimiter length 260/);
+      expect(errs[0]!.offending!.length).toBeLessThanOrEqual(200);
+      expect(errs[0]!.offending!.includes("`")).toBe(true);
+    });
+
+    it("fence directive: at least K characters (NOT exactly K backticks) — closing a fence with K+1 characters is still valid CommonMark", () => {
+      // The fence closing rule differs from inline-code: per
+      // CommonMark, the closing fence may be longer than the opening
+      // fence. The diagnostic must say "at least K characters" and
+      // must NOT say "exactly K backticks".
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Example:
+
+\`\`\`\`ts
+const x = 1;
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      const errs = r.errors.filter((e) => e.code === "unclosed_markdown");
+      expect(errs).toHaveLength(1);
+      expect(errs[0]!.message).toMatch(/fenced code block/);
+      expect(errs[0]!.message).toMatch(/delimiter length 4/);
+      expect(errs[0]!.message).toMatch(/at least 4 characters/);
+      expect(errs[0]!.message).not.toMatch(/exactly 4 backticks/);
+    });
+
+    it("inline-code directive: exactly K backticks (NOT at least K characters) — closing an inline-code span with K+1 leaves it open per maskInlineCode", () => {
+      // The inline-code closing rule differs from fence: per
+      // CommonMark, the closing backtick run must be EXACTLY the
+      // same length as the opening run. The diagnostic must say
+      // "exactly K backticks" and must NOT say "at least K
+      // characters". This case uses a 2-backtick run so the
+      // difference is not collapsible to a 1-backtick edge case.
+      const run = "``";
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Value is ${run}unclosed
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      const errs = r.errors.filter((e) => e.code === "unclosed_markdown");
+      expect(errs).toHaveLength(1);
+      expect(errs[0]!.message).toMatch(/inline-code span/);
+      expect(errs[0]!.message).toMatch(/delimiter length 2/);
+      expect(errs[0]!.message).toMatch(/exactly 2 backticks/);
+      expect(errs[0]!.message).not.toMatch(/at least 2 characters/);
     });
   });
 
@@ -890,6 +1021,167 @@ Everything here is fully described, nothing pending.
 `);
       const r = validateStage4Artifact(art, closedKeys);
       expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(false);
+    });
+
+    it("TODO/TBD prose used as a validation-category label → not flagged", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Run the audit to find stray TODO/TBD prose in masked output.
+The spaced TODO / TBD prose label describes the same validation category.
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(false);
+
+      const withRealPlaceholder = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Run the audit to find stray TODO/TBD prose in masked output.
+TODO: document the remaining behavior.
+`);
+      const placeholderError = validateStage4Artifact(
+        withRealPlaceholder,
+        closedKeys,
+      ).errors.find((e) => e.code === "todo_marker_present");
+      expect(placeholderError?.offending).toBe(
+        "TODO: document the remaining behavior.",
+      );
+    });
+
+    it("C3 TODO in plain prose reports the offending line (short lines exact, long lines excerpted ≤200 with truncation markers) and its line number", () => {
+      // Defect 3: the validation error used to carry no offending text
+      // and no line number — the repair prompt had no way to point the
+      // LLM at the specific line that needed replacement. Long lines
+      // must also be bounded to the diagnostic cap so a runaway
+      // multi-kilobyte line cannot inflate the repair prompt.
+      //
+      // Defect 1 (offset correctness): the offending excerpt and line
+      // number must come from the ORIGINAL body — putting a fenced
+      // code block before the TODO line and asserting the EXACT 1-based
+      // line number verifies that the masked offset maps to the
+      // original (a fence before the line shifts the original-body
+      // line number, not the masked one). A CRLF variant in the same
+      // minimal test verifies that the length-preserving code-span
+      // mask keeps the offset stable on CRLF input (the R3 defect).
+      const shortArt = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+Login uses the credentials from the request.
+
+TODO: describe the cache invalidation path.
+
+The validate function checks the token signature.
+`);
+      const shortResult = validateStage4Artifact(shortArt, closedKeys);
+      const shortErrs = shortResult.errors.filter(
+        (e) => e.code === "todo_marker_present",
+      );
+      expect(shortErrs).toHaveLength(1);
+      expect(shortErrs[0]!.offending).toBe(
+        "TODO: describe the cache invalidation path.",
+      );
+      // Body-relative line number — the fenced anchor marker and the
+      // heading precede the TODO. Body lines:
+      //   1: "# x"
+      //   2: (empty)
+      //   3: "<!-- lw:anchors ... -->"
+      //   4: (empty)
+      //   5: "Login uses the credentials from the request."
+      //   6: (empty)
+      //   7: "TODO: describe the cache invalidation path."
+      //   8: (empty)
+      //   9: "The validate function checks the token signature."
+      // We assert the exact 1-based line number derived from the
+      // ORIGINAL body so a wrong offset would surface as a numeric
+      // mismatch.
+      const todoLineNumber = shortErrs[0]!.message.match(/line\s+(\d+)/i)?.[1];
+      expect(todoLineNumber).toBe("7");
+
+      // Fence-then-TODO case: a fenced code block before the
+      // TODO must not shift the diagnostic onto the fence line.
+      // The first TODO outside code is on line N; the excerpt
+      // must equal that line, never the fence.
+      const fenceBeforeArt = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+\`\`\`ts
+const FENCE_TOKEN = 1;
+\`\`\`
+
+TODO: describe the cache invalidation path.
+
+The validate function checks the token signature.
+`);
+      const fenceBeforeResult = validateStage4Artifact(fenceBeforeArt, closedKeys);
+      const fenceBeforeErrs = fenceBeforeResult.errors.filter(
+        (e) => e.code === "todo_marker_present",
+      );
+      expect(fenceBeforeErrs).toHaveLength(1);
+      expect(fenceBeforeErrs[0]!.offending).toBe(
+        "TODO: describe the cache invalidation path.",
+      );
+      expect(fenceBeforeErrs[0]!.offending).not.toContain("FENCE_TOKEN");
+      // The body-relative line is shifted by the fence but the
+      // validator must still report the TODO's line, not the
+      // fence's line. Body lines (fence adds 3 lines: open, body,
+      // close):
+      //   1: "# x"
+      //   2: (empty)
+      //   3: "<!-- lw:anchors ... -->"
+      //   4: (empty)
+      //   5: "```ts"
+      //   6: "const FENCE_TOKEN = 1;"
+      //   7: "```"
+      //   8: (empty)
+      //   9: "TODO: describe the cache invalidation path."
+      const fenceBeforeLine = fenceBeforeErrs[0]!.message.match(/line\s+(\d+)/i)?.[1];
+      expect(fenceBeforeLine).toBe("9");
+
+      // CRLF case: same logical structure with \r\n terminators.
+      // The non-preserving `maskCodeSpans` would drop the
+      // carriage returns and shift the offset; the
+      // length-preserving variant must keep the line number exact.
+      const crlfArt = fullArt(
+        "# x\r\n\r\n<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->\r\n\r\nLogin uses the credentials from the request.\r\n\r\nTODO: describe the cache invalidation path.\r\n\r\nThe validate function checks the token signature.\r\n",
+      );
+      const crlfResult = validateStage4Artifact(crlfArt, closedKeys);
+      const crlfErrs = crlfResult.errors.filter(
+        (e) => e.code === "todo_marker_present",
+      );
+      expect(crlfErrs).toHaveLength(1);
+      expect(crlfErrs[0]!.offending).toBe(
+        "TODO: describe the cache invalidation path.",
+      );
+      const crlfLine = crlfErrs[0]!.message.match(/line\s+(\d+)/i)?.[1];
+      expect(crlfLine).toBe("7");
+
+      // Long-line case: ~40k-character logical line with TODO near the
+      // middle. The excerpt must be ≤ 200 chars, retain TODO, indicate
+      // truncation, and the message must still carry the correct
+      // body-relative line number. Spaces around TODO create the word
+      // boundaries the `\b(TODO|TBD)\b` regex requires.
+      const longLine = "A".repeat(20_000) + " TODO " + "B".repeat(20_000);
+      expect(longLine.length).toBe(40_006);
+      const longArt = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+${longLine}
+`);
+      const longResult = validateStage4Artifact(longArt, closedKeys);
+      const longErrs = longResult.errors.filter(
+        (e) => e.code === "todo_marker_present",
+      );
+      expect(longErrs).toHaveLength(1);
+      expect(longErrs[0]!.offending).toBeDefined();
+      expect(longErrs[0]!.offending!.length).toBeLessThanOrEqual(200);
+      expect(longErrs[0]!.offending).toContain("TODO");
+      expect(longErrs[0]!.offending).toMatch(/…/);
+      expect(longErrs[0]!.message).toMatch(/line\s+\d+/i);
     });
   });
 });
@@ -1014,6 +1306,64 @@ The indexed function handles the documented operation.
   });
 });
 
+describe("artifact.validateStage4Artifact — zero-key How-it-fits boundary", () => {
+  // Paid-R2 reproduction: zero-symbol modules (cli, cli-scripts, core) all
+  // exhausted their repair budget with `missing_page_opening` because the
+  // opening check treated every later unanchored H2 as part of the How it
+  // fits prose block. The zero-key prompt contract requires unanchored
+  // implementation sections AFTER the opening, so the opening slice must
+  // be bounded at the next H2 after the How it fits heading.
+  const validZeroKeyOpening =
+    "# CLI responsibilities\n\n" +
+    "This page documents the CLI surface of the livewiki package.\n\n" +
+    "## When to use this page\n\n" +
+    "- Review CLI behavior.\n" +
+    "- Change CLI behavior.\n\n" +
+    "## How it fits\n\n" +
+    "This module provides the CLI entrypoint beside the repository's other tooling.";
+  const validZeroKeyOpeningBeforeH3 =
+    validZeroKeyOpening +
+    "\n\n### Test environment\n\n" +
+    "The tests exercise the CLI through the package's compiled entrypoint.";
+  const invalidZeroKeyOpening =
+    "# CLI responsibilities\n\n" +
+    "This page documents the CLI surface of the livewiki package.\n\n" +
+    "## When to use this page\n\n" +
+    "- Review CLI behavior.\n" +
+    "- Change CLI behavior.\n\n" +
+    "## How it fits\n\n" +
+    "## Test environment and discovery";
+  const zeroKeyPage = (opening: string) => `---
+title: cli
+owner: generated
+anchors: []
+---
+
+${opening}
+
+## Test environment and discovery
+
+The package's commands are discoverable through the standard help output.
+`;
+
+  it("accepts a valid How-it-fits prose block followed by an unanchored H2 or H3; rejects a heading with no How-it-fits prose", () => {
+    for (const opening of [validZeroKeyOpening, validZeroKeyOpeningBeforeH3]) {
+      const validResult = validateStage4Artifact(zeroKeyPage(opening), []);
+      const validOpeningErrs = validResult.errors.filter(
+        (e) => e.code === "missing_page_opening",
+      );
+      expect(validOpeningErrs, "valid zero-key page must not trip missing_page_opening").toEqual([]);
+    }
+
+    const invalidResult = validateStage4Artifact(zeroKeyPage(invalidZeroKeyOpening), []);
+    const invalidOpeningErrs = invalidResult.errors.filter(
+      (e) => e.code === "missing_page_opening",
+    );
+    expect(invalidOpeningErrs).toHaveLength(1);
+    expect(invalidOpeningErrs[0]!.message).toMatch(/How it fits/);
+  });
+});
+
 describe("artifact — pipeline normalize+validate (round-trip)", () => {
   it("MiniMax baseline output (src.md) normalizes to a valid artifact", () => {
     // Reproduced literally from docs/benchmarks/2026-07-10-minimax-m3/raw/livewiki/src.md
@@ -1098,5 +1448,586 @@ Body.`;
     const val = validateStage4Artifact(norm.content, ["src/auth.ts#login"]);
     expect(val.ok).toBe(false);
     expect(val.errors.some((e) => e.code === "anchor_outside_closed_list" && e.offending === "key1")).toBe(true);
+  });
+});
+
+describe("artifact.validateStage4Artifact — flow page kind (stage 5)", () => {
+  const flowKeys = ["src/cli.ts#run", "src/core.ts#batch", "src/store.ts#persist"];
+  const FLOW_FRONTMATTER = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+  - src/core.ts#batch
+  - src/store.ts#persist
+modules:
+  - cli
+  - core
+---
+`;
+  const flowContext = {
+    moduleId: "batch-documentation-run",
+    moduleRole: "product",
+    pageKind: "flow",
+    expectedFlowDiagram: "livewiki/diagrams/flow-batch-documentation-run.mmd",
+    // Deliberately reversed: the modules set comparison is order-insensitive.
+    expectedFlowModules: ["core", "cli"],
+  } as const;
+
+  const OPENING = `# Batch documentation run
+
+This page explains how a batch run documents the repository end to end.`;
+  const PURPOSE = `## Purpose
+
+<!-- lw:anchors src/cli.ts#run -->
+
+A batch run starts from the CLI and produces accepted module pages.`;
+  const ORDERED = `## Ordered flow
+
+<!-- lw:anchors src/core.ts#batch -->
+
+1. The CLI parses the invocation.
+2. The orchestrator documents each module.`;
+  const DIAGRAM = `## Diagram
+
+\`\`\`mermaid
+%% livewiki/diagrams/flow-batch-documentation-run.mmd
+\`\`\``;
+  const INVARIANTS = `## Invariants
+
+- Every page passes the validator before write.`;
+  const FAILURE = `## Failure and recovery
+
+<!-- lw:anchors src/store.ts#persist -->
+
+A failed task is marked and the run continues to the next task.`;
+  const RELATED = `## Related pages
+
+- [CLI module](cli.md)
+- [Core module](core.md)`;
+
+  const fullBody = () =>
+    [OPENING, PURPOSE, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n");
+  const flowPage = (body: string, frontmatter = FLOW_FRONTMATTER) =>
+    `${frontmatter}\n${body}\n`;
+
+  it("accepts a minimal valid flow page (expected modules are order-insensitive)", () => {
+    const r = validateStage4Artifact(flowPage(fullBody()), flowKeys, flowContext);
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+
+  it("accepts a valid flow page without the optional expectations", () => {
+    const r = validateStage4Artifact(flowPage(fullBody()), flowKeys, {
+      moduleId: "batch-documentation-run",
+      moduleRole: "product",
+      pageKind: "flow",
+    });
+    expect(r.errors).toEqual([]);
+  });
+
+  it("accepts any flow-* placeholder when expectedFlowDiagram is not provided", () => {
+    const body = [
+      OPENING,
+      PURPOSE,
+      ORDERED,
+      `## Diagram\n\n\`\`\`mermaid\n%% livewiki/diagrams/flow-other-run.mmd\n\`\`\``,
+      INVARIANTS,
+      FAILURE,
+      RELATED,
+    ].join("\n\n");
+    const r = validateStage4Artifact(flowPage(body), flowKeys, {
+      moduleId: "batch-documentation-run",
+      moduleRole: "product",
+      pageKind: "flow",
+    });
+    expect(r.errors).toEqual([]);
+  });
+
+  it.each([
+    [
+      "missing H1",
+      [
+        "This page explains how a batch run documents the repository end to end.",
+        PURPOSE, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED,
+      ].join("\n\n"),
+      "required page opening H1 is missing",
+      "(absent)",
+    ],
+    [
+      "late H1",
+      ["Introductory text.", OPENING, PURPOSE, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      "required page opening H1 appears after other content",
+      "# Batch documentation run",
+    ],
+    [
+      "missing responsibility",
+      ["# Batch documentation run", PURPOSE, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      "page opening responsibility paragraph is missing",
+      "(absent)",
+    ],
+    [
+      "two responsibility paragraphs",
+      [
+        "# Batch documentation run\n\nThis page explains how a batch run documents the repository end to end.\n\nA second paragraph is not allowed here.",
+        PURPOSE, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED,
+      ].join("\n\n"),
+      "page opening responsibility block must be exactly one prose paragraph",
+      "A second paragraph is not allowed here.",
+    ],
+    [
+      "an anchor marker before Purpose",
+      [
+        "# Batch documentation run\n\nThis page explains how a batch run documents the repository end to end.\n\n<!-- lw:anchors src/cli.ts#run -->",
+        `## Purpose\n\nA batch run starts from the CLI and produces accepted module pages.`,
+        ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED,
+      ].join("\n\n"),
+      "page opening responsibility block must be exactly one prose paragraph",
+      "<!-- lw:anchors src/cli.ts#run -->",
+    ],
+    [
+      "missing Purpose",
+      [OPENING, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      'required page opening H2 "Purpose" is missing or malformed',
+      "## Ordered flow",
+    ],
+    [
+      "Purpose without prose",
+      [OPENING, `## Purpose\n\n<!-- lw:anchors src/cli.ts#run -->`, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      'page opening "Purpose" must contain one or more prose paragraphs',
+      "(absent)",
+    ],
+    [
+      "missing Ordered flow",
+      [OPENING, PURPOSE, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      'required page opening H2 "Ordered flow" is missing or malformed',
+      "## Diagram",
+    ],
+    [
+      "Ordered flow without a numbered list",
+      [OPENING, PURPOSE, `## Ordered flow\n\nThe CLI parses the invocation and the orchestrator documents each module.`, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      'page opening "Ordered flow" must contain a numbered Markdown list with at least one item',
+      "The CLI parses the invocation and the orchestrator documents each module.",
+    ],
+    [
+      "missing Diagram",
+      [OPENING, PURPOSE, ORDERED, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      'required page opening H2 "Diagram" is missing or malformed',
+      "## Invariants",
+    ],
+    [
+      "Diagram without the placeholder line",
+      [OPENING, PURPOSE, ORDERED, `## Diagram\n\n\`\`\`mermaid\ngraph TD\n  A --> B\n\`\`\``, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      'page opening "Diagram" must contain a fenced mermaid code block holding a %% livewiki/diagrams/flow-<slug>.mmd placeholder line',
+      "(absent)",
+    ],
+    [
+      "missing Invariants",
+      [OPENING, PURPOSE, ORDERED, DIAGRAM, FAILURE, RELATED].join("\n\n"),
+      'required page opening H2 "Invariants" is missing or malformed',
+      "## Failure and recovery",
+    ],
+    [
+      "Invariants without content",
+      [OPENING, PURPOSE, ORDERED, DIAGRAM, `## Invariants`, FAILURE, RELATED].join("\n\n"),
+      'page opening "Invariants" must contain prose or bullets',
+      "(absent)",
+    ],
+    [
+      "missing Failure and recovery",
+      [OPENING, PURPOSE, ORDERED, DIAGRAM, INVARIANTS, RELATED].join("\n\n"),
+      'required page opening H2 "Failure and recovery" is missing or malformed',
+      "## Related pages",
+    ],
+    [
+      "missing Related pages",
+      [OPENING, PURPOSE, ORDERED, DIAGRAM, INVARIANTS, FAILURE].join("\n\n"),
+      'required page opening H2 "Related pages" is missing or malformed',
+      "(absent)",
+    ],
+    [
+      "Related pages without a link",
+      [OPENING, PURPOSE, ORDERED, DIAGRAM, INVARIANTS, FAILURE, `## Related pages\n\nSee the module pages for details.`].join("\n\n"),
+      'page opening "Related pages" must contain at least one Markdown link',
+      "See the module pages for details.",
+    ],
+    [
+      "Diagram misordered before Ordered flow",
+      [OPENING, PURPOSE, DIAGRAM, ORDERED, INVARIANTS, FAILURE, RELATED].join("\n\n"),
+      'required page opening H2 "Diagram" is missing or malformed',
+      "## Invariants",
+    ],
+  ])("reports the first flow opening failure for %s", (_name, body, message, offending) => {
+    const errors = validateStage4Artifact(flowPage(body), flowKeys, flowContext).errors;
+    const openingErrors = errors.filter((error) => error.code === "missing_page_opening");
+    expect(openingErrors).toHaveLength(1);
+    expect(openingErrors[0]).toMatchObject({ message, offending, location: "body" });
+  });
+
+  it("wrong diagram placeholder vs expectedFlowDiagram → missing_page_opening naming the expected placeholder", () => {
+    const body = [
+      OPENING,
+      PURPOSE,
+      ORDERED,
+      `## Diagram\n\n\`\`\`mermaid\n%% livewiki/diagrams/flow-other-run.mmd\n\`\`\``,
+      INVARIANTS,
+      FAILURE,
+      RELATED,
+    ].join("\n\n");
+    const errors = validateStage4Artifact(flowPage(body), flowKeys, flowContext).errors;
+    const openingErrors = errors.filter((e) => e.code === "missing_page_opening");
+    expect(openingErrors).toHaveLength(1);
+    expect(openingErrors[0]!.message).toBe(
+      'page opening "Diagram" placeholder must be exactly "%% livewiki/diagrams/flow-batch-documentation-run.mmd"',
+    );
+    expect(openingErrors[0]!.offending).toBe("%% livewiki/diagrams/flow-other-run.mmd");
+  });
+
+  it("flow frontmatter without `modules:` → invalid_frontmatter", () => {
+    const fm = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+  - src/core.ts#batch
+---
+`;
+    const errors = validateStage4Artifact(flowPage(fullBody(), fm), flowKeys, flowContext).errors;
+    const errs = errors.filter((e) => e.code === "invalid_frontmatter");
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.message).toMatch(/`modules:`/);
+  });
+
+  it("flow frontmatter with an empty `modules:` list → invalid_frontmatter", () => {
+    const fm = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+  - src/core.ts#batch
+modules:
+---
+`;
+    const errors = validateStage4Artifact(flowPage(fullBody(), fm), flowKeys, flowContext).errors;
+    const errs = errors.filter((e) => e.code === "invalid_frontmatter");
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.message).toMatch(/at least one participating module ID/);
+  });
+
+  it("flow frontmatter with a scalar `modules:` value → invalid_frontmatter", () => {
+    const fm = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+  - src/core.ts#batch
+modules: cli
+---
+`;
+    const errors = validateStage4Artifact(flowPage(fullBody(), fm), flowKeys, flowContext).errors;
+    const errs = errors.filter((e) => e.code === "invalid_frontmatter");
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.message).toMatch(/non-empty string list/);
+  });
+
+  it("flow `modules:` mismatch vs expectedFlowModules → invalid_frontmatter", () => {
+    const errors = validateStage4Artifact(flowPage(fullBody()), flowKeys, {
+      ...flowContext,
+      expectedFlowModules: ["cli", "mcp"],
+    }).errors;
+    const errs = errors.filter((e) => e.code === "invalid_frontmatter");
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.message).toMatch(/must equal the candidate module set/);
+  });
+
+  it("flow `modules:` subset of expectedFlowModules → invalid_frontmatter", () => {
+    const fm = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+  - src/core.ts#batch
+modules:
+  - cli
+---
+`;
+    const errors = validateStage4Artifact(flowPage(fullBody(), fm), flowKeys, flowContext).errors;
+    expect(errors.some((e) => e.code === "invalid_frontmatter")).toBe(true);
+  });
+
+  it("closed-key dual completeness: key missing from flow frontmatter → missing_closed_key tagged frontmatter", () => {
+    const fm = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+modules:
+  - cli
+  - core
+---
+`;
+    const errors = validateStage4Artifact(flowPage(fullBody(), fm), flowKeys, flowContext).errors;
+    const fmMissing = errors.filter(
+      (e) => e.code === "missing_closed_key" && e.location === "frontmatter",
+    );
+    expect(fmMissing.map((e) => e.offending)).toEqual(["src/core.ts#batch", "src/store.ts#persist"]);
+    expect(
+      errors.some((e) => e.code === "missing_closed_key" && e.location === "section"),
+    ).toBe(false);
+  });
+
+  it("closed-key dual completeness: key missing from flow section markers → missing_closed_key tagged section", () => {
+    const failureNoMarker = `## Failure and recovery
+
+A failed task is marked and the run continues to the next task.`;
+    const body = [OPENING, PURPOSE, ORDERED, DIAGRAM, INVARIANTS, failureNoMarker, RELATED].join("\n\n");
+    const errors = validateStage4Artifact(flowPage(body), flowKeys, flowContext).errors;
+    const sectionMissing = errors.filter(
+      (e) => e.code === "missing_closed_key" && e.location === "section",
+    );
+    expect(sectionMissing.map((e) => e.offending)).toEqual(["src/store.ts#persist"]);
+    expect(
+      errors.some((e) => e.code === "missing_closed_key" && e.location === "frontmatter"),
+    ).toBe(false);
+  });
+
+  it("invented key in flow frontmatter → anchor_outside_closed_list", () => {
+    const fm = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+  - src/core.ts#batch
+  - src/other.ts#nope
+modules:
+  - cli
+  - core
+---
+`;
+    const errors = validateStage4Artifact(flowPage(fullBody(), fm), flowKeys, flowContext).errors;
+    expect(
+      errors.some(
+        (e) => e.code === "anchor_outside_closed_list" && e.offending === "src/other.ts#nope",
+      ),
+    ).toBe(true);
+  });
+
+  it("flow pages may cite a subset of the closed list (upper bound, not assignment)", () => {
+    // The page cites the three keys its marker-carrying sections need (one
+    // distinct key per required section, R10.1 D2); src/extra.ts#unused is
+    // a closed-list key the page does not use — no missing_closed_key.
+    const fm = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+  - src/core.ts#batch
+  - src/store.ts#persist
+modules:
+  - cli
+  - core
+---
+`;
+    const closedWithUnused = [...flowKeys, "src/extra.ts#unused"];
+    const errors = validateStage4Artifact(flowPage(fullBody(), fm), closedWithUnused, flowContext).errors;
+    expect(errors.filter((e) => e.code === "missing_closed_key")).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  // === R10.1 item D — marker placement and semantic-tier coverage ===
+
+  it.each([
+    [
+      "Diagram",
+      `## Diagram\n\n<!-- lw:anchors src/core.ts#batch -->\n\n\`\`\`mermaid\n%% livewiki/diagrams/flow-batch-documentation-run.mmd\n\`\`\``
+    ],
+    [
+      "Invariants",
+      `## Invariants\n\n<!-- lw:anchors src/core.ts#batch -->\n\n- Every page passes the validator before write.`
+    ],
+    [
+      "Related pages",
+      `## Related pages\n\n<!-- lw:anchors src/core.ts#batch -->\n\n- [CLI module](cli.md)`
+    ],
+  ])("marker inside %s → anchor_in_disallowed_section naming the section", (name, section) => {
+    const orderedNoMarker = `## Ordered flow\n\n1. The CLI parses the invocation.\n2. The orchestrator documents each module.`;
+    const body = [
+      OPENING,
+      PURPOSE,
+      orderedNoMarker,
+      name === "Diagram" ? section : DIAGRAM,
+      name === "Invariants" ? section : INVARIANTS,
+      FAILURE,
+      name === "Related pages" ? section : RELATED,
+    ].join("\n\n");
+    const errors = validateStage4Artifact(flowPage(body), flowKeys, flowContext).errors;
+    const disallowed = errors.filter((e) => e.code === "anchor_in_disallowed_section");
+    expect(disallowed).toHaveLength(1);
+    expect(disallowed[0]!.message).toContain(`"${name}"`);
+    expect(disallowed[0]!.offending).toBe("<!-- lw:anchors src/core.ts#batch -->");
+  });
+
+  it("marker before the first H2 → anchor_in_disallowed_section (preamble)", () => {
+    const preamble = `${OPENING}\n\n<!-- lw:anchors src/cli.ts#run -->`;
+    const purposeNoMarker = `## Purpose\n\nA batch run starts from the CLI and produces accepted module pages.`;
+    const body = [preamble, purposeNoMarker, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n");
+    const errors = validateStage4Artifact(flowPage(body), flowKeys, flowContext).errors;
+    const disallowed = errors.filter((e) => e.code === "anchor_in_disallowed_section");
+    expect(disallowed).toHaveLength(1);
+    expect(disallowed[0]!.message).toMatch(/before the first H2/);
+    expect(disallowed[0]!.offending).toBe("<!-- lw:anchors src/cli.ts#run -->");
+  });
+
+  it("a marker inside an H3 descending from `## Ordered flow` is allowed and counts for D2", () => {
+    const orderedH3 = `## Ordered flow\n\n1. The CLI parses the invocation.\n2. The orchestrator documents each module.\n\n### Step details\n\n<!-- lw:anchors src/core.ts#batch -->\n\nProse about the orchestration step.`;
+    const body = [OPENING, PURPOSE, orderedH3, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n");
+    const r = validateStage4Artifact(flowPage(body), flowKeys, flowContext);
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+
+  it.each([
+    [
+      "Purpose",
+      `## Purpose\n\nA batch run starts from the CLI and produces accepted module pages.`,
+      "src/core.ts#batch src/store.ts#persist",
+    ],
+    [
+      "Ordered flow",
+      `## Ordered flow\n\n1. The CLI parses the invocation.\n2. The orchestrator documents each module.`,
+      "src/cli.ts#run src/store.ts#persist",
+    ],
+    [
+      "Failure and recovery",
+      `## Failure and recovery\n\nA failed task is marked and the run continues to the next task.`,
+      "src/cli.ts#run src/core.ts#batch",
+    ],
+  ])("required section %s without any marker → anchor_missing_in_required_section", (name, markerlessSection, cited) => {
+    const citedKeys = (cited as string).split(" ");
+    const fm = [
+      "---",
+      "title: Batch documentation run",
+      "owner: generated",
+      "anchors:",
+      ...citedKeys.map((k) => `  - ${k}`),
+      "modules:",
+      "  - cli",
+      "  - core",
+      "---",
+      "",
+    ].join("\n");
+    const body = [
+      OPENING,
+      name === "Purpose" ? markerlessSection : PURPOSE,
+      name === "Ordered flow" ? markerlessSection : ORDERED,
+      DIAGRAM,
+      INVARIANTS,
+      name === "Failure and recovery" ? markerlessSection : FAILURE,
+      RELATED,
+    ].join("\n\n");
+    const errors = validateStage4Artifact(flowPage(body, fm), flowKeys, flowContext).errors;
+    // The cited keys stay dual-consistent (no missing_closed_key): the
+    // only defect is the named section carrying no marker.
+    expect(errors.map((e) => e.code)).toEqual(["anchor_missing_in_required_section"]);
+    expect(errors[0]!.message).toContain(`"${name}"`);
+    expect(errors[0]!.offending).toBe(name);
+  });
+
+  const flowGroups = {
+    entryKeys: ["src/cli.ts#run"],
+    boundaryKeys: ["src/core.ts#batch"],
+    sinkKeys: ["src/store.ts#persist"],
+  } as const;
+
+  it("a page citing ≥1 key from each non-empty group passes (tier coverage satisfied)", () => {
+    const r = validateStage4Artifact(flowPage(fullBody()), flowKeys, {
+      ...flowContext,
+      flowKeyGroups: flowGroups,
+    });
+    expect(r.errors).toEqual([]);
+  });
+
+  it("a non-empty group left uncited → anchor_missing_required_tier naming the group", () => {
+    // src/extra.ts#unused is the only sink key; the page cites the other three.
+    const closedWithUnused = [...flowKeys, "src/extra.ts#unused"];
+    const errors = validateStage4Artifact(flowPage(fullBody()), closedWithUnused, {
+      ...flowContext,
+      flowKeyGroups: { ...flowGroups, sinkKeys: ["src/extra.ts#unused"] },
+    }).errors;
+    expect(errors.map((e) => e.code)).toEqual(["anchor_missing_required_tier"]);
+    expect(errors[0]!.message).toContain('"sink"');
+    expect(errors[0]!.message).toContain("src/extra.ts#unused");
+    expect(errors[0]!.offending).toBe("sink");
+  });
+
+  it("empty or closed-list-foreign groups are never required", () => {
+    const r = validateStage4Artifact(flowPage(fullBody()), flowKeys, {
+      ...flowContext,
+      flowKeyGroups: {
+        entryKeys: [],
+        boundaryKeys: ["src/ghost.ts#nope"],
+        sinkKeys: ["src/store.ts#persist"],
+      },
+    });
+    expect(r.errors).toEqual([]);
+  });
+
+  it("absent groups leave the tier rule inert", () => {
+    const r = validateStage4Artifact(flowPage(fullBody()), flowKeys, flowContext);
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+
+  it("a group key cited only in frontmatter does not count (dual citation rule)", () => {
+    // src/core.ts#batch is in the frontmatter list but in no section marker:
+    // not "cited" for the boundary group (and one-sided for the dual rule).
+    const orderedNoMarker = `## Ordered flow\n\n1. The CLI parses the invocation.\n2. The orchestrator documents each module.`;
+    const body = [OPENING, PURPOSE, orderedNoMarker, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n");
+    const errors = validateStage4Artifact(flowPage(body), flowKeys, {
+      ...flowContext,
+      flowKeyGroups: flowGroups,
+    }).errors;
+    const tiers = errors.filter((e) => e.code === "anchor_missing_required_tier");
+    expect(tiers).toHaveLength(1);
+    expect(tiers[0]!.message).toContain('"boundary"');
+    expect(
+      errors.some((e) => e.code === "missing_closed_key" && e.offending === "src/core.ts#batch"),
+    ).toBe(true);
+  });
+
+  it("module pages are unaffected by the flow placement and tier rules", () => {
+    const modulePage = [
+      "---",
+      "title: Some module",
+      "owner: generated",
+      "anchors:",
+      "  - src/a.ts#a",
+      "---",
+      "",
+      "# Some module",
+      "",
+      "This page documents the module's indexed responsibilities.",
+      "",
+      "## When to use this page",
+      "",
+      "- Review behavior.",
+      "- Change behavior.",
+      "",
+      "## How it fits",
+      "",
+      "This module provides one part of the repository implementation.",
+      "",
+      "## Details",
+      "",
+      "<!-- lw:anchors src/a.ts#a -->",
+      "",
+      "Body.",
+      "",
+    ].join("\n");
+    const r = validateStage4Artifact(modulePage, ["src/a.ts#a"], {
+      moduleId: "mod",
+      moduleRole: "product",
+    });
+    expect(r.errors).toEqual([]);
   });
 });

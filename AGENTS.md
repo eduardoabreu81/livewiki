@@ -13,7 +13,17 @@
 > public winner claim until the maintainer decides the
 > `docs/BENCHMARK.md` note. Post-review navigation work is on main:
 > deterministic navigation layer (Lot M, 0746860) and the stage-4
-> page-opening contract + semantic titles (Lot N, 59b1112).
+> page-opening contract + semantic titles (Lot N, 59b1112). Phase 6
+> Lot 6A is on main (75cd004): deterministic local export is implemented,
+> and the `generic` target passed a manual Windows happy-path and
+> idempotence check on 2026-07-15. The uncommitted R10/R10.1 semantic-flow
+> body is implemented with deterministic suites green; its comparison corpus
+> is complete after recovery, while strict autonomous paid-E2E acceptance
+> remains open. R11-NAV intent-first deterministic navigation is implemented
+> and green in the same uncommitted body. R11-A concept topics, topic-first
+> navigation, and compact auxiliary-page depth are implemented in the working
+> tree but intentionally not built, tested, or benchmarked yet. GitHub and
+> cross-platform work remain deliberately deferred.
 
 ## Language policy
 
@@ -47,6 +57,38 @@ MCP clients, and LLM providers remain optional user-selected surfaces.
 appear in the working tree — they may be reviewer's work. If in doubt,
 ask.
 
+## Product-first execution discipline
+
+Maintainer decision (2026-07-15): develop and validate livewiki one user
+flow at a time. The repository must not use GitHub Actions, benchmark
+harnesses, or publication infrastructure as an iterative debugger.
+
+- Start with the smallest real local product flow and one simple user-facing
+  command. Record the observed result before expanding scope.
+- GitHub integration, remote CI, release automation, and broad platform
+  matrices are final validation steps, not prerequisites for local product
+  work.
+- Benchmark/proxy/orchestrator harnesses are reserved for explicit benchmark
+  or publication evidence. They are not part of the normal fix-and-retest
+  loop.
+- Paid/provider calls require explicit maintainer approval. Prefer the active
+  development LLM through livewiki's CLI, MCP, or packaged skill when testing
+  an existing repository.
+- An external executor receives one bounded task. It leaves changes
+  uncommitted and unpushed. The coordinator reviews the result before a
+  separate commit/push authorization.
+- Do not add durable tests for exploratory work or a passing manual check.
+  For a confirmed product defect, keep at most the smallest regression test
+  that prevents that exact defect from silently returning; delete temporary
+  fixtures and debugging scripts before reporting.
+- Do not combine unrelated cleanup, documentation migration, CI repair, or
+  platform work with the active product flow.
+- After one flow passes, stop, document the result, and let the maintainer
+  choose the next flow.
+
+The current handoff and next E2E contract are in
+`docs/tasks/2026-07-15-local-product-e2e/HANDOFF.md`.
+
 **NEVER run `git clean -fdx` in this working tree.** The tree is
 shared with the reviewer, and that command destroys uncommitted work
 from both sides (we lost an entire new module that way during the
@@ -60,9 +102,16 @@ Remove-Item -Force packages/*/*.tsbuildinfo, packages/*/dist/*.tsbuildinfo
 ## TL;DR
 
 livewiki is an agent-first technical documentation tool. The core is the
-**4-stage batch pipeline** (scan → modules → prioritize → document)
-that calls an LLM to generate Markdown pages anchored to code symbols,
-post-validating via `verify` (broken_anchor = key outside the index).
+**5-stage batch pipeline** (scan → modules → prioritize → document →
+flows) that calls an LLM to generate Markdown pages anchored to code
+symbols, post-validating via `verify` (broken_anchor = key outside the
+index). Stage 5 synthesizes a bounded set of semantic product-flow
+artifacts (`livewiki/flows/<slug>.md` + `livewiki/diagrams/flow-<slug>.mmd`
++ deterministic `flows/index.md` hub) from deterministically detected
+candidates (`packages/core/src/flows.ts`), reusing the stage-4
+artifact/repair/transactional-write machinery. The R11-A working tree adds a
+closed-inventory semantic topic planner and bounded topic pages under
+`livewiki/topics/`; implementation is uncommitted and validation has not run.
 The **MCP server (Phase 4)** exposes the wiki via 6 tools to any MCP
 client (Claude Code, Cursor, Codex, etc.) — FTS5 search, read,
 validated write, debt management.
@@ -84,7 +133,8 @@ Project status:
   - **[S]** translation to English of CLI strings + messages ✅
   - **[U–X]** batch resilience (unique IDs, artifact validation, bounded
     repair, transactional write, ownership) ✅ approved (pending push)
-- **Phase 6** (export to github-wiki/gitlab-wiki/generic) — post-MVP
+- **Phase 6 Lot 6A** (deterministic export) ✅ implemented; `generic` local
+  happy path manually validated, Git-host targets not yet manually validated
 - **Phase 7** (local viewer + templates) — post-MVP
 
 Phase 3 acceptance criterion (SPEC): `livewiki init --batch` in a medium
@@ -138,7 +188,8 @@ livewiki/
 │   │   │   ├── diagrams.ts     # deterministic Mermaid
 │   │   │   ├── prompts.ts      # templates (English), ${language} in user
 │   │   │   ├── manifest.ts     # .manifest.json + snapshotHash
-│   │   │   ├── batch.ts        # 4-stage orchestrator + circuit breaker
+│   │   │   ├── batch.ts        # 5-stage orchestrator + circuit breaker
+│   │   │   ├── flows.ts        # stage 5: deterministic flow-candidate detector
 │   │   │   ├── init.ts         # livewiki init (deterministic layout + batch)
 │   │   │   ├── update.ts       # Phase 5: incremental mode
 │   │   │   ├── update-metrics.ts# Phase 5: token accounting
@@ -159,7 +210,7 @@ livewiki/
 │   │           ├── batch.ts    # livewiki batch [status|resume|--only|list]
 │   │           ├── pointer.ts  # livewiki pointer (Phase 5 step 4)
 │   │           ├── serve.ts    # livewiki serve (Phase 4)
-│   │           ├── export.ts   # livewiki export (stub Phase 6)
+│   │           ├── export.ts   # livewiki export (Phase 6 Lot 6A)
 │   │           └── view.ts     # livewiki view (stub Phase 7)
 │   │       ├── templates/      # Phase 5 step 3: hook templates
 │   │       │   ├── git/post-commit        # bash hook
@@ -245,6 +296,12 @@ pnpm --filter @livewiki/core test -- src/export.test.ts
                      # Phase 6 Lot 6A: deterministic export, safe-io allowlist
 pnpm --filter @livewiki/cli test -- src/cli-export-e2e.test.ts
                      # Phase 6 Lot 6A: CLI E2E
+pnpm --filter @livewiki/core test -- src/flows.test.ts
+                     # stage 5: deterministic flow-candidate detector
+pnpm --filter @livewiki/core test -- src/batch-stage5.test.ts
+                     # stage 5: orchestration contracts (owner, rollback, budgets)
+pnpm --filter @livewiki/cli test -- src/cli-batch-stage5-e2e.test.ts
+                     # stage 5: CLI E2E (flows + hub + verify zero issues)
 ```
 
 Current coverage: **80%+ statements / 80%+ branches / 90%+ funcs** (above
@@ -262,6 +319,11 @@ create symlinks (no Developer Mode, no admin); the same tests run
 (without skipping) on the Ubuntu and macOS jobs. A test-file guard
 in `packages/core/src/export.test.ts` makes any Unix-host skip
 enforceable as a CI failure.
+
+This workflow is not currently green. Runs `29438763571`, `29441166630`,
+and `29445115951` exposed workflow/runtime and macOS path-canonicalization
+issues. They are recorded for later work, but MUST NOT be repaired or retried
+until the local product E2E sequence in the current handoff is complete.
 
 Until the remote matrix has been observed green on all three OS hosts,
 this repo must NOT claim "cross-platform validated", "matrix green",
@@ -289,6 +351,25 @@ for closing the lot.
 - **Bug in circuit breaker / orchestrator** → `packages/core/src/batch.ts`,
   with tests in `batch.test.ts`. Update
   `packages/cli/src/commands/batch.ts` for the new exit code.
+- **Stage 5 (flows)** → detection in `packages/core/src/flows.ts` (pure,
+  deterministic; tests in `flows.test.ts`); orchestration in `batch.ts`
+  (tests in `batch-stage5.test.ts`); prompt builders
+  `buildStage5Prompt`/`buildStage5RepairPrompt` + `FLOW_PAGE_PROMPT_RULES`
+  in `prompts.ts`; flow page-kind validation in `artifact.ts`
+  (`Stage4ValidationContext.pageKind`); hub/gated links in
+  `navigation.ts` (`loadFlowPresentations`, `generateFlowsIndex`,
+  `syncFlowsIndexHub`); stale cleanup `syncStaleFlowArtifacts` in
+  `init.ts`; CLI E2E in `cli-batch-stage5-e2e.test.ts`. Config keys
+  (defaults): `maxFlows` (4; 0 disables), `flowMaxAnchors` (25),
+  `flowMaxDiagramNodes` (12), `flowMaxDiagramEdges` (20), `flowSignals`
+  (gitignore-style entry/persistence pattern overrides).
+- **Stage 5 (topics)** → closed inventory, proposal validation, and stable
+  evidence identities in `packages/core/src/topics.ts`; planner/topic prompts
+  in `prompts.ts`; `pageKind: topic` validation in `artifact.ts`; orchestration
+  and checkpoint reuse in `batch.ts`; hubs and bounded topic cross-links in
+  `navigation.ts`; generated-only stale cleanup in `init.ts`. Config defaults:
+  `maxTopics` 4, `topicMaxAnchors` 18, `topicMaxSourceChars` 40,000, and
+  `topicMaxOutputTokens` 4,096.
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -380,6 +461,30 @@ for closing the lot.
   `completed_with_failures` (exit 1), never `completed` (exit 0).
   Also: a run with `cb.done === 0` AND `ordered.length > 0` is
   forced to `completed_with_failures`.
+- **Stage 5 (flows)**: after stage 4 (and before the navigation regen),
+  `detectFlowCandidates` (`flows.ts`, pure/deterministic) produces a
+  bounded set of cross-module flow candidates; each becomes a task
+  `flow:<slug>` reusing the stage-4 attempt/repair/budget machinery. The
+  model emits ONE page with the diagram INLINE in `## Diagram`; the
+  orchestrator extracts it to `livewiki/diagrams/flow-<slug>.mmd` and
+  writes the page with the `%% livewiki/diagrams/flow-<slug>.mmd`
+  placeholder. No mechanical fallback (artifact-repair stays
+  fail-closed). `owner: human` flow pages are refused; stale generated
+  flows are removed by `syncStaleFlowArtifacts`. The hub
+  (`flows/index.md`), quickstart/overview gated links, and module
+  `## Navigate` `Flow:` lines are regenerated by `init` /
+  `regenerateArchitectureOverview`. `--only flow:<slug>` reruns one
+  flow with monotonic usage. Zero candidates is a valid outcome (no
+  `flows/`, no links), never an empty pipeline.
+- **Preset satisfies provider** (E2E fix): `validateConfigForBatch`
+  accepts `preset` + `model` without `provider` (SPEC: config.json
+  references the preset by name). A preset-only config previously threw
+  `MissingProviderConfigError`; regression test in `config.test.ts`.
+- **Inline flow-style frontmatter lists** (E2E fix): `key: [a, b, c]`
+  parses as a string list (the form LLMs most often emit). Previously
+  it became one opaque string, silently breaking `anchors:` checks and
+  the flow `modules:` consumption in navigation. Regression tests in
+  `frontmatter.test.ts`.
 - **NodeNext imports** (FIX K rev2): `modules.ts:resolveRelativeImport`
   strips the `.js`/`.jsx`/`.mjs`/`.cjs` extension before trying
   candidates. `import x from "../utils/crypto.js"` now resolves to
@@ -468,13 +573,128 @@ for closing the lot.
   already released it). If it persists,
   `mavis-trash .git/index.lock` (do NOT use `Remove-Item`).
 
-## Live state (next: BENCHMARK.md decision → Phase 6 export → Phase 7 viewer)
+## Live state (semantic product-flow layer implemented, awaiting review)
 
-```bash
-# Last validation (post navigation lots M–N, commit 59b1112):
-pnpm -r test  → 768 passed (core 695 + cli 52 + mcp 21)
-pnpm -r build → green (core + cli + mcp)
-```
+The semantic product-flow layer (design contract:
+`docs/tasks/2026-07-18-semantic-product-flow/DESIGN.md`, approved
+2026-07-18) is **implemented and validated in the working tree,
+uncommitted and unpushed** on top of the R2–R9 hardening patch:
+
+- SPEC amendments applied (5-stage pipeline, semantic-flow section,
+  quickstart gated link, `tasks.md` responsibility-sentence dedup,
+  `flows/` layout).
+- Stage 5 (flows): deterministic candidate detection (`flows.ts`),
+  per-candidate tasks `flow:<slug>`, inline-diagram extraction to
+  `diagrams/flow-<slug>.mmd`, flow page-kind validation, bounded repair,
+  transactional write, stale-flow cleanup, `--only flow:<slug>`.
+- Navigation: `flows/index.md` hub, gated quickstart/overview links,
+  module `## Navigate` `Flow:` lines, `tasks.md` dedup (responsibility
+  sentence; auxiliary modules as compact link lists).
+- Two defects found and fixed with regression tests during validation:
+  `validateConfigForBatch` rejected preset-only configs; the frontmatter
+  parser treated inline flow-style lists (`key: [a, b]`) as one opaque
+  string.
+- Test state: core 875 passed / 12 skipped (Windows symlink), CLI 81,
+  MCP 21; `pnpm -r build` clean.
+- Real E2E on a kc-quillrift copy (2026-07-18): `claude`, `codex`, and
+  `mmx` (MiniMax-M3) each produced module pages + flow page + diagram
+  reaching **verify zero issues** and idempotent `export generic`
+  (mmx needed one error-feedback repair round). A local 3B ollama model
+  hit `repair_exhausted` on stage 4 and the circuit breaker aborted
+  cleanly with exact token accounting — small local models are below the
+  contract's reliability floor. Evidence:
+  `docs/tasks/2026-07-18-semantic-product-flow/RESULTS.md`.
+- **R10 (comparison-grade, 2026-07-18)**: MiniMax-M3 `init --batch
+  --no-refine` on the frozen `895d49e` source (same as R9). Final corpus:
+  40 pages + 12 Mermaid, verify zero issues, 261/261 links, **duplicate
+  prose groups 36 → 1** (only a shared `## Navigate` boilerplate line).
+  The flow task exposed two design fixes, both applied with regression
+  tests: flow closed list is an **upper bound** (cite-what-you-use, both
+  surfaces consistent), and index pages (`tasks.md`, `flows/index.md`)
+  are title + link only (no copied sentences). Two further defects fixed
+  during validation: preset-only configs rejected by
+  `validateConfigForBatch`; inline flow-style frontmatter lists parsed as
+  one string. Blind dual evaluation (claude + codex, immutable dirs,
+  frozen OpenWiki R1 control): **descriptive tie / split decision** —
+  claude 7.65 vs 7.40 OpenWiki, codex 7.8 vs 8.0 LiveWiki; mean ≈7.73 vs
+  ≈7.70 (two ordinal scores, no variance claimed), closing the R9 0.75
+  gap to ≈0.03. R10 totals (checkpoint-authoritative): 1,190,779 tokens =
+  994,646 in + 196,133 out, 82 calls; flow task 361,891 tokens / 17
+  attempts. Convergent wins: factual accuracy (9,9) and
+  traceability (9,10). Residual gaps both evaluators name: auxiliary
+  prominence (16 benchmark/tooling pages) and intent-based navigation.
+  Full evidence in the RESULTS addendum.
+- **R10.1 acceptance fixes (2026-07-19, implemented, uncommitted;
+  autonomous acceptance still open)**:
+  contract `docs/tasks/2026-07-19-r10-1-acceptance-fixes/CONTRACT.md`
+  (rev6, evidence reconciled after external review). Implemented:
+  transactional stage-5
+  pair writes (exception → dual rollback, `write_verify_exception`;
+  stage-4 aligned), any-severity stage-5 write gate scoped to written
+  artifacts (stage 4 keeps error-only), hub ownership skip for
+  human/mixed (`skipped-owner`, never persisted), flow validator
+  placement D1/D2 + tier coverage D3 (`anchor_missing_required_tier`)
+  with H2-ancestor membership and explicit anchor groups
+  (entry/boundary/sink) reaching prompt + validator, `Module ID:` removed
+  from tasks.md, combined-matcher negations in `flowSignals`,
+  `persistenceImportPatterns` config + channel, internal workspace import
+  resolution (`import-resolution.ts`: declared workspace map, exports
+  explicit keys, dist→src via rootDir/outDir, per-occurrence external
+  accounting), seed tiers/groups with two-pass filling + deterministic
+  skips (K-a/K-b, `skippedFlowCandidates`), fair per-root enumeration +
+  module-sharing centrality. Final deterministic suite state: core 963
+  passed / 12 skipped, CLI 84, MCP 21; build clean. The strict paid-E2E
+  criterion remains a full exit-0 run with no `--only` recovery or manual
+  edit; it has not yet been met.
+- **R10.1 acceptance E2E (2026-07-19, single authorized run)**: MiniMax-M3
+  defaults, frozen 895d49e fresh copy, 1.35M monitored ceiling, zero
+  manual edits. Run: `completed_with_failures` (39 done / 3 failed),
+  1,117,150 tokens. Internal-import resolution works: 4 flow candidates
+  (R10 had 1) over 265 workspace edges. **`flow:cli-src-to-core-src-05`
+  done and meets every acceptance criterion** (100% production anchors,
+  groups cited, 8 modules, verify zero issues). 3 flows failed
+  `repair_exhausted` (diagram budget/duplicates — model-quality
+  residuals, correctly rejected, nothing invalid persisted). Stopped per
+  scope; awaiting external review before commit/push.
+- **R10.1 E2E completion + blind eval (2026-07-19)**: E2E #2 (repair 5,
+  no ceiling) exposed a systematic prompt defect (hub link written
+  `../index.md`) — fixed with regression tests (bare `index.md` rule +
+  module-granularity diagram guidance + `verify_failed` ACTION; core 963
+  passed). E2E #3: **all 4 flows done**, but one benchmark module required a
+  disclosed `--only` recovery. Therefore the final corpus is complete while
+  autonomous acceptance remains open. Raw corpus: 43 Markdown + 15 Mermaid,
+  verify zero, 344/344 links, zero duplicate groups. Masked evaluation corpus:
+  341/341 links and one Navigate-boilerplate duplicate group. Final checkpoint:
+  1,027,383 tokens (9.8% of OpenWiki); all three R10.1 engineering runs total
+  3,602,729 tokens. Corrected blind scores: OpenWiki/R10.1 claude 8.65/6.70,
+  codex 7.15/6.80. The byte-identical control moved substantially between
+  rounds, so one run per evaluator cannot establish regression or improvement;
+  the movement does not exceed every observed corpus difference. Accuracy and
+  traceability remain strengths but are not a uniform cross-evaluator win in
+  R10.1. The stable actionable finding is navigation/clarity: source-chunk
+  pages and auxiliary volume lose to concept-oriented routes. The bounded
+  deterministic response is R11-NAV below; the broader concept-topic response
+  is the unvalidated R11-A working-tree implementation that follows it.
+- **R11-NAV (2026-07-20, implemented, uncommitted)**: deterministic
+  presentation-only contract at `docs/tasks/2026-07-20-r11-nav/CONTRACT.md`.
+  Quickstart routes by intent and links directly to accepted flows; Tasks
+  contains flows + product work + one auxiliary route; the architecture
+  overview keeps product cards and one auxiliary summary; and
+  `livewiki/auxiliary/index.md` owns the complete non-product inventory.
+  Human/mixed/unknown-owner auxiliary hubs are preserved and their skip is
+  surfaced in init/batch results. Build clean; core 966 / CLI 86 / MCP 21,
+  with 12 expected Windows symlink skips. No paid call, benchmark, commit, or
+  push.
+- **R11-A (2026-07-20, implemented, uncommitted, unvalidated)**: one bounded
+  `topic-plan` task builds a closed concept inventory from accepted module and
+  flow evidence; strict validation produces `topic:<evidence-hash>` tasks and
+  bounded, anchored `livewiki/topics/<slug>.md` pages. Topics use transactional
+  page-scoped any-severity verification, ownership-safe stale cleanup, exact
+  accounting, deterministic topic-first Quickstart/Tasks/module/flow routes,
+  and a title-link-only topics hub. Non-product stage-4 pages use the compact
+  auxiliary reference contract without changing exact anchor coverage. This
+  implementation pass ran static syntax/diff checks only; build, tests, MMX,
+  paid E2E, benchmark comparison, commit, and push await separate alignment.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series
@@ -489,13 +709,33 @@ navigation findings were implemented as Lot M (deterministic quickstart/
 tasks/navigate, commit 0746860) and Lot N (page-opening contract,
 semantic titles, `missing_page_opening` + `title_equals_module_id`
 validations, commit 59b1112) per
-`docs/tasks/2026-07-14-navigation-investigation/`.
+`docs/tasks/2026-07-14-navigation-investigation/`. The dual-evaluator
+blind comparison (LiveWiki R9 7.00 vs OpenWiki R1 7.75) is at
+`docs/benchmarks/2026-07-10-minimax-m3/QUALITY-COMPARISON-R9-OPENWIKI-R1.md`;
+its gaps motivated the semantic product-flow layer above.
+
+Phase 6 Lot 6A is implemented on main at `75cd004`. A disposable local
+repository confirmed that `export generic` preserves ordinary frontmatter
+except `anchors`, preserves `lw:manual` content, rewrites internal links,
+exports Mermaid, does not mutate `livewiki/`, and is idempotent. No product
+defect or code change was required by that smoke.
+
+Three follow-up CI commits (`ad5561c`, `20b4541`, `5633963`) remain on main,
+but the remote matrix is not green. That is explicitly deferred. An abandoned
+seven-file local CI correction was discarded on 2026-07-15 so the next window
+starts from the committed tree. The untracked v21 benchmark evidence remains
+protected and untouched.
 
 Next planned steps:
-1. Maintainer decision on a `docs/BENCHMARK.md` note after the review
-   (no public winner claim until then).
-2. Phase 6: export to github-wiki/gitlab-wiki/generic.
-3. Phase 7: local viewer + templates.
+1. Maintainer review of the combined uncommitted R10/R10.1 + R11-NAV body.
+2. Decide whether to authorize one fresh full paid acceptance E2E, with no
+   `--only` recovery or rerun-to-green loop, or explicitly record a waiver of
+   the autonomous-run criterion before committing the current body.
+3. After review, authorize commit/push separately and launch the beta; use real
+   navigation failures to decide whether the deferred R11-A topic layer earns
+   its complexity.
+4. Only after local product flows pass, return to GitHub/cross-platform CI.
+5. Phase 7: local viewer + templates rendering the same canonical artifacts.
 
 > **Reminder for the user**: validate doc/spec additions BEFORE coding.
 > When Edu adds something to SPEC (via commit), compare with the current

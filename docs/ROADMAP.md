@@ -5,11 +5,22 @@
 > phases (Phase 6 export, Phase 7 viewer) and records why rejected ideas
 > were rejected, so they are not re-litigated.
 
-## Committed next (see AGENTS.md)
+## Current execution order (see AGENTS.md)
 
-1. Phase 6 — export to `github-wiki` / `gitlab-wiki` / `generic` (one-way
-   lossy transformation, idempotent, overwrite-guarded).
-2. Phase 7 — local viewer + templates (self-contained static site, client-side
+1. Review the uncommitted R10/R10.1 + R11-NAV body. R11-NAV's deterministic
+   intent routes and auxiliary de-emphasis are implemented and green; strict
+   autonomous paid-E2E acceptance remains open.
+2. Run one fresh standalone-provider acceptance E2E only after explicit
+   at-the-moment authorization. Do not use a rerun-to-green loop.
+3. After review, decide separately whether to commit/push and launch the beta.
+4. Review the R11-A concept-topic implementation now present in the working
+   tree; validation and any launch-gate decision remain separate.
+5. Revise the blind-evaluation instrument before using scores for another
+   product decision.
+6. Phase 6 Lot 6A follow-up — manually validate the remaining local export
+   targets after `generic` (already implemented and locally validated).
+7. Cross-platform/GitHub validation after the local product flows pass.
+8. Phase 7 — local viewer + templates (self-contained static site, client-side
    search, rendered Mermaid, no executable template code).
 
 The independent quality review vs frozen OpenWiki
@@ -21,6 +32,74 @@ clean-v18 benchmark run (13/13 modules, verify clean, exact accounting) is the
 final state of the public comparison evidence; no further benchmark or harness
 run is planned unless a product defect requires a focused reproduction. The
 maintainer decides when (and whether) to publish a `docs/BENCHMARK.md` note.
+
+## Required product-flow visibility (agent first, human next)
+
+This is an original product requirement, not a benchmark-only optimization.
+`VISION.md` defines two content layers: a structural wiki for agents and a later
+human/product narrative generated from that structure — "map first, then a
+story." The current deterministic Mermaid artifacts (`structure.mmd`,
+`modules.mmd`, and per-module class diagrams) provide useful inventory and
+traceability, but they do not by themselves explain how a product, application,
+or repository works. A directory tree says what exists; a product-flow view must
+show how responsibilities communicate to produce behavior.
+
+The bounded semantic flow layer is implemented in the uncommitted R10/R10.1
+body. R11-NAV now exposes those existing flows directly from Quickstart and
+Tasks and moves auxiliary inventory out of primary navigation. R11-A
+concept-topic synthesis is implemented in the working tree and remains
+unvalidated, uncommitted, and outside the beta-launch gate until review.
+Phase 7 must render the same canonical artifacts for humans instead of
+inventing a separate, competing narrative.
+
+Required content:
+
+- a concise "How it works" entry from Quickstart to the repository's principal
+  end-to-end flows;
+- component/data-flow diagrams that show entry points, responsibility
+  boundaries, state or persistence, external systems, outputs, and the arrows
+  between them;
+- sequence or state views for a small number of critical workflows when order,
+  retry, rollback, recovery, or ownership transitions materially affect the
+  behavior;
+- companion prose for every diagram: purpose, ordered flow, invariants, failure
+  paths, and links to the relevant topic and module pages; and
+- topic-oriented synthesis across modules, so a reader does not have to assemble
+  one workflow manually from many per-module pages.
+
+Generation constraints:
+
+- infer flow candidates generically from repository entry points, module/import
+  relationships, commands/routes, configuration, persistence, and external
+  boundaries; never hardcode livewiki-specific guide names into the product;
+- retain the existing deterministic structure/import/class diagrams as the
+  source map, but do not count them as satisfying the semantic-flow requirement;
+- keep diagrams bounded and readable; prefer several focused flows over a
+  mega-diagram or an edge-dense call graph;
+- LLM-assisted semantic diagrams are allowed only as batch artifacts, clearly
+  identified as synthesized documentation, source-cited/anchored, Mermaid-
+  parsed, link-validated, and subject to the existing artifact/repair gates;
+- preserve a textual fallback so agents and humans can understand the flow
+  without rendering Mermaid; and
+- generate one canonical flow artifact that CLI, MCP, export, and the Phase 7
+  viewer all consume. Do not maintain separate agent and human truths.
+
+Acceptance evidence must demonstrate that, on a real repository, both an agent
+reading the low-token entry path and a human using the Phase 7 viewer can answer:
+
+1. What starts the principal workflow?
+2. Which components participate, and how do they communicate?
+3. Where does state move or persist?
+4. What is produced at the end?
+5. What happens on the critical failure/recovery path?
+
+The answer must come from a short topic path plus a readable diagram, not from a
+directory tree or manual reconstruction of module pages. `SPEC.md` is aligned
+for bounded semantic flows and R11-NAV's deterministic intent routes. The
+R11-A amendment is implemented under maintainer authorization but still needs
+review and validation; it preserves the
+distinction between rejected automatic mega-call-graphs and approved, bounded
+semantic synthesis.
 
 ## Approved backlog (post Phase 7, in priority order)
 

@@ -58,6 +58,10 @@ export function registerInit(program: Command): void {
             filesWritten: result.filesWritten,
             batchSummary: result.batchSummary,
             batchExitCode: result.batchExitCode,
+            skippedFlowsHub: result.skippedFlowsHub,
+            skippedAuxiliaryHub: result.skippedAuxiliaryHub,
+            skippedTopicsHub: result.skippedTopicsHub,
+            skippedFlowCandidates: result.skippedFlowCandidates,
           },
           formatHuman(result),
         );
@@ -80,7 +84,7 @@ export function registerInit(program: Command): void {
     });
   }
 
-function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number }; batchExitCode?: 0 | 1 | 2 }): string {
+function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number }; batchExitCode?: 0 | 1 | 2; skippedFlowsHub?: { path: string; owner: "human" | "mixed" | null }; skippedAuxiliaryHub?: { path: string; owner: "human" | "mixed" | null }; skippedTopicsHub?: { path: string; owner: "human" | "mixed" | null }; skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }> }): string {
   const lines: string[] = [];
   if (result.plan) {
     lines.push(`livewiki init --plan (no writes, no LLM):`);
@@ -99,6 +103,26 @@ function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; ba
   lines.push(`  files written: ${result.filesWritten.length}`);
   for (const f of result.filesWritten) {
     lines.push(`    ${f}`);
+  }
+  // R10.1 C: a preserved human/mixed/unparseable flows hub is never silent.
+  if (result.skippedFlowsHub) {
+    lines.push(
+      `  flows hub: preserved (owner: ${result.skippedFlowsHub.owner ?? "unknown"}) — ${result.skippedFlowsHub.path} not overwritten`,
+    );
+  }
+  if (result.skippedAuxiliaryHub) {
+    lines.push(
+      `  auxiliary hub: preserved (owner: ${result.skippedAuxiliaryHub.owner ?? "unknown"}) — ${result.skippedAuxiliaryHub.path} not overwritten`,
+    );
+  }
+  if (result.skippedTopicsHub) {
+    lines.push(
+      `  topics hub: preserved (owner: ${result.skippedTopicsHub.owner ?? "unknown"}) — ${result.skippedTopicsHub.path} not overwritten`,
+    );
+  }
+  // R10.1 K: deterministic pre-LLM flow skips are never silent either.
+  for (const s of result.skippedFlowCandidates ?? []) {
+    lines.push(`  flow skipped: ${s.slug} (${s.code}) — ${s.message}`);
   }
   if (result.batchSummary) {
     lines.push("");

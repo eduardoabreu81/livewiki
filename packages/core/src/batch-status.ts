@@ -95,7 +95,10 @@ export async function buildStatusReport(
       const stageKey = String(t.stage);
       const prev = byStage[stageKey] ?? emptyStageUsage();
       byStage[stageKey] = mergeStageUsage(prev, stageUsage);
-      // By module (só stage 4)
+      // By module (só stage 4) — a token/cost breakdown, NOT a done count:
+      // it includes failed stage-4 tasks that had any usage, and omits
+      // stage 5 (flows/topics) entirely. Use `report.run.summary.tasksDone`
+      // /`tasksFailed` for the authoritative all-stages task count.
       if (t.stage === 4) {
         const prevMod = byModuleMap.get(t.target) ?? emptyStageUsage();
         byModuleMap.set(t.target, mergeStageUsage(prevMod, stageUsage));

@@ -29,6 +29,7 @@
 
 import ignore from "ignore";
 import type { ExtractedImport } from "./imports.js";
+import { resolveImportEdges, type ResolvedImportEdge } from "./import-resolution.js";
 import { sha256 } from "./hashes.js";
 
 export interface Module {
@@ -677,14 +678,20 @@ export function refinePeerDirectoryFragmentationError(
  * Resolve imports pra edges no grafo de módulos. Apenas edges entre módulos
  * DIFERENTES (self-loops são descartados).
  *
- * Limitação MVP: resolve só imports relativos (./foo, ../bar) que apontam
- * pra arquivos existentes no `knownFiles`. Imports absolutos/node_modules
- * viram "external" e não geram edges internos.
+ * R10.1 (J): implemented ON TOP of the single file-level resolver
+ * (`resolveImportEdges` in import-resolution.ts) — there is no second
+ * resolver. Callers that already resolved file edges with the workspace
+ * map (batch stage 3, init buildPlan) pass them via `resolvedEdges`;
+ * otherwise the edges are resolved here with an EMPTY workspace map, which
+ * reproduces the historical behavior exactly: only relative imports
+ * (`./foo`, `../bar`) pointing at files in `knownFiles` become edges, and
+ * absolute/node_modules specifiers stay external.
  */
 export function resolveModuleEdges(
   modules: Module[],
   importsByFile: Map<string, ExtractedImport[]>,
   knownFiles: Set<string>,
+  resolvedEdges?: ResolvedImportEdge[],
 ): ModuleGraphEdge[] {
   // Mapa path → moduleId
   const fileToModule = new Map<string, string>();
@@ -694,21 +701,19 @@ export function resolveModuleEdges(
     }
   }
 
+  const fileEdges =
+    resolvedEdges ??
+    resolveImportEdges({ importsByFile, knownFiles, workspacePackages: [] });
+
   const edges = new Map<string, ModuleGraphEdge>(); // dedup por "from→to"
-  for (const [filePath, imports] of importsByFile) {
-    const fromModule = fileToModule.get(filePath);
+  for (const fileEdge of fileEdges) {
+    const fromModule = fileToModule.get(fileEdge.fromFile);
     if (!fromModule) continue;
-    for (const imp of imports) {
-      // Só imports relativos (./ ou ../)
-      if (!imp.source.startsWith("./") && !imp.source.startsWith("../")) continue;
-      const resolved = resolveRelativeImport(filePath, imp.source, knownFiles);
-      if (!resolved) continue;
-      const toModule = fileToModule.get(resolved);
-      if (!toModule || toModule === fromModule) continue;
-      const key = `${fromModule}→${toModule}`;
-      if (!edges.has(key)) {
-        edges.set(key, { from: fromModule, to: toModule });
-      }
+    const toModule = fileToModule.get(fileEdge.toFile);
+    if (!toModule || toModule === fromModule) continue;
+    const key = `${fromModule}→${toModule}`;
+    if (!edges.has(key)) {
+      edges.set(key, { from: fromModule, to: toModule });
     }
   }
   return [...edges.values()].sort((a, b) =>
@@ -727,11 +732,14 @@ export function resolveModuleEdges(
  *
  * Agora strip da extensão `.js`/`.jsx` ANTES de gerar os candidatos, e também
  * trata `index.js` → `index.ts/tsx/js/jsx` (mapeamento de barrels).
+ *
+ * Exported for the single import resolver (import-resolution.ts, R10.1 J) —
+ * relative-specifier resolution must not be duplicated.
  */
-function resolveRelativeImport(
+export function resolveRelativeImport(
   fromFile: string,
   importPath: string,
-  knownFiles: Set<string>,
+  knownFiles: ReadonlySet<string>,
 ): string | null {
   const fromDir = fromFile.includes("/") ? fromFile.slice(0, fromFile.lastIndexOf("/")) : "";
   const parts = fromDir.split("/").filter(Boolean);
@@ -829,7 +837,46 @@ export const DEFAULT_PATH_ROLE_PATTERNS: Required<PathRoleConfig> = {
   docsPatterns: ["docs/**", "**/docs/**"],
 };
 
-function matchesAnyPathPattern(path: string, patterns: string[]): boolean {
+/**
+ * Gitignore-style path patterns feeding the stage-5 flow-candidate signals
+ * (SPEC §"Semantic product-flow layer"). Same per-category replacement
+ * semantics as PathRoleConfig: a supplied category replaces its built-in
+ * patterns; an empty array disables that category. The defaults name no
+ * product — any repo can override them.
+ */
+export interface FlowSignalConfig {
+  /** Entry-point files (CLI/executable surfaces) used by the entry signal. */
+  entryPatterns?: string[];
+  /** Persistence files (storage/state) used by the persistence signal. */
+  persistencePatterns?: string[];
+  /**
+   * External import specifiers (e.g. a database driver package) that also
+   * mark persistence. Matched against each file's external specifiers with
+   * the same combined gitignore semantics; the default is empty — no
+   * built-in package-name guessing.
+   */
+  persistenceImportPatterns?: string[];
+}
+
+export const DEFAULT_FLOW_SIGNAL_PATTERNS: Required<FlowSignalConfig> = {
+  entryPatterns: ["bin/**", "cmd/**", "**/cli.*", "**/main.*", "**/server.*", "**/app.*"],
+  persistencePatterns: [
+    "**/db.*",
+    "**/database/**",
+    "**/store/**",
+    "**/state/**",
+    "**/persistence/**",
+    "**/repository/**",
+  ],
+  persistenceImportPatterns: [],
+};
+
+/**
+ * Gitignore-style multi-pattern matcher shared by the path-role classifier
+ * and the stage-5 flow-signal detector (flows.ts). Combined-list semantics
+ * (later negations apply); an empty pattern list matches nothing.
+ */
+export function matchesAnyPathPattern(path: string, patterns: string[]): boolean {
   if (patterns.length === 0) return false;
   return ignore().add(patterns).ignores(path.replace(/\\/g, "/"));
 }

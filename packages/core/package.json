@@ -101,6 +101,18 @@
     "./export": {
       "types": "./dist/export.d.ts",
       "import": "./dist/export.js"
+    },
+    "./flows": {
+      "types": "./dist/flows.d.ts",
+      "import": "./dist/flows.js"
+    },
+    "./topics": {
+      "types": "./dist/topics.d.ts",
+      "import": "./dist/topics.js"
+    },
+    "./import-resolution": {
+      "types": "./dist/import-resolution.d.ts",
+      "import": "./dist/import-resolution.js"
     }
   },
   "files": [

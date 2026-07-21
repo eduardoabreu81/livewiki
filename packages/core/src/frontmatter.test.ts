@@ -41,6 +41,35 @@ body`;
     ]);
   });
 
+  // Regression: inline flow-style lists (`key: [a, b]`) — the form LLMs most
+  // often emit. Previously parsed as one opaque string, which silently broke
+  // anchor checks and flow `modules:` consumption.
+  it("parses inline flow-style string lists", () => {
+    const src = `---
+title: Hooks to lib flow
+modules: [hooks, services, lib]
+anchors: [src/a.ts#x, src/b.ts#y]
+empty: []
+note: "[draft] title" trailing
+---
+body`;
+    const r = parseFrontmatter(src);
+    expect(r.frontmatter?.["modules"]).toEqual(["hooks", "services", "lib"]);
+    expect(r.frontmatter?.["anchors"]).toEqual(["src/a.ts#x", "src/b.ts#y"]);
+    expect(r.frontmatter?.["empty"]).toEqual([]);
+    // Value that merely contains brackets is not a list.
+    expect(r.frontmatter?.["note"]).toBe('"[draft] title" trailing');
+  });
+
+  it("inline flow-style list with trailing comment still parses", () => {
+    const src = `---
+modules: [hooks, lib] # participating modules
+---
+body`;
+    const r = parseFrontmatter(src);
+    expect(r.frontmatter?.["modules"]).toEqual(["hooks", "lib"]);
+  });
+
   it("aceita comentários no final de linha", () => {
     const src = `---
 title: Foo  # comentário

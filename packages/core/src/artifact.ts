@@ -27,7 +27,10 @@
  *        markers ALONE must also contain every closed-list key. A page
  *        with every key only in frontmatter (zero real section markers)
  *        used to pass; it no longer does (`missing_closed_key`, tagged
- *        with the specific location that is short).
+ *        with the specific location that is short). Flow pages relax this
+ *        to a consistency rule: the closed list is an upper bound, not an
+ *        assignment (the page cites only the keys it uses); a key used on
+ *        exactly one side is still `missing_closed_key`.
  *      - No duplicate keys in the frontmatter list; no key listed in more
  *        than one section marker (`duplicate_anchor`). The same key may
  *        appear once in frontmatter and once in a single section marker.
@@ -47,6 +50,20 @@
  *        manual blocks are reserved for human content and the orchestrator
  *        reinserts them byte-for-byte from the previous version).
  *
+ *   `context.pageKind === "flow"` (stage 5) shares every check above but
+ *   replaces the module opening contract with the flow contract (Purpose,
+ *   Ordered flow, Diagram, Invariants, Failure and recovery, Related pages)
+ *   and requires `modules:` in the frontmatter.
+ *
+ *   Flow pages additionally bind each `lw:anchors` marker to its ancestor
+ *   H2 (R10.1 item D): a marker whose nearest preceding H2 is not Purpose /
+ *   Ordered flow / Failure and recovery is `anchor_in_disallowed_section`
+ *   (H3–H6 descendants of an allowed H2 count as inside it), each of the
+ *   three allowed sections must carry at least one marker
+ *   (`anchor_missing_in_required_section`), and when the context supplies
+ *   `flowKeyGroups` every non-empty entry/boundary/sink group must be
+ *   covered by at least one dual-cited key (`anchor_missing_required_tier`).
+ *
  * Returns a list of `ArtifactValidationError` (structured codes).
  * If empty → valid artifact.
  *
@@ -57,12 +74,17 @@
  */
 
 import { parseFrontmatter, getAnchors, type Frontmatter } from "./frontmatter.js";
-import type { ArtifactValidationError, ArtifactValidationCode } from "./prompts.js";
+import type {
+  ArtifactValidationError,
+  ArtifactValidationCode,
+  FlowKeyGroups,
+} from "./prompts.js";
+import type { TopicKeyGroups } from "./topics.js";
 import type { PathRole } from "./modules.js";
 import {
-  maskCodeSpans,
   maskCodeSpansPreservingLength,
   hasUnclosedMarkdown,
+  unclosedMarkdownDiagnostic,
 } from "./markdown-mask.js";
 
 export interface NormalizeResult {
@@ -78,10 +100,37 @@ export interface ValidateResult {
   errors: ArtifactValidationError[];
 }
 
+/** Page kind selecting the opening contract applied by the validator. */
+export type ArtifactPageKind = "module" | "flow" | "topic";
+
 /** Optional read-only facts for validation rules that depend on module identity. */
 export interface Stage4ValidationContext {
   readonly moduleId: string;
   readonly moduleRole: PathRole;
+  /**
+   * Page kind — `"flow"` applies the stage-5 flow opening contract and the
+   * `modules:` frontmatter requirement; omitted means `"module"` (stage-4
+   * behavior, unchanged).
+   */
+  readonly pageKind?: ArtifactPageKind;
+  /** Exact diagram placeholder required in the flow `## Diagram` section. */
+  readonly expectedFlowDiagram?: string;
+  /** Exact participating module set required in flow frontmatter `modules:` (order-insensitive). */
+  readonly expectedFlowModules?: readonly string[];
+  /**
+   * Optional semantic key groups of the flow candidate (R10.1 item D3).
+   * Flow pages only: each non-empty group must be covered by ≥1 dual-cited
+   * key; group keys outside the closed list are treated as absent.
+   */
+  readonly flowKeyGroups?: FlowKeyGroups;
+  /** Accepted topic identity and closed evidence, persisted by topic-plan. */
+  readonly expectedTopicTitle?: string;
+  readonly expectedTopicOrder?: number;
+  readonly expectedTopicIntent?: string;
+  readonly expectedTopicModules?: readonly string[];
+  readonly expectedTopicFlows?: readonly string[];
+  readonly topicKeyGroups?: TopicKeyGroups;
+  readonly topicProductKeys?: readonly string[];
 }
 
 /** Regex for a complete reasoning block: from `<think>` to `</think>`. */
@@ -96,6 +145,32 @@ const OUTER_FENCE_RE = /^```(?:markdown|md)\s*\n([\s\S]*?)\n```\s*$/;
 const ANY_FENCE_RE = /^(```)/;
 /** Matches a complete `<!-- lw:manual --> ... <!-- /lw:manual -->` block. */
 const MANUAL_BLOCK_RE = /<!--\s*lw:manual\s*-->[\s\S]*?<!--\s*\/lw:manual\s*-->/g;
+
+/**
+ * Flow sections allowed to carry `lw:anchors` markers (R10.1 item D), in
+ * contract order. Section membership is defined by the ancestor-H2
+ * interval: a marker binds to the nearest preceding H2, H3–H6 headings
+ * descending from an allowed H2 count as inside it, and the next H2
+ * closes the interval.
+ */
+const FLOW_ANCHOR_SECTIONS = [
+  { name: "Purpose", normalized: "purpose" },
+  { name: "Ordered flow", normalized: "ordered flow" },
+  { name: "Failure and recovery", normalized: "failure and recovery" },
+] as const;
+const FLOW_ANCHOR_SECTION_NORMALIZED: ReadonlySet<string> = new Set(
+  FLOW_ANCHOR_SECTIONS.map((s) => s.normalized),
+);
+const TOPIC_ANCHOR_SECTIONS = [
+  { name: "Purpose", normalized: "purpose" },
+  { name: "When to use this page", normalized: "when to use this page" },
+  { name: "Behavioral contract", normalized: "behavioral contract" },
+  { name: "Failure and recovery", normalized: "failure and recovery" },
+  { name: "Change map", normalized: "change map" },
+] as const;
+const TOPIC_ANCHOR_SECTION_NORMALIZED: ReadonlySet<string> = new Set(
+  TOPIC_ANCHOR_SECTIONS.map((section) => section.normalized),
+);
 
 /**
  * Normalizes the raw LLM output into a Markdown artifact.
@@ -196,6 +271,7 @@ export function validateStage4Artifact(
 ): ValidateResult {
   const errors: ArtifactValidationError[] = [];
   const closedSet = new Set(closedKeyList);
+  const pageKind: ArtifactPageKind = context?.pageKind ?? "module";
 
   if (artifact.trim().length === 0) {
     errors.push(err("empty_after_normalize", "artifact is empty", "global"));
@@ -251,7 +327,8 @@ export function validateStage4Artifact(
 
     // Presentation validation is intentionally context-gated. Existing callers
     // that cannot provide module identity retain the pre-Lot-N behavior.
-    if (context?.moduleRole === "product") {
+    // Flow pages have no module identity, so the title rule is module-only.
+    if (context?.moduleRole === "product" && pageKind === "module") {
       const title = fm["title"];
       if (typeof title === "string" && title === context.moduleId) {
         errors.push(
@@ -263,6 +340,67 @@ export function validateStage4Artifact(
           ),
         );
       }
+    }
+
+    // Flow pages declare their participating modules in the frontmatter.
+    if (pageKind === "flow") {
+      const modulesValue = fm["modules"];
+      if (!Array.isArray(modulesValue)) {
+        errors.push(
+          err(
+            "invalid_frontmatter",
+            "flow frontmatter must contain `modules:` as a non-empty string list of participating module IDs",
+            "frontmatter",
+            typeof modulesValue === "string" ? modulesValue : undefined,
+          ),
+        );
+      } else if (modulesValue.length === 0) {
+        errors.push(
+          err(
+            "invalid_frontmatter",
+            "flow frontmatter `modules:` must list at least one participating module ID",
+            "frontmatter",
+          ),
+        );
+      } else if (context?.expectedFlowModules !== undefined) {
+        const expected = new Set(context.expectedFlowModules);
+        const actual = new Set(modulesValue);
+        const equal =
+          actual.size === expected.size && [...actual].every((m) => expected.has(m));
+        if (!equal) {
+          errors.push(
+            err(
+              "invalid_frontmatter",
+              `flow frontmatter \`modules:\` (${modulesValue.join(", ")}) must equal the candidate module set (${context.expectedFlowModules.join(", ")})`,
+              "frontmatter",
+              modulesValue.join(", "),
+            ),
+          );
+        }
+      }
+    }
+
+    if (pageKind === "topic") {
+      const kind = fm["kind"];
+      const title = fm["title"];
+      const intent = fm["intent"];
+      const order = fm["order"];
+      const modules = fm["modules"];
+      const flows = fm["flows"];
+      if (kind !== "topic") {
+        errors.push(err("topic_frontmatter_mismatch", "topic frontmatter must declare `kind: topic`", "frontmatter", typeof kind === "string" ? kind : undefined));
+      }
+      if (context?.expectedTopicTitle !== undefined && title !== context.expectedTopicTitle) {
+        errors.push(err("topic_frontmatter_mismatch", `topic title must equal the accepted plan title "${context.expectedTopicTitle}"`, "frontmatter", typeof title === "string" ? title : undefined));
+      }
+      if (context?.expectedTopicIntent !== undefined && intent !== context.expectedTopicIntent) {
+        errors.push(err("topic_frontmatter_mismatch", `topic intent must equal the accepted plan intent "${context.expectedTopicIntent}"`, "frontmatter", typeof intent === "string" ? intent : undefined));
+      }
+      if (context?.expectedTopicOrder !== undefined && order !== String(context.expectedTopicOrder)) {
+        errors.push(err("topic_frontmatter_mismatch", `topic order must equal the accepted plan order ${context.expectedTopicOrder}`, "frontmatter", typeof order === "string" ? order : undefined));
+      }
+      validateExactTopicList("modules", modules, context?.expectedTopicModules, errors);
+      validateExactTopicList("flows", flows, context?.expectedTopicFlows ?? [], errors);
     }
 
     // 3. Frontmatter anchors
@@ -312,15 +450,19 @@ export function validateStage4Artifact(
   const sectionRe = /<!--\s*lw:anchors\s+([^\s>][^>]*?)\s*-->/g;
   // simple tracking of the previous heading for section slug
   const headingRe = /^(#{1,6})\s+(.+?)\s*$/gm;
-  const headingMatches: Array<{ text: string; slug: string; offset: number }> = [];
+  const headingMatches: Array<{ text: string; slug: string; offset: number; level: number }> = [];
   for (const m of markerScanBody.matchAll(headingRe)) {
     if (m.index === undefined || m[2] === undefined) continue;
     headingMatches.push({
       text: m[2],
       slug: slugifyHeading(m[2]),
       offset: m.index,
+      level: m[1]!.length,
     });
   }
+  // R10.1 item D: flow marker placement binds to the ancestor H2 — the
+  // nearest preceding H2; H3–H6 descendants never close the interval.
+  const h2Matches = headingMatches.filter((h) => h.level === 2);
   // Collected once so it can drive BOTH the duplicate-key scan and the
   // per-section prose check below, without re-running the regex.
   const sectionMatches = [...markerScanBody.matchAll(sectionRe)].filter(
@@ -329,12 +471,19 @@ export function validateStage4Artifact(
 
   // The human opening is structural, not editorially scored. Check only the
   // required block order and cardinalities before the first anchored section.
+  // Flow pages use the stage-5 flow contract over the whole body instead —
+  // their lw:anchors markers live inside the contract sections themselves.
   const firstSectionMarker = sectionMatches[0];
   const firstAnchoredHeading = firstSectionMarker
     ? lastHeadingBefore(headingMatches, firstSectionMarker.index!)
     : null;
   const openingEnd = firstAnchoredHeading?.offset ?? firstSectionMarker?.index ?? markerScanBody.length;
-  const openingFailure = checkRequiredPageOpening(markerScanBody.slice(0, openingEnd));
+  const openingFailure =
+    pageKind === "flow"
+      ? checkRequiredFlowOpening(markerScanBody, body, context?.expectedFlowDiagram)
+      : pageKind === "topic"
+        ? checkRequiredTopicOpening(markerScanBody, context?.expectedTopicTitle)
+        : checkRequiredPageOpening(markerScanBody.slice(0, openingEnd));
   if (openingFailure !== null) {
     errors.push(
       err(
@@ -348,9 +497,54 @@ export function validateStage4Artifact(
 
   /** Keys seen in section markers (for cross-section duplicate detection). */
   const sectionKeysSeen = new Set<string>();
+  /** Required flow sections carrying ≥1 marker (R10.1 D2), by normalized H2 text. */
+  const coveredFlowSections = new Set<string>();
+  /** Required topic sections carrying ≥1 marker, by normalized H2 text. */
+  const coveredTopicSections = new Set<string>();
   for (const m of sectionMatches) {
     const preceding = lastHeadingBefore(headingMatches, m.index!);
     const sectionSlug = preceding?.slug;
+    // R10.1 item D1 — flow pages: the marker binds to its ancestor H2 (the
+    // nearest preceding H2; H3–H6 descendants do not close the interval).
+    // A marker outside the three anchor-carrying sections is rejected.
+    if (pageKind === "flow") {
+      const ancestorH2 = lastHeadingBefore(h2Matches, m.index!);
+      const ancestorSection = ancestorH2?.text.trim().toLocaleLowerCase("en-US") ?? null;
+      if (ancestorSection !== null && FLOW_ANCHOR_SECTION_NORMALIZED.has(ancestorSection)) {
+        coveredFlowSections.add(ancestorSection);
+      } else {
+        errors.push(
+          err(
+            "anchor_in_disallowed_section",
+            ancestorH2 === null
+              ? `lw:anchors marker appears before the first H2 heading; flow pages allow anchor markers only inside "Purpose", "Ordered flow", and "Failure and recovery"`
+              : `lw:anchors marker is inside section "${ancestorH2.text.trim()}"; flow pages allow anchor markers only inside "Purpose", "Ordered flow", and "Failure and recovery" (H3+ subsections of those sections count)`,
+            "section",
+            m[0]!,
+            ancestorH2?.slug,
+          ),
+        );
+      }
+    }
+    if (pageKind === "topic") {
+      const ancestorH2 = lastHeadingBefore(h2Matches, m.index!);
+      const ancestorSection = ancestorH2?.text.trim().toLocaleLowerCase("en-US") ?? null;
+      if (ancestorSection !== null && TOPIC_ANCHOR_SECTION_NORMALIZED.has(ancestorSection)) {
+        coveredTopicSections.add(ancestorSection);
+      } else {
+        errors.push(
+          err(
+            "anchor_in_disallowed_section",
+            ancestorH2 === null
+              ? "lw:anchors marker appears before the first H2; topic markers belong only in Purpose, When to use this page, Behavioral contract, Failure and recovery, or Change map"
+              : `lw:anchors marker is inside topic section "${ancestorH2.text.trim()}"; allowed sections are Purpose, When to use this page, Behavioral contract, Failure and recovery, and Change map`,
+            "section",
+            m[0]!,
+            ancestorH2?.slug,
+          ),
+        );
+      }
+    }
     const raw = m[1]!.trim();
     const keys = raw.split(/\s+/).filter(Boolean);
     const inMarker = new Set<string>();
@@ -395,6 +589,217 @@ export function validateStage4Artifact(
     }
   }
 
+  // R10.1 item D2 — flow pages: each required section must carry ≥1 marker
+  // anywhere in its ancestor-H2 interval (H3–H6 descendants count). Marker
+  // presence in all three sections is mandatory for stage-5 artifacts;
+  // module pages are not affected.
+  if (pageKind === "flow") {
+    for (const section of FLOW_ANCHOR_SECTIONS) {
+      if (!coveredFlowSections.has(section.normalized)) {
+        errors.push(
+          err(
+            "anchor_missing_in_required_section",
+            `required flow section "${section.name}" carries no lw:anchors marker — each of "Purpose", "Ordered flow", and "Failure and recovery" must contain at least one marker (H3+ subsections count; a key may not repeat across markers, so each section needs its own key)`,
+            "section",
+            section.name,
+            slugifyHeading(section.name),
+          ),
+        );
+      }
+    }
+
+    // R10.1 item D3 — semantic-group coverage. Groups are subsets of the
+    // closed list (keys outside it are treated as absent); a group is
+    // covered only when ≥1 of its keys is dual-cited (frontmatter anchors
+    // list AND one section marker). Absent or empty groups are never required.
+    const groups = context?.flowKeyGroups;
+    if (groups !== undefined) {
+      const fmKeySet = new Set(fmAnchors);
+      const tierGroups: Array<[string, readonly string[] | undefined]> = [
+        ["entry", groups.entryKeys],
+        ["boundary", groups.boundaryKeys],
+        ["sink", groups.sinkKeys],
+      ];
+      for (const [label, keys] of tierGroups) {
+        if (keys === undefined) continue;
+        const valid = keys.filter((k) => closedSet.has(k));
+        if (valid.length === 0) continue;
+        const covered = valid.some((k) => fmKeySet.has(k) && sectionKeysSeen.has(k));
+        if (!covered) {
+          errors.push(
+            err(
+              "anchor_missing_required_tier",
+              `the page cites no key from the "${label}" group — cite at least one of its closed-list keys (${valid.join(", ")}) in the section that documents it (frontmatter anchors list AND one section marker, the dual citation rule)`,
+              "section",
+              label,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  if (pageKind === "topic") {
+    for (const section of TOPIC_ANCHOR_SECTIONS) {
+      if (!coveredTopicSections.has(section.normalized)) {
+        errors.push(
+          err(
+            "anchor_missing_in_required_section",
+            `required topic section "${section.name}" carries no lw:anchors marker`,
+            "section",
+            section.name,
+            slugifyHeading(section.name),
+          ),
+        );
+      }
+    }
+    const fmKeySet = new Set(fmAnchors);
+    const groups = context?.topicKeyGroups;
+    if (groups !== undefined) {
+      for (const name of ["contract", "state", "output", "failure"] as const) {
+        const valid = groups[name].filter((key) => closedSet.has(key));
+        if (valid.length > 0 && !valid.some((key) => fmKeySet.has(key) && sectionKeysSeen.has(key))) {
+          errors.push(
+            err(
+              "anchor_missing_required_tier",
+              `the topic cites no key from the "${name}" evidence group (${valid.join(", ")})`,
+              "section",
+              name,
+            ),
+          );
+        }
+      }
+    }
+    if (fmAnchors.length > 0 && context?.topicProductKeys !== undefined) {
+      const productKeys = new Set(context.topicProductKeys);
+      const productCount = fmAnchors.filter((key) => productKeys.has(key)).length;
+      if (productCount / fmAnchors.length < 0.75) {
+        errors.push(err(
+          "topic_insufficient_product_evidence",
+          `topic cites ${productCount}/${fmAnchors.length} product anchors; at least 75% are required`,
+          "frontmatter",
+        ));
+      }
+    }
+    const relatedHeading = h2Matches.find(
+      (heading) => heading.text.trim().toLocaleLowerCase("en-US") === "related pages",
+    );
+    if (relatedHeading !== undefined) {
+      const nextH2 = h2Matches.find((heading) => heading.offset > relatedHeading.offset);
+      const relatedBody = body.slice(relatedHeading.offset, nextH2?.offset ?? body.length);
+      const actualTargets = new Set(
+        [...relatedBody.matchAll(/\[[^\]]+\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)]
+          .map((match) => match[1]!)
+          .filter(Boolean),
+      );
+      const expectedTargets = new Set<string>(["index.md"]);
+      for (const moduleId of context?.expectedTopicModules ?? []) {
+        expectedTargets.add(`../${moduleId}.md`);
+      }
+      for (const flowSlug of context?.expectedTopicFlows ?? []) {
+        expectedTargets.add(`../flows/${flowSlug}.md`);
+        expectedTargets.add(`../diagrams/flow-${flowSlug}.mmd`);
+      }
+      const missing = [...expectedTargets].filter((target) => !actualTargets.has(target));
+      const unexpected = [...actualTargets].filter((target) =>
+        !/^(?:https?:|mailto:|#)/i.test(target) && !expectedTargets.has(target)
+      );
+      if (missing.length > 0 || unexpected.length > 0) {
+        errors.push(err(
+          "topic_related_link_mismatch",
+          `topic Related pages links must match the accepted evidence; missing=[${missing.join(", ")}], unexpected=[${unexpected.join(", ")}]`,
+          "section",
+          [...actualTargets].join(", "),
+          relatedHeading.slug,
+        ));
+      }
+    }
+  }
+
+  if (pageKind === "module" && context !== undefined && context.moduleRole !== "product") {
+    const h2Titles = h2Matches.map((heading) => heading.text.trim().toLocaleLowerCase("en-US"));
+    const allowed = new Set(["when to use this page", "how it fits", "reference"]);
+    const unexpected = h2Matches.find((heading) => !allowed.has(heading.text.trim().toLocaleLowerCase("en-US")));
+    if (!h2Titles.includes("reference") || unexpected !== undefined) {
+      errors.push(err(
+        "auxiliary_page_not_compact",
+        "auxiliary pages must keep the required opening and use one `## Reference` implementation section only",
+        "body",
+        unexpected?.text ?? "Reference (absent)",
+      ));
+    }
+    const auxiliarySubheadings = headingMatches.filter((heading) => heading.level >= 3);
+    for (const heading of auxiliarySubheadings) {
+      const ancestorH2 = lastHeadingBefore(h2Matches, heading.offset);
+      if (heading.level !== 3 || ancestorH2?.text.trim().toLocaleLowerCase("en-US") !== "reference") {
+        errors.push(err(
+          "auxiliary_page_not_compact",
+          "auxiliary implementation subheadings must be H3 entries inside `## Reference`",
+          "section",
+          heading.text,
+          heading.slug,
+        ));
+      }
+    }
+    const referenceH3s = auxiliarySubheadings.filter((heading) =>
+      heading.level === 3 &&
+      lastHeadingBefore(h2Matches, heading.offset)?.text.trim().toLocaleLowerCase("en-US") === "reference"
+    );
+    for (const heading of referenceH3s) {
+      const nextHeading = headingMatches.find((candidate) => candidate.offset > heading.offset);
+      const end = nextHeading?.offset ?? body.length;
+      const markers = sectionMatches.filter((marker) => marker.index! > heading.offset && marker.index! < end);
+      if (markers.length !== 1) {
+        errors.push(err(
+          "auxiliary_page_not_compact",
+          `auxiliary symbol section "${heading.text.trim()}" must contain exactly one lw:anchors marker`,
+          "section",
+          heading.text,
+          heading.slug,
+        ));
+        continue;
+      }
+      const marker = markers[0]!;
+      const headingLineEnd = markerScanBody.indexOf("\n", heading.offset);
+      const between = markerScanBody.slice(headingLineEnd < 0 ? heading.offset + heading.text.length : headingLineEnd + 1, marker.index!).trim();
+      if (between !== "") {
+        errors.push(err(
+          "auxiliary_page_not_compact",
+          "the auxiliary symbol marker must appear immediately after its H3 heading",
+          "section",
+          between,
+          heading.slug,
+        ));
+      }
+      const markerEnd = marker.index! + marker[0]!.length;
+      const prose = body.slice(markerEnd, end).trim();
+      const paragraphs = prose.split(/\n\s*\n/).filter((paragraph) => paragraph.trim() !== "");
+      if (paragraphs.length !== 1 || prose.length > 500 || /^\s*[-*+]\s+/m.test(prose)) {
+        errors.push(err(
+          "auxiliary_page_not_compact",
+          "each auxiliary symbol entry must contain one short prose paragraph (500 characters maximum, no list)",
+          "section",
+          prose.slice(0, 200),
+          heading.slug,
+        ));
+      }
+    }
+    for (const marker of sectionMatches) {
+      const preceding = [...headingMatches].reverse().find((heading) => heading.offset < marker.index!) ?? null;
+      const ancestorH2 = lastHeadingBefore(h2Matches, marker.index!);
+      const keys = marker[1]!.trim().split(/\s+/).filter(Boolean);
+      if (preceding?.level !== 3 || ancestorH2?.text.trim().toLocaleLowerCase("en-US") !== "reference" || keys.length !== 1) {
+        errors.push(err(
+          "auxiliary_page_not_compact",
+          "each auxiliary symbol must have one H3 inside `## Reference`, followed by one marker containing exactly that symbol key",
+          "section",
+          marker[0]!,
+          preceding?.slug,
+        ));
+      }
+    }
+  }
+
   // 4b. Completeness is two
   // INDEPENDENT requirements, not a union. Before this, a page with every
   // key ONLY in frontmatter (zero real section markers) passed — the
@@ -405,9 +810,16 @@ export function validateStage4Artifact(
   // above, and re-emitting one `missing_closed_key` per key on top of that
   // would just be noise for a problem already named.
   if (closedKeyList.length > 0) {
+    // Flow pages: the closed list is an upper bound, not an assignment —
+    // the page cites only the keys it needs ("may use fewer, never more"),
+    // but both sides must stay consistent: a key used on exactly one side
+    // (frontmatter XOR section markers) is still missing_closed_key.
+    const usesUpperBound = context?.pageKind === "flow" || context?.pageKind === "topic";
+    const fmReference: readonly string[] = usesUpperBound ? [...sectionKeysSeen] : closedKeyList;
+    const sectionReference: readonly string[] = usesUpperBound ? fmAnchors : closedKeyList;
     if (fm !== null) {
       const fmKeySet = new Set(fmAnchors);
-      for (const k of closedKeyList) {
+      for (const k of fmReference) {
         if (!fmKeySet.has(k)) {
           errors.push(
             err(
@@ -420,7 +832,7 @@ export function validateStage4Artifact(
         }
       }
     }
-    for (const k of closedKeyList) {
+    for (const k of sectionReference) {
       if (!sectionKeysSeen.has(k)) {
         errors.push(
           err(
@@ -459,7 +871,7 @@ export function validateStage4Artifact(
             "empty_section",
             `section marker at offset ${markerStart} has no real prose before the next heading/marker/end of page`,
             "section",
-            undefined,
+            m[0]!,
             preceding?.slug,
           ),
         );
@@ -473,14 +885,65 @@ export function validateStage4Artifact(
   // `tools.md` finding): a well-formed document has zero backticks
   // surviving the mask and zero fences left open. Not a size/length
   // heuristic — a structural balance check.
+  //
+  // The structured error now carries an actionable diagnostic: which
+  // construct was left open (fence vs inline-code span), a 1-based line
+  // number of the opening delimiter, and an `offending` excerpt capped
+  // at 200 chars. R3 evidence (rerun-clean-v20) showed the LLM keeping
+  // the same unclosed construct through every repair attempt because
+  // the previous generic message gave the model no way to locate the
+  // opening. The boolean `hasUnclosedMarkdown` API is preserved for
+  // every other caller; the additional diagnostic is attached via the
+  // `offending` field.
   if (hasUnclosedMarkdown(body)) {
-    errors.push(
-      err(
-        "unclosed_markdown",
-        "the page ends with an unclosed fenced code block or inline-code span (cut mid-token)",
-        "body",
-      ),
-    );
+    const diag = unclosedMarkdownDiagnostic(body);
+    if (diag !== null) {
+      const construct = diag.kind === "fence" ? "fenced code block" : "inline-code span";
+      // The validator message names the EXACT delimiter length and
+      // the precise closing rule for the construct:
+      //
+      //   - fence (CommonMark): the closing fence run must be of the
+      //     SAME character (backticks or tildes) and at least as
+      //     long as the opening run — "at least K characters".
+      //   - inline-code (CommonMark): the closing backtick run must
+      //     be EXACTLY the same length as the opening run — "exactly
+      //     K backticks". K+1 leaves the span open.
+      //
+      // R4 follow-up: the previous directive said "at least K" for
+      // both, which is correct for fences but wrong for inline-code.
+      // `maskInlineCode` only accepts an exact-length match, so a
+      // repair model following "at least" would emit K+1 and leave
+      // the Markdown unclosed.
+      //
+      // The character class (backtick vs tilde) is visible in the
+      // bounded excerpt; only the length is carried in the message
+      // text itself, since the excerpt can only show a visible
+      // representative portion when the run is longer than the
+      // diagnostic cap.
+      const directive =
+        diag.kind === "fence"
+          ? `close it with the same delimiter character and a run of at least ${diag.delimiterLength} characters`
+          : `close it with exactly ${diag.delimiterLength} backticks`;
+      errors.push(
+        err(
+          "unclosed_markdown",
+          `the page ends with an unclosed ${construct} opened at line ${diag.lineNumber} (delimiter length ${diag.delimiterLength}) — ${directive} and audit every other open construct before the end of the page`,
+          "body",
+          diag.offending,
+        ),
+      );
+    } else {
+      // Defensive: the boolean said unclosed but the diagnostic scan
+      // found no opening line. Fall back to the previous generic
+      // message so we never silently swallow the failure.
+      errors.push(
+        err(
+          "unclosed_markdown",
+          "the page ends with an unclosed fenced code block or inline-code span (cut mid-token)",
+          "body",
+        ),
+      );
+    }
   }
 
   // 4e. "TODO"/"TBD" placeholders are banned from prose, except
@@ -491,18 +954,50 @@ export function validateStage4Artifact(
   // rejects the artifact outright if the LLM wrote its OWN manual block,
   // so this exclusion mostly matters for reused/shared masking helpers —
   // it is still correct to apply it here defensively.
+  //
+  // The structured error carries the logical line from the ORIGINAL
+  // body. Manual blocks are blanked to spaces of equal length and the
+  // code-span mask is the LENGTH-PRESERVING variant so the offset of
+  // the first TODO/TBD match in the masked text is byte-for-byte equal
+  // to its offset in the original body — including on CRLF input, where
+  // the non-preserving `maskCodeSpans` would drop the carriage returns
+  // and shift the offset (defect that produced wrong line numbers in
+  // R3). The 1-based line number is counted against the original body
+  // and the offending excerpt is bounded to TODO_OFFENDING_CAP (==
+  // DIAGNOSTIC_TEXT_CAP in batch-state.ts) so a runaway 40k-char line
+  // cannot inflate the repair prompt; the excerpt visibly indicates
+  // truncation.
   {
     const withoutManual = body.replace(
       MANUAL_BLOCK_RE,
       (m) => " ".repeat(m.length),
     );
-    const withoutCode = maskCodeSpans(withoutManual);
-    if (/\b(TODO|TBD)\b/i.test(withoutCode)) {
+    const withoutCode = maskCodeSpansPreservingLength(withoutManual);
+    const firstHit = findFirstTodoPlaceholder(withoutCode);
+    if (firstHit !== null) {
+      const firstOffset = firstHit.index;
+      let offendingLine: string | undefined;
+      let lineNumber: number | undefined;
+      if (firstOffset >= 0) {
+        const origLineEnd = findOriginalLineEnd(body, firstOffset);
+        const origLineStart = findOriginalLineStart(body, firstOffset);
+        const fullLine = body.slice(origLineStart, origLineEnd);
+        offendingLine = boundedOffendingExcerpt(
+          fullLine,
+          firstOffset - origLineStart,
+          firstOffset - origLineStart + firstHit.text.length,
+          TODO_OFFENDING_CAP,
+        );
+        lineNumber = countLines(body, origLineStart) + 1;
+      }
       errors.push(
         err(
           "todo_marker_present",
-          `the page body contains a "TODO"/"TBD" placeholder outside code — write concrete content about what is visible instead`,
+          offendingLine !== undefined && lineNumber !== undefined
+            ? `the page body contains a "TODO"/"TBD" placeholder outside code at line ${lineNumber} — write concrete content about what is visible instead`
+            : `the page body contains a "TODO"/"TBD" placeholder outside code — write concrete content about what is visible instead`,
           "body",
+          offendingLine,
         ),
       );
     }
@@ -529,6 +1024,25 @@ export function validateStage4Artifact(
     errors.push(err("empty_body", "frontmatter is present but the body is empty", "body"));
   }
 
+  if (pageKind === "topic") {
+    const prose = maskCodeSpansPreservingLength(body)
+      .replace(/<!--[^]*?-->/g, " ")
+      .replace(/^#{1,6}\s+.*$/gm, " ")
+      .replace(/^\s*[-*+]\s+/gm, " ");
+    const wordCount = prose.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu)?.length ?? 0;
+    if (wordCount > 1_400) {
+      errors.push(err("topic_too_long", `topic contains ${wordCount} prose words; hard maximum is 1400`, "body", String(wordCount)));
+    }
+    const topicFences = [...body.matchAll(/^(`{3,}|~{3,})([^\n]*)$/gm)];
+    for (let index = 0; index < topicFences.length; index += 2) {
+      const fence = topicFences[index]!;
+      const info = fence[2]!.trim().split(/\s+/, 1)[0]!.toLowerCase();
+      if (info !== "mermaid") {
+        errors.push(err("topic_code_fence", "topic pages may not contain non-Mermaid fenced code blocks", "body", fence[0]));
+      }
+    }
+  }
+
   return { ok: errors.length === 0, errors };
 }
 
@@ -548,6 +1062,24 @@ function hasRealProse(text: string): boolean {
 interface PageOpeningFailure {
   readonly message: string;
   readonly offending: string;
+}
+
+function validateExactTopicList(
+  field: "modules" | "flows",
+  actualValue: Frontmatter[string] | undefined,
+  expectedValue: readonly string[] | undefined,
+  errors: ArtifactValidationError[],
+): void {
+  if (!Array.isArray(actualValue)) {
+    errors.push(err("topic_frontmatter_mismatch", `topic frontmatter must contain \`${field}:\` as a string list`, "frontmatter", typeof actualValue === "string" ? actualValue : undefined));
+    return;
+  }
+  if (expectedValue === undefined) return;
+  const exact = actualValue.length === expectedValue.length &&
+    actualValue.every((value, index) => value === expectedValue[index]);
+  if (!exact) {
+    errors.push(err("topic_frontmatter_mismatch", `topic frontmatter \`${field}:\` (${actualValue.join(", ")}) must equal the accepted plan (${expectedValue.join(", ")})`, "frontmatter", actualValue.join(", ")));
+  }
 }
 
 /** Structural-only check for the required page opening, in contract order. */
@@ -614,7 +1146,14 @@ function checkRequiredPageOpening(text: string): PageOpeningFailure | null {
     };
   }
 
-  const howFailure = proseBlockFailure(lines.slice(howIndex + 1), false, true);
+  // Bound the How-it-fits prose block at the next implementation
+  // heading. Stage-4 explicitly permits both H2 and H3 implementation
+  // sections, including on zero-key pages, so either level ends the
+  // opening rather than becoming a forbidden heading inside its prose.
+  const howBlockEnd = findNextImplementationHeading(lines, howIndex + 1);
+  const howBlockLines =
+    howBlockEnd < 0 ? lines.slice(howIndex + 1) : lines.slice(howIndex + 1, howBlockEnd);
+  const howFailure = proseBlockFailure(howBlockLines, false, true);
   if (howFailure !== null) {
     return {
       message: 'page opening "How it fits" must contain one or more prose paragraphs without headings, bullets, or lw: markers',
@@ -623,6 +1162,297 @@ function checkRequiredPageOpening(text: string): PageOpeningFailure | null {
   }
 
   return null;
+}
+
+/**
+ * Structural-only check for the stage-5 flow-page contract, in contract
+ * order. Reports only the first failing element, same style as the module
+ * opening check. `masked` is the length-preserving code-span mask of `raw`
+ * (offsets and line indices are interchangeable): structure is scanned on the
+ * masked view so fenced/inline code cannot fake headings, markers, lists, or
+ * links, while the `## Diagram` mermaid fence is inspected on the raw text.
+ *
+ * Contract order: H1, one responsibility paragraph, Purpose, Ordered flow,
+ * Diagram, Invariants, Failure and recovery, Related pages. lw:anchors
+ * markers may live inside Purpose / Ordered flow / Failure and recovery, so
+ * they neither satisfy nor violate section content requirements; the dual
+ * closed-key completeness rule governs their placement.
+ */
+function checkRequiredTopicOpening(masked: string, expectedTitle?: string): PageOpeningFailure | null {
+  const lines = masked.split("\n");
+  while (lines.length > 0 && lines[0]!.trim() === "") lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+  if (!/^#\s+\S/.test(lines[0]?.trim() ?? "")) {
+    return { message: "required topic H1 is missing or appears after other content", offending: lines[0]?.trim() || "(absent)" };
+  }
+  if (expectedTitle !== undefined && lines[0]!.trim().slice(2).trim() !== expectedTitle) {
+    return { message: `topic H1 must match the accepted title "${expectedTitle}"`, offending: lines[0]!.trim() };
+  }
+
+  const required = [
+    "Purpose",
+    "When to use this page",
+    "Behavioral contract",
+    "Failure and recovery",
+    "Change map",
+    "Related pages",
+  ] as const;
+  const purposeIndex = findExactOpeningH2(lines, "Purpose", 1);
+  const firstH2 = findNextH2(lines, 1);
+  const problemEnd = firstPresentIndex(purposeIndex, firstH2, lines.length);
+  const problemFailure = proseBlockFailure(lines.slice(1, problemEnd), true, false);
+  if (problemFailure !== null) {
+    return {
+      message: "topic opening must contain exactly one reader-problem sentence between H1 and Purpose",
+      offending: problemFailure,
+    };
+  }
+
+  let cursor = 1;
+  for (const title of required) {
+    const index = findExactOpeningH2(lines, title, cursor);
+    if (index < 0) {
+      return {
+        message: `required topic H2 "${title}" is missing, malformed, or out of order`,
+        offending: offendingHeading(lines, findOpeningHeadingCandidate(lines, title, cursor), findNextH2(lines, cursor)),
+      };
+    }
+    const sectionFailure = flowSectionProseFailure(
+      lines.slice(index + 1, flowSectionEnd(lines, index)),
+      title === "When to use this page" || title === "Change map" || title === "Related pages",
+    );
+    if (sectionFailure !== null) {
+      return { message: `topic section "${title}" must contain grounded prose, bullets, or links`, offending: sectionFailure };
+    }
+    cursor = index + 1;
+  }
+  return null;
+}
+
+function checkRequiredFlowOpening(
+  masked: string,
+  raw: string,
+  expectedFlowDiagram?: string,
+): PageOpeningFailure | null {
+  const maskedLines = masked.split("\n");
+  const rawLines = raw.split("\n");
+  let start = 0;
+  let end = maskedLines.length;
+  while (start < end && maskedLines[start]!.trim() === "") start++;
+  while (end > start && maskedLines[end - 1]!.trim() === "") end--;
+  const lines = maskedLines.slice(start, end);
+  const rawSlice = rawLines.slice(start, end);
+
+  const h1Index = lines.findIndex((line) => /^#\s+\S/.test(line.trim()));
+  if (h1Index < 0) {
+    return {
+      message: "required page opening H1 is missing",
+      offending: "(absent)",
+    };
+  }
+  if (h1Index > 0) {
+    return {
+      message: "required page opening H1 appears after other content",
+      offending: lines[h1Index]!.trim(),
+    };
+  }
+
+  const purposeIndex = findExactOpeningH2(lines, "Purpose", 1);
+  const purposeCandidateIndex = findOpeningHeadingCandidate(lines, "Purpose", 1);
+  const firstH2AfterH1 = findNextH2(lines, 1);
+  const responsibilityEnd = firstPresentIndex(purposeIndex, purposeCandidateIndex, firstH2AfterH1, lines.length);
+  const responsibilityFailure = proseBlockFailure(lines.slice(1, responsibilityEnd), true, false);
+  if (responsibilityFailure !== null) {
+    return {
+      message: responsibilityFailure === "(absent)"
+        ? "page opening responsibility paragraph is missing"
+        : "page opening responsibility block must be exactly one prose paragraph",
+      offending: responsibilityFailure,
+    };
+  }
+
+  if (purposeIndex < 0) {
+    return {
+      message: 'required page opening H2 "Purpose" is missing or malformed',
+      offending: offendingHeading(lines, purposeCandidateIndex, firstH2AfterH1),
+    };
+  }
+
+  // Contract ordering: the opening (H1, responsibility paragraph, Purpose)
+  // must appear before the first lw:anchors section marker, same rule as
+  // module pages — markers live inside the contract sections, never before
+  // the Purpose heading.
+  const firstMarkerLine = lines.findIndex((line) => /<!--\s*lw:anchors\s/.test(line));
+  if (firstMarkerLine >= 0 && firstMarkerLine <= purposeIndex) {
+    return {
+      message: 'page opening (H1, responsibility paragraph, "Purpose") must appear before the first lw:anchors section marker',
+      offending: lines[firstMarkerLine]!.trim(),
+    };
+  }
+
+  const purposeFailure = flowSectionProseFailure(
+    lines.slice(purposeIndex + 1, flowSectionEnd(lines, purposeIndex)),
+    false,
+  );
+  if (purposeFailure !== null) {
+    return {
+      message: 'page opening "Purpose" must contain one or more prose paragraphs',
+      offending: purposeFailure,
+    };
+  }
+
+  const orderedIndex = findExactOpeningH2(lines, "Ordered flow", purposeIndex + 1);
+  if (orderedIndex < 0) {
+    return {
+      message: 'required page opening H2 "Ordered flow" is missing or malformed',
+      offending: offendingHeading(
+        lines,
+        findOpeningHeadingCandidate(lines, "Ordered flow", purposeIndex + 1),
+        findNextH2(lines, purposeIndex + 1),
+      ),
+    };
+  }
+  const orderedContent = lines
+    .slice(orderedIndex + 1, flowSectionEnd(lines, orderedIndex))
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!orderedContent.some((line) => /^\d+[.)]\s+\S/.test(line))) {
+    return {
+      message: 'page opening "Ordered flow" must contain a numbered Markdown list with at least one item',
+      offending: openingSnippet(orderedContent),
+    };
+  }
+
+  const diagramIndex = findExactOpeningH2(lines, "Diagram", orderedIndex + 1);
+  if (diagramIndex < 0) {
+    return {
+      message: 'required page opening H2 "Diagram" is missing or malformed',
+      offending: offendingHeading(
+        lines,
+        findOpeningHeadingCandidate(lines, "Diagram", orderedIndex + 1),
+        findNextH2(lines, orderedIndex + 1),
+      ),
+    };
+  }
+  const diagramRaw = rawSlice
+    .slice(diagramIndex + 1, flowSectionEnd(lines, diagramIndex))
+    .join("\n");
+  const mermaidFence = /```mermaid[ \t]*\n([\s\S]*?)\n[ \t]*```/.exec(diagramRaw);
+  const placeholderLine = mermaidFence?.[1]
+    ?.split("\n")
+    .map((line) => line.trim())
+    .find((line) => /^%%\s*livewiki\/diagrams\/flow-\S+\.mmd$/.test(line));
+  if (placeholderLine === undefined) {
+    return {
+      message: 'page opening "Diagram" must contain a fenced mermaid code block holding a %% livewiki/diagrams/flow-<slug>.mmd placeholder line',
+      offending: "(absent)",
+    };
+  }
+  if (expectedFlowDiagram !== undefined) {
+    const actual = placeholderLine.replace(/^%%\s*/, "").trim();
+    if (actual !== expectedFlowDiagram) {
+      return {
+        message: `page opening "Diagram" placeholder must be exactly "%% ${expectedFlowDiagram}"`,
+        offending: placeholderLine,
+      };
+    }
+  }
+
+  const invariantsIndex = findExactOpeningH2(lines, "Invariants", diagramIndex + 1);
+  if (invariantsIndex < 0) {
+    return {
+      message: 'required page opening H2 "Invariants" is missing or malformed',
+      offending: offendingHeading(
+        lines,
+        findOpeningHeadingCandidate(lines, "Invariants", diagramIndex + 1),
+        findNextH2(lines, diagramIndex + 1),
+      ),
+    };
+  }
+  const invariantsFailure = flowSectionProseFailure(
+    lines.slice(invariantsIndex + 1, flowSectionEnd(lines, invariantsIndex)),
+    true,
+  );
+  if (invariantsFailure !== null) {
+    return {
+      message: 'page opening "Invariants" must contain prose or bullets',
+      offending: invariantsFailure,
+    };
+  }
+
+  const failureIndex = findExactOpeningH2(lines, "Failure and recovery", invariantsIndex + 1);
+  if (failureIndex < 0) {
+    return {
+      message: 'required page opening H2 "Failure and recovery" is missing or malformed',
+      offending: offendingHeading(
+        lines,
+        findOpeningHeadingCandidate(lines, "Failure and recovery", invariantsIndex + 1),
+        findNextH2(lines, invariantsIndex + 1),
+      ),
+    };
+  }
+  const failureFailure = flowSectionProseFailure(
+    lines.slice(failureIndex + 1, flowSectionEnd(lines, failureIndex)),
+    false,
+  );
+  if (failureFailure !== null) {
+    return {
+      message: 'page opening "Failure and recovery" must contain one or more prose paragraphs',
+      offending: failureFailure,
+    };
+  }
+
+  const relatedIndex = findExactOpeningH2(lines, "Related pages", failureIndex + 1);
+  if (relatedIndex < 0) {
+    return {
+      message: 'required page opening H2 "Related pages" is missing or malformed',
+      offending: offendingHeading(
+        lines,
+        findOpeningHeadingCandidate(lines, "Related pages", failureIndex + 1),
+        findNextH2(lines, failureIndex + 1),
+      ),
+    };
+  }
+  const relatedContent = lines
+    .slice(relatedIndex + 1, flowSectionEnd(lines, relatedIndex))
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!relatedContent.some((line) => /\[[^\]]+\]\([^)]*\)/.test(line))) {
+    return {
+      message: 'page opening "Related pages" must contain at least one Markdown link',
+      offending: openingSnippet(relatedContent),
+    };
+  }
+
+  return null;
+}
+
+/** End line index (exclusive) of a flow contract section: the next heading of any level. */
+function flowSectionEnd(lines: ReadonlyArray<string>, headingIndex: number): number {
+  const next = lines.findIndex(
+    (line, index) => index > headingIndex && /^#{1,6}\s+\S/.test(line.trim()),
+  );
+  return next < 0 ? lines.length : next;
+}
+
+/**
+ * Content check for flow contract sections. lw:anchors markers are anchor
+ * carriers, not prose — they neither satisfy nor violate the requirement.
+ * Returns the offending line, "(absent)" when there is no content, or null.
+ */
+function flowSectionProseFailure(
+  lines: ReadonlyArray<string>,
+  allowBullets: boolean,
+): string | null {
+  const content = lines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !/^<!--\s*lw:anchors\s/.test(line));
+  if (content.length === 0) return "(absent)";
+  const forbidden = content.find((line) =>
+    /^#{1,6}\s/.test(line)
+      || (!allowBullets && /^[-*+]\s/.test(line))
+      || /^<!--\s*\/?lw:/.test(line));
+  return forbidden ?? null;
 }
 
 function findExactOpeningH2(
@@ -653,6 +1483,46 @@ function findOpeningHeadingCandidate(
 
 function findNextH2(lines: ReadonlyArray<string>, start: number): number {
   return lines.findIndex((line, index) => index >= start && /^##\s+\S/.test(line.trim()));
+}
+
+interface TodoPlaceholderMatch {
+  readonly index: number;
+  readonly text: string;
+}
+
+/**
+ * Find the first actual TODO/TBD placeholder in prose.
+ *
+ * A slash-joined category reference such as "TODO/TBD prose" describes
+ * the validation rule itself; it does not leave documentation work pending.
+ * Keep that narrow exemption separate from real directives such as
+ * "TODO: document this" or "Behavior is TBD", which remain invalid.
+ */
+function findFirstTodoPlaceholder(text: string): TodoPlaceholderMatch | null {
+  const tokenRe = /\b(?:TODO|TBD)\b/gi;
+  const categoryRe = /\bTODO\b\s*\/\s*\bTBD\b(?=\s+prose\b)/gi;
+
+  for (const match of text.matchAll(tokenRe)) {
+    const index = match.index!;
+    const lineStart = findOriginalLineStart(text, index);
+    const lineEnd = findOriginalLineEnd(text, index);
+    const line = text.slice(lineStart, lineEnd);
+    const offsetInLine = index - lineStart;
+    const isCategoryReference = [...line.matchAll(categoryRe)].some((category) => {
+      const start = category.index!;
+      const end = start + category[0].length;
+      return offsetInLine >= start && offsetInLine < end;
+    });
+    if (!isCategoryReference) {
+      return { index, text: match[0] };
+    }
+  }
+
+  return null;
+}
+
+function findNextImplementationHeading(lines: ReadonlyArray<string>, start: number): number {
+  return lines.findIndex((line, index) => index >= start && /^#{2,3}\s+\S/.test(line.trim()));
 }
 
 function firstPresentIndex(...indices: number[]): number {
@@ -716,6 +1586,90 @@ function err(
   };
 }
 
+/**
+ * Return the offset of the start of the line that contains
+ * `offset` in `text`. If `offset` is past the end of `text`, returns
+ * the offset of the start of the last line.
+ */
+function findOriginalLineStart(text: string, offset: number): number {
+  if (offset < 0) return 0;
+  const clamped = Math.min(offset, text.length);
+  let i = clamped;
+  while (i > 0 && text[i - 1] !== "\n") i--;
+  return i;
+}
+
+/**
+ * Return the offset just past the end of the line that contains
+ * `offset` in `text` (the position of the trailing newline, or the
+ * end of the text if the line is unterminated).
+ */
+function findOriginalLineEnd(text: string, offset: number): number {
+  if (offset < 0) return 0;
+  const clamped = Math.min(offset, text.length);
+  let i = clamped;
+  while (i < text.length && text[i] !== "\n") i++;
+  return i;
+}
+
+/**
+ * Count the number of `\n` characters strictly before `offset` in
+ * `text`. Used to translate a character offset into a 1-based line
+ * number (the caller adds 1).
+ */
+function countLines(text: string, offset: number): number {
+  let n = 0;
+  const end = Math.min(offset, text.length);
+  for (let i = 0; i < end; i++) {
+    if (text[i] === "\n") n++;
+  }
+  return n;
+}
+
+/**
+ * Cap for a TODO/TBD offending-line excerpt. Must equal
+ * DIAGNOSTIC_TEXT_CAP in batch-state.ts so the same value also bounds
+ * the repair-prompt surface; declared locally to keep this module
+ * free of any new dependency on batch-state (which would re-introduce
+ * a layering path for the sake of one number).
+ */
+const TODO_OFFENDING_CAP = 200;
+
+/**
+ * Center a window of length ≤ `cap` around the first TODO/TBD match
+ * in `line`, prefixing/suffixing with "… " when the line was
+ * truncated. The match itself is preserved; the cap is inclusive of
+ * the markers. Short lines are returned unchanged.
+ */
+function boundedOffendingExcerpt(
+  line: string,
+  matchStart: number,
+  matchEnd: number,
+  cap: number,
+): string {
+  if (line.length <= cap) return line;
+  // Reserve room for at most two "… " markers (2 chars each).
+  const innerCap = cap - 4;
+  const half = Math.floor(innerCap / 2);
+  let start = matchStart - half;
+  let end = start + innerCap;
+  if (start < 0) {
+    end = Math.min(line.length, end - start);
+    start = 0;
+  }
+  if (end > line.length) {
+    start = Math.max(0, start - (end - line.length));
+    end = line.length;
+  }
+  let excerpt = line.slice(start, end);
+  if (start > 0) excerpt = "… " + excerpt;
+  if (end < line.length) excerpt = excerpt + " …";
+  // Defensive: if clamping or markers pushed us over `cap`, truncate
+  // (the TODO/TBD token is in the window center, so it survives).
+  if (excerpt.length > cap) excerpt = excerpt.slice(0, cap);
+  return excerpt;
+}
+
 function slugifyHeading(text: string): string {
   return text
     .toLowerCase()
@@ -736,4 +1690,272 @@ function lastHeadingBefore(
     else break;
   }
   return last;
+}
+
+// === Stage 5: inline flow-diagram extraction and budget counters ===
+
+/**
+ * Hard cap on the extracted inline flow-diagram source (chars). Beyond it
+ * the diagram is rejected with `flow_diagram_too_large` — a diagram this
+ * big cannot be a focused flow (several focused flows over one
+ * mega-diagram, SPEC §"Semantic product-flow layer").
+ */
+export const FLOW_DIAGRAM_SOURCE_MAX_CHARS = 8000;
+
+/** Exact placeholder line the on-disk flow page carries inside its `## Diagram` mermaid fence. */
+export function flowDiagramPlaceholder(slug: string): string {
+  return `%% livewiki/diagrams/flow-${slug}.mmd`;
+}
+
+export interface InlineFlowDiagramExtraction {
+  /** Page with the extracted fence body replaced by `flowDiagramPlaceholder(slug)`. */
+  pageContent: string;
+  /** Trimmed source of the inline mermaid block in the `## Diagram` section. */
+  diagramSource: string;
+  /** True when `diagramSource.length > FLOW_DIAGRAM_SOURCE_MAX_CHARS`. */
+  sourceTooLarge: boolean;
+}
+
+/**
+ * Extracts the stage-5 inline companion diagram from a normalized flow
+ * page. The stage-5 LLM emits ONE Markdown page with the companion
+ * diagram INLINE as a real ```mermaid fence inside the `## Diagram`
+ * section; the orchestrator then (a) extracts the fence content here,
+ * (b) validates the page with the fence body substituted by the exact
+ * placeholder line, and (c) writes both artifacts (page with placeholder,
+ * diagram source as its own `.mmd` file). The placeholder exists only on
+ * disk — repair prompts always see the model-emitted inline form.
+ *
+ * Returns null when the `## Diagram` section contains no real mermaid
+ * fence (absent, unclosed, or nested inside another code block) or when
+ * the fence body is only a placeholder comment (`%% livewiki/...` — the
+ * model-emitted form must be the diagram itself, never the on-disk
+ * placeholder). An over-long source does NOT return null: it comes back
+ * flagged via `sourceTooLarge` so the caller rejects it with
+ * `flow_diagram_too_large` instead of the generic missing-diagram error.
+ *
+ * Code-span/fence aware: the section bounds are computed on the
+ * length-preserving masked view (a fence cannot fake the `## Diagram`
+ * heading or hide the section end), and the fence scan itself runs a
+ * CommonMark fence state machine over the raw section lines, so an
+ * example ```mermaid fence nested inside a `~~~` (or longer-run) block
+ * is ignored.
+ */
+export function extractInlineFlowDiagram(
+  content: string,
+  slug: string,
+): InlineFlowDiagramExtraction | null {
+  const rawLines = content.split("\n");
+  const maskedLines = maskCodeSpansPreservingLength(content).split("\n");
+
+  // Section bounds of the FIRST `## Diagram` H2 (case-insensitive — the
+  // same matching rule as the flow opening validator).
+  let diagramIndex = -1;
+  for (let i = 0; i < maskedLines.length; i++) {
+    const line = maskedLines[i]!.trim();
+    if (
+      /^##\s+\S/.test(line) &&
+      line.slice(3).trim().toLocaleLowerCase("en-US") === "diagram"
+    ) {
+      diagramIndex = i;
+      break;
+    }
+  }
+  if (diagramIndex < 0) return null;
+  let sectionEnd = rawLines.length;
+  for (let i = diagramIndex + 1; i < maskedLines.length; i++) {
+    if (/^#{1,6}\s+\S/.test(maskedLines[i]!.trim())) {
+      sectionEnd = i;
+      break;
+    }
+  }
+
+  // First real ```mermaid fence inside the section (CommonMark state
+  // machine: an inner fence candidate is content while another fence is
+  // open, so examples nested in `~~~` blocks are skipped).
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  let fenceOpen = -1;
+  let mermaidBody: string[] | null = null;
+  for (let i = diagramIndex + 1; i < sectionEnd; i++) {
+    const line = rawLines[i]!;
+    if (!inFence) {
+      const open = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line);
+      if (open?.[1]) {
+        inFence = true;
+        fenceChar = open[1][0]!;
+        fenceLen = open[1].length;
+        if (fenceChar === "`" && /^[ \t]{0,3}`{3,}mermaid[ \t]*$/.test(line)) {
+          fenceOpen = i;
+        }
+      }
+      continue;
+    }
+    const closeRe = new RegExp(`^[ \\t]{0,3}[${fenceChar}]{${fenceLen},}[ \\t]*$`);
+    if (closeRe.test(line)) {
+      if (fenceOpen >= 0) {
+        mermaidBody = rawLines.slice(fenceOpen + 1, i);
+      }
+      inFence = false;
+      if (mermaidBody !== null) break;
+    }
+  }
+  if (mermaidBody === null) return null;
+
+  const diagramSource = mermaidBody.join("\n").trim();
+  if (diagramSource.length === 0) return null;
+  const placeholderOnly = mermaidBody
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .every((line) => /^%%\s*livewiki\//.test(line));
+  if (placeholderOnly) return null;
+
+  const pageContent = [
+    ...rawLines.slice(0, fenceOpen + 1),
+    flowDiagramPlaceholder(slug),
+    ...rawLines.slice(fenceOpen + 1 + mermaidBody.length),
+  ].join("\n");
+
+  return {
+    pageContent,
+    diagramSource,
+    sourceTooLarge: diagramSource.length > FLOW_DIAGRAM_SOURCE_MAX_CHARS,
+  };
+}
+
+export interface FlowDiagramElementCount {
+  nodes: number;
+  edges: number;
+}
+
+/**
+ * Best-effort deterministic node/edge counters for the stage-5 diagram
+ * budget (`flow_diagram_too_large`). NOT a full Mermaid grammar — a
+ * conservative, layout-independent approximation:
+ *
+ *   - flowchart/graph: unique node identifiers found at statement
+ *     endpoints; one edge per link operator (`-->`, `---`, `-.->`,
+ *     `==>`, `--o`, `--x`, `<-->`, ...). `subgraph`/`end`/styling
+ *     directives are not nodes. Labels do not create nodes.
+ *   - sequenceDiagram: unique participant/actor names (declared via
+ *     `participant`/`actor` or used as message endpoints); one edge per
+ *     message arrow. Frame directives (loop/alt/note/...) are skipped.
+ *   - stateDiagram(-v2): unique state identifiers from transitions and
+ *     `state` declarations (including `[*]` once); one edge per `-->`.
+ *   - anything else: the non-empty, non-comment line count reported as
+ *     BOTH nodes and edges (fail-closed on unknown diagram kinds).
+ */
+export function countFlowDiagramElements(source: string): FlowDiagramElementCount {
+  const lines = source
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("%%"));
+  if (lines.length === 0) return { nodes: 0, edges: 0 };
+  const header = lines[0]!.toLocaleLowerCase("en-US");
+  const body = lines.slice(1);
+  if (/^(?:flowchart|graph)\b/.test(header)) return countFlowchartElements(body);
+  if (/^sequencediagram\b/.test(header)) return countSequenceElements(body);
+  if (/^statediagram(?:-v2)?\b/.test(header)) return countStateElements(body);
+  return { nodes: lines.length, edges: lines.length };
+}
+
+/**
+ * Link operators, longest first so `<-->` is not counted as two. No
+ * capture groups: `String.split` with this regex yields pure text
+ * segments between operators.
+ */
+const FLOWCHART_EDGE_RE = /<-->|-->|<--|-\.->|-\.-|==>|===|o--o|x--x|--o|o--|--x|x--|---/g;
+const FLOWCHART_SKIP_RE =
+  /^(?:subgraph\b|end\b|classdef\b|class\b|style\b|linkstyle\b|click\b|direction\b)/i;
+
+function countFlowchartElements(body: string[]): FlowDiagramElementCount {
+  const nodes = new Set<string>();
+  let edges = 0;
+  const addEndpoint = (segment: string): void => {
+    // `A & B --> C` chains: each `&` part is an endpoint.
+    for (const part of segment.split("&")) {
+      const id = /^[A-Za-z0-9_]+/.exec(part.trim());
+      if (id) nodes.add(id[0]);
+    }
+  };
+  for (const raw of body) {
+    const line = raw.replace(/;+\s*$/, "").trim();
+    if (line.length === 0 || FLOWCHART_SKIP_RE.test(line)) continue;
+    const operators = line.match(FLOWCHART_EDGE_RE) ?? [];
+    if (operators.length === 0) {
+      // Node-only statement (`A[Standalone]`).
+      addEndpoint(line);
+      continue;
+    }
+    edges += operators.length;
+    for (const segment of line.split(FLOWCHART_EDGE_RE)) addEndpoint(segment);
+  }
+  return { nodes: nodes.size, edges };
+}
+
+const SEQUENCE_ARROW_RE = /<<->>|<<-->>|-->>|->>|-->|->|--\)|-\)|--x|-x/;
+const SEQUENCE_SKIP_RE =
+  /^(?:note\b|loop\b|alt\b|else\b|opt\b|par\b|and\b|critical\b|break\b|rect\b|box\b|end\b|autonumber\b|activate\b|deactivate\b|create\b|destroy\b)/i;
+
+function countSequenceElements(body: string[]): FlowDiagramElementCount {
+  const nodes = new Set<string>();
+  let edges = 0;
+  for (const line of body) {
+    const declaration = /^(?:participant|actor)\s+(\S+)/i.exec(line);
+    if (declaration?.[1]) {
+      nodes.add(declaration[1]);
+      continue;
+    }
+    if (SEQUENCE_SKIP_RE.test(line)) continue;
+    if (SEQUENCE_ARROW_RE.test(line)) {
+      edges++;
+      const [left, right] = line.split(SEQUENCE_ARROW_RE);
+      const leftName = left?.trim().replace(/[+-]$/, "").trim();
+      const rightName = right?.split(":")[0]?.trim().replace(/[+-]$/, "").trim();
+      if (leftName) nodes.add(leftName);
+      if (rightName) nodes.add(rightName);
+    }
+  }
+  return { nodes: nodes.size, edges };
+}
+
+function countStateElements(body: string[]): FlowDiagramElementCount {
+  const nodes = new Set<string>();
+  let edges = 0;
+  const addState = (token: string): void => {
+    const cleaned = token.trim();
+    if (cleaned.length === 0) return;
+    if (cleaned === "[*]") {
+      nodes.add("[*]");
+      return;
+    }
+    const id = /^[A-Za-z0-9_]+/.exec(cleaned);
+    if (id) nodes.add(id[0]);
+  };
+  for (const raw of body) {
+    const line = raw.replace(/;+\s*$/, "").trim();
+    if (line.length === 0 || /^(?:note\b|end\b|direction\b)/i.test(line)) continue;
+    if (/^state\s+/i.test(line)) {
+      // `state "Description" as X` or `state X` (composite `state X {`).
+      const asAlias = /\bas\s+([A-Za-z0-9_]+)\s*\{?\s*$/.exec(line);
+      if (asAlias?.[1]) {
+        nodes.add(asAlias[1]);
+        continue;
+      }
+      const word = /^state\s+([A-Za-z0-9_]+)/i.exec(line);
+      if (word?.[1]) nodes.add(word[1]);
+      continue;
+    }
+    const transitionParts = line.split("-->");
+    if (transitionParts.length > 1) {
+      edges += transitionParts.length - 1;
+      // Transition labels (`A --> B : label`) are not nodes.
+      for (const part of transitionParts) addState(part.split(":")[0]!);
+      continue;
+    }
+    // `X : description` state annotation — X is a node, no edge.
+    addState(line.split(":")[0]!);
+  }
+  return { nodes: nodes.size, edges };
 }

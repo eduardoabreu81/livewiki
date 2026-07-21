@@ -177,6 +177,213 @@ afterEach(async () => {
 
 // === Repair: success path ===
 describe("batch X — repair success (Criterion #6)", () => {
+  it("uses the validated mechanical fallback only on the final repair slot", async () => {
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const nearMiss = makeValidPage(closedKeys)
+      .replace(
+        `<!-- lw:anchors ${closedKeys.join(" ")} -->`,
+        `<!-- lw:anchors ${closedKeys[0]} -->`,
+      )
+      .replace(
+        "Body.",
+        "Body.\n\nThe literal delimiter ``` is documented here; `commands.md` stays paired while `orphan remains visible.",
+      );
+    llm.responses = [nearMiss, nearMiss, nearMiss];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(3);
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.mechanicalRepairs).toBeUndefined();
+    expect(checkpoint.diagnosticHistory?.[1]?.mechanicalRepairs).toBeUndefined();
+    expect(checkpoint.diagnosticHistory?.[2]?.mechanicalRepairs).toEqual([
+      "escape_unmatched_inline_delimiter",
+      "append_missing_section_anchors",
+    ]);
+    expectJoinedAttempts(checkpoint);
+
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    expect(page).toContain("The literal delimiter &#96;&#96;&#96; is documented here;");
+    expect(page).toContain("`commands.md` stays paired while &#96;orphan remains visible.");
+    expect(page).toContain(`<!-- lw:anchors ${closedKeys[1]} -->`);
+  });
+
+  it("fills an empty anchored section only on the final repair slot", async () => {
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const nearMiss = makeValidPage(closedKeys).replace("Body.\n", "");
+    llm.responses = [nearMiss, nearMiss, nearMiss];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(3);
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.errors?.map((error) => error.code)).toEqual([
+      "empty_section",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.mechanicalRepairs).toBeUndefined();
+    expect(checkpoint.diagnosticHistory?.[1]?.mechanicalRepairs).toBeUndefined();
+    expect(checkpoint.diagnosticHistory?.[2]?.mechanicalRepairs).toEqual([
+      "fill_empty_anchored_section",
+    ]);
+    expectJoinedAttempts(checkpoint);
+
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    expect(page).toContain(
+      `<!-- lw:anchors ${closedKeys.join(" ")} -->\n\n` +
+        "These anchors identify indexed symbols whose implementation is part of this module.",
+    );
+  });
+
+  it("removes a later duplicate section anchor only on the final repair slot", async () => {
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const firstMarker = `<!-- lw:anchors ${closedKeys[0]} -->`;
+    const secondMarker = `<!-- lw:anchors ${closedKeys.join(" ")} -->`;
+    const duplicateOnlyMarker = `<!--  lw:anchors   ${closedKeys[0]}   -->`;
+    const codeExample = `\`\`\`md\n${firstMarker}\n\`\`\``;
+    const nearMiss = makeValidPage(closedKeys).replace(
+      secondMarker,
+      [
+        firstMarker,
+        "",
+        "The first section documents the login symbol.",
+        "",
+        codeExample,
+        "",
+        "## Remaining behavior",
+        "",
+        secondMarker,
+        "",
+        "Body.",
+        "",
+        "## Duplicate-only placement",
+        "",
+        duplicateOnlyMarker,
+        "",
+        "This placement still has explanatory prose.",
+      ].join("\n"),
+    );
+    llm.responses = [nearMiss, nearMiss, nearMiss];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(3);
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.errors?.map((error) => error.code)).toEqual([
+      "duplicate_anchor",
+      "duplicate_anchor",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.mechanicalRepairs).toBeUndefined();
+    expect(checkpoint.diagnosticHistory?.[1]?.mechanicalRepairs).toBeUndefined();
+    expect(checkpoint.diagnosticHistory?.[2]?.mechanicalRepairs).toEqual([
+      "remove_duplicate_section_anchors",
+    ]);
+    expectJoinedAttempts(checkpoint);
+
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    expect(page).toContain(codeExample);
+    expect(page).toContain(firstMarker);
+    expect(page).toContain(`<!-- lw:anchors ${closedKeys[1]} -->`);
+    expect(page).not.toContain(secondMarker);
+    expect(page).not.toContain(duplicateOnlyMarker);
+  });
+
+  it("strips invented manual markers but preserves their content only on the final repair slot", async () => {
+    const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+    const codeExample = [
+      "```md",
+      "The literal label lw:manual remains ordinary text.",
+      "```",
+    ].join("\n");
+    const preservedContent = "MODEL-WRITTEN DETAIL MUST SURVIVE";
+    const nearMiss = makeValidPage(closedKeys).replace(
+      "Body.",
+      [
+        "Body before the model-written block.",
+        "",
+        "<!-- lw:manual -->",
+        preservedContent,
+        "<!-- /lw:manual -->",
+        "",
+        "Body after the model-written block.",
+        "",
+        codeExample,
+      ].join("\n"),
+    );
+    llm.responses = [nearMiss, nearMiss, nearMiss];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.callCount).toBe(3);
+
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
+      "artifact_validation_failed",
+      "artifact_validation_failed",
+      "success",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.errors?.map((error) => error.code)).toEqual([
+      "model_invented_manual",
+    ]);
+    expect(checkpoint.diagnosticHistory?.[0]?.mechanicalRepairs).toBeUndefined();
+    expect(checkpoint.diagnosticHistory?.[1]?.mechanicalRepairs).toBeUndefined();
+    expect(checkpoint.diagnosticHistory?.[2]?.mechanicalRepairs).toEqual([
+      "strip_invented_manual_markers",
+    ]);
+    expectJoinedAttempts(checkpoint);
+
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    expect(page).toContain(preservedContent);
+    expect(page).toContain(codeExample);
+    expect(page.match(/<!-- lw:manual -->/g) ?? []).toHaveLength(0);
+    expect(page.match(/<!-- \/lw:manual -->/g) ?? []).toHaveLength(0);
+  });
+
   it("retries a token-limit truncation with a fresh initial prompt", async () => {
     llm.responses = [
       "# truncated candidate",
@@ -1334,6 +1541,15 @@ describe("batch X W — unique module IDs before stage 4", () => {
 
     // LLM autoPage: generates a valid page from the prompt's keys
     llm.autoPageFromPrompt = true;
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        maxTopics: 0,
+        pathRoles: { fixturePatterns: [], toolingPatterns: [] },
+      }),
+      "utf8",
+    );
 
     const result = await runBatch({
       repoRoot,
@@ -1343,6 +1559,7 @@ describe("batch X W — unique module IDs before stage 4", () => {
     });
 
     // Status: completed (5 tasks done, 0 fails)
+    expect(result.failures).toEqual([]);
     expect(result.status).toBe("completed");
     expect(result.byModule).toHaveLength(5);
     expect(result.failures).toHaveLength(0);
@@ -2463,6 +2680,189 @@ describe("Lot N — stage-2 display title plumbing", () => {
       expect(JSON.parse(run.summary_json).modulesRefined[0].displayTitle).toBeUndefined();
     } finally {
       db.close();
+    }
+  });
+});
+
+describe("batch — repair attempt number and total are propagated; usage accounting unchanged", () => {
+  // Defect 4: the previous repair prompt carried no attempt context,
+  // so a deterministic model received byte-identical repair prompts
+  // and returned the same page. The fix: the attempt number and total
+  // appear in BOTH system and user prompts, and the final repair
+  // attempt in the current bounded execution carries the explicit
+  // "do not reproduce the prior candidate unchanged" directive. This
+  // test also asserts that the bounded slot accounting, the
+  // usageHistory length, and the monotonic attempt numbering are
+  // NOT changed by the attempt-number propagation.
+
+  it("repair 1-of-2 → final repair 2-of-2 converges to a valid page; usage accounting unchanged", async () => {
+    // 1 initial + 2 repair attempts (3 total). The 1st repair is the
+    // 2nd LLM call; the 2nd (final) repair is the 3rd. The third
+    // response must satisfy the module's full closed list (login AND
+    // logout — the fixture exports both) so the test actually proves
+    // convergence instead of just counting calls.
+    llm.responses = [
+      makeInvalidPage("INVALID_1"),
+      makeInvalidPage("INVALID_2"),
+      makeValidPage([
+        "src/auth/login.ts#login",
+        "src/auth/login.ts#logout",
+      ]),
+    ];
+    llm.stopReasons = ["complete", "complete", "complete"];
+    llm.rawStopReasons = ["stop", "stop", "stop"];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      maxIncompleteRetries: 0,
+    });
+
+    // Convergence: the bounded repair loop actually fixed the page.
+    expect(result.status).toBe("completed");
+    expect(result.failures).toHaveLength(0);
+
+    // Bounded slot accounting: 1 initial + 2 repairs = 3 calls.
+    expect(llm.callCount).toBe(3);
+
+    // Call 1 is the initial; it MUST NOT carry a repair-attempt header.
+    const c1 = llm.callLog[0]!;
+    expect(c1.user).not.toMatch(/attempt\s+\d+\s+of\s+\d+/i);
+    expect(c1.user).not.toMatch(/Repair attempt/i);
+
+    // Call 2 is repair attempt 1 of 2 (non-final).
+    const c2 = llm.callLog[1]!;
+    expect(c2.user).toMatch(/attempt\s+1\s+of\s+2/i);
+    expect(c2.user).not.toMatch(/final\s+repair\s+attempt/i);
+    expect(c2.system).toMatch(/attempt\s+1\s+of\s+2/i);
+
+    // Call 3 is the FINAL repair attempt in the current bounded
+    // execution — must include the "do not reproduce the prior
+    // candidate unchanged" directive and the audit checklist.
+    const c3 = llm.callLog[2]!;
+    expect(c3.user).toMatch(/attempt\s+2\s+of\s+2/i);
+    expect(c3.user).toMatch(/final\s+repair\s+attempt/i);
+    expect(c3.user).toMatch(/do not reproduce the prior candidate unchanged/i);
+    expect(c3.user).toMatch(/audit/i);
+    expect(c3.system).toMatch(/final\s+repair\s+attempt/i);
+
+    // usageHistory length matches the bounded slot count and
+    // attempt numbers are monotonic (1, 2, 3).
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.usageHistory).toHaveLength(3);
+    expect(checkpoint.usageHistory!.map((u) => u.attempt)).toEqual([1, 2, 3]);
+  });
+});
+
+// === R10.1 item A — write/verify exception rolls the page back (stage 4) ===
+describe("batch X — write/verify exception rolls the page back (R10.1 A)", () => {
+  it("verifier throws after the write → new page removed, task fails write_verify_exception", async () => {
+    const verifyModule = await import("./verify.js");
+    const realRun = verifyModule.run;
+    let crashed = false;
+    const spy = vi.spyOn(verifyModule, "run").mockImplementation(async (root: string) => {
+      if (!crashed) {
+        crashed = true;
+        throw new Error("simulated verifier crash");
+      }
+      return realRun(root);
+    });
+
+    try {
+      llm.responses = [
+        makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+      ];
+
+      const result = await runBatch({
+        repoRoot,
+        llmClient: llm,
+        noRefine: true,
+        skipManifestWrite: true,
+        maxRepairAttempts: 0, // no repair — focus on the exception path
+      });
+
+      expect(crashed).toBe(true);
+      expect(result.status).toBe("completed_with_failures");
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]?.error.code).toBe("write_verify_exception");
+      expect(llm.callCount).toBe(1); // terminal for the task — no repair retry
+
+      // The candidate page NEVER persisted (exception rollback removed it).
+      const wikiPath = nodePath.join(repoRoot, "livewiki/auth.md");
+      await expect(nodeFs.access(wikiPath)).rejects.toThrow();
+
+      const checkpoint = await readStage4Checkpoint(repoRoot);
+      expect(checkpoint.status).toBe("failed");
+      expect(checkpoint.error?.code).toBe("write_verify_exception");
+      expect(checkpoint.diagnosticHistory?.[0]).toMatchObject({
+        outcome: "write_verify_exception",
+        promptKind: "initial",
+        errors: [expect.objectContaining({ code: "write_verify_exception" })],
+      });
+      expectJoinedAttempts(checkpoint);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rollback failure after the exception → rollback_failed aborts the ENTIRE RUN; second module never attempted", async () => {
+    // Same 2-module shape as the review-#4 test: auth first, other second.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/other.ts"),
+      "export function other() { return 'o'; }",
+      "utf8",
+    );
+
+    const verifyModule = await import("./verify.js");
+    const spy = vi.spyOn(verifyModule, "run").mockImplementation(async () => {
+      throw new Error("simulated verifier crash");
+    });
+    // The rollback itself breaks (same simulation as review finding #4).
+    const removeSpy = vi.spyOn(safeIo, "remove").mockImplementation(async () => {
+      throw new Error("simulated rollback failure");
+    });
+
+    try {
+      llm.autoPageFromPrompt = true;
+
+      const result = await runBatch({
+        repoRoot,
+        llmClient: llm,
+        noRefine: true,
+        skipManifestWrite: true,
+        maxRepairAttempts: 0,
+      });
+
+      // Terminal for the ENTIRE run — identical semantics to the
+      // rejection-triggered rollback failure (review finding #4).
+      expect(result.status).toBe("aborted");
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]?.error.code).toBe("rollback_failed");
+      expect(result.failures[0]?.module).toBe("auth");
+
+      // The SECOND module never reached the LLM.
+      expect(llm.callCount).toBe(1);
+
+      // Via DB: "other" was NEVER created as a stage-4 task.
+      const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+      const Database = (await import("better-sqlite3")).default;
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        const tasks = db
+          .prepare("SELECT target, status FROM batch_tasks WHERE stage = 4 ORDER BY target")
+          .all() as Array<{ target: string; status: string }>;
+        expect(tasks.length).toBe(1);
+        expect(tasks[0]?.target).toBe("auth");
+        expect(tasks[0]?.status).toBe("failed");
+      } finally {
+        db.close();
+      }
+    } finally {
+      spy.mockRestore();
+      removeSpy.mockRestore();
     }
   });
 });

@@ -27,6 +27,15 @@
  * of repair prompts. Module IDs are globally unique before the
  * first write. The write is transactional (snapshot → write → verify
  * → restore/remove on failure).
+ *
+ * Stage 5 (Lot S3a, SPEC §"Semantic product-flow layer"): after the stage-4
+ * loop and before the navigation hook, one gated task per detected flow
+ * candidate (target "flow:<slug>"). Same machinery shape as stage 4 — bounded
+ * repair slots, transactional write (page + companion diagram as one unit),
+ * same circuit breaker and checkpoint semantics. The model emits the diagram
+ * INLINE; the orchestrator extracts it, validates the placeholder-substituted
+ * page, and writes both artifacts. Zero candidates is a valid outcome, not an
+ * empty pipeline; maxFlows: 0 disables the stage entirely.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -35,7 +44,7 @@ import * as safeIo from "./safe-io.js";
 import { openIndex, type SymbolRow } from "./db.js";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
-import { run as runVerify, type VerifyIssue } from "./verify.js";
+import { run as runVerify, type VerifyIssue, type VerifyResult } from "./verify.js";
 import {
   identifyModulesHeuristic,
   resolveModuleEdges,
@@ -50,29 +59,63 @@ import {
   DuplicateModuleIdError,
   applyRefinedDisplayTitles,
   classifyModuleRole,
+  classifyPathRole,
   type Module,
 } from "./modules.js";
 import { collectImports } from "./imports.js";
 import { createLlmClient, LlmTimeoutError, type LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult, StopReason } from "./llm/types.js";
-import { loadConfig, applyDefaults, validateConfigForBatch, resolveExtraIgnores } from "./config.js";
+import { loadConfig, applyDefaults, validateConfigForBatch, resolveExtraIgnores, CONFIG_DEFAULTS } from "./config.js";
 import { calculateCostUsd, lookupPricing } from "./pricing.js";
 import {
   buildStage2RefinePrompt,
   buildStage4Prompt,
   buildRepairPrompt,
+  buildStage5Prompt,
+  buildStage5RepairPrompt,
+  buildTopicPlanPrompt,
+  buildTopicPlanRepairPrompt,
+  buildTopicPrompt,
+  buildTopicRepairPrompt,
+  type FlowDiagramBudget,
   type Language,
   type ArtifactValidationError,
+  type FlowKeyGroups,
 } from "./prompts.js";
 import {
   normalizeStage4Artifact,
   validateStage4Artifact,
+  extractInlineFlowDiagram,
+  countFlowDiagramElements,
+  FLOW_DIAGRAM_SOURCE_MAX_CHARS,
 } from "./artifact.js";
+import {
+  repairStage4ArtifactMechanically,
+  type MechanicalArtifactRepair,
+} from "./artifact-repair.js";
+import { detectFlowCandidates, type FlowCandidate } from "./flows.js";
+import {
+  buildTopicPlanningInventory,
+  validateTopicPlan,
+  type TopicCandidate,
+  type TopicPlanValidationError,
+} from "./topics.js";
+import {
+  loadEffectiveTsconfig,
+  loadWorkspacePackages,
+  resolveImportEdges,
+} from "./import-resolution.js";
+import { validateMermaidSyntax } from "./mermaid-validator.js";
+import { maskCodeSpansPreservingLength } from "./markdown-mask.js";
 import { computeSnapshotHash, writeManifestIfChanged, buildManifest } from "./manifest.js";
 import { sha256 } from "./hashes.js";
-import { regenerateArchitectureOverview } from "./init.js";
+import { regenerateArchitectureOverview, syncClassDiagrams, syncStaleFlowArtifacts, syncStaleTopicArtifacts } from "./init.js";
+import { ensureTopicsIndexScaffold, loadFlowPresentations, syncFlowsIndexHub } from "./navigation.js";
 import { parseFrontmatter, getOwner } from "./frontmatter.js";
+import { generateAuxiliaryModulePage } from "./auxiliary-page.js";
+import { repairOversizedFlowchart } from "./flow-diagram-repair.js";
 import type {
+  BatchStage,
   BatchStatusReport,
   BatchRunSummary,
   DiagnosticAttempt,
@@ -128,6 +171,34 @@ export interface BatchRunResult {
   byModule: Array<StageUsage & { module: string }>;
   failures: Array<{ taskId: number; module: string; error: { code: string; message: string }; retryCommand: string }>;
   circuitBreakerTriggered: boolean;
+  /**
+   * Priority-0 fix: authoritative task counts across ALL stages (4 + 5
+   * flows + 5 topics), taken directly from the same `cb.done`/`cb.fails`
+   * counters `finalizeRun` persists. Previously callers approximated
+   * "done" from `byModule.length` — a usage-tracking array that mixes
+   * done+failed entries and, in `batch-status.ts`, was scoped to stage 4
+   * only — which produced two different, both-wrong "done" counts for
+   * the same run (e.g. 35 vs 32) depending on which surface printed it.
+   */
+  tasksDone: number;
+  tasksFailed: number;
+  /**
+   * R10.1 C: the stage-5 flows hub was preserved because of ownership
+   * (human/mixed or unparseable). Surfaced in the run result (human/JSON),
+   * never persisted for status queries.
+   */
+  skippedFlowsHub?: { path: string; owner: "human" | "mixed" | null };
+  /** R11-NAV: a protected auxiliary hub was preserved and not regenerated. */
+  skippedAuxiliaryHub?: { path: string; owner: "human" | "mixed" | null };
+  /** R11-A: a protected topic hub was preserved and not regenerated. */
+  skippedTopicsHub?: { path: string; owner: "human" | "mixed" | null };
+  /**
+   * R10.1 K: flow candidates skipped deterministically BEFORE any LLM
+   * call (K-a anchor capacity / K-b section-anchor coverage). No
+   * batch_tasks row is ever created for them — the skip is recorded
+   * here, surfaced in human/JSON output, never persisted.
+   */
+  skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }>;
 }
 
 /**
@@ -437,11 +508,22 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     }
 
     // === Stage 3: Prioritization (with IDs already unique and stable) ===
-    const edges = resolveModuleEdges(
-      modules,
-      await collectAllImports(absRoot, filePaths),
-      new Set(filePaths),
-    );
+    // Hoisted for stage 5: the flow detector re-derives external import
+    // specifiers from the SAME per-file extraction stage 3 uses for edges.
+    const importsByFile = await collectAllImports(absRoot, filePaths);
+    const knownFiles = new Set(filePaths);
+    // R10.1 (J): ONE resolver produces the file-level import edges —
+    // relative AND declared-workspace specifiers. The same resolved edges
+    // feed the module-edge projection below and the flow detector's
+    // per-occurrence external accounting in stage 5.
+    const workspacePackages = await loadWorkspacePackages(absRoot);
+    const resolvedImportEdges = resolveImportEdges({
+      importsByFile,
+      knownFiles,
+      workspacePackages,
+      tsconfig: await loadEffectiveTsconfig(absRoot, workspacePackages),
+    });
+    const edges = resolveModuleEdges(modules, importsByFile, knownFiles, resolvedImportEdges);
     let ordered = prioritizeModules(modules, edges, resolvedConfig.pathRoles);
 
     // Defense in depth: prioritization does not change IDs, but re-applying W ensures
@@ -452,17 +534,31 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 
     // === Stage 4: Coordinated documentation ===
     const cb = { consecutive: 0, fails: 0, done: 0 };
+    // Stage-4-only done counter for the pendingBatch stage split
+    // (cb.done counts stages 4 + 5 combined once stage 5 runs).
+    let moduleTasksDone = 0;
     const failures: BatchRunResult["failures"] = [];
     const moduleUsage: BatchRunResult["byModule"] = [];
     const stage2UsageAcc: StageUsage = emptyUsage();
     let stageUsageTotals: StageUsage = emptyUsage();
     const byStageAcc: Record<string, StageUsage> = {};
 
+    // Stage 5: `--only flow:<slug>` targets a flow task, not a module.
+    const onlyFlowSlug =
+      opts.onlyTarget !== undefined && opts.onlyTarget.startsWith("flow:")
+        ? opts.onlyTarget.slice("flow:".length)
+        : null;
+    const onlyTopicIdentity =
+      opts.onlyTarget !== undefined && opts.onlyTarget.startsWith("topic:")
+        ? opts.onlyTarget.slice("topic:".length)
+        : null;
     const tasksToRun = opts.onlyTarget
-      ? ordered.filter((m) => m.id === opts.onlyTarget)
+      ? onlyFlowSlug !== null || onlyTopicIdentity !== null
+        ? []
+        : ordered.filter((m) => m.id === opts.onlyTarget)
       : ordered;
 
-    if (opts.onlyTarget && tasksToRun.length === 0) {
+    if (opts.onlyTarget && onlyFlowSlug === null && onlyTopicIdentity === null && tasksToRun.length === 0) {
       throw new Error(`module "${opts.onlyTarget}" not found in this run`);
     }
 
@@ -489,6 +585,11 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         ).run(Date.now(), task.id);
       }
     }
+
+    // Class diagrams are a deterministic projection of the complete final
+    // module plan. Synchronize before stage 4 so obsolete files from an older
+    // plan cannot survive and fail the repository-wide verify step.
+    await syncClassDiagrams(absRoot, ordered, symbols);
 
     // Accumulate stage 2 usage (if it already ran) for final byStage
     if (stage2Task) {
@@ -569,6 +670,63 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             `module "${module.id}" is on a page whose frontmatter did not parse (LF/CRLF/BOM-safe check). ` +
             `Refusing to rewrite untrusted content (rule #6 — operator must repair the page manually).`,
         };
+      } else if (classifyModuleRole(module, resolvedConfig.pathRoles) !== "product") {
+        // Priority-0 fix: auxiliary modules (fixture/tooling/docs) never
+        // call the LLM. Their page contract is fully mechanical (fixed H2
+        // set, one H3 + one marker + one short paragraph per symbol), so the
+        // orchestrator assembles it directly — zero cost, zero probabilistic
+        // failure. `usageHistory` stays empty for this task, same convention
+        // as a skipped `--no-refine` call: no attempt was made, so no entry
+        // is recorded (never an invented 0/0 usage row).
+        const auxiliaryRole = classifyModuleRole(module, resolvedConfig.pathRoles) as Exclude<
+          ReturnType<typeof classifyModuleRole>,
+          "product"
+        >;
+        const symbols = await getModuleSymbolRows(absRoot, module);
+        const closedKeyList = symbols.map((s) => s.key).sort();
+        const artifact = generateAuxiliaryModulePage({
+          module,
+          role: auxiliaryRole,
+          symbols,
+          closedKeyList,
+        });
+        const selfCheck = validateStage4Artifact(artifact, closedKeyList, {
+          moduleId: module.id,
+          moduleRole: auxiliaryRole,
+        });
+        if (selfCheck.ok) {
+          const writeResult = await tryWriteAndVerify(absRoot, wikiPath, artifact, existing);
+          if (writeResult.ok) {
+            artifacts = writeResult.artifacts;
+          } else if (writeResult.rollbackFailed) {
+            taskError = {
+              code: "rollback_failed",
+              message:
+                `rollback failed after verify rejection for ${wikiPath}: ${writeResult.rollbackFailed.reason}. ` +
+                `This is a terminal state for the ENTIRE run — the disk may have an inconsistent page. ` +
+                `Operator must inspect ${wikiPath} and re-run with --only after manual repair.`,
+            };
+            runAbortedByRollback = true;
+          } else {
+            taskError = {
+              code: "auxiliary_page_verify_failed",
+              message:
+                `deterministic auxiliary page for "${module.id}" failed verify: ` +
+                `${(writeResult.issues ?? []).map((i) => i.code).join(", ")}. Not model-repairable — ` +
+                `this indicates a bug in the deterministic generator, not a retry-able condition.`,
+              failedAt: 4,
+            };
+          }
+        } else {
+          taskError = {
+            code: "auxiliary_page_validation_failed",
+            message:
+              `deterministic auxiliary page for "${module.id}" failed artifact validation: ` +
+              `${selfCheck.errors.map((e) => e.code).join(", ")}. Not model-repairable — ` +
+              `this indicates a bug in the deterministic generator, not a retry-able condition.`,
+            failedAt: 4,
+          };
+        }
       } else {
         // Bounded slots: one initial slot plus maxRepairAttempts repair slots.
         // Normalized incomplete responses may retry fresh without consuming a
@@ -590,12 +748,21 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         while (consumedSlots < totalConsumedSlots) {
           attempt++;
           const promptKind = nextPromptKind;
-          // Reviewer revision (finding #5): the `attemptNumber` passed
-          // to the LLM call is the GLOBAL COUNTER (started from `task.attempt`
-          // persisted and incremented at every attempt). NEVER `i + 1`
-          // (which would reset on every run/--only execution). With that,
-          // usageHistory[].attempt is monotonic: 1, 2, 3, 4, ... across
-          // multiple --only/resume calls.
+          // `attemptNumber` is the GLOBAL COUNTER (persisted via
+          // `task.attempt`, incremented every attempt), so
+          // usageHistory[].attempt is monotonic across multiple
+          // --only / resume calls.
+          //
+          // Repair attempt index: the 1st repair is the 2nd LLM
+          // call; `consumedSlots` advances per consumed slot, so
+          // the 1st repair call sees consumedSlots=1. The budget is
+          // `maxRepairAttempts`; the prompt derives final-attempt
+          // from `attempt >= total` so callers cannot contradict
+          // the numbers.
+          const repairAttemptContext =
+            promptKind === "repair"
+              ? { attempt: consumedSlots, total: maxRepairAttempts }
+              : undefined;
           const attemptResult = await attemptStage4Generation({
             attemptNumber: attempt,
             module,
@@ -606,10 +773,20 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             priorCandidate,
             priorErrors,
             absRoot,
-            // Review finding #5: pricing override preserved in repairs.
+            // Pricing override preserved across repairs so the
+            // user's `config.json` is honored for every call.
             pricing: resolvedConfig.pricing,
             maxTokens: stage4MaxOutputTokens,
             thinking: thinkingMode,
+            pathRoleConfig: resolvedConfig.pathRoles,
+            // A local fallback is allowed only after the model has consumed
+            // the final configured repair slot. It never adds or replaces an
+            // LLM call and still must pass the complete artifact validator.
+            allowMechanicalFallback:
+              promptKind === "repair" && consumedSlots === totalConsumedSlots - 1,
+            ...(repairAttemptContext !== undefined
+              ? { repairAttemptContext }
+              : {}),
           });
           usageHistory.push(attemptResult.usageEntry);
           moduleUsageEntry = accumulateUsage(
@@ -748,6 +925,32 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             attemptDone = true; // break out of this task's repair loop
             runAbortedByRollback = true; // signals: exits the modules loop too
             break;
+          } else if (writeResult.exception) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "write_verify_exception",
+                errors: summarizeLlmDiagnosticError({
+                  code: "write_verify_exception",
+                  message: writeResult.exception.message,
+                }),
+              }),
+            );
+            // R10.1 item A: the write/verify step threw and the page was
+            // already rolled back inside tryWriteAndVerify. Not model-
+            // repairable (a failed write or a verifier crash recurs
+            // deterministically), so the task fails WITHOUT burning repair
+            // slots; the RUN continues (circuit breaker still applies).
+            taskError = {
+              code: "write_verify_exception",
+              message:
+                `write/verify step threw for ${wikiPath}: ${writeResult.exception.message}. ` +
+                `The candidate was rolled back; no repair retry because the failure is not model-fixable.`,
+              failedAt: 4,
+            };
+            attemptDone = true;
+            break;
           } else {
             diagnosticHistory.push(
               diagnosticAttempt({
@@ -851,6 +1054,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 
         cb.consecutive = 0;
         cb.done++;
+        moduleTasksDone++;
       }
 
       // Circuit breaker check: 3 CONSECUTIVE failures, OR >50% with at least
@@ -873,7 +1077,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksDone: cb.done,
           tasksFailed: cb.fails,
         });
-        return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, true);
+        return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, true, cb.done, cb.fails);
       }
       moduleUsage.push({ module: module.id, ...moduleUsageEntry });
 
@@ -894,10 +1098,597 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksDone: cb.done,
           tasksFailed: cb.fails,
         });
-        return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, false);
+        return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, false, cb.done, cb.fails);
       }
     }
     byStageAcc["4"] = stageUsageTotals;
+    // === Stage 5: semantic product flows (SPEC §"Semantic product-flow layer") ===
+    // One gated task per detected flow candidate, after stage 4 and before
+    // the post-stage navigation hook. Same machinery shape as stage 4:
+    // bounded repair slots, transactional write with rollback, the same
+    // circuit breaker, and identical checkpoint semantics. Zero candidates
+    // is a valid outcome (no stage-5 tasks, NOT an empty pipeline).
+    const maxFlows = resolvedConfig.maxFlows ?? 0;
+    let stage5UsageTotals: StageUsage = emptyUsage();
+    let stage5TaskCount = 0;
+    let stage5Done = 0;
+    let stage5Fails = 0;
+    let stage5Candidates: FlowCandidate[] = [];
+    const stage5GateOpen =
+      maxFlows > 0 &&
+      !runAbortedByRollback &&
+      (opts.mode !== "only" || onlyFlowSlug !== null);
+
+    if (stage5GateOpen) {
+      // Detection inputs: the active symbols already loaded for stage 4,
+      // the final module plan + edges from stage 3, and external import
+      // specifiers derived from the same per-file imports stage 3 used
+      // for resolveModuleEdges (walker-style relative paths).
+      const symbolsByFile = new Map<string, string[]>();
+      for (const s of symbols) {
+        const file = s.key.split("#")[0]!;
+        const list = symbolsByFile.get(file);
+        if (list) list.push(s.key);
+        else symbolsByFile.set(file, [s.key]);
+      }
+      // Per-occurrence external accounting (R10.1 J): an occurrence
+      // (file, specifier) with a resolved internal edge is excluded —
+      // the same specifier may be internal in one file and external in
+      // another. The detector also receives the edges for its own filter.
+      const resolvedOccurrences = new Set(
+        resolvedImportEdges.map((e) => `${e.fromFile}\0${e.source}`),
+      );
+      const externalImportsByFile = new Map<string, string[]>();
+      for (const [file, fileImports] of importsByFile) {
+        externalImportsByFile.set(
+          file,
+          fileImports
+            .map((i) => i.source)
+            .filter((source) => !resolvedOccurrences.has(`${file}\0${source}`)),
+        );
+      }
+      stage5Candidates = detectFlowCandidates({
+        modules: ordered,
+        edges,
+        symbolsByFile,
+        externalImportsByFile,
+        resolvedEdges: resolvedImportEdges,
+        ...(resolvedConfig.pathRoles !== undefined
+          ? { pathRoleConfig: resolvedConfig.pathRoles }
+          : {}),
+        ...(resolvedConfig.flowSignals !== undefined
+          ? { flowSignals: resolvedConfig.flowSignals }
+          : {}),
+        maxFlows,
+        flowMaxAnchors: resolvedConfig.flowMaxAnchors ?? CONFIG_DEFAULTS.flowMaxAnchors,
+      });
+    }
+
+    let stage5Targets: FlowCandidate[] = [];
+    if (stage5GateOpen) {
+      if (opts.mode === "only") {
+        // --only flow:<slug>: recompute detection the same way and rerun
+        // exactly one flow task; unknown slug = same behavior as modules.
+        const found = stage5Candidates.find((c) => c.slug === onlyFlowSlug);
+        if (!found) {
+          throw new Error(`flow "${onlyFlowSlug}" not found in this run`);
+        }
+        stage5Targets = [found];
+      } else {
+        stage5Targets = stage5Candidates;
+      }
+    }
+
+    const flowDiagramBudgets: FlowDiagramBudget = {
+      maxNodes: resolvedConfig.flowMaxDiagramNodes ?? CONFIG_DEFAULTS.flowMaxDiagramNodes,
+      maxEdges: resolvedConfig.flowMaxDiagramEdges ?? CONFIG_DEFAULTS.flowMaxDiagramEdges,
+    };
+
+    // R10.1 K: deterministic pre-LLM skips (K-a/K-b) never become
+    // tasks — no batch_tasks row is created; the skip is recorded on
+    // the run result (same "never silent, never persisted" contract
+    // as the R10.1 C flows-hub skip).
+    const skippedFlowCandidates: NonNullable<BatchRunResult["skippedFlowCandidates"]> = [];
+    const stage5Runnable: FlowCandidate[] = [];
+    for (const candidate of stage5Targets) {
+      if (candidate.skip !== undefined) {
+        skippedFlowCandidates.push({
+          slug: candidate.slug,
+          code: candidate.skip.code,
+          message: candidate.skip.message,
+        });
+      } else {
+        stage5Runnable.push(candidate);
+      }
+    }
+
+    for (const candidate of stage5Runnable) {
+      stage5TaskCount++;
+      const flowTarget = `flow:${candidate.slug}`;
+      let flowUsageEntry: StageUsage = emptyUsage();
+      const task = getOrCreateTask(db, runId, 5, flowTarget);
+      const startedAt = Date.now();
+      let attempt = task.attempt;
+      let usageHistory: UsageAttempt[] = [];
+      let diagnosticHistory: DiagnosticAttempt[] = [];
+      let taskError: TaskCheckpoint["error"] | undefined;
+      let artifacts: TaskCheckpoint["artifacts"] | undefined;
+      const prevCheckpoint = task.checkpoint_json ? safeJsonParse<TaskCheckpoint>(task.checkpoint_json) : null;
+      if (prevCheckpoint?.usageHistory) {
+        usageHistory = [...prevCheckpoint.usageHistory];
+      }
+      if (prevCheckpoint?.diagnosticHistory) {
+        diagnosticHistory = [...prevCheckpoint.diagnosticHistory];
+      }
+
+      const flowPagePath = `livewiki/flows/${candidate.slug}.md`;
+      const flowDiagramPath = `livewiki/diagrams/flow-${candidate.slug}.mmd`;
+
+      // Pre-LLM ownership gate, identical to stage 4 (rule #6):
+      // owner: human refuses the whole page; owner: mixed is allowed
+      // (manual blocks preserved byte-for-byte); unparseable refuses.
+      const existing = await safeIo.readText(absRoot, flowPagePath).catch(() => null);
+      const preOwner = readOwnerFromFrontmatter(existing);
+      if (preOwner === "human") {
+        taskError = {
+          code: "refused_human_page",
+          message:
+            `flow "${candidate.slug}" is on a page with owner: human — refuses to rewrite (rule #6). ` +
+            `Operator must manually change owner to "generated" or "mixed" if a re-run is desired.`,
+        };
+      } else if (preOwner === "untrusted") {
+        taskError = {
+          code: "refused_human_page",
+          message:
+            `flow "${candidate.slug}" is on a page with a missing or invalid \`owner:\` line — refuses to rewrite (rule #6). ` +
+            `Operator must manually set owner to "generated" or "mixed" if a re-run is desired.`,
+        };
+      } else if (preOwner === "unparseable") {
+        taskError = {
+          code: "refused_unparseable_page",
+          message:
+            `flow "${candidate.slug}" is on a page whose frontmatter did not parse (LF/CRLF/BOM-safe check). ` +
+            `Refusing to rewrite untrusted content (rule #6 — operator must repair the page manually).`,
+        };
+      } else {
+        // Bounded slots identical to stage 4: 1 + maxRepairAttempts
+        // consuming slots + maxIncompleteRetries non-consuming retries.
+        const totalConsumedSlots = 1 + maxRepairAttempts;
+        let consumedSlots = 0;
+        let incompleteRetriesUsed = 0;
+        let attemptDone = false;
+        let priorCandidate = "";
+        let priorErrors: ArtifactValidationError[] = [];
+        let lastErrorsForReporting: ArtifactValidationError[] = [];
+        let nextPromptKind: "initial" | "repair" = "initial";
+        const diagnosticSliceStart = diagnosticHistory.length;
+
+        while (consumedSlots < totalConsumedSlots) {
+          attempt++;
+          const promptKind = nextPromptKind;
+          const repairAttemptContext =
+            promptKind === "repair"
+              ? { attempt: consumedSlots, total: maxRepairAttempts }
+              : undefined;
+          const attemptResult = await attemptStage5Generation({
+            attemptNumber: attempt,
+            candidate,
+            modules: ordered,
+            language,
+            llmClient: llmClient!,
+            charBudget,
+            promptKind,
+            priorCandidate,
+            priorErrors,
+            absRoot,
+            pricing: resolvedConfig.pricing,
+            maxTokens: stage4MaxOutputTokens,
+            thinking: thinkingMode,
+            diagramBudgets: flowDiagramBudgets,
+            ...(repairAttemptContext !== undefined
+              ? { repairAttemptContext }
+              : {}),
+          });
+          usageHistory.push(attemptResult.usageEntry);
+          flowUsageEntry = accumulateUsage(
+            flowUsageEntry,
+            attemptResult.usageEntry,
+            resolvedConfig.pricing,
+          );
+          stage5UsageTotals = accumulateUsage(
+            stage5UsageTotals,
+            attemptResult.usageEntry,
+            resolvedConfig.pricing,
+          );
+
+          if (attemptResult.llmError) {
+            consumedSlots++;
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "llm_error",
+                errors: summarizeLlmDiagnosticError(attemptResult.llmError),
+              }),
+            );
+            // Client timeout: terminal for this task — no repair, no second
+            // generation (provider state unknown; may still bill).
+            if (attemptResult.llmError.code === "llm_timeout") {
+              taskError = {
+                code: "llm_timeout",
+                message: attemptResult.llmError.message,
+                failedAt: 5,
+              };
+              attemptDone = true;
+              break;
+            }
+            lastErrorsForReporting = [
+              {
+                code: "llm_error",
+                message: attemptResult.llmError.message,
+                location: "global",
+              },
+            ];
+            priorCandidate = "";
+            priorErrors = [];
+            nextPromptKind = "initial";
+            continue;
+          }
+
+          if (attemptResult.artifact === null) {
+            const outcome = attemptResult.diagnosticOutcome!;
+            const retryWithoutConsumingSlot =
+              outcome === "incomplete_generation" &&
+              incompleteRetriesUsed < maxIncompleteRetries;
+            if (retryWithoutConsumingSlot) {
+              incompleteRetriesUsed++;
+            } else {
+              consumedSlots++;
+            }
+            lastErrorsForReporting = attemptResult.validationErrors;
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome,
+                errors: summarizeDiagnosticErrors(attemptResult.validationErrors),
+                ...(retryWithoutConsumingSlot ? { budgetConsumed: false } : {}),
+              }),
+            );
+            if (
+              outcome === "incomplete_generation" ||
+              outcome === "truncated_by_token_limit"
+            ) {
+              priorCandidate = "";
+              priorErrors = [];
+              nextPromptKind = "initial";
+            } else {
+              // Repair input is the MODEL-EMITTED form (inline diagram),
+              // never the placeholder-substituted disk form.
+              const candidateText = attemptResult.normalizedRaw;
+              if (candidateText.length > charBudget) {
+                priorCandidate = "";
+                priorErrors = [];
+                nextPromptKind = "initial";
+              } else {
+                priorCandidate = candidateText;
+                priorErrors = attemptResult.validationErrors;
+                nextPromptKind = "repair";
+              }
+            }
+            continue;
+          }
+
+          // Valid artifact → transactional write of BOTH artifacts.
+          consumedSlots++;
+          const writeResult = await tryWriteFlowAndVerify(
+            absRoot,
+            flowPagePath,
+            flowDiagramPath,
+            attemptResult.artifact,
+            attemptResult.diagramSource!,
+            existing,
+          );
+          if (writeResult.ok) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "success",
+                errors: { errors: [], truncatedErrorCount: 0 },
+              }),
+            );
+            attemptDone = true;
+            artifacts = writeResult.artifacts;
+            break;
+          } else if (writeResult.rollbackFailed) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "verify_failed",
+                errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+              }),
+            );
+            // rollback_failed is TERMINAL for the ENTIRE run (same as
+            // stage 4): disk may be inconsistent; do not continue.
+            taskError = {
+              code: "rollback_failed",
+              message:
+                `rollback failed after verify rejection for ${flowPagePath}: ${writeResult.rollbackFailed.reason}. ` +
+                `This is a terminal state for the ENTIRE run — the disk may have an inconsistent page. ` +
+                `Operator must inspect ${flowPagePath} and re-run with --only after manual repair.`,
+            };
+            attemptDone = true;
+            runAbortedByRollback = true;
+            break;
+          } else if (writeResult.exception) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "write_verify_exception",
+                errors: summarizeLlmDiagnosticError({
+                  code: "write_verify_exception",
+                  message: writeResult.exception.message,
+                }),
+              }),
+            );
+            // R10.1 item A: the write/verify step threw and BOTH artifacts
+            // were already rolled back inside tryWriteFlowAndVerify. Not
+            // model-repairable (a failed write or a verifier crash recurs
+            // deterministically), so the task fails WITHOUT burning repair
+            // slots; the RUN continues (circuit breaker still applies).
+            taskError = {
+              code: "write_verify_exception",
+              message:
+                `write/verify step threw for ${flowPagePath}: ${writeResult.exception.message}. ` +
+                `The artifact pair was rolled back; no repair retry because the failure is not model-fixable.`,
+              failedAt: 5,
+            };
+            attemptDone = true;
+            break;
+          } else {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult,
+                promptKind,
+                outcome: "verify_failed",
+                errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+              }),
+            );
+            // Verify failed → both artifacts already rolled back inside
+            // tryWriteFlowAndVerify. Repair input is again the
+            // model-emitted inline form.
+            const repairErrors = verifyIssuesToValidationErrors(writeResult.issues ?? []);
+            lastErrorsForReporting = repairErrors;
+            if (attemptResult.normalizedRaw.length > charBudget) {
+              priorCandidate = "";
+              priorErrors = [];
+              nextPromptKind = "initial";
+            } else {
+              priorCandidate = attemptResult.normalizedRaw;
+              priorErrors = repairErrors;
+              nextPromptKind = "repair";
+            }
+            continue;
+          }
+        }
+
+        if (!attemptDone && !taskError) {
+          // Same B1 reporting as stage 4: the repair_exhausted message is
+          // built only from THIS loop's diagnostic slice.
+          const thisLoopDiagnostics = diagnosticHistory.slice(diagnosticSliceStart);
+          const attemptLines = thisLoopDiagnostics.map((d) => {
+            const stopReason = d.stopReason ?? "-";
+            const codes = d.errors.map((e) => e.code);
+            return `attempt ${d.attempt}: ${stopReason} -> ${d.outcome}` +
+              (codes.length > 0 ? ` [${codes.join(", ")}]` : "");
+          });
+          const totalErrors = thisLoopDiagnostics.reduce(
+            (sum, d) => sum + d.errors.length + d.truncatedErrorCount,
+            0,
+          );
+          taskError = {
+            code: "repair_exhausted",
+            message:
+              `task "${flowTarget}" exhausted ${thisLoopDiagnostics.length} LLM call(s) without producing a verified artifact.\n` +
+              `Attempts:\n${attemptLines.join("\n")}\n` +
+              `Total errors recorded: ${totalErrors}.`,
+            ...(lastErrorsForReporting[0]?.sectionSlug ? { failedAt: 5 } : {}),
+          };
+        }
+      }
+
+      // Persist checkpoint and update counters (identical to stage 4).
+      if (taskError) {
+        const failCheckpoint: TaskCheckpoint = {
+          stage: 5,
+          status: "failed",
+          attempt,
+          startedAt,
+          finishedAt: Date.now(),
+          usageHistory,
+          diagnosticHistory,
+          error: taskError,
+        };
+        db.prepare(
+          "UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?",
+        ).run("failed", JSON.stringify(failCheckpoint), Date.now(), task.id);
+
+        cb.consecutive++;
+        cb.fails++;
+        stage5Fails++;
+        failures.push({
+          taskId: task.id,
+          module: flowTarget,
+          error: taskError,
+          retryCommand: `livewiki batch --only ${flowTarget} ${runId}`,
+        });
+      } else {
+        const okCheckpoint: TaskCheckpoint = {
+          stage: 5,
+          status: "done",
+          attempt,
+          startedAt,
+          finishedAt: Date.now(),
+          usageHistory,
+          diagnosticHistory,
+          ...(artifacts ? { artifacts } : {}),
+        };
+        db.prepare(
+          "UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?",
+        ).run("done", JSON.stringify(okCheckpoint), Date.now(), task.id);
+
+        cb.consecutive = 0;
+        cb.done++;
+        stage5Done++;
+      }
+
+      // Circuit breaker: stage-5 tasks count exactly like stage-4 tasks.
+      const totalAttempted = cb.done + cb.fails;
+      if (
+        cb.consecutive >= 3 ||
+        (totalAttempted >= 3 && cb.fails / totalAttempted > 0.5)
+      ) {
+        byStageAcc["5"] = stage5UsageTotals;
+        finalizeRun(db, runId, "aborted", {
+          totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
+          byStage: byStageAcc,
+          byModule: moduleUsage,
+          modulesRefined: modules.map((m) => ({
+            id: m.id,
+            paths: m.paths,
+            ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
+          })),
+          tasksDone: cb.done,
+          tasksFailed: cb.fails,
+        });
+        const abortedByBreaker = buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, true, cb.done, cb.fails);
+        if (skippedFlowCandidates.length > 0) abortedByBreaker.skippedFlowCandidates = skippedFlowCandidates;
+        return abortedByBreaker;
+      }
+      moduleUsage.push({ module: flowTarget, ...flowUsageEntry });
+
+      // rollback_failed aborts the ENTIRE run (same as stage 4). Flow
+      // failures never undo stage-4 module work — the abort only stops
+      // NEW work; already-written module pages stay on disk.
+      if (runAbortedByRollback) {
+        byStageAcc["5"] = stage5UsageTotals;
+        finalizeRun(db, runId, "aborted", {
+          totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
+          byStage: byStageAcc,
+          byModule: moduleUsage,
+          modulesRefined: modules.map((m) => ({
+            id: m.id,
+            paths: m.paths,
+            ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
+          })),
+          tasksDone: cb.done,
+          tasksFailed: cb.fails,
+        });
+        const abortedByRollback = buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, false, cb.done, cb.fails);
+        if (skippedFlowCandidates.length > 0) abortedByRollback.skippedFlowCandidates = skippedFlowCandidates;
+        return abortedByRollback;
+      }
+    }
+    // === Stage 5b: semantic concept topics ===
+    const maxTopics = resolvedConfig.maxTopics ?? CONFIG_DEFAULTS.maxTopics;
+    const topicStageGateOpen =
+      maxTopics > 0 &&
+      !runAbortedByRollback &&
+      (opts.mode !== "only" || onlyTopicIdentity !== null);
+    let topicCandidates: TopicCandidate[] = [];
+    if (opts.mode === "only" && onlyTopicIdentity !== null && maxTopics <= 0) {
+      throw new Error("topic generation is disabled by maxTopics: 0");
+    }
+    if (topicStageGateOpen) {
+      const topicStage = await runSemanticTopicStage({
+        db,
+        runId,
+        absRoot,
+        modules: ordered,
+        edges,
+        flowCandidates: stage5Candidates,
+        pathRoleConfig: resolvedConfig.pathRoles,
+        llmClient: llmClient!,
+        language,
+        pricing: resolvedConfig.pricing,
+        thinking: thinkingMode,
+        maxTopics,
+        maxAnchors: resolvedConfig.topicMaxAnchors ?? CONFIG_DEFAULTS.topicMaxAnchors,
+        sourceChars: resolvedConfig.topicMaxSourceChars ?? CONFIG_DEFAULTS.topicMaxSourceChars,
+        outputTokens: resolvedConfig.topicMaxOutputTokens ?? CONFIG_DEFAULTS.topicMaxOutputTokens,
+        maxRepairAttempts,
+        mode: opts.mode,
+        onlyIdentity: onlyTopicIdentity,
+        ...(opts.mode !== "only"
+          ? { allowedFlowSlugs: new Set(stage5Candidates.map((candidate) => candidate.slug)) }
+          : {}),
+        // Priority-0 fix: the topic stage gets its OWN circuit breaker,
+        // starting from zero. Previously this inherited stage 4/5's
+        // cumulative consecutive-failure count and done/fail totals, so an
+        // unrelated module or flow failure earlier in the run could trip
+        // (or silently push toward) the topic stage's abort threshold —
+        // "falhas auxiliares e de flow bloqueando toda a camada de
+        // tópicos" (R11-A E2E v21). Topics are an independent, additive
+        // layer; their own failures should decide their own abort, not
+        // failures from a different stage.
+        initialConsecutiveFailures: 0,
+        initialDone: 0,
+        initialFails: 0,
+      });
+      topicCandidates = topicStage.candidates;
+      stage5UsageTotals = aggregateTotals(stage5UsageTotals, topicStage.usage);
+      stage5TaskCount += topicStage.taskCount;
+      stage5Done += topicStage.done;
+      stage5Fails += topicStage.fails;
+      cb.done += topicStage.done;
+      cb.fails += topicStage.fails;
+      // `cb.consecutive` is not read again after this point (only
+      // `cb.done`/`cb.fails` feed the final run status below), so
+      // overwriting it here only affects reporting, never triggers a
+      // second, cumulative abort check.
+      cb.consecutive = topicStage.endingConsecutive;
+      failures.push(...topicStage.failures);
+      moduleUsage.push(...topicStage.usageByTask);
+      runAbortedByRollback ||= topicStage.rollbackFailed;
+      // The topic stage already made its own (now-isolated) abort decision
+      // internally; do not re-derive one from cumulative cb totals here.
+      const combinedCircuitBreaker = topicStage.circuitBreakerTriggered;
+
+      if (combinedCircuitBreaker || topicStage.rollbackFailed) {
+        byStageAcc["5"] = stage5UsageTotals;
+        finalizeRun(db, runId, "aborted", {
+          totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
+          byStage: byStageAcc,
+          byModule: moduleUsage,
+          modulesRefined: modules.map((module) => ({
+            id: module.id,
+            paths: module.paths,
+            ...(module.displayTitle ? { displayTitle: module.displayTitle } : {}),
+          })),
+          tasksDone: cb.done,
+          tasksFailed: cb.fails,
+        });
+        const aborted = buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, combinedCircuitBreaker, cb.done, cb.fails);
+        if (skippedFlowCandidates.length > 0) aborted.skippedFlowCandidates = skippedFlowCandidates;
+        return aborted;
+      }
+    }
+
+    if (stage5TaskCount > 0) byStageAcc["5"] = stage5UsageTotals;
+
+    // Stale cleanup mirrors syncClassDiagrams: generated flow artifacts
+    // whose candidate disappeared are removed; human/mixed pages are
+    // preserved. Skipped when stage 5 is disabled (maxFlows 0) or the run
+    // aborted before finishing stage 5.
+    if (stage5GateOpen && !runAbortedByRollback) {
+      await syncStaleFlowArtifacts(absRoot, stage5Candidates);
+    }
+    if (topicStageGateOpen && topicCandidates.length > 0 && !runAbortedByRollback) {
+      await syncStaleTopicArtifacts(absRoot, topicCandidates);
+    }
 
     // H (rev2): if ordered > 0 but cb.done === 0, this is a pipeline failure
     // (we finished nothing). Status becomes "completed_with_failures" (exit 1),
@@ -925,7 +1716,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       status = "completed";
     }
     finalizeRun(db, runId, status, {
-      totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
+      totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
       byStage: byStageAcc,
       byModule: moduleUsage,
       modulesRefined: modules.map((m) => ({
@@ -942,7 +1733,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       const snapshotHash = await computeSnapshotHash(absRoot);
       const pendingBatch: PendingBatchRef | null =
         cb.fails > 0 || cb.done === 0
-          ? { runId, stage: 4, done: cb.done, total: ordered.length }
+          ? stage5Fails > 0
+            ? { runId, stage: 5, done: stage5Done, total: stage5TaskCount }
+            : { runId, stage: 4, done: moduleTasksDone, total: ordered.length }
           : null;
       await writeManifestIfChanged(
         absRoot,
@@ -958,24 +1751,429 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // of newly-created modules. Without this, the overview generated by init has
     // missing pages (init ran before batch) → verify reports
     // broken_internal_link warnings (and `(Q)` fails).
+    let skippedFlowsHub: BatchRunResult["skippedFlowsHub"];
+    let skippedAuxiliaryHub: BatchRunResult["skippedAuxiliaryHub"];
+    let skippedTopicsHub: BatchRunResult["skippedTopicsHub"];
     if (cb.done > 0) {
-      await regenerateArchitectureOverview(absRoot);
+      const regeneration = await regenerateArchitectureOverview(
+        absRoot,
+        topicStageGateOpen
+          ? { acceptedTopicSlugs: new Set(topicCandidates.map((candidate) => candidate.slug)) }
+          : {},
+      );
+      // R10.1 C: a preserved human/mixed/unparseable flows hub is never a
+      // silent skip — surface it in the run result (not persisted).
+      if (regeneration.flowsHub.outcome === "skipped-owner") {
+        skippedFlowsHub = {
+          path: regeneration.flowsHub.path!,
+          owner: regeneration.flowsHub.owner ?? null,
+        };
+      }
+      if (regeneration.auxiliaryHub.outcome === "skipped-owner") {
+        skippedAuxiliaryHub = {
+          path: regeneration.auxiliaryHub.path!,
+          owner: regeneration.auxiliaryHub.owner ?? null,
+        };
+      }
+      if (regeneration.topicsHub.outcome === "skipped-owner") {
+        skippedTopicsHub = {
+          path: regeneration.topicsHub.path!,
+          owner: regeneration.topicsHub.owner ?? null,
+        };
+      }
     }
 
-    return buildResult(
+    const finalResult = buildResult(
       runId,
       status,
-      stageUsageTotals,
+      aggregateTotals(stageUsageTotals, stage5UsageTotals),
       moduleUsage,
       failures,
       false,
+      cb.done,
+      cb.fails,
     );
+    if (skippedFlowsHub) finalResult.skippedFlowsHub = skippedFlowsHub;
+    if (skippedAuxiliaryHub) finalResult.skippedAuxiliaryHub = skippedAuxiliaryHub;
+    if (skippedTopicsHub) finalResult.skippedTopicsHub = skippedTopicsHub;
+    if (skippedFlowCandidates.length > 0) finalResult.skippedFlowCandidates = skippedFlowCandidates;
+    return finalResult;
   } finally {
     db.close();
   }
 }
 
 // === Helpers ===
+
+interface TopicStageResult {
+  usage: StageUsage;
+  taskCount: number;
+  done: number;
+  fails: number;
+  candidates: TopicCandidate[];
+  failures: BatchRunResult["failures"];
+  usageByTask: BatchRunResult["byModule"];
+  rollbackFailed: boolean;
+  circuitBreakerTriggered: boolean;
+  endingConsecutive: number;
+}
+
+async function runSemanticTopicStage(opts: {
+  db: import("better-sqlite3").Database;
+  runId: number;
+  absRoot: string;
+  modules: Module[];
+  edges: ReadonlyArray<{ from: string; to: string }>;
+  flowCandidates: ReadonlyArray<FlowCandidate>;
+  pathRoleConfig: import("./modules.js").PathRoleConfig | undefined;
+  llmClient: LlmClient;
+  language: Language;
+  pricing: import("./pricing.js").PricingOverride | undefined;
+  thinking: "disabled" | "adaptive" | "omit" | undefined;
+  maxTopics: number;
+  maxAnchors: number;
+  sourceChars: number;
+  outputTokens: number;
+  maxRepairAttempts: number;
+  mode: "run" | "resume" | "only";
+  onlyIdentity: string | null;
+  allowedFlowSlugs?: ReadonlySet<string>;
+  initialConsecutiveFailures: number;
+  initialDone: number;
+  initialFails: number;
+}): Promise<TopicStageResult> {
+  const result: TopicStageResult = {
+    usage: emptyUsage(), taskCount: 0, done: 0, fails: 0, candidates: [],
+    failures: [], usageByTask: [], rollbackFailed: false, circuitBreakerTriggered: false,
+    endingConsecutive: opts.initialConsecutiveFailures,
+  };
+  const inventory = await buildTopicPlanningInventory({
+    repoRoot: opts.absRoot,
+    modules: opts.modules,
+    edges: opts.edges,
+    flowCandidates: opts.flowCandidates,
+    ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
+    ...(opts.allowedFlowSlugs !== undefined ? { allowedFlowSlugs: opts.allowedFlowSlugs } : {}),
+  });
+  const activeAnchors = new Set([
+    ...inventory.modules.flatMap((module) => module.anchors),
+    ...inventory.flows.flatMap((flow) => flow.anchors),
+  ]);
+  const hasCrossModuleBasis =
+    inventory.modules.filter((module) => module.role === "product").length >= 2 ||
+    inventory.flows.some((flow) => flow.modules.length >= 3);
+  // Small or weakly indexed repositories are a deterministic no-op, not a
+  // paid planner failure. Once planning starts, invalid/exhausted output still
+  // remains a visible failed task with no fallback topics.
+  const plannerTarget = "topic-plan";
+  let plannerTask: { id: number; attempt: number; checkpoint_json: string | null };
+  if (opts.mode === "only") {
+    const existing = opts.db.prepare(
+      "SELECT id, checkpoint_json FROM batch_tasks WHERE run_id = ? AND stage = 5 AND target = ?",
+    ).get(opts.runId, plannerTarget) as { id: number; checkpoint_json: string | null } | undefined;
+    if (!existing) throw new Error("topic plan is unavailable for --only; run or resume the batch first");
+    const checkpoint = existing.checkpoint_json ? safeJsonParse<TaskCheckpoint>(existing.checkpoint_json) : null;
+    plannerTask = { id: existing.id, attempt: checkpoint?.attempt ?? 0, checkpoint_json: existing.checkpoint_json };
+  } else {
+    const existing = opts.db.prepare(
+      "SELECT id, checkpoint_json FROM batch_tasks WHERE run_id = ? AND stage = 5 AND target = ?",
+    ).get(opts.runId, plannerTarget) as { id: number; checkpoint_json: string | null } | undefined;
+    if (existing !== undefined) {
+      const checkpoint = existing.checkpoint_json ? safeJsonParse<TaskCheckpoint>(existing.checkpoint_json) : null;
+      plannerTask = { id: existing.id, attempt: checkpoint?.attempt ?? 0, checkpoint_json: existing.checkpoint_json };
+    } else {
+      if (!hasCrossModuleBasis || activeAnchors.size < 5) return result;
+      plannerTask = getOrCreateTask(opts.db, opts.runId, 5, plannerTarget);
+    }
+  }
+  const priorPlannerCheckpoint = plannerTask.checkpoint_json
+    ? safeJsonParse<TaskCheckpoint>(plannerTask.checkpoint_json)
+    : null;
+  if (priorPlannerCheckpoint?.status === "done" && priorPlannerCheckpoint.topicPlan) {
+    result.candidates = priorPlannerCheckpoint.topicPlan;
+  } else {
+    result.taskCount++;
+    const startedAt = Date.now();
+    let attempt = plannerTask.attempt;
+    const usageHistory = [...(priorPlannerCheckpoint?.usageHistory ?? [])];
+    const diagnosticHistory = [...(priorPlannerCheckpoint?.diagnosticHistory ?? [])];
+    let taskUsage = emptyUsage();
+    let priorCandidate = "";
+    let acceptedPlanRaw = "";
+    let planErrors: TopicPlanValidationError[] = [];
+    let taskError: TaskCheckpoint["error"] | undefined;
+    let terminalPlannerError: TaskCheckpoint["error"] | undefined;
+
+    for (let slot = 0; slot < 1 + opts.maxRepairAttempts; slot++) {
+      attempt++;
+      const promptKind = slot === 0 || priorCandidate === "" ? "initial" : "repair";
+      const prompt = promptKind === "initial"
+        ? buildTopicPlanPrompt(inventory, opts.maxTopics, opts.maxAnchors, opts.language, opts.sourceChars)
+        : buildTopicPlanRepairPrompt(inventory, opts.maxTopics, opts.maxAnchors, priorCandidate, planErrors, opts.language, opts.sourceChars);
+      let generated: GenerateResult;
+      try {
+        generated = await opts.llmClient.generate({
+          system: prompt.system,
+          user: prompt.user,
+          maxTokens: opts.outputTokens,
+          ...(opts.thinking ? { thinking: opts.thinking } : {}),
+        });
+      } catch (error) {
+        const usageEntry: UsageAttempt = { attempt, usage: null, usageKnown: false, costUsd: null, finishedAt: Date.now() };
+        usageHistory.push(usageEntry);
+        taskUsage = accumulateUsage(taskUsage, usageEntry, opts.pricing);
+        result.usage = accumulateUsage(result.usage, usageEntry, opts.pricing);
+        planErrors = [{ code: "topic_plan_invalid_json", message: (error as Error).message }];
+        diagnosticHistory.push(topicPlanDiagnostic(attempt, promptKind, "llm_error", priorCandidate, planErrors));
+        priorCandidate = "";
+        if (error instanceof LlmTimeoutError) {
+          terminalPlannerError = { code: "llm_timeout", message: error.message, failedAt: 5 };
+          break;
+        }
+        continue;
+      }
+      const usageEntry: UsageAttempt = {
+        attempt,
+        usage: generated.usage,
+        usageKnown: true,
+        costUsd: computeCostFromUsage(generated.usage, opts.pricing),
+        finishedAt: Date.now(),
+        ...(generated.stopReason !== undefined ? { stopReason: generated.stopReason } : {}),
+        ...(generated.rawStopReason !== undefined ? { rawStopReason: generated.rawStopReason } : {}),
+      };
+      usageHistory.push(usageEntry);
+      taskUsage = accumulateUsage(taskUsage, usageEntry, opts.pricing);
+      result.usage = accumulateUsage(result.usage, usageEntry, opts.pricing);
+      if (generated.stopReason === "length" || generated.stopReason === "incomplete") {
+        const outcome = generated.stopReason === "length" ? "truncated_by_token_limit" : "incomplete_generation";
+        planErrors = [{
+          code: "topic_plan_invalid_json",
+          message: `topic planning ended with stop reason ${generated.rawStopReason ?? generated.stopReason}`,
+        }];
+        diagnosticHistory.push(topicPlanDiagnostic(
+          attempt,
+          promptKind,
+          outcome,
+          generated.content,
+          planErrors,
+          generated.stopReason,
+          generated.rawStopReason,
+        ));
+        priorCandidate = "";
+        continue;
+      }
+      priorCandidate = generated.content;
+      const validation = validateTopicPlan(generated.content, inventory, {
+        maxTopics: opts.maxTopics,
+        maxAnchors: opts.maxAnchors,
+        maxSourceChars: opts.sourceChars,
+      });
+      planErrors = validation.errors;
+      diagnosticHistory.push(topicPlanDiagnostic(
+        attempt,
+        promptKind,
+        validation.ok ? "success" : "artifact_validation_failed",
+        generated.content,
+        planErrors,
+        generated.stopReason,
+        generated.rawStopReason,
+      ));
+      if (validation.ok) {
+        result.candidates = validation.candidates;
+        acceptedPlanRaw = generated.content;
+        break;
+      }
+    }
+
+    if (result.candidates.length === 0) {
+      taskError = terminalPlannerError ?? { code: "topic_plan_exhausted", message: `topic-plan exhausted ${1 + opts.maxRepairAttempts} bounded attempt(s) without an accepted closed plan`, failedAt: 5 };
+      const checkpoint: TaskCheckpoint = { stage: 5, status: "failed", attempt, startedAt, finishedAt: Date.now(), usageHistory, diagnosticHistory, error: taskError };
+      opts.db.prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
+        .run("failed", JSON.stringify(checkpoint), Date.now(), plannerTask.id);
+      result.fails++;
+      result.endingConsecutive = opts.initialConsecutiveFailures + 1;
+      result.failures.push({ taskId: plannerTask.id, module: plannerTarget, error: taskError, retryCommand: `livewiki batch resume ${opts.runId}` });
+      result.usageByTask.push({ module: plannerTarget, ...taskUsage });
+      return result;
+    }
+
+    const checkpoint: TaskCheckpoint = {
+      stage: 5, status: "done", attempt, startedAt, finishedAt: Date.now(),
+      usageHistory, diagnosticHistory, topicPlan: result.candidates,
+      topicPlanRaw: acceptedPlanRaw,
+    };
+    opts.db.prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
+      .run("done", JSON.stringify(checkpoint), Date.now(), plannerTask.id);
+    result.done++;
+    result.usageByTask.push({ module: plannerTarget, ...taskUsage });
+  }
+
+  const targets = opts.onlyIdentity === null
+    ? result.candidates
+    : result.candidates.filter((candidate) => candidate.evidenceHash === opts.onlyIdentity || candidate.slug === opts.onlyIdentity);
+  if (opts.onlyIdentity !== null && targets.length === 0) throw new Error(`topic "${opts.onlyIdentity}" not found in the accepted plan`);
+  await ensureTopicsIndexScaffold(opts.absRoot);
+
+  let consecutive = result.done > 0 ? 0 : opts.initialConsecutiveFailures;
+  result.endingConsecutive = consecutive;
+  let cumulativeDone = opts.initialDone + result.done;
+  let cumulativeFails = opts.initialFails + result.fails;
+  for (const candidate of targets) {
+    result.taskCount++;
+    const target = `topic:${candidate.evidenceHash}`;
+    const task = getOrCreateTask(opts.db, opts.runId, 5, target);
+    const priorCheckpoint = task.checkpoint_json ? safeJsonParse<TaskCheckpoint>(task.checkpoint_json) : null;
+    const startedAt = Date.now();
+    let attempt = task.attempt;
+    const usageHistory = [...(priorCheckpoint?.usageHistory ?? [])];
+    const diagnosticHistory = [...(priorCheckpoint?.diagnosticHistory ?? [])];
+    let taskUsage = emptyUsage();
+    const wikiPath = `livewiki/topics/${candidate.slug}.md`;
+    const existing = await safeIo.readText(opts.absRoot, wikiPath).catch(() => null);
+    const owner = readOwnerFromFrontmatter(existing);
+    let taskError: TaskCheckpoint["error"] | undefined;
+    let artifacts: TaskCheckpoint["artifacts"] | undefined;
+    if (owner === "human" || owner === "mixed" || owner === "untrusted" || owner === "unparseable") {
+      taskError = { code: "refused_owned_topic", message: `topic page ${wikiPath} is not automation-owned; human/mixed/untrusted content is preserved`, failedAt: 5 };
+    } else {
+      let priorCandidate = "";
+      let priorErrors: ArtifactValidationError[] = [];
+      for (let slot = 0; slot < 1 + opts.maxRepairAttempts; slot++) {
+        attempt++;
+        const promptKind = slot === 0 || priorCandidate === "" ? "initial" : "repair";
+        const attemptResult = await attemptTopicGeneration({
+          attemptNumber: attempt,
+          candidate,
+          language: opts.language,
+          llmClient: opts.llmClient,
+          charBudget: opts.sourceChars,
+          promptKind,
+          priorCandidate,
+          priorErrors,
+          absRoot: opts.absRoot,
+          pricing: opts.pricing,
+          maxTokens: opts.outputTokens,
+          ...(opts.thinking ? { thinking: opts.thinking } : {}),
+          ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
+          ...(promptKind === "repair" ? { repairAttemptContext: { attempt: slot, total: opts.maxRepairAttempts } } : {}),
+        });
+        usageHistory.push(attemptResult.usageEntry);
+        taskUsage = accumulateUsage(taskUsage, attemptResult.usageEntry, opts.pricing);
+        result.usage = accumulateUsage(result.usage, attemptResult.usageEntry, opts.pricing);
+        priorCandidate = attemptResult.normalizedRaw || priorCandidate;
+        priorErrors = attemptResult.validationErrors;
+        diagnosticHistory.push(topicAttemptDiagnostic(attempt, promptKind, attemptResult));
+        if (attemptResult.llmError) {
+          priorErrors = [{ code: "llm_error", message: attemptResult.llmError.message, location: "global" }];
+          priorCandidate = "";
+          if (attemptResult.llmError.code === "llm_timeout") {
+            taskError = { code: "llm_timeout", message: attemptResult.llmError.message, failedAt: 5 };
+            break;
+          }
+          continue;
+        }
+        if (attemptResult.diagnosticOutcome === "incomplete_generation" || attemptResult.diagnosticOutcome === "truncated_by_token_limit") {
+          priorCandidate = "";
+          priorErrors = [];
+          continue;
+        }
+        if (attemptResult.artifact === null) continue;
+        const write = await tryWriteAndVerify(opts.absRoot, wikiPath, attemptResult.artifact, existing, true);
+        if (write.rollbackFailed) {
+          taskError = { code: "rollback_failed", message: write.rollbackFailed.reason, failedAt: 5 };
+          result.rollbackFailed = true;
+          break;
+        }
+        if (write.exception) {
+          priorErrors = [{ code: "verify_failed", message: write.exception.message, location: "global" }];
+          continue;
+        }
+        if (write.issues) {
+          priorErrors = verifyIssuesToValidationErrors(write.issues);
+          continue;
+        }
+        artifacts = write.artifacts;
+        break;
+      }
+      if (!artifacts && !taskError) {
+        taskError = { code: "repair_exhausted", message: `task "${target}" exhausted its bounded generation/repair attempts`, failedAt: 5 };
+      }
+    }
+
+    if (taskError) {
+      const checkpoint: TaskCheckpoint = { stage: 5, status: "failed", attempt, startedAt, finishedAt: Date.now(), usageHistory, diagnosticHistory, error: taskError };
+      opts.db.prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
+        .run("failed", JSON.stringify(checkpoint), Date.now(), task.id);
+      result.fails++; cumulativeFails++; consecutive++;
+      result.failures.push({ taskId: task.id, module: target, error: taskError, retryCommand: `livewiki batch --only ${target} ${opts.runId}` });
+    } else {
+      const checkpoint: TaskCheckpoint = { stage: 5, status: "done", attempt, startedAt, finishedAt: Date.now(), usageHistory, diagnosticHistory, ...(artifacts ? { artifacts } : {}) };
+      opts.db.prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
+        .run("done", JSON.stringify(checkpoint), Date.now(), task.id);
+      result.done++; cumulativeDone++; consecutive = 0;
+    }
+    result.endingConsecutive = consecutive;
+    result.usageByTask.push({ module: target, ...taskUsage });
+    const attempted = cumulativeDone + cumulativeFails;
+    if (result.rollbackFailed || consecutive >= 3 || (attempted >= 3 && cumulativeFails / attempted > 0.5)) {
+      result.circuitBreakerTriggered = !result.rollbackFailed;
+      break;
+    }
+  }
+  return result;
+}
+
+function topicPlanDiagnostic(
+  attempt: number,
+  promptKind: "initial" | "repair",
+  outcome: DiagnosticOutcome,
+  candidate: string,
+  errors: readonly TopicPlanValidationError[],
+  stopReason?: StopReason,
+  rawStopReason?: string,
+): DiagnosticAttempt {
+  const summaries: DiagnosticErrorSummary[] = errors.slice(0, DIAGNOSTIC_MAX_ERRORS).map((error) => ({
+    code: error.code,
+    location: "global",
+    message: error.message.slice(0, DIAGNOSTIC_TEXT_CAP),
+  }));
+  return {
+    attempt,
+    ...(stopReason ? { stopReason } : {}),
+    ...(rawStopReason ? { rawStopReason } : {}),
+    outcome,
+    promptKind,
+    errors: summaries,
+    truncatedErrorCount: Math.max(0, errors.length - summaries.length),
+    ...(candidate ? { candidateChars: candidate.length, candidateSha256: sha256(candidate) } : {}),
+    finishedAt: Date.now(),
+  };
+}
+
+function topicAttemptDiagnostic(
+  attempt: number,
+  promptKind: "initial" | "repair",
+  result: Stage4AttemptResult,
+): DiagnosticAttempt {
+  const summarized = summarizeDiagnosticErrors(result.validationErrors);
+  return {
+    attempt,
+    ...(result.usageEntry.stopReason !== undefined
+      ? { stopReason: result.usageEntry.stopReason }
+      : {}),
+    ...(result.usageEntry.rawStopReason !== undefined
+      ? { rawStopReason: result.usageEntry.rawStopReason }
+      : {}),
+    outcome: result.diagnosticOutcome ?? "success",
+    promptKind,
+    errors: summarized.errors,
+    truncatedErrorCount: summarized.truncatedErrorCount,
+    ...(result.diagnosticCandidate !== null
+      ? { candidateChars: result.diagnosticCandidate.length, candidateSha256: sha256(result.diagnosticCandidate) }
+      : {}),
+    finishedAt: Date.now(),
+  };
+}
 
 /**
  * Error thrown when the pipeline finishes with 0 tasks despite the heuristic
@@ -1061,7 +2259,7 @@ function accumulateUsage(
 function getOrCreateTask(
   db: import("better-sqlite3").Database,
   runId: number,
-  stage: 1 | 2 | 3 | 4,
+  stage: BatchStage,
   target: string,
 ): { id: number; attempt: number; checkpoint_json: string | null } {
   const existing = db
@@ -1084,7 +2282,7 @@ function getOrCreateTask(
 function createOrGetTask(
   db: import("better-sqlite3").Database,
   runId: number,
-  stage: 1 | 2 | 3 | 4,
+  stage: BatchStage,
   target: string,
   mode: "run" | "resume" | "only",
 ): { id: number; attempt: number; checkpoint_json: string | null } | null {
@@ -1534,23 +2732,66 @@ function injectManualBlocksBySection(existing: string, newContent: string): stri
 }
 
 /**
+ * Best-effort rollback of written artifacts (R10.1 item A). For each entry,
+ * restores the snapshot when one existed, otherwise removes the newly
+ * created file. With `guardedRemoval` (the exception path, where a failed
+ * write may never have landed) a removal only runs when the path is still a
+ * regular file — a pre-existing directory there is not ours to delete.
+ * Returns the failure reasons; empty means fully rolled back.
+ */
+async function rollbackWrittenArtifacts(
+  absRoot: string,
+  entries: ReadonlyArray<{ path: string; snapshot: string | null }>,
+  guardedRemoval: boolean,
+): Promise<string[]> {
+  const reasons: string[] = [];
+  for (const { path, snapshot } of entries) {
+    if (snapshot !== null) {
+      try {
+        await safeIo.writeText(absRoot, path, snapshot);
+      } catch (e) {
+        reasons.push(`failed to restore previous content of ${path}: ${(e as Error).message}`);
+      }
+      continue;
+    }
+    if (guardedRemoval) {
+      const stat = await nodeFs.lstat(nodePath.join(absRoot, path)).catch(() => null);
+      if (!stat?.isFile()) continue;
+    }
+    try {
+      await safeIo.remove(absRoot, path);
+    } catch (e) {
+      reasons.push(`failed to remove new file ${path}: ${(e as Error).message}`);
+    }
+  }
+  return reasons;
+}
+
+/**
  * Phase-5 plan (X): wiki page write transaction. Algorithm:
  *   1. If `existing !== null`, extract `<!-- lw:manual -->` blocks from it
  *      with approximate position by section and reinsert them into
  *      `newContent` in the same section (byte-for-byte; review finding #7b).
  *   2. Write `finalContent` via safe-io.
- *   3. Run `runVerify` on the repo.
+ *   3. Run `runVerify` on the repo. Steps 2+3 run inside ONE try/catch
+ *      (R10.1 item A): ANY exception — the write failing, the verifier
+ *      crashing — triggers the same best-effort rollback as a rejection;
+ *      without this a verifier exception left the candidate on disk.
  *   4. If there's an error-level issue touching this page: rollback (remove if
  *      it was new, restore if it was a rewrite). Review finding #4: if the
  *      rollback fails, this is TERMINAL — we return `rollback_failed`
  *      and the orchestrator marks the task as final failure (does not retry
- *      and does not let the invalid candidate persist).
- *   5. Returns `{ ok, artifacts? | issues? | rollbackFailed? }`.
+ *      and does not let the invalid candidate persist) — terminal BOTH when
+ *      the rollback was triggered by an exception and when it was triggered
+ *      by issues returned normally (R10.1 item A).
+ *   5. Returns `{ ok, artifacts? | issues? | exception? | rollbackFailed? }`.
  */
 interface WriteResult {
   ok: boolean;
   artifacts?: { wikiPath: string; pageHash: string };
   issues?: VerifyIssue[];
+  /** The write/verify step threw; the page was rolled back. Terminal for the task. */
+  exception?: { message: string };
   /** True se o verify rejeitou E o rollback subsequente falhou. Terminal. */
   rollbackFailed?: { reason: string };
 }
@@ -1560,6 +2801,7 @@ async function tryWriteAndVerify(
   wikiPath: string,
   newContent: string,
   existing: string | null,
+  rejectAnySeverity = false,
 ): Promise<WriteResult> {
   // 1. Preserves manual blocks IN THE ORIGINAL POSITION (review finding #7b).
   //    Strategy: extract blocks grouped by section (heading slug
@@ -1589,41 +2831,44 @@ async function tryWriteAndVerify(
     }
   }
 
-  const isNew = existing === null;
   const snapshot = existing;
 
-  // 2. Escreve via safe-io
-  await safeIo.writeText(absRoot, wikiPath, finalContent);
-
-  // 3. Verify
-  const verifyResult = await runVerify(absRoot);
+  // 2+3. Write via safe-io, then verify — ALL inside one try/catch
+  //    (R10.1 item A): ANY exception (the write failing, the verifier
+  //    crashing) rolls the page back best-effort, exactly like a rejection.
+  let verifyResult: VerifyResult;
+  try {
+    await safeIo.writeText(absRoot, wikiPath, finalContent);
+    verifyResult = await runVerify(absRoot);
+  } catch (e) {
+    const reasons = await rollbackWrittenArtifacts(
+      absRoot,
+      [{ path: wikiPath, snapshot }],
+      true,
+    );
+    if (reasons.length > 0) {
+      return { ok: false, rollbackFailed: { reason: reasons.join("; ") } };
+    }
+    return { ok: false, exception: { message: (e as Error).message } };
+  }
   const broken = verifyResult.issues.filter(
-    (i) => i.wikiPath === wikiPath && i.severity === "error",
+    (i) => i.wikiPath === wikiPath && (rejectAnySeverity || i.severity === "error"),
   );
 
   if (broken.length > 0) {
     // 4. ROLLBACK MANDATORY. If the rollback fails, this is TERMINAL
     //    (review finding #4): invalid candidate MUST NEVER persist
     //    on disk and the orchestrator must signal the failure.
-    let rollbackError: string | null = null;
-    if (isNew) {
-      try {
-        await safeIo.remove(absRoot, wikiPath);
-      } catch (e) {
-        rollbackError = `failed to remove new file ${wikiPath}: ${(e as Error).message}`;
-      }
-    } else if (snapshot !== null) {
-      try {
-        await safeIo.writeText(absRoot, wikiPath, snapshot);
-      } catch (e) {
-        rollbackError = `failed to restore previous content of ${wikiPath}: ${(e as Error).message}`;
-      }
-    }
-    if (rollbackError !== null) {
+    const reasons = await rollbackWrittenArtifacts(
+      absRoot,
+      [{ path: wikiPath, snapshot }],
+      false,
+    );
+    if (reasons.length > 0) {
       return {
         ok: false,
         issues: broken,
-        rollbackFailed: { reason: rollbackError },
+        rollbackFailed: { reason: reasons.join("; ") },
       };
     }
     return { ok: false, issues: broken };
@@ -1717,6 +2962,9 @@ function diagnosticAttempt(input: {
     ...(candidate !== null
       ? { candidateChars: candidate.length, candidateSha256: sha256(candidate) }
       : {}),
+    ...(input.attemptResult.mechanicalRepairs !== undefined
+      ? { mechanicalRepairs: input.attemptResult.mechanicalRepairs }
+      : {}),
     finishedAt: Date.now(),
   };
 }
@@ -1752,6 +3000,8 @@ interface Stage4AttemptResult {
   validationErrors: ArtifactValidationError[];
   /** If the LLM call failed, the error lives here. */
   llmError: { code: string; message: string } | null;
+  /** Content-safe deterministic repairs applied after the final LLM repair. */
+  mechanicalRepairs?: MechanicalArtifactRepair[];
 }
 
 interface AttemptOpts {
@@ -1772,6 +3022,14 @@ interface AttemptOpts {
   pricing: import("./pricing.js").PricingOverride | undefined;
   maxTokens: number;
   thinking?: "disabled" | "adaptive" | "omit" | undefined;
+  pathRoleConfig?: import("./modules.js").PathRoleConfig | undefined;
+  /** True only for the final configured repair slot. */
+  allowMechanicalFallback: boolean;
+  /** Optional repair-attempt position; only set when `promptKind === "repair"`. */
+  repairAttemptContext?: {
+    attempt: number;
+    total: number;
+  };
 }
 
 /**
@@ -1792,6 +3050,7 @@ async function attemptStage4Generation(
   // Build prompt
   let prompt: { system: string; user: string };
   if (opts.promptKind === "repair") {
+    const attemptContext = opts.repairAttemptContext ?? { attempt: 1, total: 1 };
     prompt = buildRepairPrompt(
       opts.module,
       ctx.closedKeyList,
@@ -1801,6 +3060,8 @@ async function attemptStage4Generation(
       opts.priorErrors,
       opts.charBudget,
       opts.language,
+      attemptContext,
+      classifyModuleRole(opts.module, opts.pathRoleConfig),
     );
   } else {
     prompt = buildStage4Prompt(
@@ -1809,6 +3070,7 @@ async function attemptStage4Generation(
       ctx.symbolsTable,
       ctx.truncatedSource,
       opts.language,
+      classifyModuleRole(opts.module, opts.pathRoleConfig),
     );
   }
 
@@ -1933,9 +3195,32 @@ async function attemptStage4Generation(
   // Validate against closed key list
   const validation = validateStage4Artifact(normalize.content, ctx.closedKeyList, {
     moduleId: opts.module.id,
-    moduleRole: classifyModuleRole(opts.module),
+    moduleRole: classifyModuleRole(opts.module, opts.pathRoleConfig),
   });
   if (!validation.ok) {
+    if (opts.allowMechanicalFallback) {
+      const mechanical = repairStage4ArtifactMechanically(
+        normalize.content,
+        validation.errors,
+        ctx.closedKeyList,
+        {
+          moduleId: opts.module.id,
+          moduleRole: classifyModuleRole(opts.module),
+        },
+      );
+      if (mechanical !== null) {
+        return {
+          usageEntry,
+          normalizedRaw: raw,
+          diagnosticCandidate: mechanical.content,
+          diagnosticOutcome: null,
+          artifact: mechanical.content,
+          validationErrors: [],
+          llmError: null,
+          mechanicalRepairs: mechanical.repairs,
+        };
+      }
+    }
     return {
       usageEntry,
       normalizedRaw: raw,
@@ -1982,11 +3267,22 @@ interface ModuleDocContext {
   truncatedSource: string;
 }
 
-async function buildModuleDocContext(
+interface ModuleSymbolRow {
+  key: string;
+  name: string;
+  kind: string;
+  signature: string | null;
+}
+
+/**
+ * Raw `key, name, kind, signature` rows for one module's active symbols.
+ * Shared by `buildModuleDocContext` (product LLM prompt context) and the
+ * deterministic auxiliary-page path (no LLM, no source truncation needed).
+ */
+async function getModuleSymbolRows(
   absRoot: string,
   module: Module,
-  charBudget: number,
-): Promise<ModuleDocContext> {
+): Promise<ModuleSymbolRow[]> {
   const db = openIndex(
     await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db"),
   );
@@ -1996,29 +3292,32 @@ async function buildModuleDocContext(
       `SELECT key, name, kind, signature FROM symbols
        WHERE status = 'active' AND file_id IN (${fileIds.map(() => "?").join(",") || "NULL"})`,
     );
-    const symbols = (fileIds.length > 0 ? stmt.all(...fileIds) : []) as Array<{
-      key: string;
-      name: string;
-      kind: string;
-      signature: string | null;
-    }>;
-    const closedKeyList = symbols.map((s) => s.key).sort();
-    const symbolsTable = symbols
-      .map((s) => `- ${s.key} (${s.kind}): ${s.signature ?? ""}`)
-      .join("\n");
-    // Fair per-file truncation: sequential first-fit left later files (and
-    // their closed-list keys) with zero source context, which strongly
-    // correlates with invented anchors. Give every path a share of the
-    // budget so stage-4 always sees a slice of each module file.
-    const truncatedSource = await buildFairTruncatedSource(
-      absRoot,
-      module.paths,
-      charBudget,
-    );
-    return { closedKeyList, symbolsTable, truncatedSource };
+    return (fileIds.length > 0 ? stmt.all(...fileIds) : []) as ModuleSymbolRow[];
   } finally {
     db.close();
   }
+}
+
+async function buildModuleDocContext(
+  absRoot: string,
+  module: Module,
+  charBudget: number,
+): Promise<ModuleDocContext> {
+  const symbols = await getModuleSymbolRows(absRoot, module);
+  const closedKeyList = symbols.map((s) => s.key).sort();
+  const symbolsTable = symbols
+    .map((s) => `- ${s.key} (${s.kind}): ${s.signature ?? ""}`)
+    .join("\n");
+  // Fair per-file truncation: sequential first-fit left later files (and
+  // their closed-list keys) with zero source context, which strongly
+  // correlates with invented anchors. Give every path a share of the
+  // budget so stage-4 always sees a slice of each module file.
+  const truncatedSource = await buildFairTruncatedSource(
+    absRoot,
+    module.paths,
+    charBudget,
+  );
+  return { closedKeyList, symbolsTable, truncatedSource };
 }
 
 /**
@@ -2128,6 +3427,8 @@ function buildResult(
   byModule: BatchRunResult["byModule"],
   failures: BatchRunResult["failures"],
   circuitBreakerTriggered: boolean,
+  tasksDone: number,
+  tasksFailed: number,
 ): BatchRunResult {
   return {
     runId,
@@ -2136,6 +3437,8 @@ function buildResult(
     byModule,
     failures,
     circuitBreakerTriggered,
+    tasksDone,
+    tasksFailed,
   };
 }
 
@@ -2163,4 +3466,795 @@ export function statusToExitCode(
   if (status === "completed") return 0;
   if (status === "completed_with_failures") return 1;
   return 2; // aborted
+}
+
+// === Stage 5 attempt abstraction (SPEC §"Semantic product-flow layer") ===
+
+/** Result of ONE stage-5 LLM attempt; adds the extracted diagram source. */
+interface Stage5AttemptResult extends Stage4AttemptResult {
+  /** Extracted, trimmed diagram source (non-null iff artifact !== null). */
+  diagramSource: string | null;
+}
+
+interface Stage5AttemptOpts {
+  attemptNumber: number;
+  candidate: FlowCandidate;
+  /** Final module plan (walk order + paths for the source excerpt). */
+  modules: ReadonlyArray<Module>;
+  language: Language;
+  llmClient: LlmClient;
+  charBudget: number;
+  promptKind: "initial" | "repair";
+  priorCandidate: string;
+  priorErrors: ArtifactValidationError[];
+  absRoot: string;
+  /** Pricing override preserved across repairs (same as stage 4). */
+  pricing: import("./pricing.js").PricingOverride | undefined;
+  maxTokens: number;
+  thinking?: "disabled" | "adaptive" | "omit" | undefined;
+  /** Node/edge budget for the diagram gate. */
+  diagramBudgets: FlowDiagramBudget;
+  /** Optional repair-attempt position; only set when `promptKind === "repair"`. */
+  repairAttemptContext?: {
+    attempt: number;
+    total: number;
+  };
+}
+
+/**
+ * ONE stage-5 LLM call: build the bounded flow context, generate, and run
+ * the stage-5 artifact pipeline —
+ *
+ *   normalize → extract the inline diagram → validate the
+ *   placeholder-substituted page (flow pageKind) → diagram gates
+ *   (source cap → node/edge budget → real Mermaid parse).
+ *
+ * The caller orchestrates the bounded loop; this function is "one turn of
+ * the loop". artifact-repair.ts (the module-page mechanical fallback)
+ * still stays fail-closed on the stage-5 codes — but an over-budget
+ * flowchart diagram gets ONE localized, deterministic repair inline here
+ * (see `repairOversizedFlowchart`) before falling back to a full LLM
+ * repair prompt or failing the task when the bounded slots exhaust.
+ */
+async function attemptStage5Generation(
+  opts: Stage5AttemptOpts,
+): Promise<Stage5AttemptResult> {
+  // Load context on each attempt (same contract as stage 4: the closed
+  // list does not change between attempts of one run).
+  const ctx = await buildFlowDocContext(
+    opts.absRoot,
+    opts.candidate,
+    opts.modules,
+    opts.charBudget,
+  );
+
+  // R10.1 K: the candidate's explicit semantic groups reach BOTH the
+  // prompt (R10.1 D presentation) and the validator (D3 tier coverage).
+  const flowKeyGroups: FlowKeyGroups = {
+    entryKeys: opts.candidate.entryKeys,
+    boundaryKeys: opts.candidate.boundaryKeys,
+    sinkKeys: opts.candidate.sinkKeys,
+  };
+
+  let prompt: { system: string; user: string };
+  if (opts.promptKind === "repair") {
+    const attemptContext = opts.repairAttemptContext ?? { attempt: 1, total: 1 };
+    prompt = buildStage5RepairPrompt(
+      opts.candidate,
+      ctx.closedKeyList,
+      ctx.moduleOpenings,
+      ctx.symbolsTable,
+      ctx.truncatedSource,
+      opts.priorCandidate,
+      opts.priorErrors,
+      opts.charBudget,
+      opts.language,
+      attemptContext,
+      opts.diagramBudgets,
+      flowKeyGroups,
+    );
+  } else {
+    prompt = buildStage5Prompt(
+      opts.candidate,
+      ctx.closedKeyList,
+      ctx.moduleOpenings,
+      ctx.symbolsTable,
+      ctx.truncatedSource,
+      opts.language,
+      opts.diagramBudgets,
+      flowKeyGroups,
+    );
+  }
+
+  // Call LLM (identical error accounting to stage 4).
+  let raw: string;
+  let usage: { inputTokens: number; outputTokens: number; model: string };
+  let stopReason: StopReason = "unknown";
+  let rawStopReason: string | undefined;
+  try {
+    const result = await opts.llmClient.generate({
+      system: prompt.system,
+      user: prompt.user,
+      maxTokens: opts.maxTokens,
+      ...(opts.thinking ? { thinking: opts.thinking } : {}),
+    });
+    raw = result.content;
+    usage = result.usage;
+    stopReason = result.stopReason ?? "unknown";
+    rawStopReason = result.rawStopReason;
+  } catch (err) {
+    // Typed timeout: usage unknown (provider may still bill). No fake 0/0 model.
+    if (err instanceof LlmTimeoutError) {
+      return {
+        usageEntry: {
+          attempt: opts.attemptNumber,
+          usage: null,
+          usageKnown: false,
+          costUsd: null,
+          finishedAt: Date.now(),
+        },
+        normalizedRaw: "",
+        diagnosticCandidate: null,
+        diagnosticOutcome: "llm_error",
+        artifact: null,
+        validationErrors: [],
+        llmError: {
+          code: "llm_timeout",
+          message: err.message,
+        },
+        diagramSource: null,
+      };
+    }
+    const e = err as Error;
+    return {
+      usageEntry: {
+        attempt: opts.attemptNumber,
+        usage: null,
+        usageKnown: false,
+        costUsd: null,
+        finishedAt: Date.now(),
+      },
+      normalizedRaw: "",
+      diagnosticCandidate: null,
+      diagnosticOutcome: "llm_error",
+      artifact: null,
+      validationErrors: [],
+      llmError: {
+        code: "llm_call_failed",
+        message: e.message,
+      },
+      diagramSource: null,
+    };
+  }
+
+  const cost = computeCostFromUsage(usage, opts.pricing);
+  const usageEntry: UsageAttempt = {
+    attempt: opts.attemptNumber,
+    usage,
+    usageKnown: true,
+    costUsd: cost,
+    finishedAt: Date.now(),
+    stopReason,
+    ...(rawStopReason !== undefined ? { rawStopReason } : {}),
+  };
+
+  // Stop-reason gate (identical to stage 4).
+  if (stopReason === "length" || stopReason === "incomplete") {
+    const code =
+      stopReason === "length"
+        ? "truncated_by_token_limit"
+        : "incomplete_generation";
+    const reasonDetail = rawStopReason ? ` (provider reason: ${rawStopReason})` : "";
+    return {
+      usageEntry,
+      normalizedRaw: raw,
+      diagnosticCandidate: raw,
+      diagnosticOutcome: code,
+      artifact: null,
+      validationErrors: [
+        {
+          code,
+          message:
+            stopReason === "length"
+              ? `provider stopped at the output-token limit${reasonDetail}`
+              : `provider stopped before a normal text completion${reasonDetail}`,
+          location: "global",
+        },
+      ],
+      llmError: null,
+      diagramSource: null,
+    };
+  }
+
+  // Normalize
+  const normalize = normalizeStage4Artifact(raw);
+  if (!normalize.ok) {
+    return {
+      usageEntry,
+      normalizedRaw: raw,
+      diagnosticCandidate: raw,
+      diagnosticOutcome: "normalization_failed",
+      artifact: null,
+      validationErrors: normalize.errors,
+      llmError: null,
+      diagramSource: null,
+    };
+  }
+
+  const invalid = (errors: ArtifactValidationError[]): Stage5AttemptResult => ({
+    usageEntry,
+    normalizedRaw: raw,
+    diagnosticCandidate: normalize.content,
+    diagnosticOutcome: "artifact_validation_failed",
+    artifact: null,
+    validationErrors: errors,
+    llmError: null,
+    diagramSource: null,
+  });
+
+  // (a) Extract the inline companion diagram from `## Diagram`. The
+  //     model-emitted form carries the diagram INLINE; the placeholder
+  //     exists only on disk after substitution.
+  const extraction = extractInlineFlowDiagram(normalize.content, opts.candidate.slug);
+  if (extraction === null) {
+    return invalid([
+      {
+        code: "invalid_flow_diagram",
+        message:
+          "the `## Diagram` section does not contain ONE real ```mermaid fence with diagram source " +
+          "(missing, empty, unclosed, or placeholder-only) — emit the diagram inline; the orchestrator " +
+          "substitutes the placeholder after extraction",
+        location: "body",
+      },
+    ]);
+  }
+
+  // (b) Validate the page with the fence body substituted by the exact placeholder.
+  const validation = validateStage4Artifact(extraction.pageContent, ctx.closedKeyList, {
+    pageKind: "flow",
+    expectedFlowDiagram: `livewiki/diagrams/flow-${opts.candidate.slug}.mmd`,
+    expectedFlowModules: opts.candidate.moduleIds,
+    moduleId: opts.candidate.slug,
+    moduleRole: "product",
+    flowKeyGroups,
+  });
+  if (!validation.ok) {
+    return invalid(validation.errors);
+  }
+
+  // (c) Diagram gates: source cap → node/edge budget → real Mermaid parse.
+  if (extraction.sourceTooLarge) {
+    return invalid([
+      {
+        code: "flow_diagram_too_large",
+        message:
+          `inline diagram source is ${extraction.diagramSource.length} chars ` +
+          `(cap ${FLOW_DIAGRAM_SOURCE_MAX_CHARS}) — shrink the diagram`,
+        location: "body",
+      },
+    ]);
+  }
+  let diagramSource = extraction.diagramSource;
+  const counts = countFlowDiagramElements(diagramSource);
+  if (
+    counts.nodes > opts.diagramBudgets.maxNodes ||
+    counts.edges > opts.diagramBudgets.maxEdges
+  ) {
+    // Priority-0 Phase 2: try a localized, deterministic repair before
+    // burning a full LLM repair round-trip — the model's prose is already
+    // fine; only the diagram is over budget. Keeps the first N nodes
+    // (appearance order) and only edges between kept nodes, then
+    // re-validates the result exactly like a model-emitted diagram.
+    // Returns null (falls through to the LLM repair path) for any
+    // diagram kind or construct the narrow flowchart parser can't safely
+    // round-trip (e.g. sequenceDiagram/stateDiagram, `&`-chained
+    // endpoints).
+    const repaired = repairOversizedFlowchart(
+      diagramSource,
+      opts.diagramBudgets.maxNodes,
+      opts.diagramBudgets.maxEdges,
+    );
+    if (repaired === null) {
+      return invalid([
+        {
+          code: "flow_diagram_too_large",
+          message:
+            `diagram has ${counts.nodes} nodes / ${counts.edges} edges ` +
+            `(budget ${opts.diagramBudgets.maxNodes}/${opts.diagramBudgets.maxEdges}) — ` +
+            `merge or drop nodes and move detail into the "Ordered flow" prose`,
+          location: "body",
+        },
+      ]);
+    }
+    diagramSource = repaired;
+  }
+  const mermaidDiagnostic = await validateMermaidSyntax(diagramSource);
+  if (mermaidDiagnostic !== null) {
+    return invalid([
+      {
+        code: "invalid_flow_diagram",
+        message: `Mermaid parser rejected the inline diagram: ${mermaidDiagnostic}`,
+        location: "body",
+        offending: diagramSource.slice(0, DIAGNOSTIC_TEXT_CAP),
+      },
+    ]);
+  }
+
+  return {
+    usageEntry,
+    normalizedRaw: raw,
+    diagnosticCandidate: extraction.pageContent,
+    diagnosticOutcome: null,
+    artifact: extraction.pageContent,
+    validationErrors: [],
+    llmError: null,
+    diagramSource,
+  };
+}
+
+interface TopicAttemptOpts {
+  attemptNumber: number;
+  candidate: TopicCandidate;
+  language: Language;
+  llmClient: LlmClient;
+  charBudget: number;
+  promptKind: "initial" | "repair";
+  priorCandidate: string;
+  priorErrors: ArtifactValidationError[];
+  absRoot: string;
+  pricing: import("./pricing.js").PricingOverride | undefined;
+  maxTokens: number;
+  thinking?: "disabled" | "adaptive" | "omit" | undefined;
+  pathRoleConfig?: import("./modules.js").PathRoleConfig;
+  repairAttemptContext?: { attempt: number; total: number };
+}
+
+async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4AttemptResult> {
+  const ctx = await buildTopicDocContext(opts.absRoot, opts.candidate, opts.charBudget);
+  const prompt = opts.promptKind === "repair"
+    ? buildTopicRepairPrompt(
+        opts.candidate,
+        ctx.moduleDigest,
+        ctx.symbolsTable,
+        ctx.truncatedSource,
+        opts.priorCandidate,
+        opts.priorErrors,
+        opts.charBudget,
+        opts.language,
+        opts.repairAttemptContext ?? { attempt: 1, total: 1 },
+      )
+    : buildTopicPrompt(
+        opts.candidate,
+        ctx.moduleDigest,
+        ctx.symbolsTable,
+        ctx.truncatedSource,
+        opts.language,
+      );
+  let result: GenerateResult;
+  try {
+    result = await opts.llmClient.generate({
+      system: prompt.system,
+      user: prompt.user,
+      maxTokens: opts.maxTokens,
+      ...(opts.thinking ? { thinking: opts.thinking } : {}),
+    });
+  } catch (error) {
+    return {
+      usageEntry: { attempt: opts.attemptNumber, usage: null, usageKnown: false, costUsd: null, finishedAt: Date.now() },
+      normalizedRaw: "",
+      diagnosticCandidate: null,
+      diagnosticOutcome: "llm_error",
+      artifact: null,
+      validationErrors: [],
+      llmError: { code: error instanceof LlmTimeoutError ? "llm_timeout" : "llm_error", message: (error as Error).message },
+    };
+  }
+  const usageEntry: UsageAttempt = {
+    attempt: opts.attemptNumber,
+    usage: result.usage,
+    usageKnown: true,
+    costUsd: computeCostFromUsage(result.usage, opts.pricing),
+    finishedAt: Date.now(),
+    ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),
+    ...(result.rawStopReason !== undefined ? { rawStopReason: result.rawStopReason } : {}),
+  };
+  if (result.stopReason === "length" || result.stopReason === "incomplete") {
+    const code = result.stopReason === "length" ? "truncated_by_token_limit" : "incomplete_generation";
+    return {
+      usageEntry,
+      normalizedRaw: result.content,
+      diagnosticCandidate: result.content,
+      diagnosticOutcome: code,
+      artifact: null,
+      validationErrors: [{ code, message: `topic generation ended with stop reason ${result.rawStopReason ?? result.stopReason}`, location: "global" }],
+      llmError: null,
+    };
+  }
+  const normalized = normalizeStage4Artifact(result.content);
+  if (!normalized.ok) {
+    return {
+      usageEntry,
+      normalizedRaw: normalized.content,
+      diagnosticCandidate: normalized.content || null,
+      diagnosticOutcome: "normalization_failed",
+      artifact: null,
+      validationErrors: normalized.errors,
+      llmError: null,
+    };
+  }
+  const validation = validateStage4Artifact(normalized.content, opts.candidate.seedKeys, {
+    pageKind: "topic",
+    moduleId: opts.candidate.slug,
+    moduleRole: "product",
+    expectedTopicTitle: opts.candidate.title,
+    expectedTopicOrder: opts.candidate.planOrder,
+    expectedTopicIntent: opts.candidate.intent,
+    expectedTopicModules: opts.candidate.modules,
+    expectedTopicFlows: opts.candidate.flows,
+    topicKeyGroups: opts.candidate.groups,
+    topicProductKeys: opts.candidate.seedKeys.filter((key) =>
+      classifyPathRole(key.split("#", 1)[0] ?? "", opts.pathRoleConfig) === "product"
+    ),
+  });
+  if (!validation.ok) {
+    return {
+      usageEntry,
+      normalizedRaw: normalized.content,
+      diagnosticCandidate: normalized.content,
+      diagnosticOutcome: "artifact_validation_failed",
+      artifact: null,
+      validationErrors: validation.errors,
+      llmError: null,
+    };
+  }
+  return {
+    usageEntry,
+    normalizedRaw: normalized.content,
+    diagnosticCandidate: normalized.content,
+    diagnosticOutcome: null,
+    artifact: normalized.content,
+    validationErrors: [],
+    llmError: null,
+  };
+}
+
+interface TopicDocContext {
+  symbolsTable: string;
+  moduleDigest: string;
+  truncatedSource: string;
+}
+
+async function buildTopicDocContext(
+  absRoot: string,
+  candidate: TopicCandidate,
+  charBudget: number,
+): Promise<TopicDocContext> {
+  const db = openIndex(await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db"));
+  try {
+    const placeholders = candidate.seedKeys.map(() => "?").join(",");
+    const symbols = (candidate.seedKeys.length === 0 ? [] : db.prepare(
+      `SELECT s.key, s.name, s.kind, s.signature, s.start_line AS startLine,
+              s.end_line AS endLine, f.path
+       FROM symbols s JOIN files f ON f.id = s.file_id
+       WHERE s.status = 'active' AND s.key IN (${placeholders})`,
+    ).all(...candidate.seedKeys)) as Array<{
+      key: string; name: string; kind: string; signature: string | null;
+      startLine: number; endLine: number; path: string;
+    }>;
+    symbols.sort((a, b) => a.key.localeCompare(b.key));
+    const symbolsTable = symbols.map((symbol) => `- ${symbol.key} (${symbol.kind}): ${symbol.signature ?? ""}`).join("\n");
+    const digest: string[] = [];
+    for (const moduleId of candidate.modules) {
+      const page = await safeIo.readText(absRoot, `livewiki/${moduleId}.md`).catch(() => null);
+      digest.push(`### Module: ${moduleId}\n\n${page === null ? "Page unavailable" : extractModuleOpeningDigest(page)}`);
+    }
+    for (const flowSlug of candidate.flows) {
+      const page = await safeIo.readText(absRoot, `livewiki/flows/${flowSlug}.md`).catch(() => null);
+      digest.push(`### Flow: ${flowSlug}\n\n${page === null ? "Page unavailable" : extractModuleOpeningDigest(page)}`);
+    }
+    const sourceFiles = new Map<string, string[]>();
+    const sourceSpans: string[] = [];
+    for (const symbol of symbols) {
+      let lines = sourceFiles.get(symbol.path);
+      if (lines === undefined) {
+        const source = await nodeFs.readFile(nodePath.join(absRoot, symbol.path), "utf8");
+        lines = source.split("\n");
+        sourceFiles.set(symbol.path, lines);
+      }
+      const start = Math.max(0, symbol.startLine - 1 - 6);
+      const end = Math.min(lines.length, symbol.endLine + 10);
+      sourceSpans.push(`// === ${symbol.key} (${symbol.path}:${start + 1}-${end}) ===\n${lines.slice(start, end).join("\n")}`);
+    }
+    const truncatedSource = sourceSpans.join("\n\n");
+    if (truncatedSource.length > charBudget) {
+      throw new Error(`accepted topic evidence exceeds topicMaxSourceChars (${truncatedSource.length} > ${charBudget})`);
+    }
+    return {
+      symbolsTable,
+      moduleDigest: digest.join("\n\n"),
+      truncatedSource,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+interface FlowDocContext {
+  closedKeyList: string[];
+  symbolsTable: string;
+  moduleOpenings: string;
+  truncatedSource: string;
+}
+
+/** Per-module cap (chars) for the accepted-page opening digest. */
+const FLOW_MODULE_OPENING_CAP = 1200;
+
+/**
+ * Stage-5 context builder (mirrors buildModuleDocContext): the closed
+ * seed key list (candidate.seedKeys), the seed symbols table, a bounded
+ * digest of each participating module's accepted page (H1 +
+ * responsibility paragraph + `How it fits` block, in walk order), and a
+ * fair-share truncated source excerpt of the candidate modules' files —
+ * never the whole repository.
+ */
+async function buildFlowDocContext(
+  absRoot: string,
+  candidate: FlowCandidate,
+  modules: ReadonlyArray<Module>,
+  charBudget: number,
+): Promise<FlowDocContext> {
+  const db = openIndex(
+    await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db"),
+  );
+  try {
+    const closedKeyList = [...candidate.seedKeys].sort();
+    const placeholders = closedKeyList.map(() => "?").join(",");
+    const seedSymbols = (closedKeyList.length > 0
+      ? db
+          .prepare(
+            `SELECT key, name, kind, signature FROM symbols
+             WHERE status = 'active' AND key IN (${placeholders})`,
+          )
+          .all(...closedKeyList)
+      : []) as Array<{
+      key: string;
+      name: string;
+      kind: string;
+      signature: string | null;
+    }>;
+    seedSymbols.sort((a, b) => a.key.localeCompare(b.key));
+    const symbolsTable = seedSymbols
+      .map((s) => `- ${s.key} (${s.kind}): ${s.signature ?? ""}`)
+      .join("\n");
+
+    // Participating module page digests, in walk order. An absent page is
+    // reported honestly instead of inventing an opening.
+    const openings: string[] = [];
+    for (const moduleId of candidate.moduleIds) {
+      const content = await safeIo
+        .readText(absRoot, `livewiki/${moduleId}.md`)
+        .catch(() => null);
+      if (content === null) {
+        openings.push(`### ${moduleId}\n\n- ${moduleId} (page unavailable)`);
+        continue;
+      }
+      openings.push(`### ${moduleId}\n\n${extractModuleOpeningDigest(content)}`);
+    }
+
+    // Bounded source: candidate modules' files in walk order, deduped.
+    const moduleById = new Map(modules.map((m) => [m.id, m]));
+    const flowFiles: string[] = [];
+    const seenFiles = new Set<string>();
+    for (const moduleId of candidate.moduleIds) {
+      for (const p of moduleById.get(moduleId)?.paths ?? []) {
+        if (seenFiles.has(p)) continue;
+        seenFiles.add(p);
+        flowFiles.push(p);
+      }
+    }
+    const truncatedSource = await buildFairTruncatedSource(absRoot, flowFiles, charBudget);
+
+    return {
+      closedKeyList,
+      symbolsTable,
+      moduleOpenings: openings.join("\n\n"),
+      truncatedSource,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Extracts the H1 + responsibility paragraph + `How it fits` block of an
+ * accepted module page, bounded to FLOW_MODULE_OPENING_CAP chars. Heading
+ * detection runs on the length-preserving masked view so fenced code
+ * cannot fake an H1 or a section boundary; text comes from the raw page.
+ */
+function extractModuleOpeningDigest(pageContent: string): string {
+  let body = pageContent;
+  try {
+    body = parseFrontmatter(pageContent).body;
+  } catch {
+    // Unparseable frontmatter: digest the raw content.
+  }
+  const rawLines = body.split("\n");
+  const maskedLines = maskCodeSpansPreservingLength(body).split("\n");
+
+  const parts: string[] = [];
+  const h1Index = maskedLines.findIndex((line) => /^#\s+\S/.test(line.trim()));
+  if (h1Index >= 0) {
+    parts.push(rawLines[h1Index]!.trim().replace(/^#\s+/, ""));
+    const paragraph: string[] = [];
+    for (let i = h1Index + 1; i < maskedLines.length; i++) {
+      const masked = maskedLines[i]!.trim();
+      if (masked === "") {
+        if (paragraph.length > 0) break;
+        continue;
+      }
+      if (/^#{1,6}\s/.test(masked)) break;
+      paragraph.push(rawLines[i]!.trim());
+    }
+    if (paragraph.length > 0) parts.push(paragraph.join(" "));
+  }
+
+  const howIndex = maskedLines.findIndex(
+    (line) =>
+      /^##\s+\S/.test(line.trim()) &&
+      line.trim().slice(3).trim().toLocaleLowerCase("en-US") === "how it fits",
+  );
+  if (howIndex >= 0) {
+    const block: string[] = [];
+    for (let i = howIndex + 1; i < maskedLines.length; i++) {
+      const masked = maskedLines[i]!.trim();
+      if (/^#{1,6}\s/.test(masked)) break;
+      if (masked !== "") block.push(rawLines[i]!.trim());
+    }
+    if (block.length > 0) parts.push(`How it fits: ${block.join(" ")}`);
+  }
+
+  let digest = parts.join("\n\n");
+  if (digest.length > FLOW_MODULE_OPENING_CAP) {
+    digest = digest.slice(0, FLOW_MODULE_OPENING_CAP) + "…";
+  }
+  return digest.length > 0 ? digest : "(opening unavailable)";
+}
+
+/**
+ * Stage-5 write transaction: page + companion diagram as one unit.
+ * Manual-block injection and `owner: mixed` restoration on the page work
+ * exactly like `tryWriteAndVerify`. BOTH writes AND the repository-wide
+ * verify run inside one try/catch (R10.1 item A): ANY exception (the
+ * diagram write failing after the page landed, the verifier crashing)
+ * rolls BOTH artifacts back best-effort. Verify rejects on ANY issue —
+ * error OR warning — scoped to the two written paths (R10.1 item B; a
+ * deliberate asymmetry with stage 4, which keeps the error-only filter),
+ * and a rejection also rolls BOTH artifacts back (restore snapshots /
+ * remove newly created). The flows hub is synced between the writes and
+ * verify and rolled back with the pair: the page contract requires a
+ * `[How it works](index.md)` link in `Related pages`
+ * (prompts.ts FLOW_PAGE_PROMPT_RULES), so the hub must exist on disk
+ * before verify or the R10.1 B gate flags broken_internal_link on every
+ * fresh-repo flow task. A human/mixed/unparseable hub is preserved
+ * (skipped-owner) and already satisfies the link by existing.
+ * A rollback failure is terminal for the run (`rollback_failed`), whether
+ * the rollback was triggered by an exception or by a verify rejection.
+ */
+interface FlowWriteResult {
+  ok: boolean;
+  artifacts?: {
+    wikiPath: string;
+    pageHash: string;
+    diagramPath: string;
+    diagramHash: string;
+  };
+  issues?: VerifyIssue[];
+  /** The write/verify step threw; both artifacts were rolled back. Terminal for the task. */
+  exception?: { message: string };
+  /** True when verify rejected AND the subsequent rollback failed. Terminal. */
+  rollbackFailed?: { reason: string };
+}
+
+async function tryWriteFlowAndVerify(
+  absRoot: string,
+  pagePath: string,
+  diagramPath: string,
+  pageContent: string,
+  diagramSource: string,
+  existingPage: string | null,
+): Promise<FlowWriteResult> {
+  // 1. Manual blocks in the original position + `owner: mixed` restore —
+  //    byte-for-byte identical mechanism to tryWriteAndVerify (rule #6).
+  let finalContent = pageContent;
+  if (existingPage !== null) {
+    const positioned = injectManualBlocksBySection(existingPage, pageContent);
+    if (positioned !== null) {
+      finalContent = positioned;
+    }
+    if (readOwnerFromFrontmatter(existingPage) === "mixed") {
+      finalContent = forceOwnerInFrontmatter(finalContent, "mixed");
+    }
+  }
+
+  const pageSnapshot = existingPage;
+  const diagramSnapshot = await safeIo.readText(absRoot, diagramPath).catch(() => null);
+  // The flows hub joins the transaction (docstring above): synced after the
+  // pair lands, rolled back with it. Only a hub the sync actually rewrote
+  // enters the rollback set — a skipped-owner hub was never touched.
+  const hubPath = "livewiki/flows/index.md";
+  const hubSnapshot = await safeIo.readText(absRoot, hubPath).catch(() => null);
+  let hubWritten = false;
+
+  // 2+3. Write both artifacts via safe-io (page first, diagram second),
+  //    sync the flows hub, then verify — ALL inside one try/catch (R10.1
+  //    item A): ANY exception (the diagram write failing after the page
+  //    landed, the verifier crashing) rolls the artifacts back best-effort,
+  //    exactly like a verify rejection.
+  let verifyResult: VerifyResult;
+  try {
+    await safeIo.writeText(absRoot, pagePath, finalContent);
+    await safeIo.writeText(
+      absRoot,
+      diagramPath,
+      diagramSource.endsWith("\n") ? diagramSource : diagramSource + "\n",
+    );
+    hubWritten =
+      (await syncFlowsIndexHub(absRoot, await loadFlowPresentations(absRoot))).outcome ===
+      "written";
+    verifyResult = await runVerify(absRoot);
+  } catch (e) {
+    const reasons = await rollbackWrittenArtifacts(
+      absRoot,
+      [
+        { path: pagePath, snapshot: pageSnapshot },
+        { path: diagramPath, snapshot: diagramSnapshot },
+        ...(hubWritten ? [{ path: hubPath, snapshot: hubSnapshot }] : []),
+      ],
+      true,
+    );
+    if (reasons.length > 0) {
+      return { ok: false, rollbackFailed: { reason: reasons.join("; ") } };
+    }
+    return { ok: false, exception: { message: (e as Error).message } };
+  }
+
+  // 3b. ANY issue — error OR warning — on EITHER written path rejects the
+  //    pair (R10.1 item B; deliberate asymmetry with the error-only stage-4
+  //    gate). Issues on other paths never block this gate.
+  const broken = verifyResult.issues.filter(
+    (i) => i.wikiPath === pagePath || i.wikiPath === diagramPath,
+  );
+
+  if (broken.length > 0) {
+    // 4. ROLLBACK MANDATORY for BOTH artifacts (same rule as stage 4):
+    //    an invalid candidate pair MUST NEVER persist on disk — and the
+    //    hub synced with it goes back too.
+    const reasons = await rollbackWrittenArtifacts(
+      absRoot,
+      [
+        { path: pagePath, snapshot: pageSnapshot },
+        { path: diagramPath, snapshot: diagramSnapshot },
+        ...(hubWritten ? [{ path: hubPath, snapshot: hubSnapshot }] : []),
+      ],
+      false,
+    );
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        issues: broken,
+        rollbackFailed: { reason: reasons.join("; ") },
+      };
+    }
+    return { ok: false, issues: broken };
+  }
+
+  return {
+    ok: true,
+    artifacts: {
+      wikiPath: pagePath,
+      pageHash: sha256(finalContent),
+      diagramPath,
+      diagramHash: sha256(diagramSource),
+    },
+  };
 }

@@ -11,6 +11,7 @@ import {
   MissingProviderConfigError,
   CONFIG_DEFAULTS,
 } from "./config.js";
+import { DEFAULT_FLOW_SIGNAL_PATTERNS } from "./modules.js";
 
 let repoRoot: string;
 
@@ -203,6 +204,21 @@ describe("config.validateConfigForBatch — sem modelo default hardcoded", () =>
       expect(msg).toContain("example only"); // explícito que é exemplo
       expect(msg).toContain("ANTHROPIC_API_KEY"); // lembra do env var
     }
+  });
+
+  // Regression: a preset reference satisfies the provider requirement
+  // (SPEC §"Stack": config.json references the preset by name). A preset-only
+  // config was rejected before, making documented preset-only batches fail.
+  it("passes with preset + model and no provider field", () => {
+    expect(() =>
+      validateConfigForBatch(repoRoot, { preset: "ollama", model: "granite4.1:3b" }),
+    ).not.toThrow();
+  });
+
+  it("still fails when model is absent, even with a preset", () => {
+    expect(() => validateConfigForBatch(repoRoot, { preset: "ollama" })).toThrow(
+      MissingProviderConfigError,
+    );
   });
 });
 
@@ -405,5 +421,131 @@ describe("config — timeoutMs", () => {
       "utf8",
     );
     await expect(loadConfig(repoRoot)).rejects.toThrow(/timeoutMs/);
+  });
+});
+
+describe("config — stage-5 flow keys", () => {
+  it("CONFIG_DEFAULTS carries the documented flow defaults", () => {
+    expect(CONFIG_DEFAULTS.maxFlows).toBe(4);
+    expect(CONFIG_DEFAULTS.flowMaxAnchors).toBe(25);
+    expect(CONFIG_DEFAULTS.flowMaxDiagramNodes).toBe(12);
+    expect(CONFIG_DEFAULTS.flowMaxDiagramEdges).toBe(20);
+  });
+
+  it("applyDefaults fills the flow defaults and preserves explicit values", () => {
+    const d = applyDefaults({});
+    expect(d.maxFlows).toBe(4);
+    expect(d.flowMaxAnchors).toBe(25);
+    expect(d.flowMaxDiagramNodes).toBe(12);
+    expect(d.flowMaxDiagramEdges).toBe(20);
+    // 0 disables flow synthesis and must survive applyDefaults.
+    expect(applyDefaults({ maxFlows: 0 }).maxFlows).toBe(0);
+    expect(applyDefaults({ flowMaxAnchors: 10 }).flowMaxAnchors).toBe(10);
+  });
+
+  it("DEFAULT_FLOW_SIGNAL_PATTERNS carries the generic entry/persistence defaults", () => {
+    expect(DEFAULT_FLOW_SIGNAL_PATTERNS).toEqual({
+      entryPatterns: ["bin/**", "cmd/**", "**/cli.*", "**/main.*", "**/server.*", "**/app.*"],
+      persistencePatterns: [
+        "**/db.*",
+        "**/database/**",
+        "**/store/**",
+        "**/state/**",
+        "**/persistence/**",
+        "**/repository/**",
+      ],
+      // Empty on purpose: no built-in package-name guessing.
+      persistenceImportPatterns: [],
+    });
+  });
+
+  it("loadConfig accepts valid flow values", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        maxFlows: 2,
+        flowMaxAnchors: 10,
+        flowMaxDiagramNodes: 6,
+        flowMaxDiagramEdges: 8,
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.maxFlows).toBe(2);
+    expect(cfg.flowMaxAnchors).toBe(10);
+    expect(cfg.flowMaxDiagramNodes).toBe(6);
+    expect(cfg.flowMaxDiagramEdges).toBe(8);
+  });
+
+  it.each([
+    ["maxFlows", -1],
+    ["maxFlows", 1.5],
+    ["maxFlows", "4"],
+    ["flowMaxAnchors", 0],
+    ["flowMaxDiagramNodes", 0],
+    ["flowMaxDiagramEdges", -2],
+    ["flowMaxDiagramEdges", 2.5],
+  ])("loadConfig rejects invalid %s", async (key, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ provider: "anthropic", model: "claude-sonnet-5", [key]: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(new RegExp(`invalid ${key}`));
+  });
+
+  it("loads flowSignals pattern overrides (per-category replacement)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        flowSignals: {
+          entryPatterns: ["src/bin/**"],
+          persistencePatterns: [],
+        },
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.flowSignals).toEqual({
+      entryPatterns: ["src/bin/**"],
+      persistencePatterns: [],
+    });
+  });
+
+  it("loads flowSignals.persistenceImportPatterns (replaces, never merges)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        flowSignals: {
+          persistenceImportPatterns: ["@acme/db", "!@acme/internal"],
+        },
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    // Only the supplied category is set; the other two stay absent so the
+    // detector applies their defaults (per-category replacement).
+    expect(cfg.flowSignals).toEqual({
+      persistenceImportPatterns: ["@acme/db", "!@acme/internal"],
+    });
+  });
+
+  it.each([
+    ["a non-object", 42],
+    ["an array", ["bin/**"]],
+    ["an unknown key", { outputPatterns: ["x"] }],
+    ["a non-array category", { entryPatterns: "bin/**" }],
+    ["a non-string item", { persistencePatterns: [1] }],
+    ["a non-array import category", { persistenceImportPatterns: "@acme/db" }],
+    ["a non-string import item", { persistenceImportPatterns: [42] }],
+  ])("loadConfig rejects malformed flowSignals (%s)", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ flowSignals: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/flowSignals/);
   });
 });
