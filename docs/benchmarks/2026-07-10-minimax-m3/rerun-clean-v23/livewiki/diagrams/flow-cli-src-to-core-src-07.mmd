@@ -1,0 +1,12 @@
+flowchart LR
+  A1[cli.ts#createProgram] --> A2[cli.ts#run]
+  A2[cli.ts#run] --> A3[cli.ts#resolveRepoRoot]
+  A4[cli.ts#readVersion] --> A1[cli.ts#createProgram]
+  A2[cli.ts#run] --> B1[output.ts#emit]
+  B1[output.ts#emit] --> B2[output.ts#emitHuman]
+  B1[output.ts#emit] --> B3[output.ts#emitJson]
+  A2[cli.ts#run] --> C1[import-resolution.ts#expandWorkspaceGlob]
+  C1[import-resolution.ts#expandWorkspaceGlob] --> C2[import-resolution.ts#hasPackageManifest]
+  A2[cli.ts#run] --> D1[batch.ts#attemptStage4Generation]
+  D1[batch.ts#attemptStage4Generation] --> E1[batch-state.ts#DIAGNOSTIC_MAX_ERRORS]
+  D2[db.ts#CURRENT_SCHEMA_VERSION]

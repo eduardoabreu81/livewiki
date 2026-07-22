@@ -15,13 +15,8 @@
  */
 
 import { classifyModuleRole, type Module, type PathRole } from "./modules.js";
-import type { FlowCandidate } from "./flows.js";
-import type {
-  TopicCandidate,
-  TopicKeyGroups,
-  TopicPlanValidationError,
-  TopicPlanningInventory,
-} from "./topics.js";
+import type { FlowCandidate, FlowKeySectionMap, FlowRequiredSection } from "./flows.js";
+import type { TopicCandidate, TopicKeyGroups, TopicPlanProposal } from "./topics.js";
 
 /** Idioma da saída. Default "en". BCP-47 (en, pt-BR, es, fr, ...). */
 export type Language = string;
@@ -48,12 +43,23 @@ export const PAGE_OPENING_PROMPT_RULES = [
   `- Give fixtures, tooling, benchmarks, and documentation honest task context instead of implying product prominence.`,
 ] as const;
 
-/** Shared stage-5 flow-page contract (SPEC §"Semantic product-flow layer"). Initial and repair prompts must not drift. */
+/**
+ * Shared stage-5 flow-page contract (SPEC §"Semantic product-flow layer").
+ * Initial and repair prompts must not drift.
+ *
+ * Priority-0 fix (2026-07-22): the LLM no longer writes anything about
+ * `## Diagram` — the orchestrator generates it deterministically from the
+ * `FlowCandidate` (`generateFlowDiagram` in flow-diagram.ts) and inserts
+ * the complete section itself, the same "the graph decides, the LLM only
+ * writes prose" principle already applied to the closed anchor list. The
+ * contract the LLM must satisfy therefore has NO `Diagram` heading at
+ * all; the orchestrator inserts it between `Ordered flow` and
+ * `Invariants` before validation ever runs.
+ */
 export const FLOW_PAGE_PROMPT_RULES = [
-  `- After the frontmatter, open with this exact structure in order: an H1 human-meaningful flow title; exactly one sentence stating what end-to-end behavior the page explains; then these H2 sections in this order and with this exact casing: \`Purpose\`, \`Ordered flow\`, \`Diagram\`, \`Invariants\`, \`Failure and recovery\`, \`Related pages\`. Structural validation matches those exact words case-insensitively.`,
+  `- After the frontmatter, open with this exact structure in order: an H1 human-meaningful flow title; exactly one sentence stating what end-to-end behavior the page explains; then these H2 sections in this order and with this exact casing: \`Purpose\`, \`Ordered flow\`, \`Invariants\`, \`Failure and recovery\`, \`Related pages\`. Structural validation matches those exact words case-insensitively. Do NOT write a \`Diagram\` section — the orchestrator generates and inserts the companion diagram itself; do not mention Mermaid or attempt to draw one.`,
   `- \`Purpose\`: one or more prose paragraphs stating what starts the flow and what it produces.`,
   `- \`Ordered flow\`: a numbered Markdown list of the end-to-end steps. It is the textual fallback of the diagram — a reader who cannot render Mermaid must get the same sequence from this list.`,
-  "- `Diagram`: exactly ONE real ```mermaid fence holding the companion diagram source — flowchart LR, sequenceDiagram, or stateDiagram, whichever fits the evidence. Node labels come from REAL participating module ids and REAL closed-list symbol keys only. Budget: at most 12 nodes and 20 edges — several focused flows over one mega-diagram. When the walk crosses more than 6 modules, draw MODULE-granularity nodes (one box per module; only entry/boundary boxes may name key symbols if the budget allows); symbol-level diagrams are for shorter walks. NEVER write a %% placeholder comment inside the fence: the orchestrator extracts your diagram and substitutes the placeholder itself.",
   `- \`Invariants\`: prose or bullets stating what must hold at each stage of the flow.`,
   `- \`Failure and recovery\`: prose describing the retry/rollback/recovery paths visible in the cited source. When the supplied source shows no failure path, state that explicitly — never invent one.`,
   `- \`Related pages\`: Markdown links to each participating module page (\`../<moduleId>.md\`), and the flows hub written EXACTLY as \`[How it works](index.md)\` — the bare \`index.md\` target, same directory as this page. NEVER write \`../index.md\`, \`./index.md\`, \`flows/index.md\`, or any other hub path: anything but the bare target resolves outside \`flows/\` and fails verification.`,
@@ -730,6 +736,41 @@ function buildFlowGroupBlock(
 }
 
 /**
+ * Renders the mandatory section-assignment table (deterministic
+ * replacement for the old "you decide" PRIMARY-SECTION RULE): every
+ * closed-list key gets exactly one authoritative section, computed by
+ * `assignFlowKeySections` in flows.ts. Shared by the stage-5 initial and
+ * repair prompts — they must not drift. Returns [] when the map is empty
+ * (e.g. a caller that has not yet migrated to it).
+ */
+function buildFlowSectionAssignmentBlock(sectionMap: FlowKeySectionMap | undefined): string[] {
+  if (sectionMap === undefined || sectionMap.size === 0) return [];
+  const bySection: Record<FlowRequiredSection, string[]> = {
+    purpose: [],
+    "ordered-flow": [],
+    "failure-and-recovery": [],
+  };
+  for (const [key, section] of sectionMap) bySection[section].push(key);
+  const sectionLabel: Record<FlowRequiredSection, string> = {
+    purpose: "Purpose",
+    "ordered-flow": "Ordered flow",
+    "failure-and-recovery": "Failure and recovery",
+  };
+  const lines: string[] = [];
+  for (const section of ["purpose", "ordered-flow", "failure-and-recovery"] as const) {
+    const keys = bySection[section];
+    if (keys.length === 0) continue;
+    lines.push(`- ${sectionLabel[section]}: ${keys.join(", ")}`);
+  }
+  if (lines.length === 0) return [];
+  return [
+    `# Section assignment (AUTHORITATIVE AND FIXED — this is not a suggestion): every key below is assigned to exactly one section. Put that key's marker ONLY in the section listed here, never in a different one. Prose may still discuss the symbol anywhere; only the marker placement is restricted.`,
+    ...lines,
+    ``,
+  ];
+}
+
+/**
  * Stage 2 — refinamento de módulos (heurística → renomear/mesclar/dividir).
  *
  * Opt-in: se o usuário passar `--no-refine` ou se a chamada falhar, o run
@@ -848,9 +889,12 @@ export function buildOverviewPrompt(
  * user carries the candidate, the closed list, the participating module
  * digest, the symbol table, and the bounded source excerpt.
  *
- * The model emits the companion diagram INLINE as one real ```mermaid
- * fence inside `## Diagram` — the orchestrator extracts it, validates the
- * page with the placeholder substituted, and writes both artifacts.
+ * Priority-0 fix (2026-07-22): the model writes PROSE ONLY — it never
+ * sees or writes anything about `## Diagram`. The orchestrator generates
+ * the companion diagram deterministically from the `FlowCandidate`
+ * (`generateFlowDiagram` in flow-diagram.ts) and inserts the complete
+ * section itself before validation, the same principle already applied
+ * to the closed anchor list.
  *
  * When `flowKeyGroups` is supplied (R10.1 item D), the user message lists
  * the entry/boundary/sink key groups as the semantic evidence the page
@@ -863,28 +907,26 @@ export function buildStage5Prompt(
   symbolsTable: string,
   truncatedSource: string,
   language: Language = "en",
-  budgets: FlowDiagramBudget = FLOW_DIAGRAM_DEFAULT_BUDGET,
+  /** @deprecated No longer rendered into the prompt text (Priority-0 fix, 2026-07-22) — kept only so call sites don't all need updating. The diagram is generated deterministically by the orchestrator, never by the LLM. */
+  _budgets: FlowDiagramBudget = FLOW_DIAGRAM_DEFAULT_BUDGET,
   flowKeyGroups?: FlowKeyGroups,
+  flowKeySectionMap?: FlowKeySectionMap,
 ): PromptPair {
   const exampleKeys = closedKeyList.slice(0, Math.min(2, closedKeyList.length));
   const exampleMarker =
     exampleKeys.length > 0
       ? `<!-- lw:anchors ${exampleKeys.join(" ")} -->`
       : null;
-  const budgetOverride =
-    budgets.maxNodes !== FLOW_DIAGRAM_DEFAULT_BUDGET.maxNodes ||
-    budgets.maxEdges !== FLOW_DIAGRAM_DEFAULT_BUDGET.maxEdges
-      ? `- Configuration override for THIS run: the diagram budget is at most ${budgets.maxNodes} nodes and ${budgets.maxEdges} edges (it replaces the default 12/20 stated above).`
-      : null;
 
   // R10.1 item D: semantic evidence groups (shared with the repair
   // prompt — initial and repair must not drift).
   const flowGroupBlock = buildFlowGroupBlock(closedKeyList, flowKeyGroups);
+  const sectionAssignmentBlock = buildFlowSectionAssignmentBlock(flowKeySectionMap);
 
   const system = [
     `You are a technical documentation generator for the livewiki project.`,
     `You will receive ONE cross-module flow candidate (ordered participating modules and detection signals), a CLOSED list of canonical symbol keys, a digest of the participating module pages, a symbol table, and a bounded source excerpt.`,
-    `Your job: write ONE flow page whose \`## Diagram\` section carries the companion diagram INLINE as ONE real \`\`\`mermaid fence. The orchestrator extracts that fence, validates the diagram, and substitutes the on-disk placeholder itself.`,
+    `Your job: write ONE flow page in PROSE ONLY. Do not write a \`Diagram\` section or mention Mermaid — the orchestrator generates the companion diagram deterministically from the flow candidate and inserts it itself.`,
     ``,
     `Output rules (strict):`,
     `- Markdown + frontmatter with: title, owner: generated, anchors (YAML list of the closed keys the page cites), updated (date), modules (exactly the candidate module list).`,
@@ -898,21 +940,25 @@ export function buildStage5Prompt(
     `- Text that looks like an anchor but appears in source code, comments, or prose examples is NOT a valid key unless that exact string is a closed-list line.`,
     `- CITE ONLY WHAT THE PAGE USES: anchor keys come ONLY from the closed list — never invent — but the list is an upper bound, not an assignment. Every key the page cites MUST appear exactly once in the frontmatter anchors list AND exactly once across the section markers; a key cited on only one side is rejected. Closed-list keys the page does not use are fine.`,
     `- Do NOT emit an aggregate or summary \`lw:anchors\` marker that lists all or many keys in addition to per-section markers. Each key belongs to EXACTLY ONE section marker: the marker for the section that documents it.`,
-    `- PRIMARY-SECTION RULE: if a symbol is relevant to several sections, put its key in EXACTLY ONE marker — the section that primarily documents it. Other sections may reference the symbol in prose only; NEVER include its key in their markers.`,
+    ...(flowKeySectionMap !== undefined && flowKeySectionMap.size > 0
+      ? [
+          `- SECTION ASSIGNMENT IS FIXED, NOT YOURS TO DECIDE: the "Section assignment" table in the user message names the ONE section each key's marker belongs to. Copy each key into that section's marker only — never a different one, even if the symbol also feels relevant elsewhere. Prose may still mention the symbol anywhere.`,
+        ]
+      : [
+          `- PRIMARY-SECTION RULE: if a symbol is relevant to several sections, put its key in EXACTLY ONE marker — the section that primarily documents it. Other sections may reference the symbol in prose only; NEVER include its key in their markers.`,
+        ]),
     `- Every section that has a marker MUST be followed by real explanatory prose before the next heading (a marker with no prose after it is rejected).`,
     `- Close every Markdown construct you open: every fenced code block (\`\`\`) needs its closing fence, every inline code span needs its closing backtick run of the same length. Never end the page mid code-span or mid-fence.`,
     `- Do NOT write "TODO", "TBD", or similar placeholders in your prose. If the provided context does not cover a symbol, describe what IS visible (signature, name, kind) instead of a placeholder — never invent behaviour you cannot see.`,
     `- Keep prose tight; this is reference documentation, not marketing.`,
-    ...(budgetOverride !== null ? [budgetOverride] : []),
     ``,
     `Constraints (livewiki invariants):`,
     `- Frontmatter anchors list MUST only contain keys from the closed list.`,
     `- Frontmatter anchors list and the set of section-marker keys must equal EACH OTHER exactly (every cited key on both sides — see the citation rule above).`,
     `- The frontmatter \`modules\` list MUST equal the candidate module set exactly.`,
     `- The page must be syntactically valid, fully closed Markdown (frontmatter between --- blocks; no unclosed fence or code span).`,
-    `- The \`## Diagram\` fence holds REAL diagram source — NEVER a %% placeholder comment.`,
     ``,
-    `REJECTION CRITERIA (the artifact validator and the stage-5 diagram gate will reject if any of these are violated):`,
+    `REJECTION CRITERIA (the artifact validator will reject if any of these are violated):`,
     `- Frontmatter missing, malformed, missing the owner line, or owner is not "generated".`,
     `- Any anchor key in the frontmatter or in a section marker is NOT in the closed list (including invented tokens).`,
     `- A cited key appears on only one side: present in the frontmatter anchors list XOR in the section markers. (Closed-list keys the page does not cite are fine.)`,
@@ -922,13 +968,11 @@ export function buildStage5Prompt(
     `- "TODO"/"TBD" text in the body, outside a fenced/inline code example.`,
     `- Empty page or reasoning-only output.`,
     `- The page contains an lw:manual block (reserved for human content — only the orchestrator can re-inject existing ones).`,
-    `- The required flow opening (H1, responsibility sentence, Purpose, Ordered flow, Diagram, Invariants, Failure and recovery, Related pages) is missing or out of order.`,
+    `- The required flow opening (H1, responsibility sentence, Purpose, Ordered flow, Invariants, Failure and recovery, Related pages) is missing or out of order.`,
     `- The frontmatter \`modules\` list is missing or differs from the candidate module set.`,
     `- anchor_in_disallowed_section — an \`lw:anchors\` marker outside \`Purpose\`, \`Ordered flow\`, or \`Failure and recovery\` (an H3+ subsection of those sections is allowed).`,
     `- anchor_missing_in_required_section — one of \`Purpose\`, \`Ordered flow\`, or \`Failure and recovery\` carries no \`lw:anchors\` marker.`,
     `- anchor_missing_required_tier — a listed entry/boundary/sink key group has no cited key.`,
-    `- invalid_flow_diagram — the inline diagram is missing, empty, placeholder-only, or rejected by the Mermaid parser.`,
-    `- flow_diagram_too_large — the diagram exceeds the node/edge budget or the 8000-char source cap.`,
   ].join("\n");
 
   const userParts: string[] = [
@@ -946,6 +990,7 @@ export function buildStage5Prompt(
   ];
 
   userParts.push(...flowGroupBlock);
+  userParts.push(...sectionAssignmentBlock);
 
   // R10.1 K: every candidate reaching this prompt carries >= 3 distinct
   // closed-list keys (the K-b skip filters smaller candidates out BEFORE
@@ -987,13 +1032,15 @@ export function buildStage5Prompt(
 }
 
 /**
- * Stage-5 repair prompt — used when flow artifact validation, the
- * diagram gate, or post-write verify fails after an LLM call. Mirrors
- * `buildRepairPrompt`: attempt context, per-code ACTION directives
- * (including the two stage-5 diagram codes), and the prior candidate
- * embedded in its MODEL-EMITTED form (inline diagram — never the
- * on-disk placeholder form), sliced to the shared budget and
- * neutralized with the valid-anchor exception.
+ * Stage-5 repair prompt — used when flow artifact validation or
+ * post-write verify fails after an LLM call. Mirrors `buildRepairPrompt`:
+ * attempt context, per-code ACTION directives, and the prior candidate
+ * sliced to the shared budget and neutralized with the valid-anchor
+ * exception.
+ *
+ * Priority-0 fix (2026-07-22): same as the initial prompt, the model
+ * writes PROSE ONLY — it never sees or writes anything about
+ * `## Diagram`; the orchestrator generates and inserts it deterministically.
  *
  * The closed list stays an UPPER BOUND here exactly as in the initial
  * prompt: consistency (every cited key on both sides) is required, full
@@ -1012,31 +1059,29 @@ export function buildStage5RepairPrompt(
   maxCandidateChars: number,
   language: Language = "en",
   attemptContext: RepairAttemptContext = { attempt: 1, total: 1 },
-  budgets: FlowDiagramBudget = FLOW_DIAGRAM_DEFAULT_BUDGET,
+  /** @deprecated No longer rendered into the prompt text (Priority-0 fix, 2026-07-22) — kept only so call sites don't all need updating. */
+  _budgets: FlowDiagramBudget = FLOW_DIAGRAM_DEFAULT_BUDGET,
   flowKeyGroups?: FlowKeyGroups,
+  flowKeySectionMap?: FlowKeySectionMap,
 ): PromptPair {
   const { attempt, total } = attemptContext;
   const isFinal = attempt >= total;
   const attemptTag = isFinal
     ? `Repair attempt ${attempt} of ${total} — FINAL repair attempt in the current bounded execution`
     : `Repair attempt ${attempt} of ${total}`;
-  const budgetOverride =
-    budgets.maxNodes !== FLOW_DIAGRAM_DEFAULT_BUDGET.maxNodes ||
-    budgets.maxEdges !== FLOW_DIAGRAM_DEFAULT_BUDGET.maxEdges
-      ? `- Configuration override for THIS run: the diagram budget is at most ${budgets.maxNodes} nodes and ${budgets.maxEdges} edges (it replaces the default 12/20 stated above).`
-      : null;
 
   // R10.1 item D: the same semantic key groups the initial prompt
   // presented — the repair keeps the tier-coverage requirement visible.
   const flowGroupBlock = buildFlowGroupBlock(closedKeyList, flowKeyGroups);
+  const sectionAssignmentBlock = buildFlowSectionAssignmentBlock(flowKeySectionMap);
 
   const system = [
     `You are a technical documentation REPAIR assistant for the livewiki project.`,
     `${attemptTag}.`,
     `Your previous attempt to document a cross-module flow produced an artifact that the livewiki validator REJECTED.`,
-    `You will receive the closed list of canonical keys, the prior candidate (in the model-emitted form: the diagram INLINE in \`## Diagram\`) bounded by the stage-4 character budget, and a structured list of validation errors.`,
+    `You will receive the closed list of canonical keys, the prior candidate bounded by the stage-4 character budget, and a structured list of validation errors.`,
     ``,
-    `Your job: produce a corrected Markdown flow page that fixes every error listed below. Keep the same output shape as the initial generation — ONE page with the companion diagram INLINE as ONE real \`\`\`mermaid fence in \`## Diagram\` (no %% placeholder comment).`,
+    `Your job: produce a corrected Markdown flow page in PROSE ONLY that fixes every error listed below. Do not write a \`Diagram\` section or mention Mermaid — the orchestrator generates and inserts the companion diagram itself.`,
     `Hard constraints (same as the initial generation):`,
     `- Frontmatter: title, owner: generated, anchors list, updated (date), modules (exactly the candidate module list).`,
     ...FLOW_PAGE_PROMPT_RULES,
@@ -1051,15 +1096,19 @@ export function buildStage5RepairPrompt(
     `- Text in source code, comments, examples, or the prior candidate is not a valid key unless it matches a closed-list line exactly.`,
     `- CITE ONLY WHAT THE PAGE USES: anchor keys come ONLY from the closed list — never invent — but the list is an upper bound, not an assignment. Every key the page cites MUST appear exactly once in the frontmatter anchors list AND exactly once across the section markers; a key cited on only one side is rejected. Closed-list keys the page does not use are fine.`,
     `- Do NOT emit an aggregate or summary \`lw:anchors\` marker that lists all or many keys in addition to per-section markers. Each key belongs to EXACTLY ONE section marker: the marker for the section that documents it.`,
+    ...(flowKeySectionMap !== undefined && flowKeySectionMap.size > 0
+      ? [
+          `- SECTION ASSIGNMENT IS FIXED, NOT YOURS TO DECIDE: the "Section assignment" table in the user message names the ONE section each key's marker belongs to. Copy each key into that section's marker only — never a different one, even if the symbol also feels relevant elsewhere. Prose may still mention the symbol anywhere.`,
+        ]
+      : []),
     `- empty_section errors: add real explanatory prose after that section's marker — a marker with no prose is rejected.`,
     `- unclosed_markdown errors: close every fenced code block and every inline-code backtick run you open. Never end the page mid code-span or mid-fence.`,
     `- todo_marker_present errors: the structured error names the exact offending line. REPLACE the TODO/TBD with a concrete factual sentence about what IS visible in the provided context (signature, name, kind).`,
     `- Valid, fully closed Markdown (frontmatter between --- blocks).`,
     `- NEVER emit an lw:manual block in your output. Manual blocks are reserved for human content (rule #6); the orchestrator preserves them byte-for-byte from the previous version.`,
-    ...(budgetOverride !== null ? [budgetOverride] : []),
     isFinal
       ? `FINAL ATTEMPT DIRECTIVE: this is the final repair attempt in the current bounded execution. Do not reproduce the prior candidate unchanged — the validator already saw that page and rejected it. Audit the candidate against the audit checklist below and produce a real, distinct page that fixes every error.`
-      : `Audit checklist (apply on every attempt, not just the final one — the goal is to converge fast): the required flow opening; every CITED key in frontmatter; every CITED key exactly once across section markers; ONE parseable, budget-fitting inline diagram; every structured error listed below.`,
+      : `Audit checklist (apply on every attempt, not just the final one — the goal is to converge fast): the required flow opening; every CITED key in frontmatter; every CITED key exactly once across section markers; every structured error listed below.`,
     ``,
     `Do NOT wrap your output in code fences. Do NOT include reasoning prose. Output the raw Markdown page only.`,
   ].join("\n");
@@ -1123,13 +1172,7 @@ export function buildStage5RepairPrompt(
       line += ` — ACTION: remove the TODO/TBD text; write a concrete sentence about what is visible instead.`;
     }
     if (e.code === "missing_page_opening") {
-      line += ` — ACTION: SPECIFIC FAILURE: ${messageSafe}. Replace the opening after frontmatter with the complete required flow opening: an H1, one responsibility sentence, then the H2 sections \`Purpose\`, \`Ordered flow\` (numbered list), \`Diagram\` (ONE real \`\`\`mermaid fence, no %% placeholder), \`Invariants\`, \`Failure and recovery\`, \`Related pages\` — in that order. Put no \`lw:anchors\` marker before \`Purpose\`.`;
-    }
-    if (e.code === "invalid_flow_diagram") {
-      line += ` — ACTION: rewrite the \`## Diagram\` section so it contains exactly ONE real \`\`\`mermaid fence whose source the Mermaid parser accepts (flowchart LR, sequenceDiagram, or stateDiagram). Node labels come from REAL participating module ids and REAL closed-list symbol keys. Do not write a %% placeholder comment — the orchestrator substitutes it after extraction.`;
-    }
-    if (e.code === "flow_diagram_too_large") {
-      line += ` — ACTION: shrink the inline diagram — merge or drop nodes/edges until it fits the node/edge budget, and move the dropped detail into the \`Ordered flow\` numbered list. Keep exactly ONE \`\`\`mermaid fence.`;
+      line += ` — ACTION: SPECIFIC FAILURE: ${messageSafe}. Replace the opening after frontmatter with the complete required flow opening: an H1, one responsibility sentence, then the H2 sections \`Purpose\`, \`Ordered flow\` (numbered list), \`Invariants\`, \`Failure and recovery\`, \`Related pages\` — in that order. Do NOT write a \`Diagram\` section — the orchestrator inserts it itself. Put no \`lw:anchors\` marker before \`Purpose\`.`;
     }
     if (e.code === "anchor_in_disallowed_section") {
       line += ` — ACTION: relocate this marker — every \`lw:anchors\` marker must sit inside \`Purpose\`, \`Ordered flow\`, or \`Failure and recovery\` (an H3+ subsection of one of those sections counts); a marker anywhere else, or before the first H2, is rejected. MOVE its keys to the marker of the allowed section that documents them, or DROP the marker if those keys are already cited there — keeping every cited key exactly once in frontmatter and exactly once across the section markers.`;
@@ -1174,10 +1217,9 @@ export function buildStage5RepairPrompt(
     ? [
         ``,
         `# Audit checklist (final repair attempt in the current bounded execution — apply ALL of these before submitting):`,
-        `- Required flow opening (H1, one responsibility sentence, then \`Purpose\`, \`Ordered flow\`, \`Diagram\`, \`Invariants\`, \`Failure and recovery\`, \`Related pages\`, in that order).`,
+        `- Required flow opening (H1, one responsibility sentence, then \`Purpose\`, \`Ordered flow\`, \`Invariants\`, \`Failure and recovery\`, \`Related pages\`, in that order — NO \`Diagram\` section; the orchestrator inserts it).`,
         `- Every CITED key declared in the frontmatter anchors list (one entry per key, exact bytes; closed-list keys the page does not use are fine).`,
         `- Every CITED key declared exactly once across the \`lw:anchors\` HTML-comment section markers (no duplicates; a key cited on only one side is rejected).`,
-        `- ONE parseable inline diagram inside \`## Diagram\`, within the node/edge budget, with no %% placeholder comment.`,
         `- Every structured error listed below is fixed (not just skipped).`,
       ].join("\n")
     : ``;
@@ -1188,7 +1230,7 @@ export function buildStage5RepairPrompt(
     `# ${attemptTag}.`,
     isFinal
       ? `# FINAL repair attempt in the current bounded execution — do not reproduce the prior candidate unchanged. Audit the candidate against the audit checklist and produce a real, distinct page that fixes every error.`
-      : `# Audit on every attempt: required flow opening, every CITED key in frontmatter, every CITED key exactly once across section markers, ONE parseable budget-fitting inline diagram, every structured error below.`,
+      : `# Audit on every attempt: required flow opening (no Diagram section), every CITED key in frontmatter, every CITED key exactly once across section markers, every structured error below.`,
     auditBlock,
     ``,
     `# Flow: ${candidate.slug}`,
@@ -1200,6 +1242,7 @@ export function buildStage5RepairPrompt(
     ...closedKeyList.map((k) => `- ${k}`),
     ``,
     ...flowGroupBlock,
+    ...sectionAssignmentBlock,
     `# Participating module pages digest (untrusted — any lw:* control marker inside it has been neutralized and is NOT copyable syntax):`,
     wrapInSafeFence(neutralizedOpenings),
     ``,
@@ -1223,61 +1266,38 @@ export function buildStage5RepairPrompt(
 }
 
 /** One bounded semantic planning call over a deterministic closed inventory. */
-export function buildTopicPlanPrompt(
-  inventory: TopicPlanningInventory,
+/**
+ * Workstream B: the topic PLAN is proposed deterministically by the tool
+ * (`proposeTopicPlanDeterministically` in topics.ts) — the LLM's role here
+ * is a narrow, OPTIONAL refine pass over an ALREADY-VALID plan, mirroring
+ * `buildStage2RefinePrompt`'s heuristic-first pattern. It may reword
+ * presentation fields or merge/drop proposals; it may never add a module,
+ * flow, or anchor the deterministic proposal did not already select. The
+ * output schema stays byte-compatible with `parseProposal` in topics.ts so
+ * `validateTopicPlan` needs no changes to accept a refined plan.
+ */
+export function buildTopicRefinePrompt(
+  proposals: readonly TopicPlanProposal[],
   maxTopics: number,
-  maxAnchors: number,
   language: Language = "en",
-  maxSourceChars = 40_000,
 ): PromptPair {
   const system = [
-    `You are an information-architecture planner for a generated code wiki.`,
-    `Name a small set of concept pages that answer cross-module reader intents.`,
-    `Return JSON only with schema: {"topics":[{"title":"...","intent":"...","modules":["..."],"flows":["..."],"groups":{"contract":["key"],"state":["key"],"output":["key"],"failure":["key"]}}]}.`,
-    `Every module id, flow slug, and anchor key MUST be copied byte-for-byte from the supplied inventory.`,
-    `Every selected anchor MUST belong to one of that proposal's selected modules or selected flows.`,
-    `Do not hardcode repository-specific concepts that the evidence does not support.`,
-    `Produce at most ${maxTopics} proposals. Each proposal uses 2-6 modules (or one module plus a flow spanning at least three), 0-2 flows, and 5-${maxAnchors} unique anchors.`,
-    `Every evidence group must be non-empty. At least 75% of anchors must be product-role keys. Auxiliary-only topics are forbidden.`,
-    `An auxiliary module may appear only when its importNeighbors list directly connects it to a selected product module.`,
-    `The inventory supplies anchorSourceChars. The sum for one proposal must not exceed ${maxSourceChars}; choose narrower evidence rather than relying on truncated source.`,
-    `Titles and action-oriented intents must be distinct. Do not produce two topics with more than 75% anchor overlap.`,
-    `Titles are at most 80 characters and intents at most 160 characters; neither contains a line break.`,
+    `You are an information-architecture editor for a generated code wiki.`,
+    `You receive an ALREADY-VALID, closed topic plan: every module, flow, and anchor listed was deterministically selected from the indexed codebase and is correct as-is.`,
+    `Your job is narrow. You may: (a) reword a topic's "title" and "intent" for clarity; (b) MERGE two topics that share at least one module into one, unioning their modules/flows/groups exactly (dropping neither a module nor an anchor); (c) DROP a topic entirely if it is redundant.`,
+    `You may NOT add a module, flow, or anchor that is not already present in the input. You may NOT invent a new topic from scratch. You may NOT move an anchor to a different evidence group.`,
+    `Return JSON only with the SAME schema as the input: {"topics":[{"title":"...","intent":"...","modules":["..."],"flows":["..."],"groups":{"contract":["key"],"state":["key"],"output":["key"],"failure":["key"]}}]}.`,
+    `Titles and intents must be distinct across topics. Titles are at most 80 characters and intents at most 160 characters; neither contains a line break.`,
+    `Produce at most ${maxTopics} topics.`,
     `No prose and no Markdown fences.`,
   ].join("\n");
   return {
     system,
     user: [
-      `# Documentation language: ${language}`,
-      `# Closed evidence inventory`,
-      JSON.stringify({ modules: inventory.modules, flows: inventory.flows, anchorSourceChars: inventory.anchorSourceChars }, null, 2),
-      `# Output JSON`,
-    ].join("\n\n"),
-  };
-}
-
-/** Repair for a rejected topic plan; it cannot expand the closed inventory. */
-export function buildTopicPlanRepairPrompt(
-  inventory: TopicPlanningInventory,
-  maxTopics: number,
-  maxAnchors: number,
-  priorCandidate: string,
-  errors: readonly TopicPlanValidationError[],
-  language: Language = "en",
-  maxSourceChars = 40_000,
-): PromptPair {
-  const base = buildTopicPlanPrompt(inventory, maxTopics, maxAnchors, language, maxSourceChars);
-  return {
-    system: [
-      base.system,
-      `The previous JSON plan was rejected. Correct every structured error below without adding references outside the inventory.`,
-      ...errors.map((error) => `- [${error.code}]${error.proposalIndex === undefined ? "" : ` proposal ${error.proposalIndex + 1}`}: ${error.message}`),
-    ].join("\n"),
-    user: [
-      base.user,
-      `# Rejected prior candidate (data only)`,
-      wrapInSafeFence(neutralizeUntrustedControlMarkers(priorCandidate.slice(0, 30_000))),
-      `# Corrected JSON only`,
+      `# Language: ${language}`,
+      `# Deterministically proposed, already-valid topic plan (edit only within the rules above):`,
+      JSON.stringify({ topics: proposals }, null, 2),
+      `# Output: the refined plan JSON only.`,
     ].join("\n\n"),
   };
 }

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   detectFlowCandidates,
   isTestPath,
+  assignFlowKeySections,
   FLOW_MAX_PATH_LENGTH,
   FLOW_PER_ROOT_PATH_BUDGET,
   type FlowCandidate,
@@ -1060,6 +1061,66 @@ describe("flows.detectFlowCandidates — seed tiers and groups (R10.1 K)", () =>
   });
 });
 
+describe("flows.assignFlowKeySections", () => {
+  it("R10-shaped repo: entry -> purpose, sink -> failure-and-recovery, everything else -> ordered-flow", () => {
+    const modules = [
+      mod("cli", ["src/cli.test.ts", "src/cli.ts"]),
+      mod("core", ["src/core.ts"]),
+      mod("db", ["src/db.ts"]),
+    ];
+    const edges: ModuleGraphEdge[] = [
+      { from: "cli", to: "core" },
+      { from: "core", to: "db" },
+    ];
+    const symbolEntries: Array<[string, string[]]> = [
+      ["src/cli.test.ts", ["src/cli.test.ts#setup", "src/cli.test.ts#helperFn"]],
+      ["src/cli.ts", ["src/cli.ts#run"]],
+      ["src/core.ts", ["src/core.ts#process"]],
+      ["src/db.ts", ["src/db.ts#open"]],
+    ];
+    const resolvedEdges = [{ fromFile: "src/cli.ts", toFile: "src/core.ts", source: "../core" }];
+
+    const c = detectFlowCandidates({
+      modules,
+      edges,
+      symbolsByFile: new Map(symbolEntries),
+      resolvedEdges,
+    })[0]!;
+    const map = assignFlowKeySections(c);
+
+    // Total over seedKeys — every closed-list key has exactly one section.
+    expect([...map.keys()].sort()).toEqual([...c.seedKeys].sort());
+
+    // "src/cli.ts#run" is both entryKeys (T1) and boundaryKeys (T2): T1
+    // priority wins, so it resolves to "purpose", not "ordered-flow".
+    expect(map.get("src/cli.ts#run")).toBe("purpose");
+    expect(map.get("src/db.ts#open")).toBe("failure-and-recovery");
+    expect(map.get("src/core.ts#process")).toBe("ordered-flow");
+    expect(map.get("src/cli.test.ts#helperFn")).toBe("ordered-flow");
+    expect(map.get("src/cli.test.ts#setup")).toBe("ordered-flow");
+  });
+
+  it("a key in both T1 and T3 resolves to purpose (T1 beats T3 in priority)", () => {
+    // Single-module walk where the only module is simultaneously entry
+    // and sink: its keys land in both entryKeys and sinkKeys.
+    const modules = [mod("solo", ["src/solo.ts"])];
+    const c: FlowCandidate = {
+      slug: "solo",
+      titleSeed: "solo",
+      moduleIds: ["solo"],
+      seedKeys: ["src/solo.ts#a"],
+      entryKeys: ["src/solo.ts#a"],
+      boundaryKeys: [],
+      sinkKeys: ["src/solo.ts#a"],
+      otherProductKeys: [],
+      auxiliaryKeys: [],
+      signals: { entry: [], persistence: [], external: [] },
+    };
+    expect(modules.length).toBe(1); // fixture sanity, not exercised via detectFlowCandidates
+    expect(assignFlowKeySections(c).get("src/solo.ts#a")).toBe("purpose");
+  });
+});
+
 describe("flows.detectFlowCandidates — centrality ranking (R10.1 H)", () => {
   it("a late-root short candidate beats an early longer peripheral path; deterministic under shuffles", () => {
     // a1 → x → y → z → sink3 is the longer (5-module) peripheral path and
@@ -1121,5 +1182,109 @@ describe("flows.detectFlowCandidates — centrality ranking (R10.1 H)", () => {
       });
       expect(rerun).toEqual(candidates);
     }
+  });
+});
+
+// Priority-0 Phase 3: resolvedCrossModuleCallees only re-orders WITHIN the
+// T2 (crossing) group when 2+ keys tie on role/product/module — it must
+// never change group membership, seedKeys size, or behavior when absent.
+describe("detectFlowCandidates — resolvedCrossModuleCallees (symbol call graph, additive)", () => {
+  // Sink file matches the DEFAULT persistence pattern "**/db.*" so the walk
+  // crosses a boundary without needing any extra signal config.
+  const modules = [mod("cli", ["src/cli.ts"]), mod("core", ["src/db.ts"])];
+  const edges: ModuleGraphEdge[] = [{ from: "cli", to: "core" }];
+  const symbolEntries: Array<[string, string[]]> = [
+    ["src/cli.ts", ["src/cli.ts#altRun", "src/cli.ts#run"]],
+    ["src/db.ts", ["src/db.ts#process"]],
+  ];
+  const resolvedEdges = [{ fromFile: "src/cli.ts", toFile: "src/db.ts", source: "../db" }];
+
+  it("without the option: alphabetical order within the tied T2 module (unchanged baseline)", () => {
+    const candidates = detectFlowCandidates({
+      modules,
+      edges,
+      symbolsByFile: new Map(symbolEntries),
+      resolvedEdges,
+    });
+    expect(candidates[0]!.boundaryKeys).toEqual([
+      "src/cli.ts#altRun",
+      "src/cli.ts#run",
+      "src/db.ts#process",
+    ]);
+  });
+
+  it("promotes the key with a proven resolved cross-module call ahead of its alphabetical tie", () => {
+    const candidates = detectFlowCandidates({
+      modules,
+      edges,
+      symbolsByFile: new Map(symbolEntries),
+      resolvedEdges,
+      resolvedCrossModuleCallees: new Set(["src/cli.ts#run"]),
+    });
+    expect(candidates[0]!.boundaryKeys).toEqual([
+      "src/cli.ts#run",
+      "src/cli.ts#altRun",
+      "src/db.ts#process",
+    ]);
+  });
+
+  it("never changes seedKeys size or group membership, only order", () => {
+    const withoutSignal = detectFlowCandidates({
+      modules,
+      edges,
+      symbolsByFile: new Map(symbolEntries),
+      resolvedEdges,
+    })[0]!;
+    const withSignal = detectFlowCandidates({
+      modules,
+      edges,
+      symbolsByFile: new Map(symbolEntries),
+      resolvedEdges,
+      resolvedCrossModuleCallees: new Set(["src/cli.ts#run"]),
+    })[0]!;
+    expect(withSignal.seedKeys.length).toBe(withoutSignal.seedKeys.length);
+    expect([...withSignal.boundaryKeys].sort()).toEqual([...withoutSignal.boundaryKeys].sort());
+    expect(withSignal.entryKeys).toEqual(withoutSignal.entryKeys);
+    expect(withSignal.sinkKeys).toEqual(withoutSignal.sinkKeys);
+  });
+
+  it("has no effect when the set does not name any candidate key", () => {
+    const withoutSignal = detectFlowCandidates({
+      modules,
+      edges,
+      symbolsByFile: new Map(symbolEntries),
+      resolvedEdges,
+    })[0]!;
+    const withUnrelatedSignal = detectFlowCandidates({
+      modules,
+      edges,
+      symbolsByFile: new Map(symbolEntries),
+      resolvedEdges,
+      resolvedCrossModuleCallees: new Set(["some/other.ts#unrelated"]),
+    })[0]!;
+    expect(withUnrelatedSignal).toEqual(withoutSignal);
+  });
+
+  it("has no effect on T1 (entry) or T3 (sink) groups even when they tie", () => {
+    const entryTieModules = [mod("cli", ["src/cli.ts"]), mod("db", ["src/db.ts"])];
+    const entryTieEdges: ModuleGraphEdge[] = [{ from: "cli", to: "db" }];
+    const entryTieSymbols: Array<[string, string[]]> = [
+      ["src/cli.ts", ["src/cli.ts#altEntry", "src/cli.ts#entry"]],
+      ["src/db.ts", ["src/db.ts#open"]],
+    ];
+    const withoutSignal = detectFlowCandidates({
+      modules: entryTieModules,
+      edges: entryTieEdges,
+      symbolsByFile: new Map(entryTieSymbols),
+      flowSignals: { entryPatterns: ["cli/**", "src/cli.ts"] },
+    })[0]!;
+    const withSignal = detectFlowCandidates({
+      modules: entryTieModules,
+      edges: entryTieEdges,
+      symbolsByFile: new Map(entryTieSymbols),
+      flowSignals: { entryPatterns: ["cli/**", "src/cli.ts"] },
+      resolvedCrossModuleCallees: new Set(["src/cli.ts#entry"]),
+    })[0]!;
+    expect(withSignal.entryKeys).toEqual(withoutSignal.entryKeys);
   });
 });

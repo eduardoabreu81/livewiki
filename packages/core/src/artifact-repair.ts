@@ -7,6 +7,7 @@ import {
   unclosedMarkdownDiagnostic,
 } from "./markdown-mask.js";
 import type { ArtifactValidationError } from "./prompts.js";
+import type { FlowKeySectionMap, FlowRequiredSection } from "./flows.js";
 
 export type MechanicalArtifactRepair =
   | "escape_unmatched_inline_delimiter"
@@ -195,12 +196,33 @@ export function repairStage4ArtifactMechanically(
  * `missing_closed_key` errors it never resolved. Applying this fallback
  * immediately (not just on the final repair slot) removes that whole class
  * of round-trip before it can cascade.
+ *
+ * Priority-0 Phase 2 follow-up #2 (2026-07-21, v23 paid E2E): a co-occurring
+ * error this function doesn't recognize (e.g. `missing_page_opening`) used
+ * to abort the whole repair, even when every OTHER error was a plain
+ * `duplicate_anchor`/`missing_closed_key`. Unrecognized errors are now
+ * skipped rather than treated as fail-closed triggers — the mandatory final
+ * `validateStage4Artifact` re-check below is the actual safety net, so a
+ * genuinely unresolved unrelated error still yields `null` exactly as
+ * before. This also covers the real-world case where duplicated section
+ * markers inflate a page enough to push the required opening out of
+ * position: deduping can incidentally fix `missing_page_opening` too.
+ *
+ * Workstream A (deterministic flow-section assignment): when the caller
+ * supplies `flowKeySectionMap` (see `assignFlowKeySections` in flows.ts),
+ * deduping a key with more than one section-marker occurrence PREFERS the
+ * occurrence sitting in that key's assigned section over "keep first" —
+ * the closed list no longer has to guess which duplicate is the correct
+ * one. If no occurrence sits in the assigned section (or the map is
+ * omitted), this falls back to the original "keep first occurrence"
+ * behavior exactly as before — never a regression for existing callers.
  */
 export function repairUpperBoundArtifactMechanically(
   artifact: string,
   errors: ReadonlyArray<ArtifactValidationError>,
   closedKeyList: ReadonlyArray<string>,
   context: Readonly<Stage4ValidationContext>,
+  flowKeySectionMap?: FlowKeySectionMap,
 ): MechanicalArtifactRepairResult | null {
   if (errors.length === 0) return null;
   const closedSet = new Set(closedKeyList);
@@ -236,14 +258,20 @@ export function repairUpperBoundArtifactMechanically(
         continue;
       }
     }
-    return null;
+    // Any other error code is left for the caller's LLM repair path — the
+    // mandatory full re-validation below still fails closed if it's never
+    // actually resolved by the mechanical fixes applied here.
   }
 
   let content = artifact;
   const repairs: MechanicalArtifactRepair[] = [];
 
   if (duplicateSectionKeys.length > 0) {
-    const deduplicated = removeLaterSectionAnchorOccurrences(content, duplicateSectionKeys);
+    const deduplicated = removeLaterSectionAnchorOccurrences(
+      content,
+      duplicateSectionKeys,
+      flowKeySectionMap,
+    );
     if (deduplicated === null || deduplicated === content) return null;
     content = deduplicated;
     repairs.push("remove_duplicate_section_anchors");
@@ -357,14 +385,46 @@ function stripManualControlMarkers(text: string): string | null {
   return result;
 }
 
+/** Maps a flow page's H2 section heading text to its FlowRequiredSection, if any. */
+const FLOW_SECTION_HEADING_MAP: Readonly<Record<string, FlowRequiredSection>> = {
+  purpose: "purpose",
+  "ordered flow": "ordered-flow",
+  "failure and recovery": "failure-and-recovery",
+};
+
+/**
+ * Which required flow section (if any) contains `index`, based on the last
+ * H2 heading (`## ...`) at or before it. An H2 that is not one of the three
+ * required sections resets the ancestor to null (H3+ subsections do NOT
+ * reset it — only a sibling/next H2 does, matching the validator's own
+ * "H3+ subsection of those sections is allowed" rule).
+ */
+function flowSectionAncestorAt(masked: string, index: number): FlowRequiredSection | null {
+  const headingRe = /^##[ \t]+(.+?)[ \t]*$/gm;
+  let current: FlowRequiredSection | null = null;
+  for (const m of masked.matchAll(headingRe)) {
+    if (m.index === undefined || m.index > index) break;
+    const title = m[1]!.trim().toLowerCase();
+    current = FLOW_SECTION_HEADING_MAP[title] ?? null;
+  }
+  return current;
+}
+
 /**
  * Match the validator's order-preserving duplicate rule: the first real
  * section-marker occurrence is canonical and every later occurrence is
  * removed. Marker-shaped examples inside Markdown code remain untouched.
+ *
+ * When `flowKeySectionMap` is supplied (Workstream A), the occurrence kept
+ * for a given key is the FIRST one whose ancestor H2 section matches that
+ * key's assigned section, rather than unconditionally the first occurrence
+ * in the document. If no occurrence sits in the assigned section (or the
+ * map is omitted), the original "keep first" behavior applies unchanged.
  */
 function removeLaterSectionAnchorOccurrences(
   text: string,
   duplicateKeys: ReadonlyArray<string>,
+  flowKeySectionMap?: FlowKeySectionMap,
 ): string | null {
   const targetKeys = new Set(duplicateKeys);
   const masked = maskCodeSpansPreservingLength(text);
@@ -384,15 +444,38 @@ function removeLaterSectionAnchorOccurrences(
     return null;
   }
 
+  // Decide, per duplicate key, which match-array index is the keeper: the
+  // first occurrence in its assigned section if one exists, else the
+  // first occurrence overall (identical to the pre-existing behavior).
+  const keeperIndexByKey = new Map<string, number>();
+  for (const key of duplicateKeys) {
+    const assignedSection = flowKeySectionMap?.get(key);
+    let firstOverall = -1;
+    let firstInSection = -1;
+    for (const [i, match] of matches.entries()) {
+      const keys = match[1]!.trim().split(/\s+/).filter(Boolean);
+      if (!keys.includes(key)) continue;
+      if (firstOverall === -1) firstOverall = i;
+      if (
+        firstInSection === -1 &&
+        assignedSection !== undefined &&
+        flowSectionAncestorAt(masked, match.index!) === assignedSection
+      ) {
+        firstInSection = i;
+      }
+    }
+    keeperIndexByKey.set(key, firstInSection !== -1 ? firstInSection : firstOverall);
+  }
+
   const seen = new Set<string>();
   const replacements: Array<{ start: number; end: number; value: string }> = [];
-  for (const match of matches) {
+  for (const [i, match] of matches.entries()) {
     const keys = match[1]!.trim().split(/\s+/).filter(Boolean);
     const kept: string[] = [];
     let changed = false;
     for (const key of keys) {
       if (targetKeys.has(key)) {
-        if (seen.has(key)) {
+        if (seen.has(key) || i !== keeperIndexByKey.get(key)) {
           changed = true;
           continue;
         }

@@ -1,0 +1,18 @@
+flowchart LR
+  cli_src["cli-src"]
+  commands["commands"]
+  core_src_03["core-src-03"]
+  core_src_02["core-src-02"]
+  core_src_05["core-src-05"]
+  core_src_06["core-src-06"]
+  core_src_04["core-src-04"]
+  core_src_01["core-src-01"]
+  cli_src -- "createProgram + run" --> commands
+  commands -- "resolveRepoRoot" --> core_src_03
+  core_src_03 -- "runBatch / attemptStage4Generation" --> core_src_02
+  core_src_02 -- "diagnosticHistory caps" --> core_src_03
+  core_src_03 -- "anchor-ledger.assigneeFor" --> core_src_01
+  core_src_05 -- "expandWorkspaceGlob + hasPackageManifest" --> core_src_03
+  core_src_06 -- "buildManifest + computeSnapshotHash" --> core_src_04
+  core_src_04 -- "buildMarker / detectMarker" --> core_src_06
+  commands -- "emit / emitHuman / emitJson" --> cli_src

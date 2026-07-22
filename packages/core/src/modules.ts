@@ -833,7 +833,7 @@ export const DEFAULT_PATH_ROLE_PATTERNS: Required<PathRoleConfig> = {
     "**/__fixtures__/**",
     "**/testdata/**",
   ],
-  toolingPatterns: ["scripts/**", "**/tools/**", "**/benchmarks/**"],
+  toolingPatterns: ["**/scripts/**", "**/tools/**", "**/benchmarks/**"],
   docsPatterns: ["docs/**", "**/docs/**"],
 };
 

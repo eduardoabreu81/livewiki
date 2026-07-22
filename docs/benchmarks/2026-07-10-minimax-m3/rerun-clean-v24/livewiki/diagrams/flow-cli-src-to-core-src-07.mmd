@@ -1,0 +1,22 @@
+flowchart LR
+  CLI["cli-src: cli.ts"]:::entry
+  CMD["commands: batch.ts"]:::boundary
+  CORE["core-src-03: batch.ts"]:::boundary
+  STATE["core-src-02: batch-state.ts"]:::sink
+  RES["core-src-05: import-resolution.ts"]:::sink
+  LEDGER["core-src-01: anchor-ledger.ts"]:::sink
+  MAN["core-src-06: manifest.ts"]:::sink
+  NAV["core-src-07: navigation.ts"]:::sink
+  CLI -- run / createProgram --> CMD
+  CMD -- register batch action --> CORE
+  CORE -- accumulateUsage / aggregateTotals --> STATE
+  CORE -- attemptStage4Generation --> STATE
+  STATE -- DIAGNOSTIC_MAX_ERRORS / DIAGNOSTIC_TEXT_CAP --> CMD
+  CMD -- formatDiagnosticLine / appendStage4Diagnostics --> CORE
+  RES -- expandWorkspaceGlob / hasPackageManifest --> CORE
+  CORE -- AnchorParseError / assigneeFor --> LEDGER
+  CORE -- computeSnapshotHash / buildManifest --> MAN
+  CORE -- buildDisplayTitleFallbacks / buildNavigateBlock --> NAV
+  CLI -- emit / emitJson --> CMD
+  CLI --> DB[("core-src-03: db.ts<br/>CURRENT_SCHEMA_VERSION")]
+  CORE --> DB

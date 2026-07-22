@@ -73,8 +73,7 @@ import {
   buildRepairPrompt,
   buildStage5Prompt,
   buildStage5RepairPrompt,
-  buildTopicPlanPrompt,
-  buildTopicPlanRepairPrompt,
+  buildTopicRefinePrompt,
   buildTopicPrompt,
   buildTopicRepairPrompt,
   type FlowDiagramBudget,
@@ -85,21 +84,19 @@ import {
 import {
   normalizeStage4Artifact,
   validateStage4Artifact,
-  extractInlineFlowDiagram,
-  countFlowDiagramElements,
-  FLOW_DIAGRAM_SOURCE_MAX_CHARS,
 } from "./artifact.js";
 import {
   repairStage4ArtifactMechanically,
   repairUpperBoundArtifactMechanically,
   type MechanicalArtifactRepair,
 } from "./artifact-repair.js";
-import { detectFlowCandidates, type FlowCandidate } from "./flows.js";
+import { detectFlowCandidates, assignFlowKeySections, type FlowCandidate } from "./flows.js";
 import {
   buildTopicPlanningInventory,
   validateTopicPlan,
-  repairTopicPlanSourceBudgetMechanically,
+  proposeTopicPlanDeterministically,
   type TopicCandidate,
+  type TopicPlanProposal,
   type TopicPlanValidationError,
 } from "./topics.js";
 import {
@@ -115,7 +112,14 @@ import { regenerateArchitectureOverview, syncClassDiagrams, syncStaleFlowArtifac
 import { ensureTopicsIndexScaffold, loadFlowPresentations, syncFlowsIndexHub } from "./navigation.js";
 import { parseFrontmatter, getOwner } from "./frontmatter.js";
 import { generateAuxiliaryModulePage } from "./auxiliary-page.js";
-import { repairOversizedFlowchart } from "./flow-diagram-repair.js";
+import { generateFlowDiagram, insertFlowDiagramSection } from "./flow-diagram.js";
+import { computeCrossModuleCallees, computeCallerCentrality } from "./call-resolution.js";
+import {
+  computeDynamicOutputTokenBudget,
+  MODULE_OUTPUT_BUDGET_OPTIONS,
+  TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS,
+  type OutputBudgetSignals,
+} from "./output-budget.js";
 import type {
   BatchStage,
   BatchStatusReport,
@@ -201,6 +205,18 @@ export interface BatchRunResult {
    * here, surfaced in human/JSON output, never persisted.
    */
   skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }>;
+  /**
+   * Priority-0 fix (v25 paid E2E): topics are an optional, additive semantic
+   * layer on top of the required module/flow pages — unlike those, a
+   * planner that exhausts every repair attempt without producing a plan
+   * that satisfies every closed-list/budget constraint SIMULTANEOUSLY is a
+   * content-quality ceiling for this run, not an operational failure. This
+   * no longer marks the batch `completed_with_failures`; it is surfaced
+   * here (human/JSON), retryable via `retryCommand`, and never silent. A
+   * real infra error during planning (LLM timeout, etc.) still fails the
+   * task normally — only the "exhausted, no valid plan" outcome is skipped.
+   */
+  skippedTopicPlan?: { reason: string; retryCommand: string };
 }
 
 /**
@@ -287,6 +303,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       opts.stage4MaxOutputTokens ??
       resolvedConfig.stage4MaxOutputTokens ??
       8192;
+    const outputTokenStrategy: "dynamic" | "fixed" =
+      resolvedConfig.outputTokenStrategy ?? "dynamic";
     const charBudget = opts.contextCharBudget ?? 60_000;
     const thinkingMode = opts.thinking ?? resolvedConfig.thinking;
     const { maxFiles: maxModuleFiles, maxSymbols: maxModuleSymbols } =
@@ -540,6 +558,13 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // (cb.done counts stages 4 + 5 combined once stage 5 runs).
     let moduleTasksDone = 0;
     const failures: BatchRunResult["failures"] = [];
+    // Priority-0 fix (v-next paid E2E on MoneyPrinterTurbo-Plus): a flow
+    // candidate spanning a module whose own stage-4 page failed to write
+    // is a guaranteed, retry-proof verify failure (its "Related pages"
+    // link points at a module page that was never written). Tracked here
+    // so stage 5 can skip such candidates deterministically instead of
+    // burning a full LLM repair budget on an unwinnable verify.
+    const failedModuleIds = new Set<string>();
     const moduleUsage: BatchRunResult["byModule"] = [];
     const stage2UsageAcc: StageUsage = emptyUsage();
     let stageUsageTotals: StageUsage = emptyUsage();
@@ -778,7 +803,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             // Pricing override preserved across repairs so the
             // user's `config.json` is honored for every call.
             pricing: resolvedConfig.pricing,
-            maxTokens: stage4MaxOutputTokens,
+            outputTokenCeiling: stage4MaxOutputTokens,
+            outputTokenStrategy,
             thinking: thinkingMode,
             pathRoleConfig: resolvedConfig.pathRoles,
             // A local fallback is allowed only after the model has consumed
@@ -1033,6 +1059,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 
         cb.consecutive++;
         cb.fails++;
+        failedModuleIds.add(module.id);
         failures.push({
           taskId: task.id,
           module: module.id,
@@ -1149,6 +1176,11 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             .filter((source) => !resolvedOccurrences.has(`${file}\0${source}`)),
         );
       }
+      // Priority-0 Phase 3: symbol keys with a call graph edge PROVING a
+      // cross-module dependency, only used by detectFlowCandidates to
+      // break ties within the T2 (crossing) seed-key group — additive,
+      // never changes which flows are detected.
+      const resolvedCrossModuleCallees = computeCrossModuleCallees(db, ordered);
       stage5Candidates = detectFlowCandidates({
         modules: ordered,
         edges,
@@ -1163,6 +1195,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           : {}),
         maxFlows,
         flowMaxAnchors: resolvedConfig.flowMaxAnchors ?? CONFIG_DEFAULTS.flowMaxAnchors,
+        resolvedCrossModuleCallees,
       });
     }
 
@@ -1193,11 +1226,23 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     const skippedFlowCandidates: NonNullable<BatchRunResult["skippedFlowCandidates"]> = [];
     const stage5Runnable: FlowCandidate[] = [];
     for (const candidate of stage5Targets) {
+      const failedParticipant = candidate.moduleIds.find((id) => failedModuleIds.has(id));
       if (candidate.skip !== undefined) {
         skippedFlowCandidates.push({
           slug: candidate.slug,
           code: candidate.skip.code,
           message: candidate.skip.message,
+        });
+      } else if (failedParticipant !== undefined) {
+        // Priority-0 fix: this candidate spans a module whose stage-4 page
+        // never got written — its "Related pages" link would cite a page
+        // that does not exist, so every attempt fails `verify` identically
+        // regardless of retries. Skip deterministically instead of
+        // spending the full LLM repair budget on a guaranteed failure.
+        skippedFlowCandidates.push({
+          slug: candidate.slug,
+          code: "participating_module_failed",
+          message: `module "${failedParticipant}" failed stage-4 generation — its page was never written, so this flow's cross-references can never verify`,
         });
       } else {
         stage5Runnable.push(candidate);
@@ -1284,7 +1329,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             priorErrors,
             absRoot,
             pricing: resolvedConfig.pricing,
-            maxTokens: stage4MaxOutputTokens,
+            outputTokenCeiling: stage4MaxOutputTokens,
+            outputTokenStrategy,
             thinking: thinkingMode,
             diagramBudgets: flowDiagramBudgets,
             ...(repairAttemptContext !== undefined
@@ -1601,6 +1647,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       !runAbortedByRollback &&
       (opts.mode !== "only" || onlyTopicIdentity !== null);
     let topicCandidates: TopicCandidate[] = [];
+    let skippedTopicPlan: BatchRunResult["skippedTopicPlan"];
     if (opts.mode === "only" && onlyTopicIdentity !== null && maxTopics <= 0) {
       throw new Error("topic generation is disabled by maxTopics: 0");
     }
@@ -1621,9 +1668,11 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         maxAnchors: resolvedConfig.topicMaxAnchors ?? CONFIG_DEFAULTS.topicMaxAnchors,
         sourceChars: resolvedConfig.topicMaxSourceChars ?? CONFIG_DEFAULTS.topicMaxSourceChars,
         outputTokens: resolvedConfig.topicMaxOutputTokens ?? CONFIG_DEFAULTS.topicMaxOutputTokens,
+        outputTokenStrategy,
         maxRepairAttempts,
         mode: opts.mode,
         onlyIdentity: onlyTopicIdentity,
+        noRefine: opts.noRefine ?? false,
         ...(opts.mode !== "only"
           ? { allowedFlowSlugs: new Set(stage5Candidates.map((candidate) => candidate.slug)) }
           : {}),
@@ -1655,6 +1704,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       failures.push(...topicStage.failures);
       moduleUsage.push(...topicStage.usageByTask);
       runAbortedByRollback ||= topicStage.rollbackFailed;
+      if (topicStage.skippedTopicPlan) skippedTopicPlan = topicStage.skippedTopicPlan;
       // The topic stage already made its own (now-isolated) abort decision
       // internally; do not re-derive one from cumulative cb totals here.
       const combinedCircuitBreaker = topicStage.circuitBreakerTriggered;
@@ -1675,6 +1725,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         });
         const aborted = buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, combinedCircuitBreaker, cb.done, cb.fails);
         if (skippedFlowCandidates.length > 0) aborted.skippedFlowCandidates = skippedFlowCandidates;
+        if (skippedTopicPlan) aborted.skippedTopicPlan = skippedTopicPlan;
         return aborted;
       }
     }
@@ -1799,6 +1850,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     if (skippedAuxiliaryHub) finalResult.skippedAuxiliaryHub = skippedAuxiliaryHub;
     if (skippedTopicsHub) finalResult.skippedTopicsHub = skippedTopicsHub;
     if (skippedFlowCandidates.length > 0) finalResult.skippedFlowCandidates = skippedFlowCandidates;
+    if (skippedTopicPlan) finalResult.skippedTopicPlan = skippedTopicPlan;
     return finalResult;
   } finally {
     db.close();
@@ -1818,6 +1870,7 @@ interface TopicStageResult {
   rollbackFailed: boolean;
   circuitBreakerTriggered: boolean;
   endingConsecutive: number;
+  skippedTopicPlan?: BatchRunResult["skippedTopicPlan"];
 }
 
 async function runSemanticTopicStage(opts: {
@@ -1836,6 +1889,7 @@ async function runSemanticTopicStage(opts: {
   maxAnchors: number;
   sourceChars: number;
   outputTokens: number;
+  outputTokenStrategy: "dynamic" | "fixed";
   maxRepairAttempts: number;
   mode: "run" | "resume" | "only";
   onlyIdentity: string | null;
@@ -1843,6 +1897,8 @@ async function runSemanticTopicStage(opts: {
   initialConsecutiveFailures: number;
   initialDone: number;
   initialFails: number;
+  /** --no-refine: skip the optional LLM refine pass over the deterministic topic plan. */
+  noRefine?: boolean;
 }): Promise<TopicStageResult> {
   const result: TopicStageResult = {
     usage: emptyUsage(), taskCount: 0, done: 0, fails: 0, candidates: [],
@@ -1900,132 +1956,99 @@ async function runSemanticTopicStage(opts: {
     const usageHistory = [...(priorPlannerCheckpoint?.usageHistory ?? [])];
     const diagnosticHistory = [...(priorPlannerCheckpoint?.diagnosticHistory ?? [])];
     let taskUsage = emptyUsage();
-    let priorCandidate = "";
-    let acceptedPlanRaw = "";
-    let planErrors: TopicPlanValidationError[] = [];
-    let taskError: TaskCheckpoint["error"] | undefined;
-    let terminalPlannerError: TaskCheckpoint["error"] | undefined;
 
-    for (let slot = 0; slot < 1 + opts.maxRepairAttempts; slot++) {
+    // Workstream B: the plan is proposed deterministically first (no LLM
+    // call, no repair loop, no possible "exhausted" outcome) — see
+    // `proposeTopicPlanDeterministically` in topics.ts. An optional,
+    // narrowly-scoped LLM refine pass may reword/merge/drop proposals
+    // afterward, mirroring stage 2's heuristic-first + optional-refine
+    // pattern (`buildStage2RefinePrompt` above): any rejection, invalid
+    // output, or infra failure degrades silently back to the already-valid
+    // deterministic plan rather than failing or skipping the task.
+    const planValidationOpts = {
+      maxTopics: opts.maxTopics,
+      maxAnchors: opts.maxAnchors,
+      maxSourceChars: opts.sourceChars,
+    };
+    const centrality = computeCallerCentrality(opts.db);
+    let candidates = proposeTopicPlanDeterministically(inventory, centrality, planValidationOpts);
+
+    if (candidates.length > 0 && !opts.noRefine) {
       attempt++;
-      const promptKind = slot === 0 || priorCandidate === "" ? "initial" : "repair";
-      const prompt = promptKind === "initial"
-        ? buildTopicPlanPrompt(inventory, opts.maxTopics, opts.maxAnchors, opts.language, opts.sourceChars)
-        : buildTopicPlanRepairPrompt(inventory, opts.maxTopics, opts.maxAnchors, priorCandidate, planErrors, opts.language, opts.sourceChars);
-      let generated: GenerateResult;
       try {
-        generated = await opts.llmClient.generate({
+        const proposals: TopicPlanProposal[] = candidates.map((c) => ({
+          title: c.title,
+          intent: c.intent,
+          modules: c.modules,
+          flows: c.flows,
+          groups: c.groups,
+        }));
+        const prompt = buildTopicRefinePrompt(proposals, opts.maxTopics, opts.language);
+        const refineMaxTokens = resolveOutputTokenBudget(
+          opts.outputTokenStrategy,
+          opts.outputTokens,
+          { anchorCount: candidates.flatMap((c) => c.seedKeys).length },
+          TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS,
+        );
+        const generated = await opts.llmClient.generate({
           system: prompt.system,
           user: prompt.user,
-          maxTokens: opts.outputTokens,
+          maxTokens: refineMaxTokens,
           ...(opts.thinking ? { thinking: opts.thinking } : {}),
         });
+        const usageEntry: UsageAttempt = {
+          attempt,
+          usage: generated.usage,
+          usageKnown: true,
+          costUsd: computeCostFromUsage(generated.usage, opts.pricing),
+          finishedAt: Date.now(),
+          ...(generated.stopReason !== undefined ? { stopReason: generated.stopReason } : {}),
+          ...(generated.rawStopReason !== undefined ? { rawStopReason: generated.rawStopReason } : {}),
+        };
+        usageHistory.push(usageEntry);
+        taskUsage = accumulateUsage(taskUsage, usageEntry, opts.pricing);
+        result.usage = accumulateUsage(result.usage, usageEntry, opts.pricing);
+
+        if (generated.stopReason === "length" || generated.stopReason === "incomplete") {
+          const outcome = generated.stopReason === "length" ? "truncated_by_token_limit" : "incomplete_generation";
+          diagnosticHistory.push(topicPlanDiagnostic(
+            attempt, "initial", outcome, generated.content, [], generated.stopReason, generated.rawStopReason,
+          ));
+          // degrades silently — keep the already-valid deterministic plan.
+        } else {
+          const refined = validateTopicPlan(generated.content, inventory, planValidationOpts);
+          if (refined.ok) {
+            candidates = refined.candidates;
+            diagnosticHistory.push(topicPlanDiagnostic(
+              attempt, "initial", "success", generated.content, [], generated.stopReason, generated.rawStopReason,
+            ));
+          } else {
+            diagnosticHistory.push(topicPlanDiagnostic(
+              attempt, "initial", "artifact_validation_failed", generated.content, refined.errors,
+              generated.stopReason, generated.rawStopReason,
+            ));
+            // degrades silently — keep the already-valid deterministic plan.
+          }
+        }
       } catch (error) {
         const usageEntry: UsageAttempt = { attempt, usage: null, usageKnown: false, costUsd: null, finishedAt: Date.now() };
         usageHistory.push(usageEntry);
         taskUsage = accumulateUsage(taskUsage, usageEntry, opts.pricing);
         result.usage = accumulateUsage(result.usage, usageEntry, opts.pricing);
-        planErrors = [{ code: "topic_plan_invalid_json", message: (error as Error).message }];
-        diagnosticHistory.push(topicPlanDiagnostic(attempt, promptKind, "llm_error", priorCandidate, planErrors));
-        priorCandidate = "";
-        if (error instanceof LlmTimeoutError) {
-          terminalPlannerError = { code: "llm_timeout", message: error.message, failedAt: 5 };
-          break;
-        }
-        continue;
-      }
-      const usageEntry: UsageAttempt = {
-        attempt,
-        usage: generated.usage,
-        usageKnown: true,
-        costUsd: computeCostFromUsage(generated.usage, opts.pricing),
-        finishedAt: Date.now(),
-        ...(generated.stopReason !== undefined ? { stopReason: generated.stopReason } : {}),
-        ...(generated.rawStopReason !== undefined ? { rawStopReason: generated.rawStopReason } : {}),
-      };
-      usageHistory.push(usageEntry);
-      taskUsage = accumulateUsage(taskUsage, usageEntry, opts.pricing);
-      result.usage = accumulateUsage(result.usage, usageEntry, opts.pricing);
-      if (generated.stopReason === "length" || generated.stopReason === "incomplete") {
-        const outcome = generated.stopReason === "length" ? "truncated_by_token_limit" : "incomplete_generation";
-        planErrors = [{
-          code: "topic_plan_invalid_json",
-          message: `topic planning ended with stop reason ${generated.rawStopReason ?? generated.stopReason}`,
-        }];
+        const message = error instanceof LlmTimeoutError ? error.message : (error as Error).message;
         diagnosticHistory.push(topicPlanDiagnostic(
-          attempt,
-          promptKind,
-          outcome,
-          generated.content,
-          planErrors,
-          generated.stopReason,
-          generated.rawStopReason,
+          attempt, "initial", "llm_error", "", [{ code: "topic_plan_invalid_json", message }],
         ));
-        priorCandidate = "";
-        continue;
+        // degrades silently — an LLM refine failure (even a timeout) is
+        // never a planning failure; the deterministic plan is already valid.
       }
-      priorCandidate = generated.content;
-      const planValidationOpts = {
-        maxTopics: opts.maxTopics,
-        maxAnchors: opts.maxAnchors,
-        maxSourceChars: opts.sourceChars,
-      };
-      const validation = validateTopicPlan(generated.content, inventory, planValidationOpts);
-      planErrors = validation.errors;
-      if (validation.ok) {
-        result.candidates = validation.candidates;
-        acceptedPlanRaw = generated.content;
-        diagnosticHistory.push(topicPlanDiagnostic(
-          attempt, promptKind, "success", generated.content, [], generated.stopReason, generated.rawStopReason,
-        ));
-        break;
-      }
-      // Priority-0 follow-up: a plan whose ONLY problem is
-      // topic_plan_source_budget has an unambiguous, cross-checked
-      // mechanical fix (drop the costliest anchors without breaking the
-      // anchor floor, group coverage, or product ratio) — try it before
-      // spending another repair slot on a full regeneration.
-      const mechanical = repairTopicPlanSourceBudgetMechanically(
-        generated.content,
-        planErrors,
-        inventory,
-        planValidationOpts,
-      );
-      if (mechanical !== null) {
-        result.candidates = mechanical.result.candidates;
-        acceptedPlanRaw = mechanical.content;
-        diagnosticHistory.push(topicPlanDiagnostic(
-          attempt, promptKind, "success", mechanical.content, [], generated.stopReason, generated.rawStopReason,
-        ));
-        break;
-      }
-      diagnosticHistory.push(topicPlanDiagnostic(
-        attempt,
-        promptKind,
-        "artifact_validation_failed",
-        generated.content,
-        planErrors,
-        generated.stopReason,
-        generated.rawStopReason,
-      ));
     }
 
-    if (result.candidates.length === 0) {
-      taskError = terminalPlannerError ?? { code: "topic_plan_exhausted", message: `topic-plan exhausted ${1 + opts.maxRepairAttempts} bounded attempt(s) without an accepted closed plan`, failedAt: 5 };
-      const checkpoint: TaskCheckpoint = { stage: 5, status: "failed", attempt, startedAt, finishedAt: Date.now(), usageHistory, diagnosticHistory, error: taskError };
-      opts.db.prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
-        .run("failed", JSON.stringify(checkpoint), Date.now(), plannerTask.id);
-      result.fails++;
-      result.endingConsecutive = opts.initialConsecutiveFailures + 1;
-      result.failures.push({ taskId: plannerTask.id, module: plannerTarget, error: taskError, retryCommand: `livewiki batch resume ${opts.runId}` });
-      result.usageByTask.push({ module: plannerTarget, ...taskUsage });
-      return result;
-    }
-
+    result.candidates = candidates;
     const checkpoint: TaskCheckpoint = {
       stage: 5, status: "done", attempt, startedAt, finishedAt: Date.now(),
-      usageHistory, diagnosticHistory, topicPlan: result.candidates,
-      topicPlanRaw: acceptedPlanRaw,
+      usageHistory, diagnosticHistory, topicPlan: candidates,
+      topicPlanRaw: JSON.stringify({ topics: candidates }),
     };
     opts.db.prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
       .run("done", JSON.stringify(checkpoint), Date.now(), plannerTask.id);
@@ -2077,7 +2100,12 @@ async function runSemanticTopicStage(opts: {
           priorErrors,
           absRoot: opts.absRoot,
           pricing: opts.pricing,
-          maxTokens: opts.outputTokens,
+          outputTokenCeiling: opts.outputTokens,
+          outputTokenStrategy: opts.outputTokenStrategy,
+          anchorSourceChars: candidate.seedKeys.reduce(
+            (sum, key) => sum + (inventory.anchorSourceChars[key] ?? 0),
+            0,
+          ),
           ...(opts.thinking ? { thinking: opts.thinking } : {}),
           ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
           ...(promptKind === "repair" ? { repairAttemptContext: { attempt: slot, total: opts.maxRepairAttempts } } : {}),
@@ -2219,6 +2247,25 @@ class TaskError extends Error {
     this.code = code;
     this.name = "TaskError";
   }
+}
+
+/**
+ * Resolves the actual `maxTokens` sent to the LLM: under `"fixed"`, the
+ * configured ceiling is sent literally (pre-Priority-0-fix behavior,
+ * preserved for users who already depend on the exact value); under
+ * `"dynamic"` (the default), the ceiling becomes an upper bound for a
+ * content-scaled budget (`computeDynamicOutputTokenBudget`,
+ * output-budget.ts) — never a flat value applied to every page regardless
+ * of how many anchors it must document.
+ */
+function resolveOutputTokenBudget(
+  strategy: "dynamic" | "fixed",
+  ceiling: number,
+  signals: OutputBudgetSignals,
+  preset: typeof MODULE_OUTPUT_BUDGET_OPTIONS,
+): number {
+  if (strategy === "fixed") return ceiling;
+  return computeDynamicOutputTokenBudget(signals, { ...preset, ceiling });
 }
 
 function emptyUsage(): StageUsage {
@@ -3045,7 +3092,9 @@ interface AttemptOpts {
    * embedded table, losing the user's override in `config.json`.
    */
   pricing: import("./pricing.js").PricingOverride | undefined;
-  maxTokens: number;
+  /** Ceiling for `maxTokens`; the actual value is computed once the closed key list is known. */
+  outputTokenCeiling: number;
+  outputTokenStrategy: "dynamic" | "fixed";
   thinking?: "disabled" | "adaptive" | "omit" | undefined;
   pathRoleConfig?: import("./modules.js").PathRoleConfig | undefined;
   /** True only for the final configured repair slot. */
@@ -3071,6 +3120,12 @@ async function attemptStage4Generation(
   // need the same context (the closed list does not change between attempts —
   // unless the index changes, which would be out of batch scope).
   const ctx = await buildModuleDocContext(opts.absRoot, opts.module, opts.charBudget);
+  const maxTokens = resolveOutputTokenBudget(
+    opts.outputTokenStrategy,
+    opts.outputTokenCeiling,
+    { anchorCount: ctx.closedKeyList.length },
+    MODULE_OUTPUT_BUDGET_OPTIONS,
+  );
 
   // Build prompt
   let prompt: { system: string; user: string };
@@ -3108,7 +3163,7 @@ async function attemptStage4Generation(
     const result = await opts.llmClient.generate({
       system: prompt.system,
       user: prompt.user,
-      maxTokens: opts.maxTokens,
+      maxTokens,
       ...(opts.thinking ? { thinking: opts.thinking } : {}),
     });
     raw = result.content;
@@ -3515,7 +3570,9 @@ interface Stage5AttemptOpts {
   absRoot: string;
   /** Pricing override preserved across repairs (same as stage 4). */
   pricing: import("./pricing.js").PricingOverride | undefined;
-  maxTokens: number;
+  /** Ceiling for `maxTokens`; the actual value is computed once the closed key list is known. */
+  outputTokenCeiling: number;
+  outputTokenStrategy: "dynamic" | "fixed";
   thinking?: "disabled" | "adaptive" | "omit" | undefined;
   /** Node/edge budget for the diagram gate. */
   diagramBudgets: FlowDiagramBudget;
@@ -3527,19 +3584,28 @@ interface Stage5AttemptOpts {
 }
 
 /**
- * ONE stage-5 LLM call: build the bounded flow context, generate, and run
- * the stage-5 artifact pipeline —
+ * ONE stage-5 LLM call: build the bounded flow context, generate PROSE
+ * ONLY (the LLM never writes anything about `## Diagram`), and run the
+ * stage-5 artifact pipeline —
  *
- *   normalize → extract the inline diagram → validate the
- *   placeholder-substituted page (flow pageKind) → diagram gates
- *   (source cap → node/edge budget → real Mermaid parse).
+ *   normalize → generate the diagram deterministically
+ *   (`generateFlowDiagram`, zero LLM calls) → insert the complete
+ *   `## Diagram` section between `Ordered flow` and `Invariants`
+ *   (`insertFlowDiagramSection`) → validate the complete page (flow
+ *   pageKind).
+ *
+ * Priority-0 fix (2026-07-22): the old pipeline asked the LLM to write
+ * Mermaid syntax freely and only had a mechanical repair for
+ * oversized-but-valid flowcharts — genuinely malformed syntax
+ * (`invalid_flow_diagram`) had NO deterministic recovery. The diagram is
+ * now generated the same way the closed anchor list already is: the
+ * graph decides, the LLM only writes prose. `validateMermaidSyntax` still
+ * runs as defense in depth against a bug in the renderer itself — a
+ * rejection there throws (an infra-level failure), never consumes an LLM
+ * repair slot.
  *
  * The caller orchestrates the bounded loop; this function is "one turn of
- * the loop". artifact-repair.ts (the module-page mechanical fallback)
- * still stays fail-closed on the stage-5 codes — but an over-budget
- * flowchart diagram gets ONE localized, deterministic repair inline here
- * (see `repairOversizedFlowchart`) before falling back to a full LLM
- * repair prompt or failing the task when the bounded slots exhaust.
+ * the loop".
  */
 async function attemptStage5Generation(
   opts: Stage5AttemptOpts,
@@ -3552,6 +3618,12 @@ async function attemptStage5Generation(
     opts.modules,
     opts.charBudget,
   );
+  const maxTokens = resolveOutputTokenBudget(
+    opts.outputTokenStrategy,
+    opts.outputTokenCeiling,
+    { anchorCount: ctx.closedKeyList.length },
+    MODULE_OUTPUT_BUDGET_OPTIONS,
+  );
 
   // R10.1 K: the candidate's explicit semantic groups reach BOTH the
   // prompt (R10.1 D presentation) and the validator (D3 tier coverage).
@@ -3560,6 +3632,10 @@ async function attemptStage5Generation(
     boundaryKeys: opts.candidate.boundaryKeys,
     sinkKeys: opts.candidate.sinkKeys,
   };
+  // Workstream A: deterministic section homes for every closed-list key —
+  // reaches the prompt (fixed table) and the mechanical repair (section
+  // preference on dedup).
+  const flowKeySectionMap = assignFlowKeySections(opts.candidate);
 
   let prompt: { system: string; user: string };
   if (opts.promptKind === "repair") {
@@ -3577,6 +3653,7 @@ async function attemptStage5Generation(
       attemptContext,
       opts.diagramBudgets,
       flowKeyGroups,
+      flowKeySectionMap,
     );
   } else {
     prompt = buildStage5Prompt(
@@ -3588,6 +3665,7 @@ async function attemptStage5Generation(
       opts.language,
       opts.diagramBudgets,
       flowKeyGroups,
+      flowKeySectionMap,
     );
   }
 
@@ -3600,7 +3678,7 @@ async function attemptStage5Generation(
     const result = await opts.llmClient.generate({
       system: prompt.system,
       user: prompt.user,
-      maxTokens: opts.maxTokens,
+      maxTokens,
       ...(opts.thinking ? { thinking: opts.thinking } : {}),
     });
     raw = result.content;
@@ -3717,24 +3795,44 @@ async function attemptStage5Generation(
     diagramSource: null,
   });
 
-  // (a) Extract the inline companion diagram from `## Diagram`. The
-  //     model-emitted form carries the diagram INLINE; the placeholder
-  //     exists only on disk after substitution.
-  const extraction = extractInlineFlowDiagram(normalize.content, opts.candidate.slug);
-  if (extraction === null) {
+  // (a) Generate the diagram deterministically — zero LLM involvement.
+  //     The LLM never sees or writes anything about `## Diagram`; this
+  //     replaces the old "extract what the LLM wrote" step entirely
+  //     (Priority-0 fix: `invalid_flow_diagram` used to have no
+  //     mechanical recovery for genuinely malformed LLM-written Mermaid).
+  const diagramSource = generateFlowDiagram(opts.candidate, opts.modules, opts.diagramBudgets);
+
+  // Defense in depth: a rejection here is a BUG IN generateFlowDiagram,
+  // never a content-generation failure — it must not consume an LLM
+  // repair slot or be surfaced as a normal validation error. Throwing
+  // lets it propagate as an infra-level failure, same as an unexpected
+  // LLM transport error would.
+  const mermaidDiagnostic = await validateMermaidSyntax(diagramSource);
+  if (mermaidDiagnostic !== null) {
+    throw new Error(
+      `generateFlowDiagram produced invalid Mermaid for flow "${opts.candidate.slug}" — ` +
+        `this is a bug in flow-diagram.ts, not an LLM failure: ${mermaidDiagnostic}`,
+    );
+  }
+
+  // (b) Insert the complete `## Diagram` section (heading + real fence)
+  //     between `## Ordered flow` and `## Invariants` — the LLM's raw
+  //     output never had this section at all.
+  const pageWithDiagram = insertFlowDiagramSection(normalize.content, opts.candidate.slug);
+  if (pageWithDiagram === null) {
     return invalid([
       {
-        code: "invalid_flow_diagram",
+        code: "missing_page_opening",
         message:
-          "the `## Diagram` section does not contain ONE real ```mermaid fence with diagram source " +
-          "(missing, empty, unclosed, or placeholder-only) — emit the diagram inline; the orchestrator " +
-          "substitutes the placeholder after extraction",
+          'could not locate the "Invariants" heading to insert the `## Diagram` section — ' +
+          "the required flow opening (H1, Purpose, Ordered flow, Invariants, Failure and recovery, " +
+          "Related pages) is missing or out of order",
         location: "body",
       },
     ]);
   }
 
-  // (b) Validate the page with the fence body substituted by the exact placeholder.
+  // (c) Validate the page with the real diagram already inserted.
   const validationContext = {
     pageKind: "flow" as const,
     expectedFlowDiagram: `livewiki/diagrams/flow-${opts.candidate.slug}.mmd`,
@@ -3743,8 +3841,8 @@ async function attemptStage5Generation(
     moduleRole: "product" as const,
     flowKeyGroups,
   };
-  const validation = validateStage4Artifact(extraction.pageContent, ctx.closedKeyList, validationContext);
-  let pageContent = extraction.pageContent;
+  const validation = validateStage4Artifact(pageWithDiagram, ctx.closedKeyList, validationContext);
+  let pageContent = pageWithDiagram;
   if (!validation.ok) {
     // Priority-0 Phase 2 follow-up: duplicate_anchor and missing_closed_key
     // are purely mechanical under the flow "upper bound" contract (see
@@ -3752,73 +3850,16 @@ async function attemptStage5Generation(
     // full LLM repair round-trip. Falls through to the LLM repair path for
     // any other error shape.
     const mechanical = repairUpperBoundArtifactMechanically(
-      extraction.pageContent,
+      pageWithDiagram,
       validation.errors,
       ctx.closedKeyList,
       validationContext,
+      flowKeySectionMap,
     );
     if (mechanical === null) {
       return invalid(validation.errors);
     }
     pageContent = mechanical.content;
-  }
-
-  // (c) Diagram gates: source cap → node/edge budget → real Mermaid parse.
-  if (extraction.sourceTooLarge) {
-    return invalid([
-      {
-        code: "flow_diagram_too_large",
-        message:
-          `inline diagram source is ${extraction.diagramSource.length} chars ` +
-          `(cap ${FLOW_DIAGRAM_SOURCE_MAX_CHARS}) — shrink the diagram`,
-        location: "body",
-      },
-    ]);
-  }
-  let diagramSource = extraction.diagramSource;
-  const counts = countFlowDiagramElements(diagramSource);
-  if (
-    counts.nodes > opts.diagramBudgets.maxNodes ||
-    counts.edges > opts.diagramBudgets.maxEdges
-  ) {
-    // Priority-0 Phase 2: try a localized, deterministic repair before
-    // burning a full LLM repair round-trip — the model's prose is already
-    // fine; only the diagram is over budget. Keeps the first N nodes
-    // (appearance order) and only edges between kept nodes, then
-    // re-validates the result exactly like a model-emitted diagram.
-    // Returns null (falls through to the LLM repair path) for any
-    // diagram kind or construct the narrow flowchart parser can't safely
-    // round-trip (e.g. sequenceDiagram/stateDiagram, `&`-chained
-    // endpoints).
-    const repaired = repairOversizedFlowchart(
-      diagramSource,
-      opts.diagramBudgets.maxNodes,
-      opts.diagramBudgets.maxEdges,
-    );
-    if (repaired === null) {
-      return invalid([
-        {
-          code: "flow_diagram_too_large",
-          message:
-            `diagram has ${counts.nodes} nodes / ${counts.edges} edges ` +
-            `(budget ${opts.diagramBudgets.maxNodes}/${opts.diagramBudgets.maxEdges}) — ` +
-            `merge or drop nodes and move detail into the "Ordered flow" prose`,
-          location: "body",
-        },
-      ]);
-    }
-    diagramSource = repaired;
-  }
-  const mermaidDiagnostic = await validateMermaidSyntax(diagramSource);
-  if (mermaidDiagnostic !== null) {
-    return invalid([
-      {
-        code: "invalid_flow_diagram",
-        message: `Mermaid parser rejected the inline diagram: ${mermaidDiagnostic}`,
-        location: "body",
-        offending: diagramSource.slice(0, DIAGNOSTIC_TEXT_CAP),
-      },
-    ]);
   }
 
   return {
@@ -3844,7 +3885,11 @@ interface TopicAttemptOpts {
   priorErrors: ArtifactValidationError[];
   absRoot: string;
   pricing: import("./pricing.js").PricingOverride | undefined;
-  maxTokens: number;
+  /** Ceiling for `maxTokens`; the actual value is computed from the candidate's seed keys. */
+  outputTokenCeiling: number;
+  outputTokenStrategy: "dynamic" | "fixed";
+  /** Sum of `TopicPlanningInventory.anchorSourceChars` for this candidate's seed keys, when known. */
+  anchorSourceChars?: number;
   thinking?: "disabled" | "adaptive" | "omit" | undefined;
   pathRoleConfig?: import("./modules.js").PathRoleConfig;
   repairAttemptContext?: { attempt: number; total: number };
@@ -3852,6 +3897,15 @@ interface TopicAttemptOpts {
 
 async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4AttemptResult> {
   const ctx = await buildTopicDocContext(opts.absRoot, opts.candidate, opts.charBudget);
+  const maxTokens = resolveOutputTokenBudget(
+    opts.outputTokenStrategy,
+    opts.outputTokenCeiling,
+    {
+      anchorCount: opts.candidate.seedKeys.length,
+      ...(opts.anchorSourceChars !== undefined ? { anchorSourceChars: opts.anchorSourceChars } : {}),
+    },
+    MODULE_OUTPUT_BUDGET_OPTIONS,
+  );
   const prompt = opts.promptKind === "repair"
     ? buildTopicRepairPrompt(
         opts.candidate,
@@ -3876,7 +3930,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
     result = await opts.llmClient.generate({
       system: prompt.system,
       user: prompt.user,
-      maxTokens: opts.maxTokens,
+      maxTokens,
       ...(opts.thinking ? { thinking: opts.thinking } : {}),
     });
   } catch (error) {
@@ -3923,10 +3977,10 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
       llmError: null,
     };
   }
-  const validation = validateStage4Artifact(normalized.content, opts.candidate.seedKeys, {
-    pageKind: "topic",
+  const validationContext = {
+    pageKind: "topic" as const,
     moduleId: opts.candidate.slug,
-    moduleRole: "product",
+    moduleRole: "product" as const,
     expectedTopicTitle: opts.candidate.title,
     expectedTopicOrder: opts.candidate.planOrder,
     expectedTopicIntent: opts.candidate.intent,
@@ -3936,24 +3990,41 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
     topicProductKeys: opts.candidate.seedKeys.filter((key) =>
       classifyPathRole(key.split("#", 1)[0] ?? "", opts.pathRoleConfig) === "product"
     ),
-  });
+  };
+  const validation = validateStage4Artifact(normalized.content, opts.candidate.seedKeys, validationContext);
+  let pageContent = normalized.content;
   if (!validation.ok) {
-    return {
-      usageEntry,
-      normalizedRaw: normalized.content,
-      diagnosticCandidate: normalized.content,
-      diagnosticOutcome: "artifact_validation_failed",
-      artifact: null,
-      validationErrors: validation.errors,
-      llmError: null,
-    };
+    // Same upper-bound contract as flow pages (buildTopicRepairPrompt
+    // mirrors buildStage5RepairPrompt exactly): duplicate_anchor and
+    // missing_closed_key have an unambiguous mechanical fix. Try it before
+    // spending a full LLM repair round-trip — v24 paid E2E showed a topic
+    // page's final repair attempt left with a single duplicate_anchor
+    // that this fallback resolves without another LLM call.
+    const mechanical = repairUpperBoundArtifactMechanically(
+      normalized.content,
+      validation.errors,
+      opts.candidate.seedKeys,
+      validationContext,
+    );
+    if (mechanical === null) {
+      return {
+        usageEntry,
+        normalizedRaw: normalized.content,
+        diagnosticCandidate: normalized.content,
+        diagnosticOutcome: "artifact_validation_failed",
+        artifact: null,
+        validationErrors: validation.errors,
+        llmError: null,
+      };
+    }
+    pageContent = mechanical.content;
   }
   return {
     usageEntry,
     normalizedRaw: normalized.content,
-    diagnosticCandidate: normalized.content,
+    diagnosticCandidate: pageContent,
     diagnosticOutcome: null,
-    artifact: normalized.content,
+    artifact: pageContent,
     validationErrors: [],
     llmError: null,
   };

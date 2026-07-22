@@ -140,6 +140,13 @@ export interface InitResult {
    * the CLI output, never persisted for status queries.
    */
   skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }>;
+  /**
+   * Priority-0 fix (v25 paid E2E): the topic planner exhausted every repair
+   * attempt without a valid closed plan — a content-quality ceiling, not an
+   * operational failure. Never a silent skip — reported here and in the
+   * CLI output, never persisted for status queries.
+   */
+  skippedTopicPlan?: { reason: string; retryCommand: string };
 }
 
 /**
@@ -203,6 +210,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   let skippedAuxiliaryHub: InitResult["skippedAuxiliaryHub"];
   let skippedTopicsHub: InitResult["skippedTopicsHub"];
   let skippedFlowCandidates: InitResult["skippedFlowCandidates"];
+  let skippedTopicPlan: InitResult["skippedTopicPlan"];
 
   // structure.mmd (organograma de diretórios)
   const structureMmd = generateStructure(filePaths);
@@ -348,6 +356,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     if (result.skippedAuxiliaryHub) skippedAuxiliaryHub = result.skippedAuxiliaryHub;
     if (result.skippedTopicsHub) skippedTopicsHub = result.skippedTopicsHub;
     if (result.skippedFlowCandidates) skippedFlowCandidates = result.skippedFlowCandidates;
+    if (result.skippedTopicPlan) skippedTopicPlan = result.skippedTopicPlan;
     // Atualiza manifest com pendingBatch se houve falhas (handoff)
     if (result.status === "completed_with_failures" || result.status === "aborted") {
       const totalsDone = result.byModule.reduce((a, m) => a + (m.costUsd !== null ? 1 : 0), 0);
@@ -380,6 +389,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     ...(skippedAuxiliaryHub ? { skippedAuxiliaryHub } : {}),
     ...(skippedTopicsHub ? { skippedTopicsHub } : {}),
     ...(skippedFlowCandidates ? { skippedFlowCandidates } : {}),
+    ...(skippedTopicPlan ? { skippedTopicPlan } : {}),
   };
 }
 

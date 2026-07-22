@@ -1,0 +1,20 @@
+flowchart LR
+  cli["cli-src: run / createProgram"]
+  readV["cli-src: readVersion"]
+  resolveR["cli-src: resolveRepoRoot"]
+  cmds["commands: registerX actions"]
+  emit["cli-src: output.ts#emit"]
+  manifest["core-src-06: manifest.ts#buildManifest"]
+  hash["core-src-06: manifest.ts#computeSnapshotHash"]
+  db["core-src-03: db.ts#CURRENT_SCHEMA_VERSION"]
+  state["core-src-02: batch-state.ts#DIAGNOSTIC_MAX_ERRORS"]
+  export["core-src-04: export.ts#buildMarker"]
+  ires["core-src-05: import-resolution.ts#expandWorkspaceGlob"]
+  cli --> readV --> cmds --> resolveR
+  cmds --> emit
+  cmds --> manifest
+  manifest --> hash
+  cmds --> db
+  db --> state
+  cmds --> export
+  resolveR --> ires

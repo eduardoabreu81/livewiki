@@ -80,10 +80,22 @@ export interface LivewikiConfig {
    */
   maxIncompleteRetries?: number;
   /**
-   * Max output tokens for stage-4 (and repair) generation.
-   * Default 8192. Override per repo or via BatchOptions.
+   * Max output tokens for stage-4/stage-5 (and repair) generation.
+   * When `outputTokenStrategy` is "dynamic" (the default), this is a
+   * CEILING for the content-scaled budget computed by
+   * `computeDynamicOutputTokenBudget` (output-budget.ts) — not the value
+   * sent on every call. When "fixed", this value IS sent literally, same
+   * as before this option existed. Default 8192 (as a ceiling). Override
+   * per repo or via BatchOptions.
    */
   stage4MaxOutputTokens?: number;
+  /**
+   * Controls whether `stage4MaxOutputTokens`/`topicMaxOutputTokens` are a
+   * content-scaled dynamic budget (ceiling only) or the literal value sent
+   * on every call. Default "dynamic" — a flat budget silently starves
+   * large modules/flows/topics while never being hit by small ones.
+   */
+  outputTokenStrategy?: "dynamic" | "fixed";
   /**
    * Split modules with more than this many files before stage 4.
    * Default 12. Set 0 to disable file-count splitting.
@@ -149,7 +161,11 @@ export interface LivewikiConfig {
   topicMaxAnchors?: number;
   /** Maximum source-evidence characters supplied to one topic task. Default 40,000. */
   topicMaxSourceChars?: number;
-  /** Maximum output tokens for topic generation and repair. Default 4,096. */
+  /**
+   * Maximum output tokens for topic generation and repair. Same
+   * ceiling-vs-literal semantics as `stage4MaxOutputTokens` under
+   * `outputTokenStrategy`. Default 4,096 (as a ceiling).
+   */
   topicMaxOutputTokens?: number;
 }
 
@@ -192,8 +208,18 @@ export const CONFIG_DEFAULTS = {
   maxRepairAttempts: 2,
   /** Default non-consuming retries for normalized incomplete responses. */
   maxIncompleteRetries: 2,
-  /** Stage-4 completion budget (tokens). Raised from 4k after MiniMax bench. */
-  stage4MaxOutputTokens: 8192,
+  /**
+   * Stage-4/5 completion budget CEILING (tokens) under the dynamic
+   * strategy — the actual per-page value is computed by
+   * `computeDynamicOutputTokenBudget` and rarely reaches this ceiling
+   * for small pages. Set generously (matches the accepted 256..32768
+   * validation range) so the ceiling itself is never the bottleneck; the
+   * formula, not this constant, controls typical spend. Under the
+   * "fixed" strategy this value IS sent literally on every call.
+   */
+  stage4MaxOutputTokens: 32_768,
+  /** Dynamic (content-scaled) vs fixed (literal) output-token budgets. */
+  outputTokenStrategy: "dynamic" as "dynamic" | "fixed",
   /** Structural split thresholds for oversized modules. */
   maxModuleFiles: 12,
   maxModuleSymbols: 80,
@@ -213,7 +239,8 @@ export const CONFIG_DEFAULTS = {
   maxTopics: 4,
   topicMaxAnchors: 18,
   topicMaxSourceChars: 40_000,
-  topicMaxOutputTokens: 4_096,
+  /** Same ceiling-under-dynamic-strategy semantics as `stage4MaxOutputTokens`. */
+  topicMaxOutputTokens: 32_768,
 } as const;
 
 /**
@@ -299,6 +326,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     maxRepairAttempts: CONFIG_DEFAULTS.maxRepairAttempts,
     maxIncompleteRetries: CONFIG_DEFAULTS.maxIncompleteRetries,
     stage4MaxOutputTokens: CONFIG_DEFAULTS.stage4MaxOutputTokens,
+    outputTokenStrategy: CONFIG_DEFAULTS.outputTokenStrategy,
     maxModuleFiles: CONFIG_DEFAULTS.maxModuleFiles,
     maxModuleSymbols: CONFIG_DEFAULTS.maxModuleSymbols,
     timeoutMs: CONFIG_DEFAULTS.timeoutMs,
@@ -451,12 +479,21 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
   }
   if (obj["stage4MaxOutputTokens"] !== undefined) {
     const v = obj["stage4MaxOutputTokens"];
-    if (typeof v !== "number" || !Number.isInteger(v) || v < 256) {
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 256 || v > 32_768) {
       throw new Error(
-        `invalid stage4MaxOutputTokens: must be an integer >= 256, got ${JSON.stringify(v)}`,
+        `invalid stage4MaxOutputTokens: must be an integer 256..32768, got ${JSON.stringify(v)}`,
       );
     }
     out.stage4MaxOutputTokens = v;
+  }
+  if (obj["outputTokenStrategy"] !== undefined) {
+    const v = obj["outputTokenStrategy"];
+    if (v !== "dynamic" && v !== "fixed") {
+      throw new Error(
+        `invalid outputTokenStrategy: must be "dynamic" | "fixed", got ${JSON.stringify(v)}`,
+      );
+    }
+    out.outputTokenStrategy = v;
   }
   if (obj["maxModuleFiles"] !== undefined) {
     const v = obj["maxModuleFiles"];

@@ -221,11 +221,19 @@ export function resolveImportEdges(opts: {
     const fromFile = normalizeRepoPath(rawFrom);
     for (const imp of imports) {
       const spec = imp.source;
-      const toFile = resolveSpecifier(fromFile, spec, packages, opts.tsconfig, opts.knownFiles);
-      if (toFile === null || toFile === fromFile) continue;
-      const key = `${fromFile}\0${toFile}\0${spec}`;
-      if (!edges.has(key)) {
-        edges.set(key, { fromFile, toFile, source: spec });
+      const targets =
+        imp.kind === "py-from" || imp.kind === "py-import"
+          ? resolvePythonSpecifier(fromFile, imp, opts.knownFiles)
+          : (() => {
+              const single = resolveSpecifier(fromFile, spec, packages, opts.tsconfig, opts.knownFiles);
+              return single === null ? [] : [single];
+            })();
+      for (const toFile of targets) {
+        if (toFile === fromFile) continue;
+        const key = `${fromFile}\0${toFile}\0${spec}`;
+        if (!edges.has(key)) {
+          edges.set(key, { fromFile, toFile, source: spec });
+        }
       }
     }
   }
@@ -236,6 +244,96 @@ export function resolveImportEdges(opts: {
         : a.toFile.localeCompare(b.toFile)
       : a.fromFile.localeCompare(b.fromFile),
   );
+}
+
+/**
+ * Resolves a Python import occurrence to zero or more repo files. Python
+ * import resolution was previously unimplemented at this layer — `imports.ts`
+ * extracted `py-import`/`py-from` specifiers correctly, but every occurrence
+ * fell through `resolveSpecifier`'s TS-shaped branches (no `./`/`../` prefix,
+ * no declared workspace package) and resolved to `null`, so a Python repo's
+ * internal module graph was always empty regardless of its actual imports.
+ *
+ * Two specifier shapes, split by `ExtractedImport.kind`:
+ *   - `py-import` (`import foo.bar.baz`): the whole dotted path names ONE
+ *     module. Dots become path separators from the REPO ROOT — Python
+ *     absolute imports are root-relative, never relative to the importing
+ *     file — tried as `<path>.py` then `<path>/__init__.py`.
+ *   - `py-from` (`from foo.bar import baz, qux as q`): `source` is the
+ *     package/module dotted path being imported FROM; `names` are the
+ *     imported symbols. Each name is tried FIRST as a submodule file of
+ *     that path (`foo/bar/<name>.py`) — the common case for a package
+ *     re-exporting its own submodules (`from app.services import bgm`).
+ *     If NO name resolves as its own submodule file (they are attributes/
+ *     classes/functions defined inside the package's own `__init__.py`,
+ *     not separate files), the "from" target itself is tried as a single
+ *     fallback edge.
+ *
+ * A leading-dot `source` (`.foo`, `..pkg.sub`, or bare `.`/`..`) is a
+ * Python RELATIVE import: one dot means the current package (`fromFile`'s
+ * own directory, mirroring `from . import x`); each additional dot climbs
+ * one more directory level (`from .. import x` = parent package). The
+ * remaining dotted segments (if any) resolve the same way as an absolute
+ * path from that ancestor directory.
+ *
+ * Every segment is resolved as either a file (`seg.py`) or a package
+ * (`seg/__init__.py`) — never guessed past what `knownFiles` contains.
+ */
+function resolvePythonSpecifier(
+  fromFile: string,
+  imp: ExtractedImport,
+  knownFiles: ReadonlySet<string>,
+): string[] {
+  const baseDir = pythonSourceBaseDir(fromFile, imp.source);
+  if (baseDir === null) return [];
+
+  if (imp.kind === "py-import") {
+    const target = resolvePythonModulePath(baseDir, knownFiles);
+    return target === null ? [] : [target];
+  }
+
+  const targets: string[] = [];
+  for (const rawName of imp.names ?? []) {
+    const name = (rawName.split(/\s+as\s+/)[0] ?? "").trim();
+    if (name.length === 0 || name === "*") continue;
+    const sub = resolvePythonModulePath(`${baseDir}/${name}`, knownFiles);
+    if (sub !== null) targets.push(sub);
+  }
+  if (targets.length > 0) return targets;
+  const whole = resolvePythonModulePath(baseDir, knownFiles);
+  return whole === null ? [] : [whole];
+}
+
+/**
+ * Converts a Python "from"/"import" dotted specifier into a repo-relative
+ * directory path (no extension), resolving a leading-dot relative
+ * specifier against `fromFile`'s own directory. Returns null when a
+ * relative specifier climbs above the repo root.
+ */
+function pythonSourceBaseDir(fromFile: string, spec: string): string | null {
+  if (!spec.startsWith(".")) {
+    return spec.split(".").filter(Boolean).join("/");
+  }
+  let i = 0;
+  while (i < spec.length && spec[i] === ".") i++;
+  const dots = i;
+  const restParts = spec.slice(i).split(".").filter(Boolean);
+  const fromDir = fromFile.includes("/") ? fromFile.slice(0, fromFile.lastIndexOf("/")) : "";
+  const parts = fromDir.split("/").filter(Boolean);
+  for (let up = 1; up < dots; up++) {
+    if (parts.length === 0) return null;
+    parts.pop();
+  }
+  return [...parts, ...restParts].join("/");
+}
+
+/** `<dir>` → `<dir>.py` or `<dir>/__init__.py`, whichever is a known file. */
+function resolvePythonModulePath(dir: string, knownFiles: ReadonlySet<string>): string | null {
+  const asFile = `${dir}.py`;
+  if (knownFiles.has(asFile)) return asFile;
+  const asPackage = `${dir}/__init__.py`;
+  if (knownFiles.has(asPackage)) return asPackage;
+  return null;
 }
 
 /** Resolves ONE specifier occurrence; null means "stays external". */

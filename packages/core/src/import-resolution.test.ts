@@ -481,3 +481,98 @@ describe("import-resolution workspace/tsconfig loading (fixture repo)", () => {
     ).toEqual([]);
   });
 });
+
+describe("import-resolution.resolveImportEdges (Python)", () => {
+  // Priority-0 fix (v-next paid E2E on MoneyPrinterTurbo-Plus): Python
+  // import resolution was previously unimplemented at this layer — every
+  // `py-from`/`py-import` occurrence fell through to `null` (external),
+  // so a Python repo's internal module graph was always empty regardless
+  // of its real imports (the "0 edges" finding from the blind A/B eval).
+  const PY_FILES = new Set([
+    "app/services/task.py",
+    "app/services/bgm.py",
+    "app/services/llm.py",
+    "app/services/__init__.py",
+    "app/config/config.py",
+    "app/config/__init__.py",
+    "app/models/const.py",
+  ]);
+
+  it("resolves 'from pkg.sub import name' to the submodule file (absolute dotted)", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      [
+        "app/services/task.py",
+        [{ source: "app.services", kind: "py-from", names: ["bgm as bgm_service", "llm"] }],
+      ],
+    ]);
+    const edges = resolveImportEdges({ importsByFile, knownFiles: PY_FILES, workspacePackages: [] });
+    expect(edges.map((e) => e.toFile).sort()).toEqual([
+      "app/services/bgm.py",
+      "app/services/llm.py",
+    ]);
+  });
+
+  it("resolves 'import pkg.sub.mod' (no from) to the leaf module file", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["app/services/task.py", [{ source: "app.services.bgm", kind: "py-import" }]],
+    ]);
+    const edges = resolveImportEdges({ importsByFile, knownFiles: PY_FILES, workspacePackages: [] });
+    expect(edges).toEqual([{ fromFile: "app/services/task.py", toFile: "app/services/bgm.py", source: "app.services.bgm" }]);
+  });
+
+  it("falls back to the 'from' package itself when no imported name is its own submodule file", () => {
+    // `config` here names an attribute defined inside app/config/__init__.py,
+    // not a sibling app/config/config_helper.py file.
+    const files = new Set(["app/services/task.py", "app/config/__init__.py"]);
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["app/services/task.py", [{ source: "app.config", kind: "py-from", names: ["config"] }]],
+    ]);
+    const edges = resolveImportEdges({ importsByFile, knownFiles: files, workspacePackages: [] });
+    expect(edges).toEqual([{ fromFile: "app/services/task.py", toFile: "app/config/__init__.py", source: "app.config" }]);
+  });
+
+  it("resolves Python's own relative imports: '.' (current package) and '..pkg' (parent package)", () => {
+    const files = new Set([
+      "app/services/task.py",
+      "app/services/bgm.py",
+      "app/services/__init__.py",
+      "app/models/const.py",
+    ]);
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      [
+        "app/services/task.py",
+        [
+          { source: ".", kind: "py-from", names: ["bgm"] }, // 1 dot: current package (app/services)
+          { source: "..models", kind: "py-from", names: ["const"] }, // 2 dots: parent package (app), submodule models
+        ],
+      ],
+    ]);
+    const edges = resolveImportEdges({ importsByFile, knownFiles: files, workspacePackages: [] });
+    expect(edges.map((e) => e.toFile).sort()).toEqual([
+      "app/models/const.py",
+      "app/services/bgm.py",
+    ]);
+  });
+
+  it("an import with no resolvable target (real third-party package) stays external", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["app/services/task.py", [{ source: "loguru", kind: "py-from", names: ["logger"] }]],
+    ]);
+    expect(
+      resolveImportEdges({ importsByFile, knownFiles: PY_FILES, workspacePackages: [] }),
+    ).toEqual([]);
+  });
+
+  it("modules.resolveModuleEdges groups resolved Python file edges into module edges", () => {
+    const modules: Module[] = [
+      { id: "services", paths: ["app/services/task.py", "app/services/bgm.py"], symbolCount: 2 },
+      { id: "models", paths: ["app/models/const.py"], symbolCount: 1 },
+    ];
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["app/services/task.py", [{ source: "app.models", kind: "py-from", names: ["const"] }]],
+    ]);
+    const fileEdges = resolveImportEdges({ importsByFile, knownFiles: PY_FILES, workspacePackages: [] });
+    const moduleEdges = resolveModuleEdges(modules, importsByFile, PY_FILES, fileEdges);
+    expect(moduleEdges).toEqual([{ from: "services", to: "models" }]);
+  });
+});

@@ -1,0 +1,444 @@
+diff --git a/packages/cli/src/commands/batch.ts b/packages/cli/src/commands/batch.ts
+index d1ab2e6..304737a 100644
+--- a/packages/cli/src/commands/batch.ts
++++ b/packages/cli/src/commands/batch.ts
+@@ -306,6 +306,12 @@ export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>):
+   for (const s of result.skippedFlowCandidates ?? []) {
+     lines.push(`  flow skipped: ${s.slug} (${s.code}) — ${s.message}`);
+   }
++  // Priority-0 fix (v25 paid E2E): an exhausted topic plan is optional/
++  // additive, not a batch failure — never silent either.
++  if (result.skippedTopicPlan) {
++    lines.push(`  topics skipped: ${result.skippedTopicPlan.reason}`);
++    lines.push(`    retry: ${result.skippedTopicPlan.retryCommand}`);
++  }
+   if (result.failures.length > 0) {
+     lines.push("");
+     lines.push("Failures:");
+diff --git a/packages/cli/src/commands/init.ts b/packages/cli/src/commands/init.ts
+index e709c49..cd36d5b 100644
+--- a/packages/cli/src/commands/init.ts
++++ b/packages/cli/src/commands/init.ts
+@@ -62,6 +62,7 @@ export function registerInit(program: Command): void {
+             skippedAuxiliaryHub: result.skippedAuxiliaryHub,
+             skippedTopicsHub: result.skippedTopicsHub,
+             skippedFlowCandidates: result.skippedFlowCandidates,
++            skippedTopicPlan: result.skippedTopicPlan,
+           },
+           formatHuman(result),
+         );
+@@ -84,7 +85,7 @@ export function registerInit(program: Command): void {
+     });
+   }
+ 
+-function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number }; batchExitCode?: 0 | 1 | 2; skippedFlowsHub?: { path: string; owner: "human" | "mixed" | null }; skippedAuxiliaryHub?: { path: string; owner: "human" | "mixed" | null }; skippedTopicsHub?: { path: string; owner: "human" | "mixed" | null }; skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }> }): string {
++function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number }; batchExitCode?: 0 | 1 | 2; skippedFlowsHub?: { path: string; owner: "human" | "mixed" | null }; skippedAuxiliaryHub?: { path: string; owner: "human" | "mixed" | null }; skippedTopicsHub?: { path: string; owner: "human" | "mixed" | null }; skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }>; skippedTopicPlan?: { reason: string; retryCommand: string } }): string {
+   const lines: string[] = [];
+   if (result.plan) {
+     lines.push(`livewiki init --plan (no writes, no LLM):`);
+@@ -124,6 +125,12 @@ function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; ba
+   for (const s of result.skippedFlowCandidates ?? []) {
+     lines.push(`  flow skipped: ${s.slug} (${s.code}) — ${s.message}`);
+   }
++  // Priority-0 fix (v25 paid E2E): an exhausted topic plan is optional/
++  // additive, not a batch failure — never silent either.
++  if (result.skippedTopicPlan) {
++    lines.push(`  topics skipped: ${result.skippedTopicPlan.reason}`);
++    lines.push(`    retry: ${result.skippedTopicPlan.retryCommand}`);
++  }
+   if (result.batchSummary) {
+     lines.push("");
+     lines.push(`  batch run #${result.batchSummary.runId}: ${result.batchSummary.status}`);
+diff --git a/packages/core/src/artifact-repair.test.ts b/packages/core/src/artifact-repair.test.ts
+index c1c6158..6ac1579 100644
+--- a/packages/core/src/artifact-repair.test.ts
++++ b/packages/core/src/artifact-repair.test.ts
+@@ -212,6 +212,43 @@ describe("repairUpperBoundArtifactMechanically — flow pages (upper-bound contr
+     expect(validateFlow(repaired!.content, anchors).ok).toBe(true);
+   });
+ 
++  it("still fixes the duplicate when an unrelated, already-moot error code rides along (v23 fix)", () => {
++    // Priority-0 Phase 2 follow-up #2: a co-occurring error this function
++    // doesn't recognize (e.g. missing_page_opening, reported because the
++    // model's duplicated section content pushed the required opening out
++    // of position) used to abort the whole mechanical repair. It should
++    // no longer block a fix the function CAN make — the mandatory final
++    // re-validation is what decides success, not the presence of an extra
++    // unrecognized error report in the list handed in.
++    const valid = makeFlowPage(anchors, modules);
++    const broken = valid.replace(
++      `<!-- lw:anchors ${anchors[2]} -->`,
++      `<!-- lw:anchors ${anchors[2]} ${anchors[0]} -->`,
++    );
++    const before = validateFlow(broken, anchors);
++    expect(before.ok).toBe(false);
++
++    const errorsWithUnrelatedNoise: ArtifactValidationError[] = [
++      ...before.errors,
++      {
++        code: "missing_page_opening",
++        message: "required page opening H1 appears after other content",
++        location: "body",
++        offending: "# Example flow",
++      },
++    ];
++    const repaired = repairUpperBoundArtifactMechanically(broken, errorsWithUnrelatedNoise, anchors, {
++      pageKind: "flow",
++      moduleId: "example-flow",
++      moduleRole: "product",
++      expectedFlowModules: modules,
++      expectedFlowDiagram: flowDiagramPlaceholder("example-flow").replace(/^%%\s*/, ""),
++    });
++    expect(repaired).not.toBeNull();
++    expect(repaired!.repairs).toEqual(["remove_duplicate_section_anchors"]);
++    expect(validateFlow(repaired!.content, anchors).ok).toBe(true);
++  });
++
+   it("returns null (fail-closed) for a code it does not support", () => {
+     const valid = makeFlowPage(anchors, modules);
+     const errors: ArtifactValidationError[] = [
+diff --git a/packages/core/src/artifact-repair.ts b/packages/core/src/artifact-repair.ts
+index 7943505..a52acf7 100644
+--- a/packages/core/src/artifact-repair.ts
++++ b/packages/core/src/artifact-repair.ts
+@@ -195,6 +195,17 @@ export function repairStage4ArtifactMechanically(
+  * `missing_closed_key` errors it never resolved. Applying this fallback
+  * immediately (not just on the final repair slot) removes that whole class
+  * of round-trip before it can cascade.
++ *
++ * Priority-0 Phase 2 follow-up #2 (2026-07-21, v23 paid E2E): a co-occurring
++ * error this function doesn't recognize (e.g. `missing_page_opening`) used
++ * to abort the whole repair, even when every OTHER error was a plain
++ * `duplicate_anchor`/`missing_closed_key`. Unrecognized errors are now
++ * skipped rather than treated as fail-closed triggers — the mandatory final
++ * `validateStage4Artifact` re-check below is the actual safety net, so a
++ * genuinely unresolved unrelated error still yields `null` exactly as
++ * before. This also covers the real-world case where duplicated section
++ * markers inflate a page enough to push the required opening out of
++ * position: deduping can incidentally fix `missing_page_opening` too.
+  */
+ export function repairUpperBoundArtifactMechanically(
+   artifact: string,
+@@ -236,7 +247,9 @@ export function repairUpperBoundArtifactMechanically(
+         continue;
+       }
+     }
+-    return null;
++    // Any other error code is left for the caller's LLM repair path — the
++    // mandatory full re-validation below still fails closed if it's never
++    // actually resolved by the mechanical fixes applied here.
+   }
+ 
+   let content = artifact;
+diff --git a/packages/core/src/batch-stage5.test.ts b/packages/core/src/batch-stage5.test.ts
+index eeb53ab..fc1b64a 100644
+--- a/packages/core/src/batch-stage5.test.ts
++++ b/packages/core/src/batch-stage5.test.ts
+@@ -1544,7 +1544,11 @@ describe("batch stage 5 — semantic groups reach prompt and validator (R10.1 K)
+     const flowCall = llm.callLog.find((c) => /^# Flow: /m.test(c.user))!;
+     expect(flowCall.user).toContain("# Semantic key groups");
+     expect(flowCall.user).toContain("- entry keys: cli/cli.ts#run");
+-    expect(flowCall.user).toContain("- boundary keys: cli/handler.ts#handle, core/db.ts#connect");
++    // Priority-0 Phase 3: `handle()` really calls `connect()` across the
++    // module boundary (see writeGroupFlowRepo) — the resolved call graph
++    // promotes the call-verified key ahead of its path-heuristic sibling
++    // within the tied T2 group.
++    expect(flowCall.user).toContain("- boundary keys: core/db.ts#connect, cli/handler.ts#handle");
+     expect(flowCall.user).toContain("- sink keys: core/db.ts#connect, core/store.ts#save");
+ 
+     const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
+@@ -1613,7 +1617,9 @@ describe("batch stage 5 — semantic groups reach prompt and validator (R10.1 K)
+     expect(repairCall.user).toContain("anchor_missing_required_tier");
+     expect(repairCall.user).toContain("# Semantic key groups");
+     expect(repairCall.user).toContain("- entry keys: cli/cli.ts#run");
+-    expect(repairCall.user).toContain("- boundary keys: cli/handler.ts#handle, core/db.ts#connect");
++    // Priority-0 Phase 3: the resolved call graph promotes the call-verified
++    // key (core/db.ts#connect) ahead of its path-heuristic sibling.
++    expect(repairCall.user).toContain("- boundary keys: core/db.ts#connect, cli/handler.ts#handle");
+     expect(repairCall.user).toContain("- sink keys: core/db.ts#connect, core/store.ts#save");
+     // The corrected page landed.
+     expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(true);
+@@ -1653,9 +1659,14 @@ describe("batch stage 5 — deterministic pre-LLM seed skips (R10.1 K)", () => {
+   it("K-a: cap below the mandatory group reservation → skip recorded, no task created", async () => {
+     await writeGroupFlowRepo(repoRoot);
+     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
++    // Priority-0 Phase 3: the resolved call graph (handle() really calls
++    // connect() — see writeGroupFlowRepo) now lets ONE key (core/db.ts#connect)
++    // cover BOTH the boundary and sink reservations, so the mandatory
++    // reservation shrinks from 3 keys to 2. flowMaxAnchors must drop to 1
++    // (not 2) to still land below it and trigger K-a here.
+     await nodeFs.writeFile(
+       nodePath.join(repoRoot, ".livewiki/config.json"),
+-      JSON.stringify({ flowMaxAnchors: 2, maxTopics: 0 }),
++      JSON.stringify({ flowMaxAnchors: 1, maxTopics: 0 }),
+       "utf8",
+     );
+ 
+@@ -1675,3 +1686,87 @@ describe("batch stage 5 — deterministic pre-LLM seed skips (R10.1 K)", () => {
+     expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
+   }, 60_000);
+ });
++
++describe("batch stage 5 — topic-plan graceful skip (v25 paid E2E fix)", () => {
++  // A topic plan that repeats the SAME simultaneous, mutually-unfixable
++  // violations (too few anchors AND a source-budget overrun) on every
++  // attempt — this is the exact shape observed in the v25 paid MiniMax-M3
++  // rerun: no mechanical repair can safely resolve it (fixing the source
++  // budget by dropping anchors would only push the anchor count further
++  // below the 5-anchor floor), so the planner exhausts every repair slot.
++  class TopicExhaustingLlm implements LlmClient {
++    public readonly provider = "anthropic" as const;
++    public readonly model = "claude-test-mock";
++    public topicPlanCallCount = 0;
++
++    async generate(req: GenerateRequest): Promise<GenerateResult> {
++      const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
++      if (/^# Flow: \S+$/m.test(req.user)) {
++        return { content: makeFlowPage(parseFlowPrompt(req.user), "flowchart LR\n  cli --> core"), usage };
++      }
++      if (req.user.includes("# Closed evidence inventory")) {
++        this.topicPlanCallCount++;
++        // Single proposal: 1 anchor (below the 5-anchor floor) whose
++        // "source" is declared enormous by anchorSourceChars in the
++        // inventory — always both topic_plan_anchor_budget AND
++        // topic_plan_source_budget, never just one.
++        const content = JSON.stringify({
++          topics: [{
++            title: "Everything",
++            intent: "Explain the whole repository in one topic.",
++            modules: ["cli", "core"],
++            flows: [],
++            groups: { contract: ["cli/index.ts#main"], state: [], output: [], failure: [] },
++          }],
++        });
++        return { content, usage };
++      }
++      const closedKeys = parseClosedKeys(req.user);
++      return { content: makeValidPage(closedKeys), usage };
++    }
++  }
++
++  it("topic-plan exhausted (multi-violation, unfixable) → skipped task, run stays `completed`", async () => {
++    // Boost the fixture past the 5-anchor floor and 2-product-module
++    // threshold so topic-plan actually attempts (writeFlowRepo alone has
++    // only 3 symbols, below the gate — see the early no-op branch in
++    // runSemanticTopicStage).
++    await writeFlowRepo(repoRoot);
++    await nodeFs.writeFile(
++      nodePath.join(repoRoot, "core/db.ts"),
++      [
++        'export function connect() { return "db"; }',
++        "export function disconnect() {}",
++        "export function query() {}",
++        "",
++      ].join("\n"),
++      "utf8",
++    );
++    const topicLlm = new TopicExhaustingLlm();
++
++    const result = await runBatch({
++      repoRoot,
++      llmClient: topicLlm,
++      noRefine: true,
++      skipManifestWrite: true,
++    });
++
++    // The graceful-skip fix: an unfixable, exhausted topic plan no longer
++    // drags the whole run into `completed_with_failures`.
++    expect(result.status).toBe("completed");
++    expect(topicLlm.topicPlanCallCount).toBe(3); // initial + 2 repair rounds (default maxRepairAttempts)
++    expect(result.failures.some((f) => f.module === "topic-plan")).toBe(false);
++    expect(result.skippedTopicPlan).toBeDefined();
++    expect(result.skippedTopicPlan!.reason).toContain("topic-plan exhausted");
++    expect(result.skippedTopicPlan!.retryCommand).toContain("livewiki batch resume");
++
++    const checkpoint = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
++    expect(checkpoint).not.toBeNull();
++    expect(checkpoint!.status).toBe("skipped");
++    expect(checkpoint!.error).toBeUndefined();
++
++    // The flow page still completed normally — the skip is isolated to topics.
++    expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(true);
++    expect(await fileExists(repoRoot, "livewiki/topics")).toBe(false);
++  }, 60_000);
++});
+diff --git a/packages/core/src/init.ts b/packages/core/src/init.ts
+index 0eacb6c..2b7d976 100644
+--- a/packages/core/src/init.ts
++++ b/packages/core/src/init.ts
+@@ -140,6 +140,13 @@ export interface InitResult {
+    * the CLI output, never persisted for status queries.
+    */
+   skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }>;
++  /**
++   * Priority-0 fix (v25 paid E2E): the topic planner exhausted every repair
++   * attempt without a valid closed plan — a content-quality ceiling, not an
++   * operational failure. Never a silent skip — reported here and in the
++   * CLI output, never persisted for status queries.
++   */
++  skippedTopicPlan?: { reason: string; retryCommand: string };
+ }
+ 
+ /**
+@@ -203,6 +210,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
+   let skippedAuxiliaryHub: InitResult["skippedAuxiliaryHub"];
+   let skippedTopicsHub: InitResult["skippedTopicsHub"];
+   let skippedFlowCandidates: InitResult["skippedFlowCandidates"];
++  let skippedTopicPlan: InitResult["skippedTopicPlan"];
+ 
+   // structure.mmd (organograma de diretórios)
+   const structureMmd = generateStructure(filePaths);
+@@ -348,6 +356,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
+     if (result.skippedAuxiliaryHub) skippedAuxiliaryHub = result.skippedAuxiliaryHub;
+     if (result.skippedTopicsHub) skippedTopicsHub = result.skippedTopicsHub;
+     if (result.skippedFlowCandidates) skippedFlowCandidates = result.skippedFlowCandidates;
++    if (result.skippedTopicPlan) skippedTopicPlan = result.skippedTopicPlan;
+     // Atualiza manifest com pendingBatch se houve falhas (handoff)
+     if (result.status === "completed_with_failures" || result.status === "aborted") {
+       const totalsDone = result.byModule.reduce((a, m) => a + (m.costUsd !== null ? 1 : 0), 0);
+@@ -380,6 +389,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
+     ...(skippedAuxiliaryHub ? { skippedAuxiliaryHub } : {}),
+     ...(skippedTopicsHub ? { skippedTopicsHub } : {}),
+     ...(skippedFlowCandidates ? { skippedFlowCandidates } : {}),
++    ...(skippedTopicPlan ? { skippedTopicPlan } : {}),
+   };
+ }
+ 
+diff --git a/packages/core/src/modules.test.ts b/packages/core/src/modules.test.ts
+index 4a5ff07..e333d44 100644
+--- a/packages/core/src/modules.test.ts
++++ b/packages/core/src/modules.test.ts
+@@ -200,6 +200,15 @@ describe("modules.classifyPathRole", () => {
+     expect(classifyPathRole("docs/benchmarks/run/tools/proxy.mjs")).toBe("tooling");
+   });
+ 
++  it("defaults: nested package scripts/** (not just root) → tooling", () => {
++    // v23 paid E2E finding: packages/mcp/scripts/make-executable.mjs was
++    // classified "product" (only the root-level `scripts/**` glob matched),
++    // so it went through the LLM stage-4 path instead of the deterministic
++    // auxiliary-page path and hit an unrecoverable missing_page_opening loop.
++    expect(classifyPathRole("packages/mcp/scripts/make-executable.mjs")).toBe("tooling");
++    expect(classifyPathRole("packages/cli/scripts/make-executable.mjs")).toBe("tooling");
++  });
++
+   it("defaults: docs/** (not benchmarks) → docs", () => {
+     expect(classifyPathRole("docs/guide.md")).toBe("docs");
+   });
+diff --git a/packages/core/src/modules.ts b/packages/core/src/modules.ts
+index 6bdf719..95d7c1c 100644
+--- a/packages/core/src/modules.ts
++++ b/packages/core/src/modules.ts
+@@ -833,7 +833,7 @@ export const DEFAULT_PATH_ROLE_PATTERNS: Required<PathRoleConfig> = {
+     "**/__fixtures__/**",
+     "**/testdata/**",
+   ],
+-  toolingPatterns: ["scripts/**", "**/tools/**", "**/benchmarks/**"],
++  toolingPatterns: ["**/scripts/**", "**/tools/**", "**/benchmarks/**"],
+   docsPatterns: ["docs/**", "**/docs/**"],
+ };
+ 
+diff --git a/packages/core/src/topics.test.ts b/packages/core/src/topics.test.ts
+index bf07655..c85e873 100644
+--- a/packages/core/src/topics.test.ts
++++ b/packages/core/src/topics.test.ts
+@@ -212,18 +212,45 @@ describe("repairTopicPlanSourceBudgetMechanically", () => {
+     ).toBeNull();
+   });
+ 
+-  it("returns null (fail-closed) when a non-source-budget error is also present", () => {
++  it("returns null (fail-closed) when the accompanying error is a genuine, unfixed defect", () => {
++    // Unlike the "already-moot" case below, this proposal's title really
++    // is over budget in the raw content, so the mandatory final
++    // re-validation still catches it after the mechanical anchor-drop.
+     const inv = budgetInventory();
+-    const raw = JSON.stringify({ topics: [budgetProposal()] });
+-    const errors: TopicPlanValidationError[] = [
+-      { code: "topic_plan_source_budget", message: "too big", proposalIndex: 0 },
+-      { code: "topic_plan_text_budget", message: "title too long", proposalIndex: 0 },
+-    ];
++    const overLongTitle = "x".repeat(120);
++    const raw = JSON.stringify({ topics: [budgetProposal({ title: overLongTitle })] });
++    const before = validateTopicPlan(raw, inv, budgetOpts);
++    expect(before.errors.map((e) => e.code).sort()).toEqual(
++      ["topic_plan_source_budget", "topic_plan_text_budget"].sort(),
++    );
++
+     expect(
+-      repairTopicPlanSourceBudgetMechanically(raw, errors, inv, budgetOpts),
++      repairTopicPlanSourceBudgetMechanically(raw, before.errors, inv, budgetOpts),
+     ).toBeNull();
+   });
+ 
++  it("fixes the source budget even when an unrelated, already-resolved error rides along (v23 fix)", () => {
++    // Priority-0 Phase 2 follow-up #2: the gate used to reject a repair the
++    // moment ANY non-source-budget error appeared anywhere in the reported
++    // list, even one that doesn't describe an actual remaining defect in
++    // this content (e.g. a stale error from an earlier round, or one on a
++    // proposal that validates fine on its own). The mandatory final
++    // `validateTopicPlan` re-check is the real safety net, so a spurious
++    // extra error entry must not block a fix this function CAN make.
++    const inv = budgetInventory();
++    const raw = JSON.stringify({ topics: [budgetProposal()] });
++    const before = validateTopicPlan(raw, inv, budgetOpts);
++    expect(before.errors.map((e) => e.code)).toEqual(["topic_plan_source_budget"]);
++
++    const errorsWithSpuriousExtra: TopicPlanValidationError[] = [
++      ...before.errors,
++      { code: "topic_plan_text_budget", message: "stale error from a prior round", proposalIndex: 0 },
++    ];
++    const repaired = repairTopicPlanSourceBudgetMechanically(raw, errorsWithSpuriousExtra, inv, budgetOpts);
++    expect(repaired).not.toBeNull();
++    expect(repaired!.result.ok).toBe(true);
++  });
++
+   it("returns null for an empty errors list", () => {
+     const inv = budgetInventory();
+     const raw = JSON.stringify({ topics: [budgetProposal()] });
+diff --git a/packages/core/src/topics.ts b/packages/core/src/topics.ts
+index 7df86f6..d2994fc 100644
+--- a/packages/core/src/topics.ts
++++ b/packages/core/src/topics.ts
+@@ -388,10 +388,19 @@ export function validateTopicPlan(
+  * ratio below the accepted minimum. This function drops the COSTLIEST
+  * anchors first (non-product before product, to protect the ratio) and
+  * re-validates the WHOLE plan afterward — it only returns a result when
+- * every constraint still holds, and only ever activates when EVERY
+- * reported error is `topic_plan_source_budget` (any other code — a
+- * mixed-cause proposal, an unrelated malformed proposal elsewhere in the
+- * same plan — falls through to the existing LLM repair prompt untouched).
++ * every constraint still holds, product or not. Only proposals actually
++ * flagged with `topic_plan_source_budget` are touched; a co-occurring
++ * unrelated error on a DIFFERENT proposal (e.g. another candidate hitting
++ * `topic_plan_text_budget`/`topic_plan_anchor_budget`) no longer blocks
++ * this repair outright — the mandatory final `validateTopicPlan` re-check
++ * is the actual safety net, so any error this function can't fix (on any
++ * proposal) still surfaces as a `null` return, same as before.
++ *
++ * Priority-0 follow-up #2 (2026-07-21, v23 paid E2E): the original gate
++ * required EVERY reported error across the whole plan to be
++ * `topic_plan_source_budget`, so a single unrelated violation on an
++ * unrelated candidate topic silently disabled this repair for the whole
++ * batch and the exhausted failure repeated unchanged across 3 rounds.
+  */
+ export function repairTopicPlanSourceBudgetMechanically(
+   raw: string,
+@@ -400,7 +409,6 @@ export function repairTopicPlanSourceBudgetMechanically(
+   opts: TopicPlanValidationOptions,
+ ): { content: string; result: TopicPlanValidationResult } | null {
+   if (errors.length === 0) return null;
+-  if (errors.some((e) => e.code !== "topic_plan_source_budget")) return null;
+   if (opts.maxSourceChars === undefined) return null;
+   const maxSourceChars = opts.maxSourceChars;
+ 
+@@ -418,7 +426,10 @@ export function repairTopicPlanSourceBudgetMechanically(
+   if (rawTopics === null) return null;
+ 
+   const flaggedIndexes = new Set(
+-    errors.map((e) => e.proposalIndex).filter((i): i is number => i !== undefined),
++    errors
++      .filter((e) => e.code === "topic_plan_source_budget")
++      .map((e) => e.proposalIndex)
++      .filter((i): i is number => i !== undefined),
+   );
+   if (flaggedIndexes.size === 0) return null;
+   const minimumRatio = opts.minimumProductAnchorRatio ?? 0.75;

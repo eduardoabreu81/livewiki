@@ -1,0 +1,17 @@
+flowchart LR
+  cli["cli-src<br/>createProgram / run"]
+  cmds["commands<br/>registerBatch / output"]
+  cs01["core-src-01<br/>anchor-ledger"]
+  cs03["core-src-03<br/>batch.ts"]
+  cs02["core-src-02<br/>batch-state"]
+  cs05["core-src-05<br/>import-resolution"]
+  cs06["core-src-06<br/>manifest"]
+  cs04["core-src-04<br/>export"]
+  cli --> cmds --> cs03
+  cs03 --> cs02
+  cs03 --> cs01
+  cs03 --> cs05
+  cs03 --> cs06
+  cs06 --> cs04
+  cs01 --> cs04
+  cs05 --> cs03

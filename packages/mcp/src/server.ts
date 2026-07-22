@@ -9,6 +9,9 @@
  *   - livewiki_write_doc   — escreve/atualiza página (allowlist + verify)
  *   - livewiki_resolve_debt— marca dívida como paga
  *
+ * Phase 3 adds a 7th tool:
+ *   - livewiki_impact      — blast radius de um símbolo (callers + páginas afetadas)
+ *
  * Princípio arquitetural: escrita passa por core/safe-io (regra #1 da SPEC).
  * write_doc valida o path contra allowlist (livewiki/, .livewiki/) E roda
  * `verify` no conteúdo antes de aceitar. Path fora de livewiki/ é erro;
@@ -30,6 +33,7 @@ import * as safeIo from "@livewiki/core/safe-io";
 import { run as runStatus } from "@livewiki/core/status";
 import { run as runVerify } from "@livewiki/core/verify";
 import { openIndex } from "@livewiki/core/db";
+import { computeBlastRadius } from "@livewiki/core/blast-radius";
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs/promises";
 import {
@@ -166,6 +170,52 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         return textResult(JSON.stringify(report, null, 2));
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : `status failed`);
+      }
+    },
+  );
+
+  // ─── livewiki_impact ───────────────────────────────────────────────────
+  // "What breaks if I change this symbol?" — walks the resolved call graph
+  // backward (direct + transitive callers, bounded) and cross-references
+  // anchors/doc_pages to report which wiki pages document affected code.
+  server.tool(
+    "livewiki_impact",
+    "Blast radius for a symbol key (e.g. 'src/auth.ts#login'): direct and transitive callers found in the indexed call graph, plus which wiki pages document any of them. Only RESOLVED call edges are walked (an edge the indexer couldn't confidently attribute to one symbol is skipped, never guessed) — treat this as a best-effort signal, not exhaustive static analysis. Bounded by maxDepth/maxNodes; `truncated: true` means the walk stopped at a bound, not that it found no more callers.",
+    {
+      symbolKey: z
+        .string()
+        .min(1)
+        .describe("Symbol key, e.g. 'src/auth.ts#login' or 'src/auth.ts#Session.refresh'"),
+      maxDepth: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .optional()
+        .describe("Max caller-of-caller hops to follow (default 5)"),
+      maxNodes: z
+        .number()
+        .int()
+        .min(1)
+        .max(2000)
+        .optional()
+        .describe("Max distinct caller symbols to collect (default 200)"),
+    },
+    async ({ symbolKey, maxDepth, maxNodes }) => {
+      try {
+        const dbPath = await safeIo.resolveAndValidate(repoRoot, ".livewiki/index.db");
+        const db = openIndex(dbPath);
+        try {
+          const result = computeBlastRadius(db, symbolKey, {
+            ...(maxDepth !== undefined ? { maxDepth } : {}),
+            ...(maxNodes !== undefined ? { maxNodes } : {}),
+          });
+          return textResult(JSON.stringify(result, null, 2));
+        } finally {
+          db.close();
+        }
+      } catch (err) {
+        return errorResult(err instanceof Error ? err.message : "impact failed");
       }
     },
   );

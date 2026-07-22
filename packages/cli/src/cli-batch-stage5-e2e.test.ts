@@ -172,15 +172,16 @@ function parseFlowPrompt(user: string): FlowPromptCtx {
 const FLOW_TITLE = "CLI to database flow";
 
 /**
- * Valid stage-5 flow page in the MODEL-EMITTED form: the companion
- * diagram is INLINE inside `## Diagram` as ONE real ```mermaid fence (the
- * orchestrator extracts it and substitutes the on-disk placeholder).
- * Dual completeness: every closed key appears exactly once in frontmatter
- * and exactly once across the section markers (first key in `Purpose`,
+ * Valid stage-5 flow page in the MODEL-EMITTED form. Priority-0 fix
+ * (2026-07-22): the LLM no longer writes anything about `## Diagram` —
+ * the orchestrator generates and inserts it deterministically. Dual
+ * completeness: every closed key appears exactly once in frontmatter and
+ * exactly once across the section markers (first key in `Purpose`,
  * second in `Ordered flow`, the rest in `Failure and recovery` — every
  * marker-carrying flow section holds at least one marker, R10.1 D).
+ * `diagramSource` is unused (kept for call-site compat).
  */
-function makeFlowPage(ctx: FlowPromptCtx, diagramSource: string): string {
+function makeFlowPage(ctx: FlowPromptCtx, _diagramSource: string): string {
   const [firstKey, secondKey, ...restKeys] = ctx.closedKeys;
   return [
     "---",
@@ -208,12 +209,6 @@ function makeFlowPage(ctx: FlowPromptCtx, diagramSource: string): string {
     "1. The CLI parses the invocation and calls the engine.",
     "2. The engine builds the plan and asks the database to persist it.",
     "3. The database stores the record and returns it to the caller.",
-    "",
-    "## Diagram",
-    "",
-    "```mermaid",
-    diagramSource,
-    "```",
     "",
     "## Invariants",
     "",
@@ -443,11 +438,13 @@ describe("CLI E2E stage 5 — semantic product flows with stub LLM", () => {
     expect(flowPage).not.toContain("cli --> core");
     expect(flowPage).toContain("owner: generated");
 
-    // 3. Companion diagram holds the real extracted source.
+    // 3. Companion diagram is generated deterministically (Priority-0 fix,
+    //    2026-07-22) — the LLM never writes it. A 3-module walk uses
+    //    symbol granularity, so node labels are participating symbol names.
     const diagram = await readWiki(FLOW_DIAGRAM_PATH);
     expect(diagram).toContain("flowchart LR");
-    expect(diagram).toContain("cli --> core");
-    expect(diagram).toContain("core --> db");
+    expect(diagram).toContain("main");
+    expect(diagram).toContain("saveRecord");
 
     // 4a. Navigation surface: deterministic flows hub.
     const hub = await readWiki("livewiki/flows/index.md");
@@ -564,14 +561,14 @@ describe("CLI E2E stage 5 — semantic product flows with stub LLM", () => {
     await expectVerifyClean();
   }, 120_000);
 
-  it("diagram over the node budget gets a localized mechanical repair; zero extra LLM calls", async () => {
-    // Priority-0 Phase 2: repairOversizedFlowchart truncates a repairable
-    // flowchart deterministically INSIDE the same attempt, so an
-    // over-budget diagram no longer costs a full repair round-trip.
+  it("a tight diagram node budget is respected by construction; zero extra LLM calls", async () => {
+    // Priority-0 fix (2026-07-22): the diagram is generated deterministically
+    // from the FlowCandidate (generateFlowDiagram) and always respects the
+    // configured budget from the start — there is no LLM-written diagram
+    // left to repair, so a tight budget never costs an extra LLM call.
     await writeFlowRepo();
-    await writeConfig({ flowMaxDiagramNodes: 2 });
+    await writeConfig({ flowMaxDiagramNodes: 2, flowMaxDiagramEdges: 1 });
 
-    const oversized = "flowchart LR\n  cli --> core\n  core --> db"; // 3 nodes > budget 2
     let flowCalls = 0;
     stub.setHandler((req) => {
       if (/^# Flow: \S+$/m.test(req.user)) {
@@ -580,7 +577,7 @@ describe("CLI E2E stage 5 — semantic product flows with stub LLM", () => {
           status: 200,
           body: {
             content: [
-              { type: "text", text: makeFlowPage(parseFlowPrompt(req.user), oversized) },
+              { type: "text", text: makeFlowPage(parseFlowPrompt(req.user), "unused") },
             ],
             model: "claude-test-mock",
             usage: { input_tokens: 100, output_tokens: 50 },
@@ -597,18 +594,18 @@ describe("CLI E2E stage 5 — semantic product flows with stub LLM", () => {
     const initReport = JSON.parse(initR.stdout) as { batchSummary: { status: string } };
     expect(initReport.batchSummary.status).toBe("completed");
 
-    // ONE attempt total — the diagram gate repairs the diagram mechanically
-    // before returning, so no repair round is ever requested from the model.
+    // ONE attempt total — the diagram costs zero LLM calls either way.
     expect(flowCalls).toBe(1);
 
-    // The repaired page carries the placeholder; the diagram file holds the
-    // deterministically shrunken source (first 2 nodes, cli/core, and the
-    // one edge fully between them — db and core-->db are dropped).
     const flowPage = await readWiki(FLOW_PAGE_PATH);
     expect(flowPage).toContain(FLOW_PLACEHOLDER);
     expect(flowPage).not.toContain("flowchart LR");
     const diagram = await readWiki(FLOW_DIAGRAM_PATH);
-    expect(diagram).toBe("flowchart LR\n  cli --> core\n");
+    expect(diagram).toContain("flowchart LR");
+    const nodeTokens = new Set([...diagram.matchAll(/\bn\d+\b/g)].map((m) => m[0]));
+    expect(nodeTokens.size).toBeLessThanOrEqual(2);
+    const edgeLines = diagram.split("\n").filter((l) => l.includes("-->"));
+    expect(edgeLines.length).toBeLessThanOrEqual(1);
 
     const report = await readStatus();
     const flowTask = report.tasks.find((t) => t.stage === 5 && t.target === FLOW_TARGET);

@@ -28,8 +28,9 @@ import * as safeIo from "./safe-io.js";
 import { walkRepo } from "./walker.js";
 import { sha256 } from "./hashes.js";
 import { initParser, parseSource, listSupportedGrammars } from "./parser.js";
-import { extractSymbols, type SymbolRecord } from "./symbols.js";
+import { extractSymbols, extractCalls, type SymbolRecord, type CallRecord } from "./symbols.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
+import { resolveCalls } from "./call-resolution.js";
 
 export interface IndexOptions {
   /** Patterns extras a ignorar (além de .gitignore + defaults). */
@@ -129,6 +130,7 @@ async function orchestrateIndex(
     mtime: number;
     hash: string;
     symbols: SymbolRecord[];
+    calls: CallRecord[];
   }
   const plans: FilePlan[] = [];
 
@@ -154,10 +156,12 @@ async function orchestrateIndex(
     }
 
     let symbols: SymbolRecord[] = [];
+    let calls: CallRecord[] = [];
     const ext = nodePath.extname(entry.path);
     try {
       const tree = await parseSource(ext, content);
       symbols = extractSymbols(tree, entry.path, content);
+      calls = extractCalls(tree, entry.path, content);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(`[livewiki] parse falhou em ${entry.path}: ${(err as Error).message}`);
@@ -170,6 +174,7 @@ async function orchestrateIndex(
       mtime: stat.mtimeMs,
       hash,
       symbols,
+      calls,
     });
   }
 
@@ -211,6 +216,12 @@ async function orchestrateIndex(
     );
     const markFileDeleted = db.prepare(
       "UPDATE files SET status = 'deleted' WHERE id = ?",
+    );
+    // Calls have no move-tracking need (unlike symbols) — a changed or
+    // removed file's call edges are simply recomputed wholesale.
+    const deleteCallsForFile = db.prepare("DELETE FROM calls WHERE file_id = ?");
+    const insertCall = db.prepare(
+      "INSERT INTO calls (file_id, caller_key, callee_name, line) VALUES (?, ?, ?, ?)",
     );
 
     for (const plan of plans) {
@@ -255,6 +266,10 @@ async function orchestrateIndex(
         );
         result.symbolsAdded++;
       }
+      deleteCallsForFile.run(fileId);
+      for (const call of plan.calls) {
+        insertCall.run(fileId, call.caller_key, call.callee_name, call.line);
+      }
     }
 
     // Arquivos que existiam no DB mas não no walk → marca como deleted (file + symbols)
@@ -269,9 +284,15 @@ async function orchestrateIndex(
         markSymbolDeleted.run(prevRow.id);
         result.symbolsDeleted += oldSyms.length;
         markFileDeleted.run(prevRow.id);
+        deleteCallsForFile.run(prevRow.id);
         result.filesDeleted++;
       }
     }
+
+    // Runs inside the same transaction as the symbol/call writes above so a
+    // reindex is atomic: readers never see calls with a stale/missing
+    // resolution for symbols that were just added or removed.
+    resolveCalls(db);
 
     db.prepare(
       "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed_at', ?)",

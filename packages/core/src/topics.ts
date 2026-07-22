@@ -59,6 +59,12 @@ export interface TopicPlanningInventory {
   anchorSourceChars: Record<string, number>;
 }
 
+/** One deterministic module cluster (Workstream B): a connected component of the product-module import graph plus its directly-connected auxiliary modules. */
+export interface TopicModuleCluster {
+  productModuleIds: string[];
+  auxiliaryModuleIds: string[];
+}
+
 export interface TopicPlanProposal {
   title: string;
   intent: string;
@@ -377,6 +383,285 @@ export function validateTopicPlan(
 }
 
 /**
+ * Workstream B: connected components over the product-module import
+ * graph (`importNeighbors`, already computed by
+ * `buildTopicPlanningInventory`), each with its directly-connected
+ * auxiliary modules attached. Deterministic and correct-by-construction
+ * against `topic_plan_auxiliary_disconnected` — an auxiliary module only
+ * ever joins a cluster because it is directly connected to one of that
+ * cluster's product modules.
+ *
+ * Components with fewer than 2 product modules are merged into the
+ * neighboring component sharing the most product-adjacency (by raw
+ * shared-neighbor count), or dropped if no viable merge target exists — a
+ * degenerate single-module cluster is never proposed. A cluster whose
+ * total module count (product + auxiliary) exceeds 6 is trimmed
+ * (auxiliary first, then product down to a floor of 2) to fit
+ * `topic_plan_module_budget`.
+ */
+export function clusterModulesByImportGraph(inventory: TopicPlanningInventory): TopicModuleCluster[] {
+  const productModules = inventory.modules.filter((m) => m.role === "product");
+  const productIds = new Set(productModules.map((m) => m.id));
+  const productAdjacency = new Map<string, Set<string>>();
+  for (const m of productModules) {
+    productAdjacency.set(m.id, new Set(m.importNeighbors.filter((id) => productIds.has(id) && id !== m.id)));
+  }
+
+  const visited = new Set<string>();
+  const components: string[][] = [];
+  for (const id of [...productIds].sort()) {
+    if (visited.has(id)) continue;
+    const queue = [id];
+    visited.add(id);
+    const component: string[] = [];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      component.push(current);
+      for (const neighbor of [...(productAdjacency.get(current) ?? [])].sort()) {
+        if (visited.has(neighbor)) continue;
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+    components.push(component.sort());
+  }
+
+  const multi = components.filter((c) => c.length >= 2).map((c) => [...c]);
+  const singletons = components.filter((c) => c.length < 2);
+  for (const single of singletons) {
+    const id = single[0];
+    if (id === undefined) continue;
+    const neighbors = productAdjacency.get(id) ?? new Set<string>();
+    let bestIndex = -1;
+    let bestScore = 0;
+    for (const [i, comp] of multi.entries()) {
+      const score = comp.filter((m) => neighbors.has(m)).length;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+    }
+    if (bestIndex !== -1) {
+      multi[bestIndex]!.push(id);
+      multi[bestIndex]!.sort();
+    }
+    // else: an isolated singleton with no viable merge target is dropped —
+    // it can never satisfy the 2-product-module floor on its own.
+  }
+
+  const auxiliaryModules = inventory.modules.filter((m) => m.role !== "product");
+  const clusters = multi.map((productModuleIds): TopicModuleCluster => {
+    const productSet = new Set(productModuleIds);
+    const auxiliaryModuleIds = auxiliaryModules
+      .filter((m) => m.importNeighbors.some((n) => productSet.has(n)))
+      .map((m) => m.id)
+      .sort();
+    return capClusterSize({ productModuleIds, auxiliaryModuleIds });
+  });
+  return clusters.sort((a, b) => a.productModuleIds[0]!.localeCompare(b.productModuleIds[0]!));
+}
+
+/** Trims a cluster (auxiliary first, then product down to a floor of 2) to fit the 6-module budget. */
+function capClusterSize(cluster: TopicModuleCluster): TopicModuleCluster {
+  let { productModuleIds, auxiliaryModuleIds } = cluster;
+  while (productModuleIds.length + auxiliaryModuleIds.length > 6 && auxiliaryModuleIds.length > 0) {
+    auxiliaryModuleIds = auxiliaryModuleIds.slice(0, -1);
+  }
+  while (productModuleIds.length + auxiliaryModuleIds.length > 6 && productModuleIds.length > 2) {
+    productModuleIds = productModuleIds.slice(0, -1);
+  }
+  return { productModuleIds, auxiliaryModuleIds };
+}
+
+/** Maps a module's dominant `classifyTopicSignals` tag to the topic evidence group it best fits. */
+const SIGNAL_TO_TOPIC_GROUP: Readonly<Record<string, TopicGroupName>> = {
+  configuration: "contract",
+  "entry/boundary": "contract",
+  "persistence/state": "state",
+  output: "output",
+  "validation/recovery": "failure",
+};
+
+/**
+ * Workstream B: deterministic anchor selection for one module cluster.
+ * Buckets every anchor into one of the 4 evidence groups by inheriting
+ * its owning module's dominant signal (via `SIGNAL_TO_TOPIC_GROUP`),
+ * ranks within each bucket by caller centrality (a cheap "how central is
+ * this symbol" proxy from `computeCallerCentrality`) descending, fills
+ * every group's floor of 1 anchor first (borrowing from the unclassified
+ * pool when a bucket is empty), then round-robins the remaining budget —
+ * tracking the running product-anchor ratio exactly like
+ * `repairTopicPlanSourceBudgetMechanically`'s `canRemove`, but additive
+ * instead of subtractive. Returns null when a group's floor cannot be
+ * met at all, or the 5-anchor floor is unreachable.
+ */
+export function selectTopicAnchors(
+  cluster: TopicModuleCluster,
+  inventory: TopicPlanningInventory,
+  centrality: ReadonlyMap<string, number>,
+  opts: { maxAnchors: number; maxSourceChars?: number; minimumProductAnchorRatio?: number },
+): TopicKeyGroups | null {
+  const moduleIds = [...cluster.productModuleIds, ...cluster.auxiliaryModuleIds];
+  const moduleById = new Map(inventory.modules.map((m) => [m.id, m]));
+  const minimumRatio = opts.minimumProductAnchorRatio ?? 0.75;
+
+  interface Entry {
+    key: string;
+    group: TopicGroupName | null;
+    chars: number;
+    isProduct: boolean;
+    centrality: number;
+  }
+  const entries: Entry[] = [];
+  const seenKeys = new Set<string>();
+  for (const moduleId of moduleIds) {
+    const module = moduleById.get(moduleId);
+    if (module === undefined) continue;
+    const dominantGroup = module.signals.map((s) => SIGNAL_TO_TOPIC_GROUP[s]).find((g) => g !== undefined) ?? null;
+    for (const key of [...module.anchors].sort()) {
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      entries.push({
+        key,
+        group: dominantGroup,
+        chars: inventory.anchorSourceChars[key] ?? 0,
+        isProduct: inventory.anchorRoles[key] === "product",
+        centrality: centrality.get(key) ?? 0,
+      });
+    }
+  }
+  if (entries.length === 0) return null;
+
+  const byGroup = new Map<TopicGroupName, Entry[]>(TOPIC_GROUP_NAMES.map((g) => [g, []]));
+  const unclassified: Entry[] = [];
+  for (const entry of entries) {
+    if (entry.group !== null) byGroup.get(entry.group)!.push(entry);
+    else unclassified.push(entry);
+  }
+  const rank = (a: Entry, b: Entry): number =>
+    b.centrality - a.centrality || a.chars - b.chars || a.key.localeCompare(b.key);
+  for (const list of byGroup.values()) list.sort(rank);
+  unclassified.sort(rank);
+
+  const picked = new Set<Entry>();
+  const groups: TopicKeyGroups = { contract: [], state: [], output: [], failure: [] };
+  const rankedAll = [...entries].sort(rank);
+
+  for (const group of TOPIC_GROUP_NAMES) {
+    const own = byGroup.get(group)!.find((e) => !picked.has(e));
+    // Prefer the group's own dominant-signal bucket, then the fully
+    // unclassified pool, then — since a real cluster often has anchors
+    // concentrated in just 1-2 signals — the best remaining entry from
+    // ANY bucket. A group already handled earlier in this loop already
+    // secured its own floor pick, so borrowing one of its leftovers here
+    // never starves it.
+    const chosen =
+      own ?? unclassified.find((e) => !picked.has(e)) ?? rankedAll.find((e) => !picked.has(e));
+    if (chosen === undefined) return null;
+    picked.add(chosen);
+    groups[group].push(chosen.key);
+  }
+
+  let totalChars = [...picked].reduce((sum, e) => sum + e.chars, 0);
+  let productCount = [...picked].filter((e) => e.isProduct).length;
+  let totalCount = picked.size;
+
+  const pools = new Map<TopicGroupName, Entry[]>(
+    TOPIC_GROUP_NAMES.map((g) => [g, [...byGroup.get(g)!, ...unclassified].sort(rank)]),
+  );
+
+  let progressed = true;
+  while (progressed && totalCount < opts.maxAnchors) {
+    progressed = false;
+    for (const group of TOPIC_GROUP_NAMES) {
+      if (totalCount >= opts.maxAnchors) break;
+      const pool = pools.get(group)!;
+      const entry = pool.find((e) => !picked.has(e));
+      if (entry === undefined) continue;
+      const nextChars = totalChars + entry.chars;
+      if (opts.maxSourceChars !== undefined && nextChars > opts.maxSourceChars) continue;
+      const nextTotal = totalCount + 1;
+      const nextProduct = productCount + (entry.isProduct ? 1 : 0);
+      if (nextProduct / nextTotal < minimumRatio) continue;
+      picked.add(entry);
+      groups[group].push(entry.key);
+      totalChars = nextChars;
+      productCount = nextProduct;
+      totalCount = nextTotal;
+      progressed = true;
+    }
+  }
+
+  if (totalCount < 5) return null;
+  return groups;
+}
+
+/**
+ * Workstream B orchestrator: clusters modules (`clusterModulesByImportGraph`),
+ * selects anchors per cluster (`selectTopicAnchors`), builds a deterministic
+ * title/intent/flows for each surviving cluster, and validates the WHOLE
+ * batch through the unchanged `validateTopicPlan` — construction and
+ * validation stay decoupled, so a proposal that construction got wrong
+ * (e.g. a duplicate title against another cluster) is dropped and the
+ * remainder re-validated, rather than surfacing an invalid plan. Returns
+ * already-accepted `TopicCandidate`s, ready for the same per-topic
+ * prose-generation loop the LLM-proposed path fed before.
+ */
+export function proposeTopicPlanDeterministically(
+  inventory: TopicPlanningInventory,
+  centrality: ReadonlyMap<string, number>,
+  opts: TopicPlanValidationOptions,
+): TopicCandidate[] {
+  const clusters = clusterModulesByImportGraph(inventory);
+  const moduleById = new Map(inventory.modules.map((m) => [m.id, m]));
+
+  let proposals: TopicPlanProposal[] = [];
+  for (const cluster of clusters) {
+    const selectOpts = {
+      maxAnchors: opts.maxAnchors,
+      ...(opts.maxSourceChars !== undefined ? { maxSourceChars: opts.maxSourceChars } : {}),
+      ...(opts.minimumProductAnchorRatio !== undefined
+        ? { minimumProductAnchorRatio: opts.minimumProductAnchorRatio }
+        : {}),
+    };
+    const groups = selectTopicAnchors(cluster, inventory, centrality, selectOpts);
+    if (groups === null) continue;
+
+    const moduleIds = [...cluster.productModuleIds, ...cluster.auxiliaryModuleIds].sort();
+    const primaryId = cluster.productModuleIds[0]!;
+    const secondId = cluster.productModuleIds[1];
+    const primaryTitle = moduleById.get(primaryId)?.title ?? primaryId;
+    const secondTitle = secondId !== undefined ? moduleById.get(secondId)?.title ?? secondId : undefined;
+    const rawTitle = secondTitle !== undefined ? `${primaryTitle} and ${secondTitle}` : `${primaryTitle} overview`;
+    const title = rawTitle.slice(0, 80);
+    const dominantSignal =
+      cluster.productModuleIds.map((id) => moduleById.get(id)?.signals[0]).find((s) => s !== undefined) ??
+      "cross-module behavior";
+    const intent = `Explains how ${moduleIds.length} related modules coordinate ${dominantSignal}.`.slice(0, 160);
+
+    const flows = inventory.flows
+      .filter((f) => f.modules.length > 0 && f.modules.every((m) => moduleIds.includes(m)))
+      .map((f) => f.slug)
+      .sort()
+      .slice(0, 2);
+
+    proposals.push({ title, intent, modules: moduleIds, flows, groups });
+  }
+
+  for (;;) {
+    if (proposals.length === 0) return [];
+    const raw = JSON.stringify({ topics: proposals });
+    const result = validateTopicPlan(raw, inventory, opts);
+    if (result.ok) return result.candidates;
+    const badIndexes = new Set(
+      result.errors.map((e) => e.proposalIndex).filter((i): i is number => i !== undefined),
+    );
+    if (badIndexes.size === 0) return [];
+    proposals = proposals.filter((_, i) => !badIndexes.has(i));
+  }
+}
+
+/**
  * Cross-checked mechanical repair for `topic_plan_source_budget` alone.
  *
  * Priority-0 follow-up (2026-07-21 improvement pass): the v22 paid E2E
@@ -388,10 +673,19 @@ export function validateTopicPlan(
  * ratio below the accepted minimum. This function drops the COSTLIEST
  * anchors first (non-product before product, to protect the ratio) and
  * re-validates the WHOLE plan afterward — it only returns a result when
- * every constraint still holds, and only ever activates when EVERY
- * reported error is `topic_plan_source_budget` (any other code — a
- * mixed-cause proposal, an unrelated malformed proposal elsewhere in the
- * same plan — falls through to the existing LLM repair prompt untouched).
+ * every constraint still holds, product or not. Only proposals actually
+ * flagged with `topic_plan_source_budget` are touched; a co-occurring
+ * unrelated error on a DIFFERENT proposal (e.g. another candidate hitting
+ * `topic_plan_text_budget`/`topic_plan_anchor_budget`) no longer blocks
+ * this repair outright — the mandatory final `validateTopicPlan` re-check
+ * is the actual safety net, so any error this function can't fix (on any
+ * proposal) still surfaces as a `null` return, same as before.
+ *
+ * Priority-0 follow-up #2 (2026-07-21, v23 paid E2E): the original gate
+ * required EVERY reported error across the whole plan to be
+ * `topic_plan_source_budget`, so a single unrelated violation on an
+ * unrelated candidate topic silently disabled this repair for the whole
+ * batch and the exhausted failure repeated unchanged across 3 rounds.
  */
 export function repairTopicPlanSourceBudgetMechanically(
   raw: string,
@@ -400,7 +694,6 @@ export function repairTopicPlanSourceBudgetMechanically(
   opts: TopicPlanValidationOptions,
 ): { content: string; result: TopicPlanValidationResult } | null {
   if (errors.length === 0) return null;
-  if (errors.some((e) => e.code !== "topic_plan_source_budget")) return null;
   if (opts.maxSourceChars === undefined) return null;
   const maxSourceChars = opts.maxSourceChars;
 
@@ -418,7 +711,10 @@ export function repairTopicPlanSourceBudgetMechanically(
   if (rawTopics === null) return null;
 
   const flaggedIndexes = new Set(
-    errors.map((e) => e.proposalIndex).filter((i): i is number => i !== undefined),
+    errors
+      .filter((e) => e.code === "topic_plan_source_budget")
+      .map((e) => e.proposalIndex)
+      .filter((i): i is number => i !== undefined),
   );
   if (flaggedIndexes.size === 0) return null;
   const minimumRatio = opts.minimumProductAnchorRatio ?? 0.75;

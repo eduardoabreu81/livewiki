@@ -121,7 +121,7 @@ describe("indexer end-to-end", () => {
     expect(report.symbols.byKind.method).toBe(2);
     expect(report.symbols.byKind.function).toBe(2);
     expect(report.symbols.byKind.export).toBe(1);
-    expect(report.meta.schemaVersion).toBe(4);
+    expect(report.meta.schemaVersion).toBe(5);
   });
 
   it("indexes duplicate method names and persists one active row per key", async () => {
@@ -156,5 +156,59 @@ const secondClient = {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ kind: "method", start_line: 2 });
     expect(rows[0]?.signature).toContain("first");
+  });
+
+  it("persists call edges and replaces them wholesale on reindex (Phase 3)", async () => {
+    const callsPath = nodePath.join(repoRoot, "src", "calls-demo.ts");
+    await nodeFs.writeFile(
+      callsPath,
+      "function outer() { helper(); }\nfunction helper() { return 1; }\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const rows = db
+        .prepare("SELECT caller_key, callee_name, line FROM calls WHERE caller_key = ?")
+        .all("src/calls-demo.ts#outer") as Array<{ caller_key: string; callee_name: string; line: number }>;
+      expect(rows).toEqual([{ caller_key: "src/calls-demo.ts#outer", callee_name: "helper", line: 1 }]);
+    } finally {
+      db.close();
+    }
+
+    // Reindex after removing the call — the old edge must not survive as
+    // a stale row (calls have no soft-delete/move-tracking, unlike symbols).
+    await nodeFs.writeFile(callsPath, "function outer() { return 0; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+
+    const db2 = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const rows = db2
+        .prepare("SELECT caller_key FROM calls WHERE caller_key = ?")
+        .all("src/calls-demo.ts#outer") as Array<{ caller_key: string }>;
+      expect(rows).toEqual([]);
+    } finally {
+      db2.close();
+    }
+  });
+
+  it("removes call edges when their file disappears from the walk", async () => {
+    const callsPath = nodePath.join(repoRoot, "src", "calls-gone.ts");
+    await nodeFs.writeFile(callsPath, "function outer() { helper(); }\n");
+    await runIndexer(repoRoot, { quiet: true });
+    await nodeFs.rm(callsPath);
+    await runIndexer(repoRoot, { quiet: true });
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const rows = db
+        .prepare("SELECT caller_key FROM calls WHERE caller_key = ?")
+        .all("src/calls-gone.ts#outer") as Array<{ caller_key: string }>;
+      expect(rows).toEqual([]);
+    } finally {
+      db.close();
+    }
   });
 });

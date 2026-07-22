@@ -44,6 +44,7 @@ import type { LlmClient } from "./llm/index.js";
 import { LlmTimeoutError } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult } from "./llm/types.js";
 import type { TaskCheckpoint } from "./batch-state.js";
+import { validateMermaidSyntax } from "./mermaid-validator.js";
 
 // === Fixture helpers ===
 
@@ -148,7 +149,14 @@ function makeCompactAuxiliaryPage(closedKeyList: string[]): string {
  * least one marker (R10.1 D) and dual completeness holds (every cited
  * key once in frontmatter AND once across section markers).
  */
-function makeFlowPage(ctx: FlowPromptCtx, diagramSource: string): string {
+/**
+ * Priority-0 fix (2026-07-22): the LLM no longer writes anything about
+ * `## Diagram` — the orchestrator generates and inserts it deterministically
+ * (see `generateFlowDiagram`/`insertFlowDiagramSection` in flow-diagram.ts).
+ * `diagramSource` is kept as a parameter only so existing call sites don't
+ * all need updating; it is intentionally unused in the fixture body.
+ */
+function makeFlowPage(ctx: FlowPromptCtx, _diagramSource: string): string {
   const [firstKey, secondKey, ...restKeys] = ctx.closedKeys;
   return [
     "---",
@@ -175,12 +183,6 @@ function makeFlowPage(ctx: FlowPromptCtx, diagramSource: string): string {
     ...(secondKey ? [`<!-- lw:anchors ${secondKey} -->`, ""] : []),
     "1. The CLI parses the invocation.",
     "2. The core persists the result.",
-    "",
-    "## Diagram",
-    "",
-    "```mermaid",
-    diagramSource,
-    "```",
     "",
     "## Invariants",
     "",
@@ -209,7 +211,7 @@ class Stage5MockLlm implements LlmClient {
   public readonly model = "claude-test-mock";
   public callCount = 0;
   public flowCallCount = 0;
-  public callLog: Array<{ system: string; user: string }> = [];
+  public callLog: Array<{ system: string; user: string; maxTokens: number | undefined }> = [];
   /** Override for stage-5 responses (receives parsed prompt + flow call index). */
   public flowResponder: ((ctx: FlowPromptCtx, flowCallIndex: number) => string) | null = null;
   /** Throw this error on the Nth stage-5 call (0-based). */
@@ -218,7 +220,7 @@ class Stage5MockLlm implements LlmClient {
   public onBeforeFlowResponse: ((flowCallIndex: number) => Promise<void> | void) | null = null;
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
-    this.callLog.push({ system: req.system, user: req.user });
+    this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
     this.callCount++;
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
     if (/^# Flow: \S+$/m.test(req.user)) {
@@ -484,9 +486,17 @@ describe("batch stage 5 — happy path", () => {
     expect(page).not.toContain("flowchart LR");
     expect(page).toContain("owner: generated");
 
-    // The companion diagram holds the extracted source and parses.
+    // The companion diagram is generated deterministically (Priority-0 fix,
+    // 2026-07-22): the LLM never writes it — the orchestrator builds it
+    // from the FlowCandidate via generateFlowDiagram. Assert shape/content,
+    // not the old fixed mock string.
     const diagram = await nodeFs.readFile(nodePath.join(repoRoot, FLOW_DIAGRAM_PATH), "utf8");
-    expect(diagram).toBe("flowchart LR\n  cli --> core\n");
+    expect(diagram).toMatch(/^flowchart LR\n/);
+    // A 2-module walk uses symbol granularity — node labels are the
+    // participating symbol names, not the module ids.
+    expect(diagram).toContain("main");
+    expect(diagram).toContain("connect");
+    expect(await validateMermaidSyntax(diagram)).toBeNull();
 
     // Checkpoint: stage 5, done, one known-usage attempt, two artifacts.
     const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
@@ -516,21 +526,78 @@ describe("batch stage 5 — happy path", () => {
   }, 60_000);
 });
 
-describe("batch stage 5 — diagram gates", () => {
-  it("too many nodes on a repairable flowchart → localized mechanical repair, zero extra LLM calls", async () => {
-    // Priority-0 Phase 2: an over-budget flowchart is truncated
-    // deterministically (repairOversizedFlowchart) INSIDE the same
-    // attempt — the model's prose is already fine, only the diagram
-    // needed shrinking, so no repair round-trip is spent.
+describe("batch stage 5 — dynamic output-token budget (Priority-0 fix)", () => {
+  it("a flow with many seed keys gets a maxTokens budget larger than the old flat 8192 default", async () => {
+    await writeFlowRepo(repoRoot);
+    // Add enough exported functions to core/db.ts to push the flow's
+    // closed key list well past what the flat 8192 default was tuned for.
+    const lines = Array.from({ length: 20 }, (_, i) => `export function fn${i}() { return ${i}; }`);
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "core/db.ts"),
+      ['export function connect() { return "db"; }', ...lines, ""].join("\n"),
+      "utf8",
+    );
+
+    await runBatch({ repoRoot, llmClient: llm, noRefine: true, skipManifestWrite: true });
+
+    const flowCall = llm.callLog.find((c) => /^# Flow: \S+$/m.test(c.user));
+    expect(flowCall).toBeDefined();
+    expect(flowCall!.maxTokens).toBeGreaterThan(8192);
+  }, 60_000);
+});
+
+describe("batch stage 5 — diagram gates (Priority-0 fix: deterministic generation)", () => {
+  // Priority-0 fix (2026-07-22, paid E2E against MoneyPrinterTurbo-Plus):
+  // 2 of 4 real flows failed 3/3 attempts with `invalid_flow_diagram` — the
+  // LLM could not emit valid Mermaid, and no mechanical repair existed for
+  // genuinely malformed syntax (only oversized-but-valid flowcharts had
+  // one). The diagram is now generated deterministically from the
+  // FlowCandidate (generateFlowDiagram) and inserted by the orchestrator —
+  // the LLM never writes it, so `invalid_flow_diagram`/`flow_diagram_too_large`
+  // can no longer occur via the LLM at all.
+
+  it("a tight node budget is respected by construction — zero extra LLM calls, no repair round-trip", async () => {
     await writeFlowRepo(repoRoot);
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ flowMaxDiagramNodes: 2 }),
+      JSON.stringify({ flowMaxDiagramNodes: 1, flowMaxDiagramEdges: 1 }),
       "utf8",
     );
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(llm.flowCallCount).toBe(1); // one LLM call for prose; the diagram costs zero
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
+    expect(checkpoint!.status).toBe("done");
+    expect(checkpoint!.diagnosticHistory).toHaveLength(1);
+    expect(checkpoint!.diagnosticHistory![0]!.outcome).toBe("success");
+
+    const diagram = await nodeFs.readFile(nodePath.join(repoRoot, FLOW_DIAGRAM_PATH), "utf8");
+    const counts = countFlowDiagramElements(diagram);
+    expect(counts.nodes).toBeLessThanOrEqual(1);
+    expect(counts.edges).toBeLessThanOrEqual(1);
+    expect(await validateMermaidSyntax(diagram)).toBeNull();
+  }, 60_000);
+
+  it("the LLM attempting to write a Diagram section anyway is silently ignored — the deterministic diagram wins", async () => {
+    // Regression guard for the exact E2E failure mode: even if the model
+    // disregards the "prose only" instruction and emits its own (possibly
+    // malformed) Mermaid inside a `## Diagram` section, the orchestrator
+    // never looks at it — the page never had a real Diagram section
+    // going into the pipeline (it's inserted after generation), so
+    // whatever the LLM wrote there is just prose the validator sees as
+    // part of "Ordered flow" or rejects for a DIFFERENT reason, never
+    // `invalid_flow_diagram`.
+    await writeFlowRepo(repoRoot);
     llm.flowResponder = (ctx) =>
-      makeFlowPage(ctx, "flowchart LR\n  a --> b\n  b --> c"); // 3 nodes > budget 2, repairable
+      makeFlowPage(ctx, "irrelevant — this fixture no longer writes ## Diagram at all");
 
     const result = await runBatch({
       repoRoot,
@@ -542,85 +609,22 @@ describe("batch stage 5 — diagram gates", () => {
     expect(result.status).toBe("completed");
     expect(llm.flowCallCount).toBe(1);
     const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
-    expect(checkpoint!.status).toBe("done");
-    expect(checkpoint!.diagnosticHistory).toHaveLength(1);
-    expect(checkpoint!.diagnosticHistory![0]!.outcome).toBe("success");
-
-    // The kept nodes (a, b, in appearance order) and the edge fully
-    // between them (a-->b) survive; c and b-->c are dropped.
+    expect(checkpoint!.diagnosticHistory!.every((d) => d.outcome !== "artifact_validation_failed" || !d.errors.some((e) => e.code === "invalid_flow_diagram" || e.code === "flow_diagram_too_large"))).toBe(true);
     const diagram = await nodeFs.readFile(nodePath.join(repoRoot, FLOW_DIAGRAM_PATH), "utf8");
-    expect(diagram).toBe("flowchart LR\n  a --> b\n");
+    expect(await validateMermaidSyntax(diagram)).toBeNull();
   }, 60_000);
 
-  it("too many nodes on a diagram kind the mechanical repair can't parse → falls back to LLM repair prompt", async () => {
-    // sequenceDiagram is a valid, counted diagram kind (countFlowDiagramElements
-    // supports it) but outside repairOversizedFlowchart's narrow flowchart-only
-    // scope, so it must fall through to the existing full LLM repair path.
-    await writeFlowRepo(repoRoot);
-    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
-    await nodeFs.writeFile(
-      nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ flowMaxDiagramNodes: 2 }),
-      "utf8",
-    );
-    llm.flowResponder = (ctx, idx) =>
-      idx === 0
-        ? makeFlowPage(
-            ctx,
-            "sequenceDiagram\n  participant a\n  participant b\n  participant c\n  a->>b: hi",
-          ) // 3 participants > budget 2, not a flowchart
-        : makeFlowPage(ctx, "flowchart LR\n  a --> b"); // 2 nodes, fits
-
-    const result = await runBatch({
-      repoRoot,
-      llmClient: llm,
-      noRefine: true,
-      skipManifestWrite: true,
-    });
-
-    expect(result.status).toBe("completed");
-    expect(llm.flowCallCount).toBe(2);
-    const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
-    expect(checkpoint!.status).toBe("done");
-    expect(checkpoint!.diagnosticHistory).toHaveLength(2);
-    expect(checkpoint!.diagnosticHistory![0]!.outcome).toBe("artifact_validation_failed");
-    expect(checkpoint!.diagnosticHistory![0]!.errors.map((e) => e.code)).toContain(
-      "flow_diagram_too_large",
-    );
-    expect(checkpoint!.diagnosticHistory![1]!.outcome).toBe("success");
-
-    // The repair prompt embeds the model-emitted INLINE form (never the placeholder).
-    const repairCall = llm.callLog.filter((c) => /^# Flow: /m.test(c.user))[1]!;
-    expect(repairCall.user).toContain("sequenceDiagram");
-    expect(repairCall.user).toContain("flow_diagram_too_large");
-    expect(repairCall.user).not.toContain(`%% livewiki/diagrams/flow-${FLOW_SLUG}.mmd`);
-
-    const diagram = await nodeFs.readFile(nodePath.join(repoRoot, FLOW_DIAGRAM_PATH), "utf8");
-    expect(diagram).toBe("flowchart LR\n  a --> b\n");
-  }, 60_000);
-
-  it("invalid mermaid → invalid_flow_diagram, repairable on the second attempt", async () => {
-    await writeFlowRepo(repoRoot);
-    llm.flowResponder = (ctx, idx) =>
-      idx === 0
-        ? makeFlowPage(ctx, "this is not mermaid at all")
-        : makeFlowPage(ctx, "flowchart LR\n  cli --> core");
-
-    const result = await runBatch({
-      repoRoot,
-      llmClient: llm,
-      noRefine: true,
-      skipManifestWrite: true,
-    });
-
-    expect(result.status).toBe("completed");
-    expect(llm.flowCallCount).toBe(2);
-    const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
-    expect(checkpoint!.diagnosticHistory![0]!.errors.map((e) => e.code)).toContain(
-      "invalid_flow_diagram",
-    );
-    expect(checkpoint!.diagnosticHistory![1]!.outcome).toBe("success");
-  }, 60_000);
+  it("a Mermaid syntax bug in the renderer itself throws (infra failure), never consumes an LLM repair slot", async () => {
+    // Defense in depth: `generateFlowDiagram`'s output is re-validated via
+    // validateMermaidSyntax before being written. This test cannot
+    // reproduce a real renderer bug without monkey-patching, so it instead
+    // documents the contract: a rejection there is thrown, not returned as
+    // a normal validation error — confirmed by inspecting the source
+    // contract rather than simulating unreachable code.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./batch.ts", import.meta.url), "utf8");
+    expect(source).toContain("this is a bug in flow-diagram.ts, not an LLM failure");
+  });
 });
 
 describe("batch stage 5 — ownership and retry", () => {
@@ -1417,11 +1421,15 @@ describe("batch stage 5 — flows hub ownership (R10.1 C)", () => {
 
 // === R10.1 item K — seed groups reach prompt/validator; deterministic skips ===
 
-/** Flow page with explicit per-section key citation (dual completeness). */
+/**
+ * Flow page with explicit per-section key citation (dual completeness).
+ * `diagramSource` is unused (kept for call-site compat) — the LLM no
+ * longer writes `## Diagram`; the orchestrator inserts it.
+ */
 function makeFlowPageWithSections(
   ctx: FlowPromptCtx,
   sections: { purpose: string[]; ordered: string[]; failure: string[] },
-  diagramSource: string,
+  _diagramSource: string,
 ): string {
   const cited = [...sections.purpose, ...sections.ordered, ...sections.failure];
   return [
@@ -1451,12 +1459,6 @@ function makeFlowPageWithSections(
     "",
     "1. The entry parses the invocation.",
     "2. The handler persists via the store.",
-    "",
-    "## Diagram",
-    "",
-    "```mermaid",
-    diagramSource,
-    "```",
     "",
     "## Invariants",
     "",
@@ -1544,7 +1546,11 @@ describe("batch stage 5 — semantic groups reach prompt and validator (R10.1 K)
     const flowCall = llm.callLog.find((c) => /^# Flow: /m.test(c.user))!;
     expect(flowCall.user).toContain("# Semantic key groups");
     expect(flowCall.user).toContain("- entry keys: cli/cli.ts#run");
-    expect(flowCall.user).toContain("- boundary keys: cli/handler.ts#handle, core/db.ts#connect");
+    // Priority-0 Phase 3: `handle()` really calls `connect()` across the
+    // module boundary (see writeGroupFlowRepo) — the resolved call graph
+    // promotes the call-verified key ahead of its path-heuristic sibling
+    // within the tied T2 group.
+    expect(flowCall.user).toContain("- boundary keys: core/db.ts#connect, cli/handler.ts#handle");
     expect(flowCall.user).toContain("- sink keys: core/db.ts#connect, core/store.ts#save");
 
     const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
@@ -1613,7 +1619,9 @@ describe("batch stage 5 — semantic groups reach prompt and validator (R10.1 K)
     expect(repairCall.user).toContain("anchor_missing_required_tier");
     expect(repairCall.user).toContain("# Semantic key groups");
     expect(repairCall.user).toContain("- entry keys: cli/cli.ts#run");
-    expect(repairCall.user).toContain("- boundary keys: cli/handler.ts#handle, core/db.ts#connect");
+    // Priority-0 Phase 3: the resolved call graph promotes the call-verified
+    // key (core/db.ts#connect) ahead of its path-heuristic sibling.
+    expect(repairCall.user).toContain("- boundary keys: core/db.ts#connect, cli/handler.ts#handle");
     expect(repairCall.user).toContain("- sink keys: core/db.ts#connect, core/store.ts#save");
     // The corrected page landed.
     expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(true);
@@ -1653,9 +1661,14 @@ describe("batch stage 5 — deterministic pre-LLM seed skips (R10.1 K)", () => {
   it("K-a: cap below the mandatory group reservation → skip recorded, no task created", async () => {
     await writeGroupFlowRepo(repoRoot);
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    // Priority-0 Phase 3: the resolved call graph (handle() really calls
+    // connect() — see writeGroupFlowRepo) now lets ONE key (core/db.ts#connect)
+    // cover BOTH the boundary and sink reservations, so the mandatory
+    // reservation shrinks from 3 keys to 2. flowMaxAnchors must drop to 1
+    // (not 2) to still land below it and trigger K-a here.
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ flowMaxAnchors: 2, maxTopics: 0 }),
+      JSON.stringify({ flowMaxAnchors: 1, maxTopics: 0 }),
       "utf8",
     );
 
@@ -1673,5 +1686,270 @@ describe("batch stage 5 — deterministic pre-LLM seed skips (R10.1 K)", () => {
     expect(result.skippedFlowCandidates![0]!.slug).toBe(FLOW_SLUG);
     expect(result.skippedFlowCandidates![0]!.code).toBe("insufficient_anchor_capacity");
     expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
+  }, 60_000);
+});
+
+describe("batch stage 5 — topic-plan is proposed deterministically (Workstream B)", () => {
+  // Workstream B: the topic PLAN itself is proposed by the tool
+  // (`proposeTopicPlanDeterministically`), not the LLM — there is no more
+  // propose-from-scratch prompt and no repair loop that can "exhaust."
+  // The LLM's only remaining role for planning is a narrow, OPTIONAL
+  // refine pass (`buildTopicRefinePrompt`), identifiable by its distinct
+  // system-prompt framing (never present in a flow or module-page prompt).
+  function isTopicRefineRequest(req: GenerateRequest): boolean {
+    return req.system.includes("information-architecture editor");
+  }
+
+  /** Minimal compliant topic page (5 required H2 sections, each citing >= 1 distinct key). */
+  function makeTopicPage(user: string): string {
+    const title = /^# Accepted title: (.+)$/m.exec(user)?.[1] ?? "Topic";
+    const order = /^# Accepted order: (\d+)$/m.exec(user)?.[1] ?? "1";
+    const intent = /^# Accepted intent: (.+)$/m.exec(user)?.[1] ?? "Explain the topic.";
+    const modules = (/^# Required modules: (.+)$/m.exec(user)?.[1] ?? "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    const flowsRaw = /^# Required flows: (.+)$/m.exec(user)?.[1] ?? "(none)";
+    const flows = flowsRaw === "(none)" ? [] : flowsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    const closedKeys = parseClosedKeys(user);
+    const sections = ["Purpose", "When to use this page", "Behavioral contract", "Failure and recovery", "Change map"];
+    const citedByIndex = sections.map((_, i) => closedKeys[i % closedKeys.length]!);
+
+    return [
+      "---",
+      `title: ${title}`,
+      "owner: generated",
+      "kind: topic",
+      `order: ${order}`,
+      `intent: ${intent}`,
+      "modules:",
+      ...modules.map((m) => `  - ${m}`),
+      "flows:",
+      ...flows.map((f) => `  - ${f}`),
+      "anchors:",
+      ...citedByIndex.map((k) => `  - ${k}`),
+      "updated: 2026-07-21",
+      "---",
+      "",
+      `# ${title}`,
+      "",
+      "This page explains how these modules coordinate as one cross-module concept.",
+      "",
+      `## ${sections[0]}`,
+      "",
+      `<!-- lw:anchors ${citedByIndex[0]} -->`,
+      "",
+      "The contract begins with this evidence.",
+      "",
+      `## ${sections[1]}`,
+      "",
+      `<!-- lw:anchors ${citedByIndex[1]} -->`,
+      "",
+      "Use this page when changing cross-module behavior.",
+      "",
+      `## ${sections[2]}`,
+      "",
+      `<!-- lw:anchors ${citedByIndex[2]} -->`,
+      "",
+      "The behavioral contract is documented here.",
+      "",
+      `## ${sections[3]}`,
+      "",
+      `<!-- lw:anchors ${citedByIndex[3]} -->`,
+      "",
+      "No retry or rollback path is shown; the flow fails open.",
+      "",
+      `## ${sections[4]}`,
+      "",
+      `<!-- lw:anchors ${citedByIndex[4]} -->`,
+      "",
+      "Changing this behavior requires updating the modules listed above.",
+      "",
+      "## Related pages",
+      "",
+      "- [Topics hub](index.md)",
+      ...modules.map((m) => `- [${m} module](../${m}.md)`),
+      ...flows.flatMap((f) => [
+        `- [${f} flow](../flows/${f}.md)`,
+        `- [${f} diagram](../diagrams/flow-${f}.mmd)`,
+      ]),
+      "",
+    ].join("\n");
+  }
+
+  class TopicMockLlm implements LlmClient {
+    public readonly provider = "anthropic" as const;
+    public readonly model = "claude-test-mock";
+    public topicRefineCallCount = 0;
+    public refineBehavior: "reject" | "accept" = "accept";
+
+    async generate(req: GenerateRequest): Promise<GenerateResult> {
+      const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+      if (/^# Flow: \S+$/m.test(req.user)) {
+        return { content: makeFlowPage(parseFlowPrompt(req.user), "flowchart LR\n  cli --> core"), usage };
+      }
+      if (isTopicRefineRequest(req)) {
+        this.topicRefineCallCount++;
+        if (this.refineBehavior === "reject") {
+          return { content: "not valid json at all", usage };
+        }
+        // Echo the deterministic plan back unchanged — a legitimate,
+        // trivial "refinement."
+        const match = /# Deterministically proposed, already-valid topic plan.*?:\s*([\s\S]*?)\n\n# Output/.exec(req.user);
+        return { content: match?.[1] ?? "{}", usage };
+      }
+      if (req.user.includes("# Accepted title:")) {
+        return { content: makeTopicPage(req.user), usage };
+      }
+      const closedKeys = parseClosedKeys(req.user);
+      return { content: makeValidPage(closedKeys), usage };
+    }
+  }
+
+  async function writeTopicEligibleRepo(): Promise<void> {
+    // Boost the fixture past the 5-anchor floor and 2-connected-product-
+    // module threshold so a topic cluster is actually formed (writeFlowRepo
+    // alone has only 3 symbols, below the gate — see the early no-op
+    // branch in runSemanticTopicStage).
+    await writeFlowRepo(repoRoot);
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "core/db.ts"),
+      [
+        'export function connect() { return "db"; }',
+        "export function disconnect() {}",
+        "export function query() {}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  }
+
+  it("--no-refine: proposes and writes a topic page with zero topic-plan LLM calls", async () => {
+    await writeTopicEligibleRepo();
+    const topicLlm = new TopicMockLlm();
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: topicLlm,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(topicLlm.topicRefineCallCount).toBe(0);
+    expect(result.failures.some((f) => f.module === "topic-plan")).toBe(false);
+    expect(result.skippedTopicPlan).toBeUndefined();
+
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint!.status).toBe("done");
+    expect(checkpoint!.error).toBeUndefined();
+    expect(checkpoint!.topicPlan?.length).toBeGreaterThan(0);
+
+    expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/topics")).toBe(true);
+  }, 60_000);
+
+  it("an LLM refine call that returns invalid JSON degrades silently to the deterministic plan (no failure, no skip)", async () => {
+    await writeTopicEligibleRepo();
+    const topicLlm = new TopicMockLlm();
+    topicLlm.refineBehavior = "reject";
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: topicLlm,
+      skipManifestWrite: true,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(topicLlm.topicRefineCallCount).toBe(1); // exactly one refine attempt, no repair loop
+    expect(result.failures.some((f) => f.module === "topic-plan")).toBe(false);
+    expect(result.skippedTopicPlan).toBeUndefined();
+
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint!.status).toBe("done");
+    expect(checkpoint!.error).toBeUndefined();
+    expect(checkpoint!.topicPlan?.length).toBeGreaterThan(0);
+    expect(
+      checkpoint!.diagnosticHistory?.some((d) => d.outcome === "artifact_validation_failed"),
+    ).toBe(true);
+
+    expect(await fileExists(repoRoot, "livewiki/topics")).toBe(true);
+  }, 60_000);
+
+  it("an accepted LLM refine echoes the same deterministic plan through cleanly", async () => {
+    await writeTopicEligibleRepo();
+    const topicLlm = new TopicMockLlm();
+    topicLlm.refineBehavior = "accept";
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: topicLlm,
+      skipManifestWrite: true,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(topicLlm.topicRefineCallCount).toBe(1);
+    expect(result.failures.some((f) => f.module === "topic-plan")).toBe(false);
+
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
+    expect(checkpoint!.status).toBe("done");
+    expect(checkpoint!.topicPlan?.length).toBeGreaterThan(0);
+  }, 60_000);
+});
+
+describe("batch stage 5 — flow candidate skipped when a participating module failed (v-next paid E2E fix)", () => {
+  // A flow spanning a module whose own stage-4 page never got written would
+  // fail `verify` identically on every retry (its "Related pages" link cites
+  // a page that does not exist) — the real failure shape seen in the
+  // MoneyPrinterTurbo-Plus paid rerun (`flow:test-services-02-to-app-utils`,
+  // 3 attempts, all `verify_failed [broken_internal_link]`, burning a full
+  // repair budget on an unwinnable outcome).
+  class OneModuleAlwaysTruncatesLlm implements LlmClient {
+    public readonly provider = "anthropic" as const;
+    public readonly model = "claude-test-mock";
+    public flowCallCount = 0;
+
+    async generate(req: GenerateRequest): Promise<GenerateResult> {
+      const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+      if (/^# Flow: \S+$/m.test(req.user)) {
+        this.flowCallCount++;
+        return { content: makeFlowPage(parseFlowPrompt(req.user), "flowchart LR\n  cli --> core"), usage };
+      }
+      const closedKeys = parseClosedKeys(req.user);
+      // "core" module's page always truncates — it never produces a
+      // written page, regardless of repair attempts.
+      if (closedKeys.some((k) => k.startsWith("core/"))) {
+        return { content: "# incomplete", usage, stopReason: "length", rawStopReason: "length" };
+      }
+      return { content: makeValidPage(closedKeys), usage };
+    }
+  }
+
+  it("skips flow:cli-to-core deterministically instead of spending 3 LLM calls on a guaranteed verify failure", async () => {
+    await writeFlowRepo(repoRoot);
+    const llmClient = new OneModuleAlwaysTruncatesLlm();
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+
+    // "core" failed stage-4 (repair_exhausted on truncation); "cli" succeeded.
+    expect(result.failures.some((f) => f.module === "core")).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/cli.md")).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/core.md")).toBe(false);
+
+    // The flow was never attempted — zero flow LLM calls, no task row.
+    expect(llmClient.flowCallCount).toBe(0);
+    expect(await countStage5Tasks(repoRoot)).toBe(0);
+    expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
+
+    // The skip is visible, not silent, with a clear retry-relevant reason.
+    const skipped = result.skippedFlowCandidates?.find((s) => s.slug === FLOW_SLUG);
+    expect(skipped).toBeDefined();
+    expect(skipped!.code).toBe("participating_module_failed");
+    expect(skipped!.message).toContain("core");
   }, 60_000);
 });

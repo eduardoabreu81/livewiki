@@ -549,3 +549,71 @@ describe("config — stage-5 flow keys", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/flowSignals/);
   });
 });
+
+describe("config — outputTokenStrategy", () => {
+  it("defaults to dynamic", () => {
+    expect(CONFIG_DEFAULTS.outputTokenStrategy).toBe("dynamic");
+    expect(applyDefaults({}).outputTokenStrategy).toBe("dynamic");
+  });
+
+  it("loadConfig accepts an explicit 'fixed' override", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        outputTokenStrategy: "fixed",
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.outputTokenStrategy).toBe("fixed");
+  });
+
+  it.each([
+    ["an unknown string", "auto"],
+    ["a number", 1],
+    ["null", null],
+  ])("rejects %s", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ outputTokenStrategy: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/outputTokenStrategy/);
+  });
+});
+
+describe("config — stage4MaxOutputTokens ceiling", () => {
+  it("accepts the unified 256..32768 range", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        stage4MaxOutputTokens: 16_384,
+      }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.stage4MaxOutputTokens).toBe(16_384);
+  });
+
+  it("rejects a value above the new 32768 ceiling (previously unbounded)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ stage4MaxOutputTokens: 100_000 }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/stage4MaxOutputTokens/);
+  });
+
+  it("still rejects a value below 256", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ stage4MaxOutputTokens: 100 }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/stage4MaxOutputTokens/);
+  });
+});

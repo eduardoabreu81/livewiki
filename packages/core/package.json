@@ -58,6 +58,10 @@
       "types": "./dist/status.d.ts",
       "import": "./dist/status.js"
     },
+    "./blast-radius": {
+      "types": "./dist/blast-radius.d.ts",
+      "import": "./dist/blast-radius.js"
+    },
     "./init": {
       "types": "./dist/init.d.ts",
       "import": "./dist/init.js"

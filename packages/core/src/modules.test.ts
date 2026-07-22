@@ -200,6 +200,15 @@ describe("modules.classifyPathRole", () => {
     expect(classifyPathRole("docs/benchmarks/run/tools/proxy.mjs")).toBe("tooling");
   });
 
+  it("defaults: nested package scripts/** (not just root) → tooling", () => {
+    // v23 paid E2E finding: packages/mcp/scripts/make-executable.mjs was
+    // classified "product" (only the root-level `scripts/**` glob matched),
+    // so it went through the LLM stage-4 path instead of the deterministic
+    // auxiliary-page path and hit an unrecoverable missing_page_opening loop.
+    expect(classifyPathRole("packages/mcp/scripts/make-executable.mjs")).toBe("tooling");
+    expect(classifyPathRole("packages/cli/scripts/make-executable.mjs")).toBe("tooling");
+  });
+
   it("defaults: docs/** (not benchmarks) → docs", () => {
     expect(classifyPathRole("docs/guide.md")).toBe("docs");
   });

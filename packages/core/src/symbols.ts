@@ -249,6 +249,113 @@ function toSymbolRecord(symbol: ExtractedSymbol): SymbolRecord {
   };
 }
 
+// === Phase 3: raw call-site extraction (symbol call graph) ===
+
+export interface CallRecord {
+  /** Same key format as SymbolRecord.key — the enclosing function/method. */
+  caller_key: string;
+  /** Right-most identifier of the callee expression (`foo` in `a.b.foo()`). */
+  callee_name: string;
+  /** 1-based line of the call site. */
+  line: number;
+}
+
+/**
+ * Extracts raw call sites (`call_expression`/`new_expression` in TS/JS,
+ * `call` in Python) found INSIDE a named function, method, or Python
+ * function_definition. Calls at module top level (no enclosing named
+ * symbol) are skipped — there is no caller key to attribute them to, and
+ * top-level side-effect calls are rarely useful for a "who calls X" graph.
+ *
+ * This is intentionally the SAME "honest extraction" policy as
+ * `extractSymbols`: only emit a `callee_name` this scan is confident about
+ * (a plain identifier or a `.property`/`.attribute` access). Anything else
+ * — computed member access (`obj[expr]()`), spread callees, IIFEs — is
+ * skipped rather than guessed. Resolving `callee_name` to a real symbol
+ * key is a SEPARATE pass (indexer.ts), since it needs cross-file import
+ * data this module doesn't have.
+ */
+export function extractCalls(tree: Tree, relPath: string, source: string): CallRecord[] {
+  const calls: CallRecord[] = [];
+  walkForCalls(tree.rootNode, relPath, null, null, calls);
+  return calls;
+}
+
+function walkForCalls(
+  node: Node,
+  relPath: string,
+  parentClassName: string | null,
+  callerKey: string | null,
+  out: CallRecord[],
+): void {
+  let nextParentClassName = parentClassName;
+  let nextCallerKey = callerKey;
+
+  switch (node.type) {
+    case "function_declaration":
+    case "generator_function_declaration": {
+      const name = node.childForFieldName("name")?.text;
+      if (name) nextCallerKey = `${relPath}#${name}`;
+      break;
+    }
+    case "method_definition": {
+      const name = node.childForFieldName("name")?.text;
+      if (name) {
+        nextCallerKey = parentClassName
+          ? `${relPath}#${parentClassName}.${name}`
+          : `${relPath}#${name}`;
+      }
+      break;
+    }
+    case "function_definition": {
+      // Python — qualifies as Class.method when nested under a class body.
+      const name = node.childForFieldName("name")?.text;
+      if (name) {
+        nextCallerKey = parentClassName
+          ? `${relPath}#${parentClassName}.${name}`
+          : `${relPath}#${name}`;
+      }
+      break;
+    }
+    case "class_declaration":
+    case "class":
+    case "class_definition": {
+      const name = node.childForFieldName("name")?.text;
+      if (name) nextParentClassName = name;
+      break;
+    }
+    case "call_expression":
+    case "new_expression":
+    case "call": {
+      const calleeField = node.type === "new_expression" ? "constructor" : "function";
+      const calleeName = extractCalleeName(node.childForFieldName(calleeField));
+      if (calleeName && callerKey) {
+        out.push({ caller_key: callerKey, callee_name: calleeName, line: node.startPosition.row + 1 });
+      }
+      break;
+    }
+  }
+
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child) walkForCalls(child, relPath, nextParentClassName, nextCallerKey, out);
+  }
+}
+
+/** Right-most confident identifier of a callee expression, or null if unclear. */
+function extractCalleeName(node: Node | null): string | null {
+  if (!node) return null;
+  if (node.type === "identifier") return node.text;
+  if (node.type === "member_expression") {
+    return node.childForFieldName("property")?.text ?? null;
+  }
+  if (node.type === "attribute") {
+    // Python
+    return node.childForFieldName("attribute")?.text ?? null;
+  }
+  return null;
+}
+
 function signatureFor(node: Node, source: string): string | null {
   // Pega a primeira linha não-vazia do nó — útil pra âncoras no Fase 2.
   const startByte = node.startIndex;

@@ -77,13 +77,14 @@ async function teardown(c: Connected): Promise<void> {
 }
 
 describe("MCP server — Fase 4", () => {
-  it("tools/list retorna as 6 tools da SPEC", async () => {
+  it("tools/list retorna as 7 tools (SPEC + Phase 3 livewiki_impact)", async () => {
     const c = await connect();
     try {
       const { tools } = await c.client.listTools();
       const names = tools.map((t) => t.name).sort();
       expect(names).toEqual([
         "livewiki_debt",
+        "livewiki_impact",
         "livewiki_quickstart",
         "livewiki_read",
         "livewiki_resolve_debt",
@@ -162,6 +163,45 @@ describe("MCP server — Fase 4", () => {
       expect(report.symbols).toBeDefined();
       expect(report.debt).toBeDefined();
       expect(report.undocumented).toBeDefined();
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_impact reports a direct caller and the pages that cite it", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/utils/helper.ts"),
+      "export function help() { return 'utils'; }\nexport function useHelp() { return help(); }\n",
+    );
+    const { run: runIndexer } = await import("@livewiki/core/indexer");
+    await runIndexer(repoRoot, { quiet: true });
+
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_impact",
+        arguments: { symbolKey: "src/utils/helper.ts#help" },
+      });
+      const parsed = JSON.parse(extractText(r));
+      expect(parsed.symbolKey).toBe("src/utils/helper.ts#help");
+      expect(parsed.directCallers).toContain("src/utils/helper.ts#useHelp");
+      expect(parsed.truncated).toBe(false);
+      expect(Array.isArray(parsed.affectedPages)).toBe(true);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_impact returns empty callers for a symbol nothing calls", async () => {
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_impact",
+        arguments: { symbolKey: "src/auth/login.ts#login" },
+      });
+      const parsed = JSON.parse(extractText(r));
+      expect(parsed.directCallers).toEqual([]);
+      expect(parsed.transitiveCallers).toEqual([]);
     } finally {
       await teardown(c);
     }

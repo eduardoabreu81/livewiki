@@ -72,12 +72,26 @@ export function extractImportsFromTree(tree: Tree, lang: string): ExtractedImpor
       }
       case "import_from_statement": {
         // Python: from .foo import bar  OR  from foo import bar
-        const moduleName = node.childForFieldName("module_name")?.text;
+        const moduleNameNode = node.childForFieldName("module_name");
+        const moduleName = moduleNameNode?.text;
         if (moduleName) {
-          // Extract names from the children
+          // Extract names from the children. For an absolute dotted "from"
+          // target (e.g. "app.services"), `module_name` itself is a
+          // `dotted_name` node — the SAME node type this loop matches for
+          // imported names — so it must be excluded by position, or it
+          // shows up twice: once as `source`, once as a bogus first entry
+          // in `names` (relative "from .foo import bar" targets use a
+          // different node shape and are unaffected).
           const names: string[] = [];
           for (let i = 0; i < node.namedChildCount; i++) {
             const child = node.namedChild(i);
+            if (
+              child &&
+              child.startIndex === moduleNameNode?.startIndex &&
+              child.endIndex === moduleNameNode?.endIndex
+            ) {
+              continue;
+            }
             if (child?.type === "dotted_name" || child?.type === "aliased_import") {
               names.push(child.text);
             }

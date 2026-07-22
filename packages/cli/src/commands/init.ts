@@ -62,6 +62,7 @@ export function registerInit(program: Command): void {
             skippedAuxiliaryHub: result.skippedAuxiliaryHub,
             skippedTopicsHub: result.skippedTopicsHub,
             skippedFlowCandidates: result.skippedFlowCandidates,
+            skippedTopicPlan: result.skippedTopicPlan,
           },
           formatHuman(result),
         );
@@ -84,7 +85,7 @@ export function registerInit(program: Command): void {
     });
   }
 
-function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number }; batchExitCode?: 0 | 1 | 2; skippedFlowsHub?: { path: string; owner: "human" | "mixed" | null }; skippedAuxiliaryHub?: { path: string; owner: "human" | "mixed" | null }; skippedTopicsHub?: { path: string; owner: "human" | "mixed" | null }; skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }> }): string {
+function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number }; batchExitCode?: 0 | 1 | 2; skippedFlowsHub?: { path: string; owner: "human" | "mixed" | null }; skippedAuxiliaryHub?: { path: string; owner: "human" | "mixed" | null }; skippedTopicsHub?: { path: string; owner: "human" | "mixed" | null }; skippedFlowCandidates?: Array<{ slug: string; code: string; message: string }>; skippedTopicPlan?: { reason: string; retryCommand: string } }): string {
   const lines: string[] = [];
   if (result.plan) {
     lines.push(`livewiki init --plan (no writes, no LLM):`);
@@ -123,6 +124,12 @@ function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; ba
   // R10.1 K: deterministic pre-LLM flow skips are never silent either.
   for (const s of result.skippedFlowCandidates ?? []) {
     lines.push(`  flow skipped: ${s.slug} (${s.code}) — ${s.message}`);
+  }
+  // Priority-0 fix (v25 paid E2E): an exhausted topic plan is optional/
+  // additive, not a batch failure — never silent either.
+  if (result.skippedTopicPlan) {
+    lines.push(`  topics skipped: ${result.skippedTopicPlan.reason}`);
+    lines.push(`    retry: ${result.skippedTopicPlan.retryCommand}`);
   }
   if (result.batchSummary) {
     lines.push("");

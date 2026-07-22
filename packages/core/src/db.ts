@@ -15,7 +15,7 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -145,6 +145,27 @@ CREATE TABLE IF NOT EXISTS manual_blocks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_manual_blocks_doc_page_id ON manual_blocks(doc_page_id);
+
+-- Schema v5 (Phase 3 — symbol call graph / blast radius): raw call sites
+-- extracted per file, deterministically. Recomputed wholesale for a file
+-- whenever it's reindexed (no soft-delete/move-tracking needed like
+-- symbols — an edge has no identity worth preserving across a re-parse).
+-- \`resolved_callee_key\` is filled by a separate resolution pass and stays
+-- NULL for callees the resolver couldn't confidently match to one symbol
+-- (dynamic dispatch, external/unindexed code, ambiguous name) — a raw,
+-- unresolved row is still kept for the callee_name-only searches.
+CREATE TABLE IF NOT EXISTS calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  caller_key TEXT NOT NULL,
+  callee_name TEXT NOT NULL,
+  resolved_callee_key TEXT,
+  line INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_calls_file_id ON calls(file_id);
+CREATE INDEX IF NOT EXISTS idx_calls_caller_key ON calls(caller_key);
+CREATE INDEX IF NOT EXISTS idx_calls_resolved_callee_key ON calls(resolved_callee_key);
 `;
 
 /**
@@ -223,6 +244,28 @@ export function migrateV3ToV4(db: Database.Database): void {
 }
 
 /**
+ * Migração v4 → v5 (Phase 3): adiciona a tabela `calls` (grafo de chamadas
+ * por símbolo). `CREATE TABLE`/`CREATE INDEX ... IF NOT EXISTS` já são
+ * idempotentes — reaproveita o mesmo trecho do SCHEMA_SQL em vez de duplicar,
+ * então um DB recriado do zero e um DB migrado convergem pro mesmo shape.
+ */
+export function migrateV4ToV5(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_id INTEGER NOT NULL REFERENCES files(id),
+      caller_key TEXT NOT NULL,
+      callee_name TEXT NOT NULL,
+      resolved_callee_key TEXT,
+      line INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_calls_file_id ON calls(file_id);
+    CREATE INDEX IF NOT EXISTS idx_calls_caller_key ON calls(caller_key);
+    CREATE INDEX IF NOT EXISTS idx_calls_resolved_callee_key ON calls(resolved_callee_key);
+  `);
+}
+
+/**
  * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
  * Cada entry é o SQL (string) OU a função (db) => void pra aplicar quando o
  * DB está em uma versão menor.
@@ -247,6 +290,7 @@ export function postV3Migrations(
 ): Array<(db: Database.Database) => void> {
   const out: Array<(db: Database.Database) => void> = [];
   if (fromVersion < 4 && toVersion >= 4) out.push(migrateV3ToV4);
+  if (fromVersion < 5 && toVersion >= 5) out.push(migrateV4ToV5);
   return out;
 }
 
@@ -322,4 +366,13 @@ export type SymbolRow = {
   end_line: number;
   content_hash: string;
   status: string;
+};
+
+export type CallRow = {
+  id: number;
+  file_id: number;
+  caller_key: string;
+  callee_name: string;
+  resolved_callee_key: string | null;
+  line: number;
 };

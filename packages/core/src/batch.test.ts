@@ -14,11 +14,11 @@ class MockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
   public callCount = 0;
-  public callLog: Array<{ system: string; user: string }> = [];
+  public callLog: Array<{ system: string; user: string; maxTokens: number | undefined }> = [];
 
   async generate(req: import("./llm/types.js").GenerateRequest): Promise<GenerateResult> {
     this.callCount++;
-    this.callLog.push({ system: req.system, user: req.user });
+    this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
     // Extrai o nome do módulo do user prompt (linha "# Module: <id>")
     const match = req.user.match(/# Module: ([^\s]+)/);
     const moduleId = match ? match[1] : "unknown";
@@ -190,6 +190,50 @@ describe("batch.runOnly — re-roda 1 task", () => {
       expect(cp.usageHistory).toHaveLength(2);
     } finally {
       db.close();
+    }
+  });
+});
+
+describe("batch.runBatch — dynamic output-token budget (Priority-0 fix)", () => {
+  it("a module with many exported symbols gets a maxTokens budget larger than the old flat 8192 default", async () => {
+    // 40 exported functions in one file -> a closed key list large enough
+    // that the dynamic formula (base 2048 + 300/anchor) clears 8192.
+    const lines = Array.from({ length: 40 }, (_, i) => `export function fn${i}() { return ${i}; }`);
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src/big"), { recursive: true });
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src/big/many.ts"), lines.join("\n") + "\n", "utf8");
+
+    await runBatch({ repoRoot, llmClient: mockLlm, noRefine: true, skipManifestWrite: true });
+
+    const bigModuleCall = mockLlm.callLog.find((c) => c.user.includes("# Module: big"));
+    expect(bigModuleCall).toBeDefined();
+    expect(bigModuleCall!.maxTokens).toBeGreaterThan(8192);
+  });
+
+  it("a tiny module stays near the floor, well below the old flat 8192 default", async () => {
+    // The default fixture (src/auth/login.ts, 1 function) already exercises
+    // the small-module path via beforeEach.
+    await runBatch({ repoRoot, llmClient: mockLlm, noRefine: true, skipManifestWrite: true });
+
+    const authModuleCall = mockLlm.callLog.find((c) => c.user.includes("# Module: auth"));
+    expect(authModuleCall).toBeDefined();
+    expect(authModuleCall!.maxTokens).toBeLessThan(8192);
+  });
+
+  it("outputTokenStrategy: 'fixed' sends the configured ceiling literally, ignoring content size", async () => {
+    const lines = Array.from({ length: 40 }, (_, i) => `export function fn${i}() { return ${i}; }`);
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src/big"), { recursive: true });
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src/big/many.ts"), lines.join("\n") + "\n", "utf8");
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ outputTokenStrategy: "fixed", stage4MaxOutputTokens: 8192 }),
+      "utf8",
+    );
+
+    await runBatch({ repoRoot, llmClient: mockLlm, noRefine: true, skipManifestWrite: true });
+
+    for (const call of mockLlm.callLog) {
+      expect(call.maxTokens).toBe(8192);
     }
   });
 });

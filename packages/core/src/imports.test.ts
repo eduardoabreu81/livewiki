@@ -62,6 +62,20 @@ describe("imports.collectImports (Python)", () => {
     expect(sources).toContain(".local");
   });
 
+  it("'names' não duplica o próprio módulo 'from' quando o alvo é um dotted_name absoluto", async () => {
+    // Priority-0 fix: `module_name`'s own node type ("dotted_name") for an
+    // absolute "from" target used to also match the loop that collects
+    // imported names, so "from app.services import bgm" produced
+    // names: ["app.services", "bgm"] instead of just ["bgm"].
+    const imps = await collectImports(
+      "src/foo.py",
+      `from app.services import bgm as bgm_service, llm`,
+    );
+    expect(imps).toHaveLength(1);
+    expect(imps[0]?.source).toBe("app.services");
+    expect(imps[0]?.names).toEqual(["bgm as bgm_service", "llm"]);
+  });
+
   it("extrai 'import X' (sem from)", async () => {
     const imps = await collectImports(
       "src/foo.py",

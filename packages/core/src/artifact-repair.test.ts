@@ -12,6 +12,7 @@ import { describe, it, expect } from "vitest";
 import { repairStage4ArtifactMechanically, repairUpperBoundArtifactMechanically } from "./artifact-repair.js";
 import { validateStage4Artifact, flowDiagramPlaceholder } from "./artifact.js";
 import type { ArtifactValidationError, ArtifactValidationCode } from "./prompts.js";
+import type { FlowKeySectionMap } from "./flows.js";
 
 const NEW_FLOW_CODES: ArtifactValidationCode[] = [
   "anchor_in_disallowed_section",
@@ -212,6 +213,43 @@ describe("repairUpperBoundArtifactMechanically — flow pages (upper-bound contr
     expect(validateFlow(repaired!.content, anchors).ok).toBe(true);
   });
 
+  it("still fixes the duplicate when an unrelated, already-moot error code rides along (v23 fix)", () => {
+    // Priority-0 Phase 2 follow-up #2: a co-occurring error this function
+    // doesn't recognize (e.g. missing_page_opening, reported because the
+    // model's duplicated section content pushed the required opening out
+    // of position) used to abort the whole mechanical repair. It should
+    // no longer block a fix the function CAN make — the mandatory final
+    // re-validation is what decides success, not the presence of an extra
+    // unrecognized error report in the list handed in.
+    const valid = makeFlowPage(anchors, modules);
+    const broken = valid.replace(
+      `<!-- lw:anchors ${anchors[2]} -->`,
+      `<!-- lw:anchors ${anchors[2]} ${anchors[0]} -->`,
+    );
+    const before = validateFlow(broken, anchors);
+    expect(before.ok).toBe(false);
+
+    const errorsWithUnrelatedNoise: ArtifactValidationError[] = [
+      ...before.errors,
+      {
+        code: "missing_page_opening",
+        message: "required page opening H1 appears after other content",
+        location: "body",
+        offending: "# Example flow",
+      },
+    ];
+    const repaired = repairUpperBoundArtifactMechanically(broken, errorsWithUnrelatedNoise, anchors, {
+      pageKind: "flow",
+      moduleId: "example-flow",
+      moduleRole: "product",
+      expectedFlowModules: modules,
+      expectedFlowDiagram: flowDiagramPlaceholder("example-flow").replace(/^%%\s*/, ""),
+    });
+    expect(repaired).not.toBeNull();
+    expect(repaired!.repairs).toEqual(["remove_duplicate_section_anchors"]);
+    expect(validateFlow(repaired!.content, anchors).ok).toBe(true);
+  });
+
   it("returns null (fail-closed) for a code it does not support", () => {
     const valid = makeFlowPage(anchors, modules);
     const errors: ArtifactValidationError[] = [
@@ -241,5 +279,143 @@ describe("repairUpperBoundArtifactMechanically — flow pages (upper-bound contr
         expectedFlowModules: modules,
       }),
     ).toBeNull();
+  });
+});
+
+describe("repairUpperBoundArtifactMechanically — flowKeySectionMap section preference (Workstream A)", () => {
+  const modules = ["a-mod", "b-mod"];
+  const k0 = "src/a.ts#a";
+  const k1 = "src/b.ts#b";
+  const k2 = "src/c.ts#c";
+  const kDup = "src/d.ts#d";
+  const anchors = [k0, k1, k2, kDup];
+
+  /**
+   * Purpose cites k0 + kDup; Ordered flow cites k1; Failure and recovery
+   * cites k2 + kDup (the duplicate). Every section keeps >= 1 key even
+   * after dedup, regardless of which occurrence is kept.
+   */
+  function makePage(): string {
+    return [
+      "---",
+      "title: Example flow",
+      "owner: generated",
+      "anchors:",
+      ...anchors.map((k) => `  - ${k}`),
+      "modules:",
+      ...modules.map((m) => `  - ${m}`),
+      "updated: 2026-07-21",
+      "---",
+      "",
+      "# Example flow",
+      "",
+      "This page explains an example flow end to end.",
+      "",
+      "## Purpose",
+      "",
+      `<!-- lw:anchors ${k0} ${kDup} -->`,
+      "",
+      "The flow begins here and produces a stored result.",
+      "",
+      "## Ordered flow",
+      "",
+      `<!-- lw:anchors ${k1} -->`,
+      "",
+      "1. Step one runs first.",
+      "2. Step two persists the result.",
+      "",
+      "## Diagram",
+      "",
+      "```mermaid",
+      flowDiagramPlaceholder("example-flow"),
+      "```",
+      "",
+      "## Invariants",
+      "",
+      "- Every step preserves the input payload.",
+      "",
+      "## Failure and recovery",
+      "",
+      `<!-- lw:anchors ${k2} ${kDup} -->`,
+      "",
+      "No retry or rollback path is shown; the flow fails open.",
+      "",
+      "## Related pages",
+      "",
+      ...modules.map((m) => `- [${m} module](../${m}.md)`),
+      "",
+    ].join("\n");
+  }
+
+  const context = {
+    pageKind: "flow" as const,
+    moduleId: "example-flow",
+    moduleRole: "product" as const,
+    expectedFlowModules: modules,
+    expectedFlowDiagram: flowDiagramPlaceholder("example-flow").replace(/^%%\s*/, ""),
+  };
+
+  it("without a section map, keeps the first occurrence (Purpose) — pre-existing behavior", () => {
+    const broken = makePage();
+    const before = validateStage4Artifact(broken, anchors, context);
+    expect(before.ok).toBe(false);
+
+    const repaired = repairUpperBoundArtifactMechanically(broken, before.errors, anchors, context);
+    expect(repaired).not.toBeNull();
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k0} ${kDup} -->`);
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k2} -->`);
+    expect(validateStage4Artifact(repaired!.content, anchors, context).ok).toBe(true);
+  });
+
+  it("with a section map assigning kDup to failure-and-recovery, keeps that occurrence instead of the first", () => {
+    const broken = makePage();
+    const before = validateStage4Artifact(broken, anchors, context);
+    expect(before.ok).toBe(false);
+
+    const sectionMap: FlowKeySectionMap = new Map([
+      [k0, "purpose"],
+      [k1, "ordered-flow"],
+      [k2, "failure-and-recovery"],
+      [kDup, "failure-and-recovery"],
+    ]);
+    const repaired = repairUpperBoundArtifactMechanically(
+      broken,
+      before.errors,
+      anchors,
+      context,
+      sectionMap,
+    );
+    expect(repaired).not.toBeNull();
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k0} -->`);
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k2} ${kDup} -->`);
+    expect(validateStage4Artifact(repaired!.content, anchors, context).ok).toBe(true);
+  });
+
+  it("falls back to keep-first when no occurrence sits in the assigned section", () => {
+    const broken = makePage();
+    const before = validateStage4Artifact(broken, anchors, context);
+    expect(before.ok).toBe(false);
+
+    // kDup is assigned to "ordered-flow", but no occurrence of kDup is
+    // actually inside that section (it only appears in Purpose and
+    // Failure-and-recovery) — the function must not invent a match and
+    // should fall back to "keep first" (Purpose).
+    const sectionMap: FlowKeySectionMap = new Map([
+      [k0, "purpose"],
+      [k1, "ordered-flow"],
+      [k2, "failure-and-recovery"],
+      [kDup, "ordered-flow"],
+    ]);
+    const repaired = repairUpperBoundArtifactMechanically(
+      broken,
+      before.errors,
+      anchors,
+      context,
+      sectionMap,
+    );
+    expect(repaired).not.toBeNull();
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k0} ${kDup} -->`);
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k2} -->`);
+    expect(validateStage4Artifact(repaired!.content, anchors, context).ok).toBe(true);
   });
 });

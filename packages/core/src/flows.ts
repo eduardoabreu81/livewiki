@@ -162,6 +162,12 @@ export interface FlowCandidate {
   signals: FlowCandidateSignals;
 }
 
+/** The three required flow-page sections a closed-list key can be assigned to. */
+export type FlowRequiredSection = "purpose" | "ordered-flow" | "failure-and-recovery";
+
+/** Total map from every `FlowCandidate.seedKeys` entry to its one authoritative section. */
+export type FlowKeySectionMap = ReadonlyMap<string, FlowRequiredSection>;
+
 export interface FlowDetectionOptions {
   modules: Module[];
   edges: ModuleGraphEdge[];
@@ -183,6 +189,20 @@ export interface FlowDetectionOptions {
   maxFlows?: number;
   /** Default 25. */
   flowMaxAnchors?: number;
+  /**
+   * Priority-0 Phase 3 (symbol call graph): symbol keys PROVEN to be
+   * called from a different module by a resolved edge in the indexed
+   * call graph (see call-resolution.ts). Purely additive and optional —
+   * absent (or empty) reproduces the exact pre-existing behavior. When
+   * present, it only RE-ORDERS the T2 (crossing) group so a key with a
+   * real, resolved cross-module call is preferred over a merely path/
+   * import-heuristic-matched one whenever both are otherwise eligible;
+   * it never changes which keys are IN a group, never adds a flow
+   * candidate, and never changes seedKeys' final size. This module stays
+   * a pure function — the caller (batch.ts) computes this set from its
+   * own DB access, since flows.ts itself never touches the database.
+   */
+  resolvedCrossModuleCallees?: ReadonlySet<string>;
 }
 
 /** Per-module signal bundle, computed once per detection run. */
@@ -381,6 +401,7 @@ export function detectFlowCandidates(opts: FlowDetectionOptions): FlowCandidate[
       resolvedLookup,
       resolvedEdges: opts.resolvedEdges,
       pathRoleConfig: opts.pathRoleConfig,
+      resolvedCrossModuleCallees: opts.resolvedCrossModuleCallees,
     });
     const productCount = path.filter((id) => signalsById.get(id)!.product).length;
     return { candidate, productCount, centrality: centralityOf(path) };
@@ -528,6 +549,7 @@ function buildCandidate(
     resolvedLookup?: ReadonlySet<string> | undefined;
     resolvedEdges?: ResolvedImportEdge[] | undefined;
     pathRoleConfig?: PathRoleConfig | undefined;
+    resolvedCrossModuleCallees?: ReadonlySet<string> | undefined;
   },
 ): FlowCandidate {
   const entryModule = ctx.moduleById.get(path[0]!)!;
@@ -613,6 +635,7 @@ function buildSeedKeyGroups(
     resolvedLookup?: ReadonlySet<string> | undefined;
     resolvedEdges?: ResolvedImportEdge[] | undefined;
     pathRoleConfig?: PathRoleConfig | undefined;
+    resolvedCrossModuleCallees?: ReadonlySet<string> | undefined;
   },
 ): SeedKeyGroups {
   const isAuxFile = (file: string): boolean =>
@@ -738,7 +761,16 @@ function buildSeedKeyGroups(
   // test-flow fallback).
   const pickGroup = (role: SeedRole): string[] => {
     const product = byRole(role, false);
-    return product.length > 0 ? product : byRole(role, true);
+    const chosen = product.length > 0 ? product : byRole(role, true);
+    // Priority-0 Phase 3: among T2 (crossing) candidates that are
+    // otherwise tied (same role, same product/auxiliary bucket), a key
+    // PROVEN to be called from a different module by a resolved call
+    // edge is a stronger crossing signal than the path/import heuristic
+    // alone — prefer it. Stable sort (0 for ties) only re-orders; it
+    // never changes which keys belong to the group.
+    if (role !== "T2" || !ctx.resolvedCrossModuleCallees) return chosen;
+    const callees = ctx.resolvedCrossModuleCallees;
+    return [...chosen].sort((a, b) => Number(!callees.has(a)) - Number(!callees.has(b)));
   };
   const entryKeys = pickGroup("T1");
   const boundaryKeys = pickGroup("T2");
@@ -874,6 +906,31 @@ function capGroupsToSeedKeys(groups: KeyGroups, seedKeys: readonly string[]): Ke
     otherProductKeys: groups.otherProductKeys.filter((k) => keep.has(k)),
     auxiliaryKeys: groups.auxiliaryKeys.filter((k) => keep.has(k)),
   };
+}
+
+/**
+ * Deterministic replacement for the "PRIMARY-SECTION RULE" the LLM used to
+ * decide on its own: maps every key in `candidate.seedKeys` (all five
+ * tiers) to exactly one of the three required flow sections, so neither
+ * the prompt nor the mechanical repair has to invent a placement rule.
+ *
+ * Default policy: entryKeys (T1) -> "purpose"; sinkKeys (T3) ->
+ * "failure-and-recovery"; boundaryKeys (T2), otherProductKeys (T4), and
+ * auxiliaryKeys (T5) -> "ordered-flow" (the flow's main narrative body). A
+ * key present in more than one tier resolves by the same tier-priority
+ * order `pickGroup` already uses for T2 (T1 > T3 > T2/T4/T5) — never
+ * ambiguous, never re-decided per call. Total over `candidate.seedKeys`.
+ */
+export function assignFlowKeySections(candidate: FlowCandidate): FlowKeySectionMap {
+  const entry = new Set(candidate.entryKeys);
+  const sink = new Set(candidate.sinkKeys);
+  const map = new Map<string, FlowRequiredSection>();
+  for (const key of candidate.seedKeys) {
+    if (entry.has(key)) map.set(key, "purpose");
+    else if (sink.has(key)) map.set(key, "failure-and-recovery");
+    else map.set(key, "ordered-flow");
+  }
+  return map;
 }
 
 /** Copy a file->list map into a normalized-path lookup (merging collisions). */

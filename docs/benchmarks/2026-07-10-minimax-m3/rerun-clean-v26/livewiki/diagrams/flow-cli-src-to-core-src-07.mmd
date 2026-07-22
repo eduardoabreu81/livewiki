@@ -1,0 +1,19 @@
+flowchart LR
+  cli_src["cli-src (cli.ts scaffold)"]
+  commands["commands (batch.ts action)"]
+  core_03["core-src-03 (batch orchestration + db)"]
+  core_02["core-src-02 (batch-state + status)"]
+  core_01["core-src-01 (anchor-ledger)"]
+  core_05["core-src-05 (import-resolution + indexer)"]
+  core_06["core-src-06 (manifest persistence)"]
+  core_07["core-src-07 (navigation scaffolding)"]
+  cli_src -->|createProgram + run| commands
+  commands -->|runBatch / resumeBatch / runOnly| core_03
+  core_03 -->|attemptStage4Generation| core_01
+  core_03 -->|aggregateTotals + accumulateUsage| core_02
+  core_03 -->|expandWorkspaceGlob + hasPackageManifest| core_05
+  core_03 -->|buildManifest + computeSnapshotHash| core_06
+  core_06 -->|write manifest snapshot| core_07
+  core_07 -->|buildDisplayTitleFallbacks + buildNavigateBlock| core_03
+  core_02 -->|appendStage4Diagnostics bounded by caps| commands
+  commands -->|formatListHuman + formatDiagnosticLine| cli_src

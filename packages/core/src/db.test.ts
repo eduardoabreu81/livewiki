@@ -45,6 +45,7 @@ describe("db.openIndex", () => {
       expect(tables).toContain("batch_runs");
       expect(tables).toContain("batch_tasks");
       expect(tables).toContain("doc_pages");
+      expect(tables).toContain("calls");
     } finally {
       db.close();
     }
@@ -189,6 +190,50 @@ describe("db.openIndex", () => {
       expect(idxNames).toContain("idx_batch_runs_status");
       expect(idxNames).toContain("idx_batch_tasks_run_id");
       expect(idxNames).toContain("idx_batch_tasks_status");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("migra v4 → v5: cria a tabela calls + índices", () => {
+    // Simula DB com schema v4 — sem a tabela calls.
+    const Database = require("better-sqlite3");
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '4');
+      CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL UNIQUE,
+        lang TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mtime INTEGER NOT NULL,
+        indexed_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
+      );
+    `);
+    legacyDb.close();
+
+    const db = openIndex(dbPath);
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
+
+      const tables = (db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+      ).all() as { name: string }[]).map((r) => r.name);
+      expect(tables).toContain("calls");
+
+      const idx = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_calls_%' ORDER BY name")
+        .all() as Array<{ name: string }>;
+      const idxNames = idx.map((i) => i.name);
+      expect(idxNames).toContain("idx_calls_file_id");
+      expect(idxNames).toContain("idx_calls_caller_key");
+      expect(idxNames).toContain("idx_calls_resolved_callee_key");
     } finally {
       db.close();
     }

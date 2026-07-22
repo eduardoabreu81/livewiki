@@ -1,0 +1,25 @@
+flowchart LR
+  cli["cli-src"]
+  commands["commands"]
+  core01["core-src-01"]
+  core03["core-src-03"]
+  core02["core-src-02"]
+  core05["core-src-05"]
+  core06["core-src-06"]
+  core04["core-src-04"]
+  manifest["manifest.ts#buildManifest"]
+  db["db.ts#CURRENT_SCHEMA_VERSION"]
+  marker["export.ts#buildMarker"]
+  detect["export.ts#detectMarker"]
+  cli --> commands
+  commands --> core01
+  commands --> core03
+  core03 --> core05
+  core03 --> core02
+  core03 --> core06
+  core05 --> core06
+  core06 --> core04
+  core03 --> db
+  core03 --> manifest
+  core04 --> marker
+  core04 --> detect

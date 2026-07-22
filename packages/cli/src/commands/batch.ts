@@ -306,6 +306,12 @@ export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>):
   for (const s of result.skippedFlowCandidates ?? []) {
     lines.push(`  flow skipped: ${s.slug} (${s.code}) — ${s.message}`);
   }
+  // Priority-0 fix (v25 paid E2E): an exhausted topic plan is optional/
+  // additive, not a batch failure — never silent either.
+  if (result.skippedTopicPlan) {
+    lines.push(`  topics skipped: ${result.skippedTopicPlan.reason}`);
+    lines.push(`    retry: ${result.skippedTopicPlan.retryCommand}`);
+  }
   if (result.failures.length > 0) {
     lines.push("");
     lines.push("Failures:");

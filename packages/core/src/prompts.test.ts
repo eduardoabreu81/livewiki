@@ -7,6 +7,7 @@ import {
   buildRepairPrompt,
   buildStage5Prompt,
   buildStage5RepairPrompt,
+  buildTopicRefinePrompt,
   neutralizeUntrustedControlMarkers,
   neutralizeUntrustedControlMarkersExceptValidAnchors,
   DEFAULT_CONTEXT_TOKEN_BUDGET,
@@ -1791,6 +1792,63 @@ describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)",
     expect(r.user).not.toContain("- sink keys:");
   });
 
+  it("buildStage5Prompt renders the fixed section-assignment table and swaps the PRIMARY-SECTION RULE wording", () => {
+    const sectionMap = new Map<string, "purpose" | "ordered-flow" | "failure-and-recovery">([
+      ["src/cli.ts#run", "purpose"],
+      ["src/core.ts#batch", "ordered-flow"],
+      ["src/store.ts#persist", "failure-and-recovery"],
+    ]);
+    const r = buildStage5Prompt(
+      flowCandidate,
+      flowClosedKeys,
+      "openings",
+      "symbols",
+      "source",
+      "en",
+      undefined,
+      undefined,
+      sectionMap,
+    );
+    expect(r.user).toContain("# Section assignment (AUTHORITATIVE AND FIXED");
+    expect(r.user).toContain("- Purpose: src/cli.ts#run");
+    expect(r.user).toContain("- Ordered flow: src/core.ts#batch");
+    expect(r.user).toContain("- Failure and recovery: src/store.ts#persist");
+    expect(r.system).toMatch(/SECTION ASSIGNMENT IS FIXED, NOT YOURS TO DECIDE/);
+    expect(r.system).not.toMatch(/PRIMARY-SECTION RULE/);
+  });
+
+  it("buildStage5Prompt omits the section-assignment table and keeps the old PRIMARY-SECTION RULE when no map is supplied", () => {
+    const r = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
+    expect(r.user).not.toContain("# Section assignment");
+    expect(r.system).toMatch(/PRIMARY-SECTION RULE/);
+  });
+
+  it("buildStage5RepairPrompt renders the same fixed section-assignment table", () => {
+    const sectionMap = new Map<string, "purpose" | "ordered-flow" | "failure-and-recovery">([
+      ["src/cli.ts#run", "purpose"],
+      ["src/core.ts#batch", "ordered-flow"],
+      ["src/store.ts#persist", "failure-and-recovery"],
+    ]);
+    const r = buildStage5RepairPrompt(
+      flowCandidate,
+      flowClosedKeys,
+      "openings",
+      "symbols",
+      "source",
+      "prior",
+      [],
+      60_000,
+      "en",
+      { attempt: 1, total: 2 },
+      undefined,
+      undefined,
+      sectionMap,
+    );
+    expect(r.user).toContain("# Section assignment (AUTHORITATIVE AND FIXED");
+    expect(r.user).toContain("- Purpose: src/cli.ts#run");
+    expect(r.system).toMatch(/SECTION ASSIGNMENT IS FIXED, NOT YOURS TO DECIDE/);
+  });
+
   it("stage-5 repair missing_closed_key block offers add-or-remove (no forced completeness)", () => {
     const r = stage5Repair([
       {
@@ -1848,12 +1906,59 @@ describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)",
     }
   });
 
-  it("stage-5 diagram rule carries the module-granularity guidance for walks over 6 modules", () => {
+  it("neither stage-5 prompt asks the LLM to write a Diagram section or mention Mermaid (Priority-0 fix)", () => {
+    // The diagram is generated deterministically by generateFlowDiagram
+    // (flow-diagram.ts) and inserted by the orchestrator — the LLM writes
+    // prose only. Module-vs-symbol diagram granularity is a rendering
+    // decision made in code now, not a prompt instruction.
     const initial = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
     const repair = stage5Repair([]);
     for (const r of [initial, repair]) {
-      expect(r.system).toContain("more than 6 modules");
-      expect(r.system).toContain("MODULE-granularity nodes");
+      expect(r.system).toMatch(/prose only/i);
+      expect(r.system).not.toContain("MODULE-granularity nodes");
+      expect(r.system).not.toContain("mermaid fence holding the companion diagram source");
     }
+  });
+});
+
+describe("prompts — buildTopicRefinePrompt (Workstream B)", () => {
+  const proposals = [
+    {
+      title: "CLI and core overview",
+      intent: "Explains how CLI and core coordinate request handling.",
+      modules: ["cli", "core"],
+      flows: ["cli-to-core"],
+      groups: {
+        contract: ["src/cli.ts#run"],
+        state: ["src/core.ts#store"],
+        output: ["src/core.ts#emit"],
+        failure: ["src/core.ts#recover"],
+      },
+    },
+  ];
+
+  it("frames the LLM's role as a narrow refine pass, not a from-scratch proposer", () => {
+    const r = buildTopicRefinePrompt(proposals, 4, "en");
+    expect(r.system).toMatch(/ALREADY-VALID, closed topic plan/i);
+    expect(r.system).toMatch(/You may NOT add a module, flow, or anchor/i);
+    expect(r.system).toMatch(/You may NOT invent a new topic from scratch/i);
+    expect(r.system).not.toMatch(/name a small set of concept pages/i); // old propose-from-scratch framing is gone
+  });
+
+  it("embeds the deterministic proposals verbatim as the editable input", () => {
+    const r = buildTopicRefinePrompt(proposals, 4, "en");
+    expect(r.user).toContain("CLI and core overview");
+    expect(r.user).toContain("src/cli.ts#run");
+    expect(r.user).toContain("src/core.ts#recover");
+  });
+
+  it("caps the produced topic count via the maxTopics parameter", () => {
+    const r = buildTopicRefinePrompt(proposals, 2, "en");
+    expect(r.system).toContain("Produce at most 2 topics.");
+  });
+
+  it("uses the same {topics:[...]} schema the validator already parses", () => {
+    const r = buildTopicRefinePrompt(proposals, 4, "en");
+    expect(r.system).toMatch(/\{"topics":\[\{"title":"\.\.\."/);
   });
 });
