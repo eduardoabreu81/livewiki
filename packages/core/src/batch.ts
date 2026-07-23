@@ -88,6 +88,7 @@ import {
 import {
   repairStage4ArtifactMechanically,
   repairUpperBoundArtifactMechanically,
+  TOPIC_SECTION_HEADING_MAP,
   type MechanicalArtifactRepair,
 } from "./artifact-repair.js";
 import { detectFlowCandidates, assignFlowKeySections, type FlowCandidate } from "./flows.js";
@@ -95,6 +96,7 @@ import {
   buildTopicPlanningInventory,
   validateTopicPlan,
   proposeTopicPlanDeterministically,
+  assignTopicKeySections,
   type TopicCandidate,
   type TopicPlanProposal,
   type TopicPlanValidationError,
@@ -3897,6 +3899,7 @@ interface TopicAttemptOpts {
 
 async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4AttemptResult> {
   const ctx = await buildTopicDocContext(opts.absRoot, opts.candidate, opts.charBudget);
+  const topicKeySectionMap = assignTopicKeySections(opts.candidate);
   const maxTokens = resolveOutputTokenBudget(
     opts.outputTokenStrategy,
     opts.outputTokenCeiling,
@@ -3917,6 +3920,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
         opts.charBudget,
         opts.language,
         opts.repairAttemptContext ?? { attempt: 1, total: 1 },
+        topicKeySectionMap,
       )
     : buildTopicPrompt(
         opts.candidate,
@@ -3924,6 +3928,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
         ctx.symbolsTable,
         ctx.truncatedSource,
         opts.language,
+        topicKeySectionMap,
       );
   let result: GenerateResult;
   try {
@@ -3994,17 +3999,20 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
   const validation = validateStage4Artifact(normalized.content, opts.candidate.seedKeys, validationContext);
   let pageContent = normalized.content;
   if (!validation.ok) {
-    // Same upper-bound contract as flow pages (buildTopicRepairPrompt
-    // mirrors buildStage5RepairPrompt exactly): duplicate_anchor and
+    // Same upper-bound contract as flow pages: duplicate_anchor and
     // missing_closed_key have an unambiguous mechanical fix. Try it before
     // spending a full LLM repair round-trip — v24 paid E2E showed a topic
     // page's final repair attempt left with a single duplicate_anchor
-    // that this fallback resolves without another LLM call.
+    // that this fallback resolves without another LLM call. `topicKeySectionMap`
+    // (assignTopicKeySections) lets dedup prefer the assigned section's
+    // occurrence, exactly like the flow path's flowKeySectionMap.
     const mechanical = repairUpperBoundArtifactMechanically(
       normalized.content,
       validation.errors,
       opts.candidate.seedKeys,
       validationContext,
+      topicKeySectionMap,
+      TOPIC_SECTION_HEADING_MAP,
     );
     if (mechanical === null) {
       return {

@@ -596,6 +596,55 @@ export function selectTopicAnchors(
   return groups;
 }
 
+/** The five headings a topic page may carry an `lw:anchors` marker in. */
+export type TopicRequiredSection =
+  | "purpose"
+  | "when-to-use-this-page"
+  | "behavioral-contract"
+  | "failure-and-recovery"
+  | "change-map";
+
+export type TopicKeySectionMap = ReadonlyMap<string, TopicRequiredSection>;
+
+/**
+ * Deterministic replacement for the freeform "PRIMARY-SECTION RULE" the LLM
+ * used to decide on its own for topic pages — same motivation as
+ * `assignFlowKeySections` in flows.ts. Without it, the model repeatedly
+ * double-cited a key across sections (most often re-listing an already-used
+ * key in "Change map", whose natural role as a recap invites exactly that),
+ * producing `duplicate_anchor` thrashing that neither the mechanical nor the
+ * LLM repair path reliably recovered from (confirmed via a real paid E2E
+ * run, 2026-07-23).
+ *
+ * Maps each of the candidate's 4 evidence groups (contract/state/output/
+ * failure) onto one of the 5 required sections, then routes every leftover
+ * key to "behavioral-contract" as the catch-all — mirroring flow's
+ * boundary/other/auxiliary -> "ordered-flow" pattern. `selectTopicAnchors`
+ * guarantees every group is non-empty and the total is >= 5, so `purpose`,
+ * `when-to-use-this-page`, `failure-and-recovery`, and `change-map` each
+ * always get their one guaranteed key, and the >= 5 floor guarantees
+ * `behavioral-contract` always gets at least one leftover key too — total
+ * over `candidate.seedKeys`, never a starved required section.
+ */
+export function assignTopicKeySections(candidate: TopicCandidate): TopicKeySectionMap {
+  const map = new Map<string, TopicRequiredSection>();
+  const { contract, state, output, failure } = candidate.groups;
+  if (contract[0] !== undefined) map.set(contract[0], "purpose");
+  for (const key of contract.slice(1)) map.set(key, "behavioral-contract");
+  if (state[0] !== undefined) map.set(state[0], "when-to-use-this-page");
+  for (const key of state.slice(1)) map.set(key, "behavioral-contract");
+  if (failure[0] !== undefined) map.set(failure[0], "failure-and-recovery");
+  for (const key of failure.slice(1)) map.set(key, "behavioral-contract");
+  if (output[0] !== undefined) map.set(output[0], "change-map");
+  for (const key of output.slice(1)) map.set(key, "behavioral-contract");
+  // Any seed key outside the 4 groups (should not normally happen, since
+  // `selectTopicAnchors` only ever picks from them) still needs a home.
+  for (const key of candidate.seedKeys) {
+    if (!map.has(key)) map.set(key, "behavioral-contract");
+  }
+  return map;
+}
+
 /**
  * Workstream B orchestrator: clusters modules (`clusterModulesByImportGraph`),
  * selects anchors per cluster (`selectTopicAnchors`), builds a deterministic

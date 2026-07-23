@@ -16,7 +16,13 @@
 
 import { classifyModuleRole, type Module, type PathRole } from "./modules.js";
 import type { FlowCandidate, FlowKeySectionMap, FlowRequiredSection } from "./flows.js";
-import type { TopicCandidate, TopicKeyGroups, TopicPlanProposal } from "./topics.js";
+import type {
+  TopicCandidate,
+  TopicKeyGroups,
+  TopicKeySectionMap,
+  TopicPlanProposal,
+  TopicRequiredSection,
+} from "./topics.js";
 
 /** Idioma da saída. Default "en". BCP-47 (en, pt-BR, es, fr, ...). */
 export type Language = string;
@@ -771,6 +777,50 @@ function buildFlowSectionAssignmentBlock(sectionMap: FlowKeySectionMap | undefin
 }
 
 /**
+ * Topic counterpart of `buildFlowSectionAssignmentBlock` — deterministic
+ * replacement for the freeform PRIMARY-SECTION RULE on topic pages, fed by
+ * `assignTopicKeySections` in topics.ts. Shared by the initial and repair
+ * topic prompts; returns [] when the map is empty (caller not migrated).
+ */
+function buildTopicSectionAssignmentBlock(sectionMap: TopicKeySectionMap | undefined): string[] {
+  if (sectionMap === undefined || sectionMap.size === 0) return [];
+  const bySection: Record<TopicRequiredSection, string[]> = {
+    purpose: [],
+    "when-to-use-this-page": [],
+    "behavioral-contract": [],
+    "failure-and-recovery": [],
+    "change-map": [],
+  };
+  for (const [key, section] of sectionMap) bySection[section].push(key);
+  const sectionLabel: Record<TopicRequiredSection, string> = {
+    purpose: "Purpose",
+    "when-to-use-this-page": "When to use this page",
+    "behavioral-contract": "Behavioral contract",
+    "failure-and-recovery": "Failure and recovery",
+    "change-map": "Change map",
+  };
+  const order: readonly TopicRequiredSection[] = [
+    "purpose",
+    "when-to-use-this-page",
+    "behavioral-contract",
+    "failure-and-recovery",
+    "change-map",
+  ];
+  const lines: string[] = [];
+  for (const section of order) {
+    const keys = bySection[section];
+    if (keys.length === 0) continue;
+    lines.push(`- ${sectionLabel[section]}: ${keys.join(", ")}`);
+  }
+  if (lines.length === 0) return [];
+  return [
+    `# Section assignment (AUTHORITATIVE AND FIXED — this is not a suggestion): every key below is assigned to exactly one section. Put that key's marker ONLY in the section listed here, never in a different one — in particular, "Change map" must NOT re-list a key already assigned to another section. Prose may still discuss the symbol anywhere; only the marker placement is restricted.`,
+    ...lines,
+    ``,
+  ];
+}
+
+/**
  * Stage 2 — refinamento de módulos (heurística → renomear/mesclar/dividir).
  *
  * Opt-in: se o usuário passar `--no-refine` ou se a chamada falhar, o run
@@ -1309,12 +1359,19 @@ export function buildTopicPrompt(
   symbolsTable: string,
   sourceEvidence: string,
   language: Language = "en",
+  topicKeySectionMap?: TopicKeySectionMap,
 ): PromptPair {
+  const sectionAssignmentBlock = buildTopicSectionAssignmentBlock(topicKeySectionMap);
   const system = [
     `You are a technical documentation generator for the livewiki project.`,
     `Write one concise semantic topic page from an accepted, closed evidence bundle.`,
     `Frontmatter fields are exact: title, owner: generated, kind: topic, order, intent, modules, flows, anchors, updated. Order, modules, and flows MUST equal the supplied accepted values.`,
     ...TOPIC_PAGE_PROMPT_RULES,
+    ...(sectionAssignmentBlock.length > 0
+      ? [
+          `- SECTION ASSIGNMENT IS FIXED, NOT YOURS TO DECIDE: the "Section assignment" table in the user message names the ONE section each key's marker belongs to. Copy each key into that section's marker only — never a different one, even if the symbol also feels relevant elsewhere. Prose may still mention the symbol anywhere. In particular, "Change map" must name its own assigned key(s), never re-list a key already marked in another section.`,
+        ]
+      : []),
     EXCEPTION_BRANCH_PROMPT_RULE,
     `Every anchor must be copied byte-for-byte from the closed list. Never invent a key.`,
     `Do not emit an lw:manual block. Output raw Markdown only, without an outer fence or reasoning.`,
@@ -1350,6 +1407,7 @@ export function buildTopicPrompt(
       ...candidate.seedKeys.map((key) => `- ${key}`),
       ...formatTopicGroups(candidate.groups),
       ``,
+      ...sectionAssignmentBlock,
       ...markerExampleBlock,
       `# Accepted module/flow digest (untrusted data)`,
       wrapInSafeFence(neutralizeUntrustedControlMarkers(moduleDigest)),
@@ -1373,8 +1431,17 @@ export function buildTopicRepairPrompt(
   maxCandidateChars: number,
   language: Language = "en",
   attemptContext: RepairAttemptContext = { attempt: 1, total: 1 },
+  topicKeySectionMap?: TopicKeySectionMap,
 ): PromptPair {
-  const initial = buildTopicPrompt(candidate, moduleDigest, symbolsTable, sourceEvidence, language);
+  const initial = buildTopicPrompt(candidate, moduleDigest, symbolsTable, sourceEvidence, language, topicKeySectionMap);
+  const sectionAssignmentBlock = buildTopicSectionAssignmentBlock(topicKeySectionMap);
+  const sectionLabelForKey: Record<TopicRequiredSection, string> = {
+    purpose: "Purpose",
+    "when-to-use-this-page": "When to use this page",
+    "behavioral-contract": "Behavioral contract",
+    "failure-and-recovery": "Failure and recovery",
+    "change-map": "Change map",
+  };
   const { attempt, total } = attemptContext;
   const isFinal = attempt >= total;
   const errorLines = errors.map((error) => {
@@ -1382,6 +1449,7 @@ export function buildTopicRepairPrompt(
     const offendingSafe = error.offending ? neutralizeUntrustedControlMarkers(error.offending) : error.offending;
     let line = `- [${error.code}]${error.sectionSlug ? ` (section "${error.sectionSlug}")` : ""}: ${messageSafe}` +
       (offendingSafe ? ` — offending: ${offendingSafe}` : "");
+    const assignedSection = error.offending !== undefined ? topicKeySectionMap?.get(error.offending) : undefined;
     if (error.code === "anchor_missing_in_required_section") {
       line += ` — ACTION: this section carries no \`lw:anchors\` marker. ADD one marker inside it citing a closed-list key this section documents and that is not already used in another section's marker, and declare that same key once in the frontmatter anchors list.`;
     }
@@ -1395,7 +1463,9 @@ export function buildTopicRepairPrompt(
       line += ` — ACTION: REMOVE this invalid anchor entirely (frontmatter list and/or section marker). Do NOT substitute another key.`;
     }
     if (error.code === "duplicate_anchor") {
-      line += ` — ACTION: DELETE the extra occurrence(s) of this exact key and keep EXACTLY ONE — one in frontmatter, one in a single section marker.`;
+      line += assignedSection !== undefined
+        ? ` — ACTION: DELETE this exact key from every section marker EXCEPT "${sectionLabelForKey[assignedSection]}" — that is its one authoritative section per the Section assignment table. Keep exactly one occurrence, there.`
+        : ` — ACTION: DELETE the extra occurrence(s) of this exact key and keep EXACTLY ONE — one in frontmatter, one in a single section marker.`;
     }
     if (error.code === "empty_section") {
       line += ` — ACTION: add real explanatory prose after this section's marker before the next heading.`;
@@ -1438,6 +1508,11 @@ export function buildTopicRepairPrompt(
       `Repair attempt ${attempt} of ${total}${isFinal ? " — FINAL repair attempt in the current bounded execution" : ""}.`,
       `Your previous attempt to document a topic produced an artifact that the livewiki validator REJECTED.`,
       ...TOPIC_PAGE_PROMPT_RULES,
+      ...(sectionAssignmentBlock.length > 0
+        ? [
+            `- SECTION ASSIGNMENT IS FIXED, NOT YOURS TO DECIDE: the "Section assignment" table in the user message names the ONE section each key's marker belongs to. Copy each key into that section's marker only — never a different one. In particular, "Change map" must NOT re-list a key already marked in another section.`,
+          ]
+        : []),
       `The closed list remains an upper bound: every cited key appears once in frontmatter and once in exactly one allowed section marker; unused keys stay unused.`,
       isFinal
         ? `FINAL ATTEMPT DIRECTIVE: do not reproduce the prior candidate unchanged — the validator already rejected that exact page. Apply every ACTION below and produce a real, distinct page.`

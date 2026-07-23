@@ -7,7 +7,7 @@ import {
   unclosedMarkdownDiagnostic,
 } from "./markdown-mask.js";
 import type { ArtifactValidationError } from "./prompts.js";
-import type { FlowKeySectionMap, FlowRequiredSection } from "./flows.js";
+import type { FlowRequiredSection } from "./flows.js";
 
 export type MechanicalArtifactRepair =
   | "escape_unmatched_inline_delimiter"
@@ -208,21 +208,25 @@ export function repairStage4ArtifactMechanically(
  * markers inflate a page enough to push the required opening out of
  * position: deduping can incidentally fix `missing_page_opening` too.
  *
- * Workstream A (deterministic flow-section assignment): when the caller
- * supplies `flowKeySectionMap` (see `assignFlowKeySections` in flows.ts),
- * deduping a key with more than one section-marker occurrence PREFERS the
- * occurrence sitting in that key's assigned section over "keep first" —
- * the closed list no longer has to guess which duplicate is the correct
- * one. If no occurrence sits in the assigned section (or the map is
- * omitted), this falls back to the original "keep first occurrence"
- * behavior exactly as before — never a regression for existing callers.
+ * Workstream A (deterministic flow-section assignment) and its topic
+ * counterpart (`assignTopicKeySections` in topics.ts): when the caller
+ * supplies `keySectionMap`, deduping a key with more than one
+ * section-marker occurrence PREFERS the occurrence sitting in that key's
+ * assigned section over "keep first" — the closed list no longer has to
+ * guess which duplicate is the correct one. `headingMap` selects which
+ * page's H2 vocabulary to resolve ancestry against (flow's 3 sections by
+ * default; pass `TOPIC_SECTION_HEADING_MAP` for a topic page). If no
+ * occurrence sits in the assigned section (or the map is omitted), this
+ * falls back to the original "keep first occurrence" behavior exactly as
+ * before — never a regression for existing callers.
  */
 export function repairUpperBoundArtifactMechanically(
   artifact: string,
   errors: ReadonlyArray<ArtifactValidationError>,
   closedKeyList: ReadonlyArray<string>,
   context: Readonly<Stage4ValidationContext>,
-  flowKeySectionMap?: FlowKeySectionMap,
+  keySectionMap?: ReadonlyMap<string, string>,
+  headingMap: Readonly<Record<string, string>> = FLOW_SECTION_HEADING_MAP,
 ): MechanicalArtifactRepairResult | null {
   if (errors.length === 0) return null;
   const closedSet = new Set(closedKeyList);
@@ -270,7 +274,8 @@ export function repairUpperBoundArtifactMechanically(
     const deduplicated = removeLaterSectionAnchorOccurrences(
       content,
       duplicateSectionKeys,
-      flowKeySectionMap,
+      keySectionMap,
+      headingMap,
     );
     if (deduplicated === null || deduplicated === content) return null;
     content = deduplicated;
@@ -392,20 +397,34 @@ const FLOW_SECTION_HEADING_MAP: Readonly<Record<string, FlowRequiredSection>> = 
   "failure and recovery": "failure-and-recovery",
 };
 
+/** Maps a topic page's H2 section heading text to its TopicRequiredSection, if any. */
+export const TOPIC_SECTION_HEADING_MAP: Readonly<Record<string, string>> = {
+  purpose: "purpose",
+  "when to use this page": "when-to-use-this-page",
+  "behavioral contract": "behavioral-contract",
+  "failure and recovery": "failure-and-recovery",
+  "change map": "change-map",
+};
+
 /**
- * Which required flow section (if any) contains `index`, based on the last
- * H2 heading (`## ...`) at or before it. An H2 that is not one of the three
- * required sections resets the ancestor to null (H3+ subsections do NOT
- * reset it — only a sibling/next H2 does, matching the validator's own
- * "H3+ subsection of those sections is allowed" rule).
+ * Which required section (if any) contains `index`, based on the last H2
+ * heading (`## ...`) at or before it and the supplied heading vocabulary
+ * (flow's 3 sections or a topic's 5). An H2 outside that vocabulary resets
+ * the ancestor to null (H3+ subsections do NOT reset it — only a
+ * sibling/next H2 does, matching the validator's own "H3+ subsection of
+ * those sections is allowed" rule).
  */
-function flowSectionAncestorAt(masked: string, index: number): FlowRequiredSection | null {
+function sectionAncestorAt(
+  masked: string,
+  index: number,
+  headingMap: Readonly<Record<string, string>>,
+): string | null {
   const headingRe = /^##[ \t]+(.+?)[ \t]*$/gm;
-  let current: FlowRequiredSection | null = null;
+  let current: string | null = null;
   for (const m of masked.matchAll(headingRe)) {
     if (m.index === undefined || m.index > index) break;
     const title = m[1]!.trim().toLowerCase();
-    current = FLOW_SECTION_HEADING_MAP[title] ?? null;
+    current = headingMap[title] ?? null;
   }
   return current;
 }
@@ -415,16 +434,18 @@ function flowSectionAncestorAt(masked: string, index: number): FlowRequiredSecti
  * section-marker occurrence is canonical and every later occurrence is
  * removed. Marker-shaped examples inside Markdown code remain untouched.
  *
- * When `flowKeySectionMap` is supplied (Workstream A), the occurrence kept
- * for a given key is the FIRST one whose ancestor H2 section matches that
- * key's assigned section, rather than unconditionally the first occurrence
- * in the document. If no occurrence sits in the assigned section (or the
- * map is omitted), the original "keep first" behavior applies unchanged.
+ * When `keySectionMap` is supplied (Workstream A / its topic counterpart),
+ * the occurrence kept for a given key is the FIRST one whose ancestor H2
+ * section (resolved against `headingMap`) matches that key's assigned
+ * section, rather than unconditionally the first occurrence in the
+ * document. If no occurrence sits in the assigned section (or the map is
+ * omitted), the original "keep first" behavior applies unchanged.
  */
 function removeLaterSectionAnchorOccurrences(
   text: string,
   duplicateKeys: ReadonlyArray<string>,
-  flowKeySectionMap?: FlowKeySectionMap,
+  keySectionMap?: ReadonlyMap<string, string>,
+  headingMap: Readonly<Record<string, string>> = FLOW_SECTION_HEADING_MAP,
 ): string | null {
   const targetKeys = new Set(duplicateKeys);
   const masked = maskCodeSpansPreservingLength(text);
@@ -449,7 +470,7 @@ function removeLaterSectionAnchorOccurrences(
   // first occurrence overall (identical to the pre-existing behavior).
   const keeperIndexByKey = new Map<string, number>();
   for (const key of duplicateKeys) {
-    const assignedSection = flowKeySectionMap?.get(key);
+    const assignedSection = keySectionMap?.get(key);
     let firstOverall = -1;
     let firstInSection = -1;
     for (const [i, match] of matches.entries()) {
@@ -459,7 +480,7 @@ function removeLaterSectionAnchorOccurrences(
       if (
         firstInSection === -1 &&
         assignedSection !== undefined &&
-        flowSectionAncestorAt(masked, match.index!) === assignedSection
+        sectionAncestorAt(masked, match.index!, headingMap) === assignedSection
       ) {
         firstInSection = i;
       }

@@ -5,11 +5,13 @@ import {
   clusterModulesByImportGraph,
   selectTopicAnchors,
   proposeTopicPlanDeterministically,
+  assignTopicKeySections,
   type TopicPlanProposal,
   type TopicPlanningInventory,
   type TopicPlanValidationError,
   type TopicModuleCluster,
   type TopicModuleEvidence,
+  type TopicCandidate,
 } from "./topics.js";
 
 const moduleOneAnchors = ["src/a.ts#a", "src/a.ts#b", "src/a.ts#c"];
@@ -524,5 +526,83 @@ describe("proposeTopicPlanDeterministically", () => {
     const modules = [mod({ id: "solo-a" }), mod({ id: "solo-b" })];
     const inv = clusterInventory(modules);
     expect(proposeTopicPlanDeterministically(inv, new Map(), proposeOpts)).toEqual([]);
+  });
+});
+
+describe("assignTopicKeySections", () => {
+  function candidate(groups: TopicCandidate["groups"]): TopicCandidate {
+    const seedKeys = [...groups.contract, ...groups.state, ...groups.output, ...groups.failure];
+    return {
+      title: "Topic",
+      intent: "Intent",
+      modules: ["module-a"],
+      flows: [],
+      groups,
+      planOrder: 0,
+      evidenceHash: "abc123",
+      slug: "topic-abc123",
+      seedKeys,
+    };
+  }
+
+  it("assigns each of the 4 groups' first key to its own required section, and routes leftovers to behavioral-contract", () => {
+    const map = assignTopicKeySections(
+      candidate({
+        contract: ["a#1", "a#2"],
+        state: ["b#1"],
+        output: ["c#1"],
+        failure: ["d#1"],
+      }),
+    );
+    expect(map.get("a#1")).toBe("purpose");
+    expect(map.get("a#2")).toBe("behavioral-contract");
+    expect(map.get("b#1")).toBe("when-to-use-this-page");
+    expect(map.get("c#1")).toBe("change-map");
+    expect(map.get("d#1")).toBe("failure-and-recovery");
+  });
+
+  it("never assigns the same key to more than one section and covers every seed key", () => {
+    const c = candidate({
+      contract: ["a#1", "a#2", "a#3"],
+      state: ["b#1", "b#2"],
+      output: ["c#1", "c#2"],
+      failure: ["d#1", "d#2", "d#3"],
+    });
+    const map = assignTopicKeySections(c);
+    expect(map.size).toBe(c.seedKeys.length);
+    for (const key of c.seedKeys) expect(map.has(key)).toBe(true);
+    // Regression: reproduces the v29-v31 real E2E failure — a key assigned
+    // to one section (e.g. "contract") must never ALSO be the key routed to
+    // "change-map", which is exactly what caused the repeated
+    // duplicate_anchor thrashing on "Change map" re-listing an already-used
+    // key.
+    const bySection = new Map<string, string[]>();
+    for (const [key, section] of map) {
+      bySection.set(section, [...(bySection.get(section) ?? []), key]);
+    }
+    // Every key appears in exactly one section's bucket.
+    const seen = new Set<string>();
+    for (const keys of bySection.values()) {
+      for (const key of keys) {
+        expect(seen.has(key)).toBe(false);
+        seen.add(key);
+      }
+    }
+  });
+
+  it("guarantees behavioral-contract is non-empty when the candidate meets the 5-anchor floor", () => {
+    // Minimal valid candidate per selectTopicAnchors's floor: 4 groups with
+    // 1 key each would only total 4 (rejected upstream); the smallest
+    // ACCEPTED shape has one group with 2 keys.
+    const map = assignTopicKeySections(
+      candidate({
+        contract: ["a#1", "a#2"],
+        state: ["b#1"],
+        output: ["c#1"],
+        failure: ["d#1"],
+      }),
+    );
+    const behavioralContractKeys = [...map.entries()].filter(([, s]) => s === "behavioral-contract");
+    expect(behavioralContractKeys.length).toBeGreaterThan(0);
   });
 });
