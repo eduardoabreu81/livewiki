@@ -23,11 +23,16 @@
  *      dívida moved com assignee=human (Fix G + regra #6)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
+
+// These scenarios spawn the real CLI several times per test; on Windows under
+// parallel package load the default 5s budget is intermittently too tight
+// (the same code passes isolated). Timeout is a ceiling, not a delay.
+vi.setConfig({ testTimeout: 20_000 });
 
 let repoRoot: string;
 
