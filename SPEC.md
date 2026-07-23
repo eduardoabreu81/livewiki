@@ -678,6 +678,35 @@ When attempts are exhausted, `repair_exhausted` reporting presents the ordered
 per-attempt sequence and real totals across all attempts. It never describes
 the final attempt's error count as the total.
 
+**Closed repair contract.** Every artifact-validation or verify failure code
+carries an enumerated, machine-checkable repair contract per page kind
+(`module`, `flow`, `topic`), held in one single source of truth
+(`packages/core/src/repair-contract.ts`):
+
+- `SUPPORTED_FIXES[kind]` maps each code to the exact ACTION directive the
+  repair prompt renders for it. An exhaustiveness check guarantees every
+  `ArtifactValidationCode` appears in each per-kind map exactly once — either
+  as a directive or as an explicitly `UNCLASSIFIED` entry with a one-line
+  reason. The five `verify` issue codes (`broken_anchor`,
+  `broken_internal_link`, `invalid_mermaid_diagram`, `manual_block_altered`,
+  `missing_wiki_path`) are preserved end-to-end instead of being collapsed
+  into `verify_failed`; `verify_failed` remains in the union only as a legacy
+  fallback for old checkpoints, mapped to a generic directive.
+- Unclassified codes are never repaired by guessing. When a repair prompt
+  runs with a mixed error set, supported codes render their ACTION directives
+  and each unclassified code appears in a report-only section ("no supported
+  repair exists for these — do not attempt to guess; fix the actionable items
+  above"). `manual_block_altered` is unclassified by design: human content is
+  never model-repaired (rule #6); it is reported to the operator.
+- Early abort: before scheduling a repair call, if every error in the set is
+  unclassified for that page kind, the orchestrator makes no LLM call and
+  fails the task immediately with the `unrepairable` outcome (distinct from
+  `repair_exhausted`), rendered in `batch status` with the unclassified codes
+  and their reasons. No repair slot is consumed.
+- The topic stage aligns with stages 4/5 on write/verify exceptions: a
+  `write_verify_exception` short-circuits the task without burning repair
+  slots.
+
 Stage-4 output budget defaults to `stage4MaxOutputTokens` **8192** (config
 override allowed). Provider presets carry market defaults; **where an API can
 disable thinking/reasoning for documentation, livewiki disables it by default**

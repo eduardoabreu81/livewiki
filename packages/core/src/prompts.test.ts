@@ -1871,12 +1871,15 @@ describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)",
     expect(initial.system).toContain("NEVER write `../index.md`");
   });
 
-  it("stage-5 repair prompt carries the hub rule and the verify_failed bare-target ACTION (final and non-final)", () => {
+  it("stage-5 repair prompt carries the hub rule and the broken_internal_link bare-target ACTION (final and non-final)", () => {
+    // Etapa 2a: the verify-code split preserves the real issue code — the
+    // bare-target ACTION now hangs on `broken_internal_link` itself, while
+    // legacy `verify_failed` keeps only a generic directive.
     const errors: ReadonlyArray<ArtifactValidationError> = [
       {
-        code: "verify_failed",
+        code: "broken_internal_link",
         message:
-          'broken_internal_link: the link "../index.md" in "Related pages" resolves to livewiki/index.md, which does not exist',
+          'the link "../index.md" in "Related pages" resolves to livewiki/index.md, which does not exist',
         location: "section",
         offending: "../index.md",
       },
@@ -1901,9 +1904,20 @@ describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)",
       expect(r.system).toContain("[How it works](index.md)");
       expect(r.system).toContain("NEVER write `../index.md`");
       // The per-error ACTION directs the bare target for broken_internal_link.
-      expect(r.user).toMatch(/verify_failed.*ACTION: fix the exact verify issue/s);
+      expect(r.user).toMatch(/broken_internal_link.*ACTION: every link target must resolve/s);
       expect(r.user).toContain("must be the bare `index.md` target");
     }
+  });
+
+  it("legacy verify_failed renders a generic ACTION (old checkpoints)", () => {
+    const repair = stage5Repair([
+      {
+        code: "verify_failed",
+        message: "verify rejected the page",
+        location: "body",
+      },
+    ]);
+    expect(repair.user).toMatch(/verify_failed.*ACTION: fix the exact verify issue named in the error\./s);
   });
 
   it("neither stage-5 prompt asks the LLM to write a Diagram section or mention Mermaid (Priority-0 fix)", () => {

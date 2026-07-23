@@ -6,7 +6,7 @@ import {
   maskCodeSpansPreservingLength,
   unclosedMarkdownDiagnostic,
 } from "./markdown-mask.js";
-import type { ArtifactValidationError } from "./prompts.js";
+import type { ArtifactValidationCode, ArtifactValidationError } from "./prompts.js";
 import type { FlowRequiredSection } from "./flows.js";
 
 export type MechanicalArtifactRepair =
@@ -23,6 +23,31 @@ export interface MechanicalArtifactRepairResult {
 }
 
 const MAX_INLINE_DELIMITER_REPAIRS = 100;
+
+/**
+ * Etapa 2a: the closed set of validation codes the stage-4 mechanical
+ * repairer can touch (fail-closed on anything else). Single source of truth
+ * shared with the repair contract (`repair-contract.ts`) so the prompt-side
+ * directive map and this repairer can never drift apart.
+ */
+export const MECHANICAL_STAGE4_CODES = [
+  "unclosed_markdown",
+  "missing_closed_key",
+  "empty_section",
+  "duplicate_anchor",
+  "model_invented_manual",
+] as const satisfies readonly ArtifactValidationCode[];
+
+/**
+ * Etapa 2a: the closed set of validation codes the upper-bound (flow/topic)
+ * mechanical repairer can touch. Unrecognized codes are skipped there (the
+ * final full re-validation stays fail-closed); this list documents exactly
+ * which codes the repairer acts on.
+ */
+export const MECHANICAL_UPPER_BOUND_CODES = [
+  "duplicate_anchor",
+  "missing_closed_key",
+] as const satisfies readonly ArtifactValidationCode[];
 
 /**
  * Last-slot fallback for content-safe stage-4 defects observed in paid reruns.
@@ -46,6 +71,12 @@ export function repairStage4ArtifactMechanically(
   const closedSet = new Set(closedKeyList);
 
   for (const error of errors) {
+    // Fail-closed gate (Etapa 2a): any code outside the closed mechanical
+    // set aborts the repair — identical to the fall-through `return null`
+    // below, now driven by the shared constant.
+    if (!(MECHANICAL_STAGE4_CODES as readonly string[]).includes(error.code)) {
+      return null;
+    }
     if (error.code === "unclosed_markdown") {
       hasUnclosedInlineError = true;
       continue;
@@ -236,6 +267,12 @@ export function repairUpperBoundArtifactMechanically(
   const removeFromFrontmatter: string[] = [];
 
   for (const error of errors) {
+    // Codes outside the closed upper-bound set are left for the caller's
+    // LLM repair path (no-op continue — the full re-validation below stays
+    // fail-closed if they are never resolved).
+    if (!(MECHANICAL_UPPER_BOUND_CODES as readonly string[]).includes(error.code)) {
+      continue;
+    }
     if (
       error.code === "duplicate_anchor" &&
       error.location === "section" &&

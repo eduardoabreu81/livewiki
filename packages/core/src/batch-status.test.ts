@@ -223,6 +223,63 @@ describe("batch-status — H6 backward compatibility (no diagnosticHistory)", ()
   });
 });
 
+describe("batch-status — Etapa 2a `unrepairable` outcome surfaces distinctly", () => {
+  it("a failed task with error.code `unrepairable` renders in the JSON report with its codes + reasons message", async () => {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath);
+    let runId: number;
+    const now = Date.now();
+    try {
+      const runRes = db
+        .prepare(
+          "INSERT INTO batch_runs (started_at, started_by, stage, config_json, status) VALUES (?, 'test', 4, ?, 'completed_with_failures')",
+        )
+        .run(now - 1000, JSON.stringify({ language: "en", noRefine: true }));
+      runId = Number(runRes.lastInsertRowid);
+      const checkpoint = {
+        stage: 4,
+        status: "failed",
+        attempt: 1,
+        startedAt: now - 500,
+        finishedAt: now,
+        usageHistory: [
+          {
+            attempt: 1,
+            usage: { inputTokens: 100, outputTokens: 50, model: "claude-test-mock" },
+            costUsd: { input: 0, output: 0, total: 0, refDate: "2026-01-01" },
+            finishedAt: now,
+            stopReason: "complete",
+            rawStopReason: "stop",
+          },
+        ],
+        error: {
+          code: "unrepairable",
+          message:
+            'task "auth" failed without consuming repair budget: every reported error has no supported repair (unrepairable).\n' +
+            "Unclassified errors:\n" +
+            "- [manual_block_altered]: human-authored lw:manual content changed; human content is never model-repaired (rule #6) — report it to the operator.",
+        },
+      };
+      db.prepare(
+        "INSERT INTO batch_tasks (run_id, stage, target, status, checkpoint_json, updated_at) VALUES (?, 4, ?, 'failed', ?, ?)",
+      ).run(runId, "auth", JSON.stringify(checkpoint), now);
+    } finally {
+      db.close();
+    }
+
+    const report = await buildStatusReport(repoRoot, runId!);
+    const task = report.tasks.find((t) => t.target === "auth");
+    expect(task).toBeDefined();
+    // Distinct from `repair_exhausted` in the JSON surface, with the
+    // unclassified codes + reasons carried by the message.
+    expect(task!.error?.code).toBe("unrepairable");
+    const json = JSON.stringify(report);
+    expect(json).toContain("unrepairable");
+    expect(json).toContain("manual_block_altered");
+  });
+});
+
+
 describe("batch-status — JSON shape guard (additive field only)", () => {
   it("batch status --json for a pre-diagnostics checkpoint is byte-stable except for the new additive field", async () => {
     const runId = await seedLegacyCheckpoint();

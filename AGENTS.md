@@ -190,6 +190,7 @@ livewiki/
 │   │   │   ├── manifest.ts     # .manifest.json + snapshotHash
 │   │   │   ├── batch.ts        # 5-stage orchestrator + circuit breaker
 │   │   │   ├── flows.ts        # stage 5: deterministic flow-candidate detector
+│   │   │   ├── repair-contract.ts# Etapa 2a: closed repair contract (SUPPORTED_FIXES/UNCLASSIFIED per page kind)
 │   │   │   ├── init.ts         # livewiki init (deterministic layout + batch)
 │   │   │   ├── update.ts       # Phase 5: incremental mode
 │   │   │   ├── update-metrics.ts# Phase 5: token accounting
@@ -478,6 +479,22 @@ for closing the lot.
   `regenerateArchitectureOverview`. `--only flow:<slug>` reruns one
   flow with monotonic usage. Zero candidates is a valid outcome (no
   `flows/`, no links), never an empty pipeline.
+- **Closed repair contract** (Etapa 2a): every
+  `ArtifactValidationCode` — including the five real `verify` issue
+  codes, now preserved end-to-end instead of collapsed into
+  `verify_failed` — maps, per page kind, to exactly one ACTION directive
+  (`SUPPORTED_FIXES`) or an explicit `UNCLASSIFIED` reason in
+  `packages/core/src/repair-contract.ts` (exhaustiveness-tested in
+  `repair-contract.test.ts`; the mechanical code sets in
+  `artifact-repair.ts` are shared constants — one list, no drift).
+  Repair prompts render directives plus a report-only section for
+  unclassified codes (never repaired by guessing;
+  `manual_block_altered` is report-only by design, rule #6). An
+  all-unclassified error set fails the task immediately with
+  `unrepairable` (distinct from `repair_exhausted` in `batch status`,
+  human and JSON) and zero repair calls. Topic write/verify
+  exceptions short-circuit the task like stages 4/5
+  (`write_verify_exception`, no repair slots burned).
 - **Preset satisfies provider** (E2E fix): `validateConfigForBatch`
   accepts `preset` + `model` without `provider` (SPEC: config.json
   references the preset by name). A preset-only config previously threw
@@ -708,6 +725,20 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   modules through the existing zero-key contract. Validation is unit + stub
   E2E only (`cli-batch-e2e-prose-tier.test.ts`): core 1135 passed / 12
   skipped, CLI suite green. No paid call, commit, or push.
+- **Etapa 2a (2026-07-23, implemented, uncommitted)**: closed repair
+  contract (`packages/core/src/repair-contract.ts`) — every
+  `ArtifactValidationCode` (union widened with the five real `verify`
+  codes) is classified per page kind into `SUPPORTED_FIXES` directives
+  (ported verbatim from the three historical prompt if-chains) or
+  explicit `UNCLASSIFIED` reasons, enforced by an exhaustiveness test
+  (`repair-contract.test.ts`). `verifyIssuesToValidationErrors` no
+  longer collapses codes into `verify_failed` (the legacy code stays
+  in the union with a generic directive for old checkpoints). Early
+  abort: an all-unclassified error set fails the task as
+  `unrepairable` with zero repair calls; mixed sets render directives
+  plus a report-only section. Topic write/verify exceptions
+  short-circuit like stages 4/5. Validation: unit + stub suites only —
+  no paid call, commit, or push.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

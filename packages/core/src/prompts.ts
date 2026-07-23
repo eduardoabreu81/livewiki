@@ -23,6 +23,7 @@ import type {
   TopicPlanProposal,
   TopicRequiredSection,
 } from "./topics.js";
+import { renderActionDirective, renderReportOnlyBlock } from "./repair-contract.js";
 
 /** Idioma da saída. Default "en". BCP-47 (en, pt-BR, es, fr, ...). */
 export type Language = string;
@@ -514,49 +515,12 @@ export function buildRepairPrompt(
     let line =
       `- [${e.code}]${where}: ${messageSafe}` +
       (offendingSafe ? ` — offending: ${offendingSafe}` : "");
-    if (e.offending && e.code === "anchor_outside_closed_list") {
-      if (e.offending === "…" || e.offending === "...") {
-        line += ` — ACTION: The \`lw:anchors\` marker was abbreviated with "${e.offending}". REMOVE the ellipsis and rewrite that marker with every key for that section written in full, one by one, copied byte-for-byte from the closed list. NEVER substitute another key for the ellipsis or add an arbitrary key.`;
-      } else {
-        line += ` — ACTION: REMOVE this invalid anchor "${offendingSafe}" entirely. Do NOT replace it with another key.`;
-      }
-    }
-    if (e.offending && e.code === "duplicate_anchor") {
-      if (e.sectionSlug) {
-        line += ` — ACTION: DELETE this exact key "${offendingSafe}" from the \`lw:anchors\` marker in section "${e.sectionSlug}". It already appears in its proper marker elsewhere; KEEP that proper occurrence and do not move or add this key anywhere else.`;
-      } else if (e.location === "frontmatter") {
-        line += ` — ACTION: DELETE the extra list entry for this exact key "${offendingSafe}" from the frontmatter anchors list and keep EXACTLY ONE list entry.`;
-      } else if (e.location === "section") {
-        line += ` — ACTION: DELETE the extra occurrence(s) of this exact key "${offendingSafe}" from the section markers and keep EXACTLY ONE.`;
-      } else {
-        line += ` — ACTION: DELETE the extra occurrence(s) of this exact key "${offendingSafe}" from the duplicated location named by this error and keep EXACTLY ONE.`;
-      }
-      line += ` If the page has an aggregate or summary \`lw:anchors\` marker duplicating per-section keys, DELETE that aggregate marker entirely.`;
-    }
-    if (e.code === "empty_section") {
-      line += ` — ACTION: add real explanatory prose after this section's marker.`;
-    }
-    if (e.code === "unclosed_markdown") {
-      line += ` — ACTION: close every fenced code block and inline-code span; do not end the page mid-token.`;
-    }
-    if (e.code === "todo_marker_present") {
-      line += ` — ACTION: remove the TODO/TBD text; write a concrete sentence about what is visible instead. If the module recognizes the literal token, write it as inline code (\`TODO\` / \`TBD\`).`;
-    }
-    if (e.code === "missing_page_opening") {
-      // Use the safe (neutralized) message in the action directive.
-      // Review follow-up: the previous code interpolated raw
-      // `e.message` here — when a `missing_page_opening` failure
-      // came paired with a marker-bearing validator message (R4
-      // reproduction), the resulting line contained a complete
-      // copyable `<!-- lw:manual -->`.
-      line += ` — ACTION: SPECIFIC FAILURE: ${messageSafe}. Replace the opening after frontmatter with the complete required H1, one responsibility sentence, \`When to use this page\` with two to four verb-led bullets, and one or more \`How it fits\` prose paragraphs, in that order and before the first implementation section. Put no \`lw:anchors\` marker in the opening.`;
-    }
-    if (e.code === "title_equals_module_id") {
-      line += ` — ACTION: replace the frontmatter title and H1 with a concise human responsibility title. Keep the stable module ID only for structural identity and the output path.`;
-    }
-    if (e.code === "truncated_by_token_limit" || e.code === "incomplete_generation") {
-      line +=
-        " — ACTION: rewrite the complete page concisely; include every required section and close all Markdown constructs.";
+    // Etapa 2a: the ACTION directive comes from the closed repair contract
+    // (`repair-contract.ts`) — the same verbatim texts the historical
+    // if-chain rendered, now machine-checkable per code and page kind.
+    const action = renderActionDirective("module", e, { messageSafe, offendingSafe });
+    if (action !== "") {
+      line += ` — ACTION: ${action}`;
     }
     // Defense-in-depth: re-neutralize the COMPLETED structured line.
     // Every action branch should have used the safe value already,
@@ -627,6 +591,7 @@ export function buildRepairPrompt(
     `# Structured errors from the validator (FIX ALL — remove outside-list anchors; add only the exact missing keys named by missing_closed_key):`,
     ...errorLines,
     ...missingKeyBlocks,
+    ...renderReportOnlyBlock("module", errors),
     ``,
     `# Prior candidate (what the validator saw, up to ${maxCandidateChars} chars; section markers whose keys are all in the closed list are preserved as the correct syntax reference, but preservation is NOT an instruction to keep every occurrence — when a duplicate_anchor error names a key, DELETE its extra preserved copies and keep EXACTLY ONE; every other lw:* marker has been neutralized and is NOT copyable syntax; do NOT copy invalid keys from it):`,
     wrapInSafeFence(neutralizedPrior),
@@ -683,7 +648,15 @@ export type ArtifactValidationCode =
   | "llm_error"                     // LLM call threw (network, 5xx, etc)
   | "truncated_by_token_limit"      // LLM stopReason === "length" — output cut by max tokens
   | "incomplete_generation"         // provider ended for a non-completion reason
-  | "verify_failed";                // repository-wide verify rejected the page
+  | "verify_failed"                 // legacy fallback: repository-wide verify rejected the page (old checkpoints)
+  // Etapa 2a: the five real verify issue codes (verify.ts), preserved
+  // end-to-end instead of being collapsed into `verify_failed` so the
+  // repair contract can classify each one.
+  | "broken_anchor"                 // anchor references a symbol absent from the index
+  | "broken_internal_link"          // internal wiki link resolves to a nonexistent page
+  | "invalid_mermaid_diagram"       // Mermaid diagram fails syntax validation
+  | "manual_block_altered"          // lw:manual block hash diverges from the baseline (rule #6)
+  | "missing_wiki_path";            // doc_page recorded in the DB is missing from the wiki
 
 export interface ArtifactValidationError {
   code: ArtifactValidationCode;
@@ -1196,49 +1169,12 @@ export function buildStage5RepairPrompt(
     let line =
       `- [${e.code}]${where}: ${messageSafe}` +
       (offendingSafe ? ` — offending: ${offendingSafe}` : "");
-    if (e.offending && e.code === "anchor_outside_closed_list") {
-      if (e.offending === "…" || e.offending === "...") {
-        line += ` — ACTION: The \`lw:anchors\` marker was abbreviated with "${e.offending}". REMOVE the ellipsis and rewrite that marker with every key for that section written in full, one by one, copied byte-for-byte from the closed list. NEVER substitute another key for the ellipsis or add an arbitrary key.`;
-      } else {
-        line += ` — ACTION: REMOVE this invalid anchor "${offendingSafe}" entirely. Do NOT replace it with another key.`;
-      }
-    }
-    if (e.offending && e.code === "duplicate_anchor") {
-      if (e.sectionSlug) {
-        line += ` — ACTION: DELETE this exact key "${offendingSafe}" from the \`lw:anchors\` marker in section "${e.sectionSlug}". It already appears in its proper marker elsewhere; KEEP that proper occurrence and do not move or add this key anywhere else.`;
-      } else if (e.location === "frontmatter") {
-        line += ` — ACTION: DELETE the extra list entry for this exact key "${offendingSafe}" from the frontmatter anchors list and keep EXACTLY ONE list entry.`;
-      } else {
-        line += ` — ACTION: DELETE the extra occurrence(s) of this exact key "${offendingSafe}" and keep EXACTLY ONE.`;
-      }
-    }
-    if (e.code === "empty_section") {
-      line += ` — ACTION: add real explanatory prose after this section's marker.`;
-    }
-    if (e.code === "unclosed_markdown") {
-      line += ` — ACTION: close every fenced code block and inline-code span; do not end the page mid-token.`;
-    }
-    if (e.code === "todo_marker_present") {
-      line += ` — ACTION: remove the TODO/TBD text; write a concrete sentence about what is visible instead.`;
-    }
-    if (e.code === "missing_page_opening") {
-      line += ` — ACTION: SPECIFIC FAILURE: ${messageSafe}. Replace the opening after frontmatter with the complete required flow opening: an H1, one responsibility sentence, then the H2 sections \`Purpose\`, \`Ordered flow\` (numbered list), \`Invariants\`, \`Failure and recovery\`, \`Related pages\` — in that order. Do NOT write a \`Diagram\` section — the orchestrator inserts it itself. Put no \`lw:anchors\` marker before \`Purpose\`.`;
-    }
-    if (e.code === "anchor_in_disallowed_section") {
-      line += ` — ACTION: relocate this marker — every \`lw:anchors\` marker must sit inside \`Purpose\`, \`Ordered flow\`, or \`Failure and recovery\` (an H3+ subsection of one of those sections counts); a marker anywhere else, or before the first H2, is rejected. MOVE its keys to the marker of the allowed section that documents them, or DROP the marker if those keys are already cited there — keeping every cited key exactly once in frontmatter and exactly once across the section markers.`;
-    }
-    if (e.code === "anchor_missing_in_required_section") {
-      line += ` — ACTION: the named section carries no \`lw:anchors\` marker. ADD one marker inside it citing a closed-list key that section documents and that is not already used in another section's marker (a key may not repeat across markers), and declare the same key in the frontmatter anchors list.`;
-    }
-    if (e.code === "anchor_missing_required_tier") {
-      line += ` — ACTION: the named semantic group has no cited key. PICK one key from the group keys listed in the error message and cite it in the section that documents it — once in that section's marker AND once in the frontmatter anchors list; if the key is already declared on one side, ADD it to the other side instead of duplicating it.`;
-    }
-    if (e.code === "verify_failed") {
-      line += ` — ACTION: fix the exact verify issue named in the error. For a broken_internal_link: every link target must resolve from this page's directory — the flows hub link in \`Related pages\` must be the bare \`index.md\` target (NEVER \`../index.md\`, \`./index.md\`, or any other path), while module pages keep the \`../<moduleId>.md\` form.`;
-    }
-    if (e.code === "truncated_by_token_limit" || e.code === "incomplete_generation") {
-      line +=
-        " — ACTION: rewrite the complete page concisely; include every required section and close all Markdown constructs.";
+    // Etapa 2a: the ACTION directive comes from the closed repair contract
+    // (`repair-contract.ts`) — the same verbatim texts the historical
+    // if-chain rendered, now machine-checkable per code and page kind.
+    const action = renderActionDirective("flow", e, { messageSafe, offendingSafe });
+    if (action !== "") {
+      line += ` — ACTION: ${action}`;
     }
     return neutralizeUntrustedControlMarkers(line);
   });
@@ -1305,6 +1241,7 @@ export function buildStage5RepairPrompt(
     `# Structured errors from the validator (FIX ALL — remove outside-list anchors; add only the exact missing keys named by missing_closed_key, or a group key picked for anchor_missing_required_tier):`,
     ...errorLines,
     ...missingKeyBlocks,
+    ...renderReportOnlyBlock("flow", errors),
     ``,
     `# Prior candidate (what the validator saw, in the model-emitted form with the diagram INLINE, up to ${maxCandidateChars} chars; section markers whose keys are all in the closed list are preserved as the correct syntax reference, but preservation is NOT an instruction to keep every occurrence — when a duplicate_anchor error names a key, DELETE its extra preserved copies and keep EXACTLY ONE; every other lw:* marker has been neutralized and is NOT copyable syntax; do NOT copy invalid keys from it):`,
     wrapInSafeFence(neutralizedPrior),
@@ -1444,61 +1381,23 @@ export function buildTopicRepairPrompt(
   };
   const { attempt, total } = attemptContext;
   const isFinal = attempt >= total;
+  // Etapa 2a: resolves a duplicated key's deterministic assigned-section
+  // label for the contract's topic duplicate_anchor directive.
+  const assignedSectionLabel = (key: string): string | undefined => {
+    const assigned = topicKeySectionMap?.get(key);
+    return assigned !== undefined ? sectionLabelForKey[assigned] : undefined;
+  };
   const errorLines = errors.map((error) => {
     const messageSafe = neutralizeUntrustedControlMarkers(error.message);
     const offendingSafe = error.offending ? neutralizeUntrustedControlMarkers(error.offending) : error.offending;
     let line = `- [${error.code}]${error.sectionSlug ? ` (section "${error.sectionSlug}")` : ""}: ${messageSafe}` +
       (offendingSafe ? ` — offending: ${offendingSafe}` : "");
-    const assignedSection = error.offending !== undefined ? topicKeySectionMap?.get(error.offending) : undefined;
-    if (error.code === "anchor_missing_in_required_section") {
-      line += ` — ACTION: this section carries no \`lw:anchors\` marker. ADD one marker inside it citing a closed-list key this section documents and that is not already used in another section's marker, and declare that same key once in the frontmatter anchors list.`;
-    }
-    if (error.code === "anchor_missing_required_tier") {
-      line += ` — ACTION: pick one key from the group named in the error message and cite it in the section that documents it — once in that section's marker AND once in the frontmatter anchors list.`;
-    }
-    if (error.code === "missing_closed_key") {
-      line += ` — ACTION: this key is cited on only one side. ADD it to the missing side (frontmatter anchors list OR a section marker) byte-for-byte, or REMOVE it from the side where it currently appears — do not duplicate it.`;
-    }
-    if (error.code === "anchor_outside_closed_list") {
-      line += ` — ACTION: REMOVE this invalid anchor entirely (frontmatter list and/or section marker). Do NOT substitute another key.`;
-    }
-    if (error.code === "duplicate_anchor") {
-      line += assignedSection !== undefined
-        ? ` — ACTION: DELETE this exact key from every section marker EXCEPT "${sectionLabelForKey[assignedSection]}" — that is its one authoritative section per the Section assignment table. Keep exactly one occurrence, there.`
-        : ` — ACTION: DELETE the extra occurrence(s) of this exact key and keep EXACTLY ONE — one in frontmatter, one in a single section marker.`;
-    }
-    if (error.code === "empty_section") {
-      line += ` — ACTION: add real explanatory prose after this section's marker before the next heading.`;
-    }
-    if (error.code === "unclosed_markdown") {
-      line += ` — ACTION: close every fenced code block and inline-code span; do not end the page mid-token.`;
-    }
-    if (error.code === "todo_marker_present") {
-      line += ` — ACTION: remove the TODO/TBD text; write a concrete sentence about what is visible instead.`;
-    }
-    if (error.code === "model_invented_manual") {
-      line += ` — ACTION: DELETE the lw:manual block entirely; it is reserved for human content and must never be emitted.`;
-    }
-    if (error.code === "topic_too_long") {
-      line += ` — ACTION: cut prose until the page is at most 1,400 words; keep the contract, drop padding.`;
-    }
-    if (error.code === "topic_code_fence") {
-      line += ` — ACTION: remove the non-Mermaid fenced code block; name symbols and link to their module pages instead of copying implementations.`;
-    }
-    if (error.code === "topic_frontmatter_mismatch") {
-      line += ` — ACTION: set frontmatter \`intent\`/\`modules\`/\`flows\` to EXACTLY the accepted values given above — do not add, drop, or reorder entries.`;
-    }
-    if (error.code === "topic_related_link_mismatch") {
-      line += ` — ACTION: rewrite \`Related pages\` to link exactly the accepted modules/flows/diagrams/topics-hub paths given above — no more, no fewer.`;
-    }
-    if (error.code === "topic_insufficient_product_evidence") {
-      line += ` — ACTION: cite more non-test product symbols from the closed list (in the section that documents them) until at least 75% of cited keys are product symbols; drop a test-only citation if needed instead of adding an unrelated one.`;
-    }
-    if (error.code === "auxiliary_page_not_compact") {
-      line += ` — ACTION: use the compact auxiliary contract — one \`## Reference\` section with one H3 and one grounded sentence per anchored symbol.`;
-    }
-    if (error.code === "truncated_by_token_limit" || error.code === "incomplete_generation") {
-      line += ` — ACTION: rewrite the complete page concisely; include every required section and close all Markdown constructs.`;
+    // The ACTION directive comes from the closed repair contract
+    // (`repair-contract.ts`) — the same verbatim texts the historical
+    // if-chain rendered, now machine-checkable per code and page kind.
+    const action = renderActionDirective("topic", error, { messageSafe, offendingSafe, assignedSectionLabel });
+    if (action !== "") {
+      line += ` — ACTION: ${action}`;
     }
     return neutralizeUntrustedControlMarkers(line);
   });
@@ -1519,6 +1418,7 @@ export function buildTopicRepairPrompt(
         : `Apply every ACTION below, not just skim the errors — the goal is to converge fast.`,
       `Fix every error listed below and return the complete raw Markdown page only.`,
       ...errorLines,
+      ...renderReportOnlyBlock("topic", errors),
     ].join("\n"),
     user: [
       initial.user,

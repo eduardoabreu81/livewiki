@@ -1142,7 +1142,9 @@ describe("batch stage 5 — write gate severity (R10.1 B)", () => {
     );
     expect(checkpoint!.diagnosticHistory![1]!.outcome).toBe("success");
     const repairCall = llm.callLog.filter((c) => /^# Flow: /m.test(c.user))[1]!;
-    expect(repairCall.user).toContain("verify_failed");
+    // Etapa 2a: the repair prompt names the REAL verify issue code (no
+    // longer collapsed into `verify_failed`).
+    expect(repairCall.user).toContain("broken_internal_link");
     expect(repairCall.user).toContain("missing.md");
 
     const page = await nodeFs.readFile(nodePath.join(repoRoot, FLOW_PAGE_PATH), "utf8");
@@ -1182,7 +1184,10 @@ describe("batch stage 5 — write gate severity (R10.1 B)", () => {
     expect(checkpoint!.diagnosticHistory![1]!.outcome).toBe("success");
     // The repair request names the failure and carries the bare-target ACTION.
     const repairCall = llm.callLog.filter((c) => /^# Flow: /m.test(c.user))[1]!;
-    expect(repairCall.user).toContain("verify_failed");
+    // Etapa 2a: the repair prompt names the REAL verify issue code (no
+    // longer collapsed into `verify_failed`); the bare-target ACTION hangs
+    // on `broken_internal_link` itself.
+    expect(repairCall.user).toContain("broken_internal_link");
     expect(repairCall.user).toContain("must be the bare `index.md` target");
 
     const page = await nodeFs.readFile(nodePath.join(repoRoot, FLOW_PAGE_PATH), "utf8");
@@ -1280,6 +1285,63 @@ describe("batch stage 5 — write gate severity (R10.1 B)", () => {
         (i) => i.wikiPath === FLOW_PAGE_PATH || i.wikiPath === FLOW_DIAGRAM_PATH,
       ),
     ).toEqual([]);
+  }, 60_000);
+});
+
+// === Etapa 2a — closed repair contract: early abort (stage 5 flows) ===
+describe("batch stage 5 — Etapa 2a early abort on unrepairable verify sets", () => {
+  it("all-unclassified verify set on the flow page aborts with `unrepairable` after ZERO flow repair calls", async () => {
+    await writeFlowRepo(repoRoot);
+    const verifyModule = await import("./verify.js");
+    const realRun = verifyModule.run;
+    // While the flow candidate is on disk (the write+verify window), every
+    // verify call reports ONLY `manual_block_altered` on it — human content
+    // is never model-repaired (rule #6), so no paid repair call may burn.
+    const spy = vi.spyOn(verifyModule, "run").mockImplementation(async (root: string) => {
+      const real = await realRun(root);
+      if (!(await fileExists(root, FLOW_PAGE_PATH))) return real;
+      return {
+        ...real,
+        ok: false,
+        issues: [
+          {
+            severity: "error" as const,
+            code: "manual_block_altered" as const,
+            wikiPath: FLOW_PAGE_PATH,
+            detail: "lw:manual block hash diverges from the baseline",
+          },
+        ],
+      };
+    });
+
+    try {
+      const result = await runBatch({
+        repoRoot,
+        llmClient: llm,
+        noRefine: true,
+        skipManifestWrite: true,
+      });
+
+      // Exactly ONE flow LLM call (the initial generation) — zero repairs.
+      expect(llm.flowCallCount).toBe(1);
+      expect(result.status).toBe("completed_with_failures");
+      const failure = result.failures.find((f) => f.module === FLOW_TARGET);
+      expect(failure).toBeDefined();
+      // Distinct from `repair_exhausted`, with the codes + reasons rendered.
+      expect(failure!.error.code).toBe("unrepairable");
+      expect(failure!.error.message).toContain("[manual_block_altered]");
+      expect(failure!.error.message).toContain("rule #6");
+
+      const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
+      expect(checkpoint!.status).toBe("failed");
+      expect(checkpoint!.error?.code).toBe("unrepairable");
+      // Rolled back — nothing invalid persists; stage-4 work is untouched.
+      expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
+      expect(await fileExists(repoRoot, FLOW_DIAGRAM_PATH)).toBe(false);
+      expect(await fileExists(repoRoot, "livewiki/cli.md")).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   }, 60_000);
 });
 
@@ -1779,6 +1841,7 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     public readonly provider = "anthropic" as const;
     public readonly model = "claude-test-mock";
     public topicRefineCallCount = 0;
+    public topicPageCallCount = 0;
     public refineBehavior: "reject" | "accept" = "accept";
 
     async generate(req: GenerateRequest): Promise<GenerateResult> {
@@ -1797,6 +1860,7 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
         return { content: match?.[1] ?? "{}", usage };
       }
       if (req.user.includes("# Accepted title:")) {
+        this.topicPageCallCount++;
         return { content: makeTopicPage(req.user), usage };
       }
       const closedKeys = parseClosedKeys(req.user);
@@ -1894,6 +1958,124 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     const checkpoint = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
     expect(checkpoint!.status).toBe("done");
     expect(checkpoint!.topicPlan?.length).toBeGreaterThan(0);
+  }, 60_000);
+
+  // === Etapa 2a — topic stage: early abort + write-exception alignment ===
+
+  /** First generated topic page on disk (excludes the deterministic hub). */
+  async function findTopicPagePath(root: string): Promise<string | null> {
+    try {
+      const entries = await nodeFs.readdir(nodePath.join(root, "livewiki/topics"));
+      const page = entries.find((e) => e.endsWith(".md") && e !== "index.md");
+      return page !== undefined ? `livewiki/topics/${page}` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function readTopicTaskCheckpoint(root: string): Promise<TaskCheckpoint | null> {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(root, ".livewiki/index.db"), { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 5 AND target LIKE 'topic:%'")
+        .get() as { checkpoint_json: string | null } | undefined;
+      return row?.checkpoint_json ? (JSON.parse(row.checkpoint_json) as TaskCheckpoint) : null;
+    } finally {
+      db.close();
+    }
+  }
+
+  it("all-unclassified verify set on the topic page aborts with `unrepairable` after ZERO topic repair calls", async () => {
+    await writeTopicEligibleRepo();
+    const topicLlm = new TopicMockLlm();
+    const verifyModule = await import("./verify.js");
+    const realRun = verifyModule.run;
+    const spy = vi.spyOn(verifyModule, "run").mockImplementation(async (root: string) => {
+      const real = await realRun(root);
+      const topicPage = await findTopicPagePath(root);
+      if (topicPage === null) return real;
+      return {
+        ...real,
+        ok: false,
+        issues: [
+          {
+            severity: "error" as const,
+            code: "manual_block_altered" as const,
+            wikiPath: topicPage,
+            detail: "lw:manual block hash diverges from the baseline",
+          },
+        ],
+      };
+    });
+
+    try {
+      const result = await runBatch({
+        repoRoot,
+        llmClient: topicLlm,
+        noRefine: true,
+        skipManifestWrite: true,
+      });
+
+      // Exactly ONE topic-page call (the initial generation) — the
+      // all-unclassified verify set burns no repair slot.
+      expect(topicLlm.topicPageCallCount).toBe(1);
+      const topicFailure = result.failures.find((f) => f.module.startsWith("topic:"));
+      expect(topicFailure).toBeDefined();
+      expect(topicFailure!.error.code).toBe("unrepairable");
+      expect(topicFailure!.error.message).toContain("[manual_block_altered]");
+      expect(topicFailure!.error.message).toContain("rule #6");
+
+      const checkpoint = await readTopicTaskCheckpoint(repoRoot);
+      expect(checkpoint!.status).toBe("failed");
+      expect(checkpoint!.error?.code).toBe("unrepairable");
+      // The rejected candidate never persisted.
+      expect(await findTopicPagePath(repoRoot)).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  }, 60_000);
+
+  it("write/verify exception short-circuits the topic task (write_verify_exception) without burning repair slots", async () => {
+    await writeTopicEligibleRepo();
+    const topicLlm = new TopicMockLlm();
+    const verifyModule = await import("./verify.js");
+    const realRun = verifyModule.run;
+    let crashed = false;
+    const spy = vi.spyOn(verifyModule, "run").mockImplementation(async (root: string) => {
+      const topicPage = await findTopicPagePath(root);
+      if (!crashed && topicPage !== null) {
+        crashed = true;
+        throw new Error("simulated verifier crash on the topic write");
+      }
+      return realRun(root);
+    });
+
+    try {
+      const result = await runBatch({
+        repoRoot,
+        llmClient: topicLlm,
+        noRefine: true,
+        skipManifestWrite: true,
+      });
+
+      expect(crashed).toBe(true);
+      // Aligned with stages 4/5 (R10.1 item A): terminal for the task —
+      // exactly ONE topic-page call, no repair retry.
+      expect(topicLlm.topicPageCallCount).toBe(1);
+      const topicFailure = result.failures.find((f) => f.module.startsWith("topic:"));
+      expect(topicFailure).toBeDefined();
+      expect(topicFailure!.error.code).toBe("write_verify_exception");
+      expect(topicFailure!.error.message).toContain("not model-fixable");
+
+      const checkpoint = await readTopicTaskCheckpoint(repoRoot);
+      expect(checkpoint!.status).toBe("failed");
+      expect(checkpoint!.error?.code).toBe("write_verify_exception");
+      // The candidate was rolled back — no invalid topic page persists.
+      expect(await findTopicPagePath(repoRoot)).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   }, 60_000);
 });
 

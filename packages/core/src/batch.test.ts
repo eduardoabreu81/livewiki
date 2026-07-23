@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
@@ -234,6 +234,130 @@ describe("batch.runBatch — dynamic output-token budget (Priority-0 fix)", () =
 
     for (const call of mockLlm.callLog) {
       expect(call.maxTokens).toBe(8192);
+    }
+  });
+});
+
+// === Etapa 2a — closed repair contract: early abort + report-only (stage 4) ===
+describe("batch — Etapa 2a closed repair contract (stage 4)", () => {
+  it("all-unclassified verify set aborts with `unrepairable` after ZERO repair calls", async () => {
+    const verifyModule = await import("./verify.js");
+    const realRun = verifyModule.run;
+    // Every verify call reports ONLY `manual_block_altered` on the page the
+    // task writes — human content is never model-repaired (rule #6), so the
+    // orchestrator must not burn a single paid repair call on it.
+    const spy = vi.spyOn(verifyModule, "run").mockImplementation(async (root: string) => {
+      const real = await realRun(root);
+      return {
+        ...real,
+        ok: false,
+        issues: [
+          {
+            severity: "error" as const,
+            code: "manual_block_altered" as const,
+            wikiPath: "livewiki/auth.md",
+            detail: "lw:manual block hash diverges from the baseline",
+          },
+        ],
+      };
+    });
+
+    try {
+      const result = await runBatch({
+        repoRoot,
+        llmClient: mockLlm,
+        noRefine: true,
+        skipManifestWrite: true,
+        maxRepairAttempts: 2,
+        maxIncompleteRetries: 0,
+      });
+
+      // Exactly ONE LLM call (the initial generation) — zero repair calls.
+      expect(mockLlm.callCount).toBe(1);
+      expect(result.status).toBe("completed_with_failures");
+      expect(result.failures).toHaveLength(1);
+      // Distinct from `repair_exhausted`, with the codes + reasons rendered.
+      expect(result.failures[0]!.error.code).toBe("unrepairable");
+      expect(result.failures[0]!.error.message).toContain("[manual_block_altered]");
+      expect(result.failures[0]!.error.message).toContain("rule #6");
+
+      // The checkpoint carries the same outcome (drives `batch status`).
+      const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+      const Database = (await import("better-sqlite3")).default;
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        const task = db
+          .prepare("SELECT * FROM batch_tasks WHERE stage = 4")
+          .get() as { checkpoint_json: string };
+        const cp = JSON.parse(task.checkpoint_json) as {
+          status: string;
+          error?: { code: string; message: string };
+          usageHistory: unknown[];
+        };
+        expect(cp.status).toBe("failed");
+        expect(cp.error?.code).toBe("unrepairable");
+        expect(cp.usageHistory).toHaveLength(1);
+      } finally {
+        db.close();
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("mixed set proceeds to repair: directive for the supported code + report-only section for the rest", async () => {
+    const verifyModule = await import("./verify.js");
+    const realRun = verifyModule.run;
+    let verifyCalls = 0;
+    const spy = vi.spyOn(verifyModule, "run").mockImplementation(async (root: string) => {
+      verifyCalls++;
+      const real = await realRun(root);
+      if (verifyCalls > 1) return real;
+      return {
+        ...real,
+        ok: false,
+        issues: [
+          {
+            severity: "error" as const,
+            code: "manual_block_altered" as const,
+            wikiPath: "livewiki/auth.md",
+            detail: "lw:manual block hash diverges from the baseline",
+          },
+          {
+            severity: "error" as const,
+            code: "broken_internal_link" as const,
+            wikiPath: "livewiki/auth.md",
+            detail: 'the link "./missing.md" resolves to a page that does not exist',
+          },
+        ],
+      };
+    });
+
+    try {
+      const result = await runBatch({
+        repoRoot,
+        llmClient: mockLlm,
+        noRefine: true,
+        skipManifestWrite: true,
+        maxRepairAttempts: 2,
+        maxIncompleteRetries: 0,
+      });
+
+      // The mixed set is repairable: initial + one repair call, and the
+      // repaired page passes the (real) second verify.
+      expect(mockLlm.callCount).toBe(2);
+      expect(result.status).toBe("completed");
+      expect(result.failures).toHaveLength(0);
+
+      const repairCall = mockLlm.callLog[1]!;
+      // The supported code renders its specific ACTION directive...
+      expect(repairCall.user).toMatch(/broken_internal_link.*ACTION: correct the named internal link/s);
+      // ...and the unclassified code is REPORT-ONLY, never repaired by guessing.
+      expect(repairCall.user).toContain("# Errors with NO supported repair");
+      expect(repairCall.user).toContain("do NOT attempt to guess");
+      expect(repairCall.user).toContain("- [manual_block_altered]:");
+    } finally {
+      spy.mockRestore();
     }
   });
 });

@@ -91,6 +91,10 @@ import {
   TOPIC_SECTION_HEADING_MAP,
   type MechanicalArtifactRepair,
 } from "./artifact-repair.js";
+import {
+  formatUnrepairableMessage,
+  isUnrepairableErrorSet,
+} from "./repair-contract.js";
 import { detectFlowCandidates, assignFlowKeySections, type FlowCandidate } from "./flows.js";
 import {
   buildTopicPlanningInventory,
@@ -901,6 +905,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
                 priorCandidate = "";
                 priorErrors = [];
                 nextPromptKind = "initial";
+              } else if (isUnrepairableErrorSet("module", attemptResult.validationErrors)) {
+                // Etapa 2a early abort: every error in the set is
+                // unclassified for module pages — no supported repair
+                // exists, so fail WITHOUT burning a paid repair call.
+                taskError = {
+                  code: "unrepairable",
+                  message: formatUnrepairableMessage("module", module.id, attemptResult.validationErrors),
+                  failedAt: 4,
+                };
+                attemptDone = true;
+                break;
               } else {
                 priorCandidate = candidate;
                 priorErrors = attemptResult.validationErrors;
@@ -1000,6 +1015,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
               priorCandidate = "";
               priorErrors = [];
               nextPromptKind = "initial";
+            } else if (isUnrepairableErrorSet("module", repairErrors)) {
+              // Etapa 2a early abort: e.g. a verify set that is only
+              // `manual_block_altered` (rule #6 — human content is never
+              // model-repaired). Fail WITHOUT burning a paid repair call.
+              taskError = {
+                code: "unrepairable",
+                message: formatUnrepairableMessage("module", module.id, repairErrors),
+                failedAt: 4,
+              };
+              attemptDone = true;
+              break;
             } else {
               priorCandidate = candidate;
               priorErrors = repairErrors;
@@ -1420,6 +1446,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
                 priorCandidate = "";
                 priorErrors = [];
                 nextPromptKind = "initial";
+              } else if (isUnrepairableErrorSet("flow", attemptResult.validationErrors)) {
+                // Etapa 2a early abort: every error in the set is
+                // unclassified for flow pages — no supported repair
+                // exists, so fail WITHOUT burning a paid repair call.
+                taskError = {
+                  code: "unrepairable",
+                  message: formatUnrepairableMessage("flow", flowTarget, attemptResult.validationErrors),
+                  failedAt: 5,
+                };
+                attemptDone = true;
+                break;
               } else {
                 priorCandidate = candidateText;
                 priorErrors = attemptResult.validationErrors;
@@ -1516,6 +1553,16 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
               priorCandidate = "";
               priorErrors = [];
               nextPromptKind = "initial";
+            } else if (isUnrepairableErrorSet("flow", repairErrors)) {
+              // Etapa 2a early abort: every verify issue is unclassified
+              // for flow pages — fail WITHOUT burning a paid repair call.
+              taskError = {
+                code: "unrepairable",
+                message: formatUnrepairableMessage("flow", flowTarget, repairErrors),
+                failedAt: 5,
+              };
+              attemptDone = true;
+              break;
             } else {
               priorCandidate = attemptResult.normalizedRaw;
               priorErrors = repairErrors;
@@ -2089,8 +2136,20 @@ async function runSemanticTopicStage(opts: {
       let priorCandidate = "";
       let priorErrors: ArtifactValidationError[] = [];
       for (let slot = 0; slot < 1 + opts.maxRepairAttempts; slot++) {
-        attempt++;
         const promptKind = slot === 0 || priorCandidate === "" ? "initial" : "repair";
+        if (promptKind === "repair" && isUnrepairableErrorSet("topic", priorErrors)) {
+          // Etapa 2a early abort: every error in the set is unclassified
+          // for topic pages — fail WITHOUT burning a paid repair call
+          // (checked before `attempt++` so no ghost attempt number is
+          // burned without an LLM call).
+          taskError = {
+            code: "unrepairable",
+            message: formatUnrepairableMessage("topic", target, priorErrors),
+            failedAt: 5,
+          };
+          break;
+        }
+        attempt++;
         const attemptResult = await attemptTopicGeneration({
           attemptNumber: attempt,
           candidate,
@@ -2140,8 +2199,18 @@ async function runSemanticTopicStage(opts: {
           break;
         }
         if (write.exception) {
-          priorErrors = [{ code: "verify_failed", message: write.exception.message, location: "global" }];
-          continue;
+          // Etapa 2a: align with stages 4/5 (R10.1 item A) — the
+          // write/verify step threw and the candidate was already rolled
+          // back inside tryWriteAndVerify. Not model-repairable, so the
+          // task fails WITHOUT burning further repair slots.
+          taskError = {
+            code: "write_verify_exception",
+            message:
+              `write/verify step threw for ${wikiPath}: ${write.exception.message}. ` +
+              `The candidate was rolled back; no repair retry because the failure is not model-fixable.`,
+            failedAt: 5,
+          };
+          break;
         }
         if (write.issues) {
           priorErrors = verifyIssuesToValidationErrors(write.issues);
@@ -2956,6 +3025,11 @@ async function tryWriteAndVerify(
  * Phase-5 plan (X): converts verify issues (with wikiPath, code, detail)
  * into ArtifactValidationError to feed the repair prompt. Keeps the
  * location "frontmatter" for `broken_anchor` and "body" for others.
+ *
+ * Etapa 2a: the original verify issue code is PRESERVED (no longer
+ * collapsed into `verify_failed`) so the closed repair contract can
+ * classify each code — `broken_internal_link` gets an actionable
+ * directive while `manual_block_altered` stays report-only (rule #6).
  */
 function verifyIssuesToValidationErrors(
   issues: ReadonlyArray<VerifyIssue>,
@@ -2964,7 +3038,7 @@ function verifyIssuesToValidationErrors(
     const location =
       i.code === "broken_anchor" ? "frontmatter" : "body";
     return {
-      code: "verify_failed",
+      code: i.code,
       message: i.detail,
       location,
       ...(i.wikiPath ? { offending: i.wikiPath } : {}),
