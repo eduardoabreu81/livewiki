@@ -35,6 +35,38 @@ describe("symbols — TypeScript", () => {
     expect(symbols.find((s) => s.name === "Foo.bar")?.kind).toBe("method");
   });
 
+  it("NÃO extrai uma classe declarada dentro do corpo de uma função top-level", async () => {
+    const src = `function makeFake() {
+  class FakeThing {
+    run() { return 1; }
+  }
+  return new FakeThing();
+}`;
+    const tree = await parse(".ts", src);
+    const symbols = extractSymbols(tree, "x.ts", src);
+    const names = symbols.map((s) => s.name);
+    expect(names).toEqual(["makeFake"]);
+    expect(names).not.toContain("FakeThing");
+    expect(names).not.toContain("FakeThing.run");
+  });
+
+  it("NÃO extrai uma classe declarada dentro do corpo de um método", async () => {
+    const src = `class TestSuite {
+  testOllama() {
+    class FakeClient {
+      call() { return 1; }
+    }
+    return new FakeClient();
+  }
+}`;
+    const tree = await parse(".ts", src);
+    const symbols = extractSymbols(tree, "x.ts", src);
+    const names = symbols.map((s) => s.name);
+    expect(names).toEqual(["TestSuite", "TestSuite.testOllama"]);
+    expect(names).not.toContain("FakeClient");
+    expect(names).not.toContain("FakeClient.call");
+  });
+
   it("extrai generator_function_declaration", async () => {
     const src = "function* gen() { yield 1; }";
     const tree = await parse(".ts", src);
@@ -178,5 +210,52 @@ describe("symbols — Python", () => {
     const tree = await parse(".py", src);
     const symbols = extractSymbols(tree, "x.py", src);
     expect(symbols.map((s) => s.name)).toContain("name");
+  });
+
+  it("NÃO extrai uma classe declarada dentro do corpo de uma função top-level", async () => {
+    const src = `def test_thing():
+    class FakeCompletions:
+        def create(self):
+            return 1
+    return FakeCompletions()`;
+    const tree = await parse(".py", src);
+    const symbols = extractSymbols(tree, "x.py", src);
+    const names = symbols.map((s) => s.name);
+    expect(names).toEqual(["test_thing"]);
+    expect(names).not.toContain("FakeCompletions");
+    expect(names).not.toContain("FakeCompletions.create");
+  });
+
+  it("NÃO extrai uma classe declarada dentro do corpo de um método de classe", async () => {
+    const src = `class TestLLMProvider:
+    def test_ollama(self):
+        class FakeCompletions:
+            def create(self):
+                return 1
+        return FakeCompletions()
+    def test_qwen(self):
+        class FakeCompletions:
+            def create(self):
+                return 2
+        return FakeCompletions()`;
+    const tree = await parse(".py", src);
+    const symbols = extractSymbols(tree, "x.py", src);
+    const names = symbols.map((s) => s.name);
+    expect(names).toEqual(["TestLLMProvider", "TestLLMProvider.test_ollama", "TestLLMProvider.test_qwen"]);
+    expect(names).not.toContain("FakeCompletions");
+    expect(names).not.toContain("FakeCompletions.create");
+  });
+
+  it("ainda extrai uma classe top-level normalmente, mesmo com uma função top-level antes dela", async () => {
+    const src = `def helper():
+    return 1
+
+class RealModel:
+    def run(self):
+        return 2`;
+    const tree = await parse(".py", src);
+    const symbols = extractSymbols(tree, "x.py", src);
+    const names = symbols.map((s) => s.name);
+    expect(names).toEqual(["helper", "RealModel", "RealModel.run"]);
   });
 });

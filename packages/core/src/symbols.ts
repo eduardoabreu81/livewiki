@@ -26,6 +26,17 @@
  * Funções anônimas (arrow sem nome, IIFE) são puladas: a SPEC §"Conceitos-
  * chave" fala em "símbolos do código" e chave de símbolo precisa ser
  * referenciável. Anônimas não são.
+ *
+ * Classes declaradas DENTRO do corpo de uma função/método (ex.: um mock
+ * `class FakeThing:` local a um teste) também são puladas — são detalhe de
+ * implementação local, não um símbolo de módulo citável. O nome de uma
+ * classe local costuma se repetir entre métodos irmãos (um Fake* por
+ * variante testada); extraí-las colidiria todas na mesma chave
+ * `path#Nome`, descartando silenciosamente todas menos a primeira (ver
+ * dedup em `extractSymbols`) enquanto a LLM, vendo o source bruto com
+ * definições genuinamente repetidas, insiste em citar a chave compartilhada
+ * em vários pontos — root cause confirmado de um `duplicate_anchor`
+ * recorrente (2026-07-23).
  */
 
 import type { Tree, Node } from "web-tree-sitter";
@@ -88,7 +99,27 @@ function walkNode(
   relPath: string,
   parentClassName: string | null,
   out: ExtractedSymbol[],
+  insideFunctionBody = false,
 ): void {
+  // Once we descend into a function/method body, any class definition found
+  // among its descendants is a LOCAL implementation detail (e.g. a test
+  // method's inline `class FakeCompletions:` mock), not a citable
+  // module-level symbol. Skipping it matters because the same local class
+  // name commonly repeats across sibling test methods (one Fake* mock per
+  // provider branch); extracting all of them under the identical
+  // `path#Name` key silently drops every occurrence but the first (see the
+  // dedup in `extractSymbols`) while the LLM, reading the raw source, still
+  // sees genuinely repeated definitions and keeps re-citing the shared key
+  // at each one — a real duplicate_anchor failure confirmed via a paid E2E
+  // run (2026-07-23) on MoneyPrinterTurbo-Plus's test/services/test_llm.py.
+  const childInsideFunctionBody =
+    node.type === "function_declaration" ||
+    node.type === "generator_function_declaration" ||
+    node.type === "method_definition" ||
+    node.type === "function_definition"
+      ? true
+      : insideFunctionBody;
+
   switch (node.type) {
     case "function_declaration":
     case "generator_function_declaration": {
@@ -102,13 +133,14 @@ function walkNode(
     case "class_declaration":
     case "class": {
       // TS usa "class_declaration"; Python usa "class_definition" (tratado abaixo).
+      if (insideFunctionBody) return;
       const name = node.childForFieldName("name")?.text;
       if (name) {
         out.push(makeRecord(node, source, relPath, name, "class"));
         // Desce nos method_definition com parentClassName = name.
         for (let i = 0; i < node.namedChildCount; i++) {
           const child = node.namedChild(i);
-          if (child) walkNode(child, source, relPath, name, out);
+          if (child) walkNode(child, source, relPath, name, out, insideFunctionBody);
         }
         return; // já descemos manualmente
       }
@@ -138,13 +170,14 @@ function walkNode(
         }
         return; // NÃO descer — a function interna emitiria duplicado
       } else if (decl?.type === "class_declaration") {
+        if (insideFunctionBody) return;
         const name = decl.childForFieldName("name")?.text;
         if (name) {
           out.push(makeRecord(node, source, relPath, name, "class"));
           // Desce nos methods (igual ao caso class_declaration sem export)
           for (let i = 0; i < decl.namedChildCount; i++) {
             const child = decl.namedChild(i);
-            if (child) walkNode(child, source, relPath, name, out);
+            if (child) walkNode(child, source, relPath, name, out, insideFunctionBody);
           }
           return; // já descemos manualmente
         }
@@ -178,6 +211,7 @@ function walkNode(
 
     case "class_definition": {
       // Python
+      if (insideFunctionBody) return;
       const name = node.childForFieldName("name")?.text;
       if (name) {
         out.push(makeRecord(node, source, relPath, name, "class"));
@@ -186,7 +220,7 @@ function walkNode(
         if (block) {
           for (let i = 0; i < block.namedChildCount; i++) {
             const child = block.namedChild(i);
-            if (child) walkNode(child, source, relPath, name, out);
+            if (child) walkNode(child, source, relPath, name, out, insideFunctionBody);
           }
         }
         return;
@@ -199,7 +233,7 @@ function walkNode(
       for (let i = 0; i < node.namedChildCount; i++) {
         const child = node.namedChild(i);
         if (child && (child.type === "function_definition" || child.type === "class_definition")) {
-          walkNode(child, source, relPath, parentClassName, out);
+          walkNode(child, source, relPath, parentClassName, out, insideFunctionBody);
         }
       }
       return;
@@ -209,7 +243,7 @@ function walkNode(
   // Default: desce nos filhos (exceto quando já tratamos acima).
   for (let i = 0; i < node.namedChildCount; i++) {
     const child = node.namedChild(i);
-    if (child) walkNode(child, source, relPath, parentClassName, out);
+    if (child) walkNode(child, source, relPath, parentClassName, out, childInsideFunctionBody);
   }
 }
 
