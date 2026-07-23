@@ -1025,7 +1025,7 @@ export function buildStage5Prompt(
     ``,
     `# FORBIDDEN: never emit an lw:manual block (opening comment "lw:manual" through its closing pair). Manual blocks are sacred (rule #6) and are reserved for human content. If you write one, the artifact will be rejected.`,
     ``,
-    `# Output: complete Markdown flow page for livewiki/flows/${candidate.slug}.md — with the companion diagram INLINE in the \`## Diagram\` section as ONE real \`\`\`mermaid fence (no placeholder comment — the orchestrator substitutes it after extraction).`,
+    `# Output: complete Markdown flow page for livewiki/flows/${candidate.slug}.md — PROSE ONLY, no \`## Diagram\` section; the orchestrator generates and inserts the companion diagram itself.`,
   );
 
   return { system, user: userParts.join("\n") };
@@ -1259,7 +1259,7 @@ export function buildStage5RepairPrompt(
     `# Prior candidate (what the validator saw, in the model-emitted form with the diagram INLINE, up to ${maxCandidateChars} chars; section markers whose keys are all in the closed list are preserved as the correct syntax reference, but preservation is NOT an instruction to keep every occurrence — when a duplicate_anchor error names a key, DELETE its extra preserved copies and keep EXACTLY ONE; every other lw:* marker has been neutralized and is NOT copyable syntax; do NOT copy invalid keys from it):`,
     wrapInSafeFence(neutralizedPrior),
     ``,
-    `# Output: corrected Markdown flow page for livewiki/flows/${candidate.slug}.md — with the companion diagram INLINE in the \`## Diagram\` section as ONE real \`\`\`mermaid fence (no placeholder comment).`,
+    `# Output: corrected Markdown flow page for livewiki/flows/${candidate.slug}.md — PROSE ONLY, no \`## Diagram\` section; the orchestrator generates and inserts the companion diagram itself.`,
   ].join("\n");
 
   return { system, user };
@@ -1356,14 +1356,75 @@ export function buildTopicRepairPrompt(
   attemptContext: RepairAttemptContext = { attempt: 1, total: 1 },
 ): PromptPair {
   const initial = buildTopicPrompt(candidate, moduleDigest, symbolsTable, sourceEvidence, language);
+  const { attempt, total } = attemptContext;
+  const isFinal = attempt >= total;
+  const errorLines = errors.map((error) => {
+    const messageSafe = neutralizeUntrustedControlMarkers(error.message);
+    const offendingSafe = error.offending ? neutralizeUntrustedControlMarkers(error.offending) : error.offending;
+    let line = `- [${error.code}]${error.sectionSlug ? ` (section "${error.sectionSlug}")` : ""}: ${messageSafe}` +
+      (offendingSafe ? ` — offending: ${offendingSafe}` : "");
+    if (error.code === "anchor_missing_in_required_section") {
+      line += ` — ACTION: this section carries no \`lw:anchors\` marker. ADD one marker inside it citing a closed-list key this section documents and that is not already used in another section's marker, and declare that same key once in the frontmatter anchors list.`;
+    }
+    if (error.code === "anchor_missing_required_tier") {
+      line += ` — ACTION: pick one key from the group named in the error message and cite it in the section that documents it — once in that section's marker AND once in the frontmatter anchors list.`;
+    }
+    if (error.code === "missing_closed_key") {
+      line += ` — ACTION: this key is cited on only one side. ADD it to the missing side (frontmatter anchors list OR a section marker) byte-for-byte, or REMOVE it from the side where it currently appears — do not duplicate it.`;
+    }
+    if (error.code === "anchor_outside_closed_list") {
+      line += ` — ACTION: REMOVE this invalid anchor entirely (frontmatter list and/or section marker). Do NOT substitute another key.`;
+    }
+    if (error.code === "duplicate_anchor") {
+      line += ` — ACTION: DELETE the extra occurrence(s) of this exact key and keep EXACTLY ONE — one in frontmatter, one in a single section marker.`;
+    }
+    if (error.code === "empty_section") {
+      line += ` — ACTION: add real explanatory prose after this section's marker before the next heading.`;
+    }
+    if (error.code === "unclosed_markdown") {
+      line += ` — ACTION: close every fenced code block and inline-code span; do not end the page mid-token.`;
+    }
+    if (error.code === "todo_marker_present") {
+      line += ` — ACTION: remove the TODO/TBD text; write a concrete sentence about what is visible instead.`;
+    }
+    if (error.code === "model_invented_manual") {
+      line += ` — ACTION: DELETE the lw:manual block entirely; it is reserved for human content and must never be emitted.`;
+    }
+    if (error.code === "topic_too_long") {
+      line += ` — ACTION: cut prose until the page is at most 1,400 words; keep the contract, drop padding.`;
+    }
+    if (error.code === "topic_code_fence") {
+      line += ` — ACTION: remove the non-Mermaid fenced code block; name symbols and link to their module pages instead of copying implementations.`;
+    }
+    if (error.code === "topic_frontmatter_mismatch") {
+      line += ` — ACTION: set frontmatter \`intent\`/\`modules\`/\`flows\` to EXACTLY the accepted values given above — do not add, drop, or reorder entries.`;
+    }
+    if (error.code === "topic_related_link_mismatch") {
+      line += ` — ACTION: rewrite \`Related pages\` to link exactly the accepted modules/flows/diagrams/topics-hub paths given above — no more, no fewer.`;
+    }
+    if (error.code === "topic_insufficient_product_evidence") {
+      line += ` — ACTION: cite more non-test product symbols from the closed list (in the section that documents them) until at least 75% of cited keys are product symbols; drop a test-only citation if needed instead of adding an unrelated one.`;
+    }
+    if (error.code === "auxiliary_page_not_compact") {
+      line += ` — ACTION: use the compact auxiliary contract — one \`## Reference\` section with one H3 and one grounded sentence per anchored symbol.`;
+    }
+    if (error.code === "truncated_by_token_limit" || error.code === "incomplete_generation") {
+      line += ` — ACTION: rewrite the complete page concisely; include every required section and close all Markdown constructs.`;
+    }
+    return neutralizeUntrustedControlMarkers(line);
+  });
   return {
     system: [
       `You are a technical documentation REPAIR assistant for the livewiki project.`,
-      `Repair attempt ${attemptContext.attempt} of ${attemptContext.total}.`,
+      `Repair attempt ${attempt} of ${total}${isFinal ? " — FINAL repair attempt in the current bounded execution" : ""}.`,
+      `Your previous attempt to document a topic produced an artifact that the livewiki validator REJECTED.`,
       ...TOPIC_PAGE_PROMPT_RULES,
       `The closed list remains an upper bound: every cited key appears once in frontmatter and once in exactly one allowed section marker; unused keys stay unused.`,
-      `Fix every error and return the complete raw Markdown page only.`,
-      ...errors.map((error) => `- [${error.code}] ${neutralizeUntrustedControlMarkers(error.message)}${error.offending ? ` — ${neutralizeUntrustedControlMarkers(error.offending)}` : ""}`),
+      isFinal
+        ? `FINAL ATTEMPT DIRECTIVE: do not reproduce the prior candidate unchanged — the validator already rejected that exact page. Apply every ACTION below and produce a real, distinct page.`
+        : `Apply every ACTION below, not just skim the errors — the goal is to converge fast.`,
+      `Fix every error listed below and return the complete raw Markdown page only.`,
+      ...errorLines,
     ].join("\n"),
     user: [
       initial.user,
