@@ -72,7 +72,6 @@ export const FLOW_PAGE_PROMPT_RULES = [
   `- The frontmatter carries: a human-meaningful \`title\` (never the flow slug alone), \`owner: generated\`, \`anchors\` (YAML list of the closed keys the page actually cites — the closed list is an upper bound, not an assignment; each cited key appears exactly once here and exactly once across the section markers), \`updated\` (the current date supplied in the user message), and \`modules\` listing EXACTLY the participating module ids supplied in the user message — no more, no fewer.`,
   `- \`lw:anchors\` markers live only inside \`Purpose\`, \`Ordered flow\`, and \`Failure and recovery\` — a marker inside an H3+ subsection descending from one of those H2 sections counts as inside it; a marker anywhere else (before \`Purpose\`, or inside \`Diagram\`, \`Invariants\`, or \`Related pages\`) is rejected. The opening (H1 + responsibility sentence) carries no marker.`,
   `- Each of \`Purpose\`, \`Ordered flow\`, and \`Failure and recovery\` must carry at least one \`lw:anchors\` marker of its own. A key already used in another section's marker may not be repeated, so plan at least one distinct cited key for each of the three sections.`,
-  `- REPEATED SYMBOLS: when the same symbol is genuinely relevant to several steps of \`Ordered flow\` (for example a shared helper or test fixture invoked at more than one step), mention it in PROSE at every relevant step, but put its \`lw:anchors\` marker ONLY at its first mention. A key may never appear in more than one marker anywhere on the page — repeating the marker at a later mention is a validation error, not a way to "cover" every step.`,
   `- When the user message lists entry/boundary/sink key groups, cite at least one key from each listed group (each cited key appears once in the frontmatter anchors list and once in a section marker).`,
 ] as const;
 
@@ -1206,7 +1205,7 @@ export function buildStage5RepairPrompt(
     }
     if (e.offending && e.code === "duplicate_anchor") {
       if (e.sectionSlug) {
-        line += ` — ACTION: DELETE this exact key "${offendingSafe}" from THIS marker (in section "${e.sectionSlug}") — keep only its FIRST occurrence on the page, wherever that is, and remove every later one. If this key is genuinely relevant to more than one step of \`Ordered flow\`, that is fine — describe the later steps in PROSE only, with no marker there. Do not move the key to a different section.`;
+        line += ` — ACTION: DELETE this exact key "${offendingSafe}" from the \`lw:anchors\` marker in section "${e.sectionSlug}". It already appears in its proper marker elsewhere; KEEP that proper occurrence and do not move or add this key anywhere else.`;
       } else if (e.location === "frontmatter") {
         line += ` — ACTION: DELETE the extra list entry for this exact key "${offendingSafe}" from the frontmatter anchors list and keep EXACTLY ONE list entry.`;
       } else {
