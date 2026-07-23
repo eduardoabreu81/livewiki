@@ -676,6 +676,21 @@ describe("flows.isTestPath (R10.1 K)", () => {
     expect(isTestPath("src/contest.ts")).toBe(false); // no ".test." infix
     expect(isTestPath("src/latest/foo.ts")).toBe(false); // "latest" is not a "__tests__" segment
   });
+
+  it("detects Python (pytest/unittest) and Go test-file naming conventions", () => {
+    expect(isTestPath("test/services/test_llm.py")).toBe(true);
+    expect(isTestPath("test_llm.py")).toBe(true);
+    expect(isTestPath("services/llm_test.py")).toBe(true);
+    expect(isTestPath("services/llm_test.go")).toBe(true);
+    // Not a match: "test_" must be a whole-basename prefix, not a substring.
+    expect(isTestPath("src/latest_report.py")).toBe(false);
+    expect(isTestPath("src/contest_data.py")).toBe(false);
+    expect(isTestPath("src/llm.py")).toBe(false);
+    // A bare "test"/"tests" directory segment is deliberately NOT matched —
+    // only the filename convention is (see the fix's own comment).
+    expect(isTestPath("test/services/llm.py")).toBe(false);
+    expect(isTestPath("tests/helpers.py")).toBe(false);
+  });
 });
 
 describe("flows.detectFlowCandidates — seed tiers and groups (R10.1 K)", () => {
@@ -1043,8 +1058,14 @@ describe("flows.detectFlowCandidates — seed tiers and groups (R10.1 K)", () =>
     ]);
   });
 
-  it("auxiliary keys fill a semantic group only when no product key holds that role", () => {
-    // No product T1 key: a legitimately test-shaped entry keeps its keys.
+  it("a module made entirely of test files never qualifies as a walk root (2026-07-23 fix)", () => {
+    // Before the fix, a module with zero indegree and NO product file
+    // qualified as an entry root anyway (indegree 0 says nothing about
+    // whether a module is test-only or a real entry point), and its test
+    // methods were admitted straight into entryKeys. Confirmed via a real
+    // E2E run that this produces an unusable flow (entry tier made of
+    // unittest test methods, zero real product keys to fill the other
+    // sections) — the module must not be a root at all now.
     const testEntry = detectFlowCandidates({
       modules: [mod("cli", ["tests/cli.test.ts"]), mod("db", ["src/db.ts"])],
       edges: [{ from: "cli", to: "db" }],
@@ -1052,12 +1073,25 @@ describe("flows.detectFlowCandidates — seed tiers and groups (R10.1 K)", () =>
         ["tests/cli.test.ts", ["tests/cli.test.ts#t1", "tests/cli.test.ts#t2"]],
         ["src/db.ts", ["src/db.ts#open"]],
       ]),
+    });
+    expect(testEntry).toEqual([]);
+  });
+
+  it("a mixed module (test + product files) still qualifies as a walk root", () => {
+    // Only an ALL-test-files module is excluded — one real product file
+    // is enough to keep the module eligible (the R10-shaped test above
+    // already covers this via "cli": ["src/cli.test.ts", "src/cli.ts"]).
+    const mixedEntry = detectFlowCandidates({
+      modules: [mod("cli", ["tests/cli.test.ts", "src/cli.ts"]), mod("db", ["src/db.ts"])],
+      edges: [{ from: "cli", to: "db" }],
+      symbolsByFile: new Map<string, string[]>([
+        ["tests/cli.test.ts", ["tests/cli.test.ts#t1"]],
+        ["src/cli.ts", ["src/cli.ts#run"]],
+        ["src/db.ts", ["src/db.ts#open"]],
+      ]),
     })[0]!;
-    expect(testEntry.entryKeys).toEqual(["tests/cli.test.ts#t1", "tests/cli.test.ts#t2"]);
-    expect(testEntry.auxiliaryKeys).toEqual([]); // admitted into entryKeys
-    expect(testEntry.skip).toBeUndefined();
-    // The exclusion direction (a product T1 key present ⇒ auxiliary T1
-    // keys drop to T5) is covered by the R10-shaped test above.
+    expect(mixedEntry.skip).toBeUndefined();
+    expect(mixedEntry.entryKeys).toEqual(["src/cli.ts#run"]);
   });
 });
 

@@ -31,9 +31,15 @@
  *   - sink: out-degree 0 in the module graph.
  *   - product role: `classifyModuleRole === "product"` (ranking only).
  *
- * A candidate is a simple path (no repeated module) starting at an entry
- * module, stopped at a sink or at length 8, that crosses at least one
- * boundary module (persistence or external) and has length >= 2.
+ * A candidate is a simple path (no repeated module) starting at a walk
+ * root — a module with the `entry` signal whose files are NOT entirely
+ * test code per `isTestPath` (2026-07-23: a zero-indegree test-only module
+ * used to qualify as a root on the `entry` signal alone — nothing product
+ * imports a test file either, so indegree 0 is as true of a test module as
+ * a real entry point — producing flows whose entry tier was made of
+ * unittest test methods rather than product code) — stopped at a sink or
+ * at length 8, that crosses at least one boundary module (persistence or
+ * external) and has length >= 2.
  * Enumeration is a deterministic DFS (sorted module ids, sorted edges)
  * with a PER-ROOT budget (FLOW_PER_ROOT_PATH_BUDGET enumerated simple
  * paths per entry root, R10.1 H1) — a root with more paths than the
@@ -308,7 +314,31 @@ export function detectFlowCandidates(opts: FlowDetectionOptions): FlowCandidate[
     );
   }
 
-  const entryIds = modules.map((m) => m.id).filter((id) => signalsById.get(id)!.entry);
+  // A walk root must be `entry` (zero indegree, or an entry-pattern match)
+  // AND not entirely test code — indegree alone is a weak signal: nothing
+  // else in the repo importing a module is exactly as true of a genuine
+  // product entry point as it is of a test-only module (nothing product
+  // imports a test file either). Without this guard, EVERY zero-indegree
+  // test module becomes a valid flow root, producing a "flow" whose entry
+  // tier is made of unittest test methods rather than product code — a
+  // real, confirmed failure mode (2026-07-23, MoneyPrinterTurbo-Plus's
+  // `test-services-02-to-app-utils`: 24 of 25 seed keys were test methods,
+  // leaving the `otherProductKeys`/`auxiliaryKeys` groups EMPTY, which
+  // starved "Ordered flow" of any key not already claimed by another
+  // section and drove repeated duplicate_anchor failures). `classifyPathRole`
+  // deliberately still counts test SOURCE as "product" (test code is
+  // legitimate documentation content); `isTestPath` is the narrower,
+  // flow-specific signal that a module is test code, not the entry point
+  // of a real product flow — a module already excluded from tooling/docs
+  // ranking via its `product` role can still be a root, only an
+  // ALL-test-files module cannot.
+  const entryIds = modules
+    .map((m) => m.id)
+    .filter((id) => {
+      if (!signalsById.get(id)!.entry) return false;
+      const files = filesByModule.get(id) ?? [];
+      return !(files.length > 0 && files.every((f) => isTestPath(f)));
+    });
 
   // Deterministic DFS per entry root (sorted roots, sorted edges), each
   // root with its OWN enumeration budget (R10.1 H1): a root with more
@@ -598,7 +628,18 @@ export function isTestPath(path: string): boolean {
   const p = normalizeRepoPath(path);
   const base = p.split("/").pop() ?? p;
   if (base.includes(".test.") || base.includes(".spec.")) return true;
-  return p.split("/").includes("__tests__");
+  if (p.split("/").includes("__tests__")) return true;
+  // Python (pytest/unittest: test_foo.py / foo_test.py) and Go (foo_test.go)
+  // naming conventions — the original check only covered JS/TS `.test.`/
+  // `.spec.` infixes and the `__tests__` directory, missing every
+  // non-JS/TS codebase's own test-file convention entirely (confirmed via
+  // a real E2E run, 2026-07-23: MoneyPrinterTurbo-Plus's
+  // `test/services/test_llm.py` was classified as ordinary code). A bare
+  // `test`/`tests` DIRECTORY segment is deliberately NOT matched here —
+  // too many real product paths (and this file's own test fixtures) use
+  // that name for non-test content; the filename convention alone is
+  // precise enough for the confirmed failure mode.
+  return /^test_.+\.py$/.test(base) || /_test\.(py|go)$/.test(base);
 }
 
 /** Semantic roles a seed key can hold (a key may hold several). */
