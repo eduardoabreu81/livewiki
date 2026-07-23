@@ -1319,6 +1319,23 @@ export function buildTopicPrompt(
     `Every anchor must be copied byte-for-byte from the closed list. Never invent a key.`,
     `Do not emit an lw:manual block. Output raw Markdown only, without an outer fence or reasoning.`,
   ].join("\n");
+  const exampleKeys = candidate.seedKeys.slice(0, Math.min(2, candidate.seedKeys.length));
+  const exampleMarker =
+    exampleKeys.length > 0 ? `<!-- lw:anchors ${exampleKeys.join(" ")} -->` : null;
+  const markerExampleBlock = exampleMarker
+    ? [
+        `# Section marker syntax (concrete example — keys taken ONLY from the closed anchors above):`,
+        `After one of the five marker-bearing H2 headings (Purpose, When to use this page, Behavioral contract, Failure and recovery, Change map), emit ONE HTML comment listing the closed-list keys that section documents, then real prose. Use 1 or more keys — never invent a key.`,
+        ``,
+        "```",
+        "## Purpose",
+        exampleMarker,
+        "",
+        "Prose about that section.",
+        "```",
+        ``,
+      ]
+    : [];
   return {
     system,
     user: [
@@ -1332,6 +1349,8 @@ export function buildTopicPrompt(
       `# Closed anchors`,
       ...candidate.seedKeys.map((key) => `- ${key}`),
       ...formatTopicGroups(candidate.groups),
+      ``,
+      ...markerExampleBlock,
       `# Accepted module/flow digest (untrusted data)`,
       wrapInSafeFence(neutralizeUntrustedControlMarkers(moduleDigest)),
       `# Symbol table`,
