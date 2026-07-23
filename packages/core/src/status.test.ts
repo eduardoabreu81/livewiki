@@ -5,7 +5,7 @@ import type { StatusReport } from "./status.js";
 describe("status.formatHuman", () => {
   it("formats empty report", () => {
     const report: StatusReport = {
-      files: { total: 0, byLang: {}, top: [] },
+      files: { total: 0, byLang: {}, tiers: {}, top: [] },
       symbols: { total: 0, byKind: {} },
       debt: {
         total: 0,
@@ -31,6 +31,7 @@ describe("status.formatHuman", () => {
       files: {
         total: 100,
         byLang: { typescript: 70, python: 30 },
+        tiers: { typescript: "anchored", python: "anchored" },
         top: [
           { path: "src/big.ts", symbols: 42, lang: "typescript" },
           { path: "lib/util.py", symbols: 5, lang: "python" },
@@ -105,6 +106,7 @@ describe("status.formatHuman", () => {
       files: {
         total: 50,
         byLang: { typescript: 50 },
+        tiers: { typescript: "anchored" },
         top: [
           { path: "a.ts", symbols: 10, lang: "typescript" },
           { path: "b.ts", symbols: 5, lang: "typescript" },
@@ -124,5 +126,29 @@ describe("status.formatHuman", () => {
     const out = formatHuman(report);
     expect(out).toContain("Top 2 files");
     expect(out).not.toContain("Top 50");
+  });
+
+  it("renders the coverage tier of each language (SPEC coverage ladder)", () => {
+    const report: StatusReport = {
+      files: {
+        total: 15,
+        byLang: { go: 12, typescript: 3 },
+        tiers: { go: "prose", typescript: "anchored" },
+        top: [],
+      },
+      symbols: { total: 4, byKind: { function: 4 } },
+      debt: {
+        total: 0,
+        byEvent: { changed: 0, moved: 0, deleted: 0 },
+        byAssignee: { agent: 0, human: 0 },
+        items: [],
+      },
+      undocumented: { total: 0, sample: [] },
+      metrics: null,
+      meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
+    };
+    const out = formatHuman(report);
+    expect(out).toMatch(/go\s+\(prose\)\s+12/);
+    expect(out).toMatch(/typescript\s+\(anchored\)\s+3/);
   });
 });

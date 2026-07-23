@@ -14,6 +14,20 @@ import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
 import { snapshotMetrics, type UpdateMetricsSnapshot } from "./update-metrics.js";
+import { EXTENSION_LANG } from "./walker.js";
+
+/** Coverage tier of a language (SPEC §"Coverage ladder"). */
+export type LangTier = "anchored" | "prose";
+
+/**
+ * Languages whose files have a tree-sitter grammar (tier 1): the values of
+ * the walker's EXTENSION_LANG, which is the walker-side projection of the
+ * parser's extension→grammar map. Kept import-light on purpose — status must
+ * not pull web-tree-sitter into every CLI subprocess just to label tiers.
+ */
+function anchoredLangs(): ReadonlySet<string> {
+  return new Set(Object.values(EXTENSION_LANG));
+}
 
 export interface StatusOptions {
   /** Quantos arquivos mostrar no top-N (default 10). */
@@ -34,6 +48,12 @@ export interface StatusReport {
   files: {
     total: number;
     byLang: Record<string, number>;
+    /**
+     * Coverage tier per language (SPEC §"Coverage ladder"): "anchored" when a
+     * tree-sitter grammar exists for it, "prose" otherwise. Additive — JSON
+     * consumers that only read `byLang` keep working.
+     */
+    tiers: Record<string, LangTier>;
     top: Array<{ path: string; symbols: number; lang: string }>;
   };
   symbols: {
@@ -108,6 +128,12 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
   const byLang: Record<string, number> = {};
   for (const f of files) byLang[f.lang] = (byLang[f.lang] ?? 0) + 1;
 
+  const anchored = anchoredLangs();
+  const tiers: Record<string, LangTier> = {};
+  for (const lang of Object.keys(byLang)) {
+    tiers[lang] = anchored.has(lang) ? "anchored" : "prose";
+  }
+
   const byKind: Record<string, number> = {};
   for (const s of symbols) byKind[s.kind] = (byKind[s.kind] ?? 0) + 1;
 
@@ -176,7 +202,7 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
     | undefined;
 
   return {
-    files: { total: files.length, byLang, top },
+    files: { total: files.length, byLang, tiers, top },
     symbols: { total: symbols.length, byKind },
     debt: {
       total: debtRows.length,
@@ -207,7 +233,8 @@ export function formatHuman(report: StatusReport): string {
   lines.push(`Indexed files: ${report.files.total}`);
   if (Object.keys(report.files.byLang).length > 0) {
     for (const [lang, n] of Object.entries(report.files.byLang).sort()) {
-      lines.push(`  ${lang.padEnd(12)} ${n}`);
+      const tier = report.files.tiers[lang] ?? "prose";
+      lines.push(`  ${lang.padEnd(12)} ${`(${tier})`.padEnd(10)} ${n}`);
     }
   }
   lines.push("");

@@ -170,11 +170,11 @@ livewiki/
 │   │   │   ├── index.ts        # public surface
 │   │   │   ├── safe-io.ts      # rule #1: writes only via allowlist
 │   │   │   ├── hashes.ts       # sha256 helper
-│   │   │   ├── walker.ts       # walks repo respecting .gitignore
+│   │   │   ├── walker.ts       # denylist walk (all text files; skips binaries/lockfiles/livewiki/)
 │   │   │   ├── parser.ts       # tree-sitter init + parse source
 │   │   │   ├── symbols.ts      # extract symbols from AST (TS/JS/Python)
 │   │   │   ├── db.ts           # SQLite schema v3→v4 + migrations
-│   │   │   ├── indexer.ts      # walk → read → hash → parse → upsert
+│   │   │   ├── indexer.ts      # walk → read → hash → (parse if grammar) → upsert; NUL/1 MiB skips
 │   │   │   ├── anchors.ts      # extracts anchors from markdown
 │   │   │   ├── frontmatter.ts  # YAML subset parser
 │   │   │   ├── anchor-ledger.ts# Phase 2: diff vs previous state → debt
@@ -302,6 +302,8 @@ pnpm --filter @livewiki/core test -- src/batch-stage5.test.ts
                      # stage 5: orchestration contracts (owner, rollback, budgets)
 pnpm --filter @livewiki/cli test -- src/cli-batch-stage5-e2e.test.ts
                      # stage 5: CLI E2E (flows + hub + verify zero issues)
+pnpm --filter @livewiki/cli test -- src/cli-batch-e2e-prose-tier.test.ts
+                     # Etapa 1: tier-2 prose floor CLI E2E (mixed .ts/.go/.rs + prose-only repo)
 ```
 
 Current coverage: **80%+ statements / 80%+ branches / 90%+ funcs** (above
@@ -695,6 +697,17 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   auxiliary reference contract without changing exact anchor coverage. This
   implementation pass ran static syntax/diff checks only; build, tests, MMX,
   paid E2E, benchmark comparison, commit, and push await separate alignment.
+- **Etapa 1 (2026-07-23, implemented, uncommitted)**: tier-2 universal prose
+  floor (SPEC §"Coverage ladder"). The walker uses a denylist (all text files
+  walked; archives/binaries, media/fonts, maps/minified, and lockfiles
+  skipped; `livewiki/` always ignored; extensionless files skipped). Grammar-
+  less files are indexed with `symbolCount: 0` and `lang` = extension without
+  the dot; files with a NUL byte in the first 8 KiB or over 1 MiB are skipped
+  and counted (`filesSkippedBinary`, `filesSkippedTooLarge`). `status` reports
+  `files.tiers` per language (`anchored` vs `prose`); stage 4 documents prose
+  modules through the existing zero-key contract. Validation is unit + stub
+  E2E only (`cli-batch-e2e-prose-tier.test.ts`): core 1135 passed / 12
+  skipped, CLI suite green. No paid call, commit, or push.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

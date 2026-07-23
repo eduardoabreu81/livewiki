@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
@@ -210,5 +210,97 @@ const secondClient = {
     } finally {
       db.close();
     }
+  });
+
+  it("indexes a grammar-less file with 0 symbols and no parse warning (tier 2)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "main.go"),
+      "package main\n\nfunc main() {}\n",
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let result;
+    try {
+      result = await runIndexer(repoRoot, { quiet: true });
+      expect(warn, "no parse warning for grammar-less files").not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+    expect(result.filesScanned).toBe(3);
+    expect(result.filesAdded).toBe(3);
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT id, lang FROM files WHERE path = 'main.go' AND status = 'active'")
+        .get() as { id: number; lang: string } | undefined;
+      expect(row?.lang).toBe("go");
+      const syms = db
+        .prepare("SELECT COUNT(*) AS n FROM symbols WHERE file_id = ?")
+        .get(row!.id) as { n: number };
+      expect(syms.n).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("skips a file with a NUL byte in the first 8 KiB (binary safety net)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "blob.txt"),
+      Buffer.from([0x41, 0x00, 0x42, 0x43]),
+    );
+    const result = await runIndexer(repoRoot, { quiet: true });
+    expect(result.filesSkippedBinary).toBe(1);
+    expect(result.filesSkippedTooLarge).toBe(0);
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT id FROM files WHERE path = 'blob.txt'")
+        .get() as { id: number } | undefined;
+      expect(row, "binary file must not be indexed").toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("skips a file larger than 1 MiB (size cap)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "big.log"),
+      "x".repeat(1024 * 1024 + 1),
+    );
+    const result = await runIndexer(repoRoot, { quiet: true });
+    expect(result.filesSkippedTooLarge).toBe(1);
+    expect(result.filesSkippedBinary).toBe(0);
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT id FROM files WHERE path = 'big.log'")
+        .get() as { id: number } | undefined;
+      expect(row, "oversized file must not be indexed").toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("incremental run treats prose files as unchanged by hash", async () => {
+    await nodeFs.writeFile(nodePath.join(repoRoot, "main.go"), "package main\n");
+    await runIndexer(repoRoot, { quiet: true });
+    const r2 = await runIndexer(repoRoot, { quiet: true });
+    expect(r2.filesAdded).toBe(0);
+    expect(r2.filesUpdated).toBe(0);
+    expect(r2.filesUnchanged).toBe(3); // auth.ts + calc.py + main.go
+  });
+
+  it("status classifies each language by coverage tier", async () => {
+    await nodeFs.writeFile(nodePath.join(repoRoot, "main.go"), "package main\n");
+    await runIndexer(repoRoot, { quiet: true });
+    const report = await runStatus(repoRoot);
+    expect(report.files.tiers.typescript).toBe("anchored");
+    expect(report.files.tiers.python).toBe("anchored");
+    expect(report.files.tiers.go).toBe("prose");
   });
 });

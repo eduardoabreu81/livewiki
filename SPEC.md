@@ -52,6 +52,13 @@
   acceptable; document the choice)
 - **Parsing**: `web-tree-sitter` (WASM). MVP grammars: TypeScript/JavaScript (tsx
   included), Python
+- **Coverage ladder (two tiers)**: grammars are a precision upgrade, not a gate.
+  Files whose extension maps to a tree-sitter grammar are tier 1 (anchored):
+  symbol extraction, anchors, and debt apply. Every other indexed text file is
+  tier 2 (prose): it is indexed with `symbolCount: 0` and documented as
+  unanchored prose (`anchors: []`, grounded in paths and visible source). The
+  prose floor is permanent — the tool never completes successfully with an
+  empty wiki just because the repository's language has no grammar yet.
 - **Database**: `better-sqlite3` (synchronous, fast; WAL mode)
 - **MCP**: `@modelcontextprotocol/sdk`
 - **CLI**: `commander` (or a minimalist equivalent); human-readable AND parseable
@@ -781,6 +788,15 @@ with tests** (it's rule 1).
 web-tree-sitter + TS/JS/Python grammars, symbol extraction (functions, classes,
 methods, exports), hashes, SQLite schema, `.gitignore` respect. Performance
 target: a 50k LOC repo indexed in < 30s on the first run, < 2s incremental.
+The walker indexes every text file by default (denylist, not allowlist):
+archives/binaries, media/fonts, `.map`/minified files, and known lockfiles are
+skipped, and `livewiki/` is always ignored alongside `.git/`, `node_modules/`,
+`.livewiki/`, `dist/`, and `coverage/`. Files without an extension are skipped
+(no meaningful language name). Files with no grammar are indexed without
+parsing (`symbolCount: 0`, language = lowercased extension without the dot).
+Files over 1 MiB or with a NUL byte in the first 8 KiB are skipped and counted
+(`filesSkippedTooLarge`, `filesSkippedBinary`). `status` classifies each
+language as `anchored` (grammar available) or `prose` (no grammar).
 
 ### Phase 2 — Anchors and debt ✅ criterion: editing an anchored function generates `changed` debt; moving generates `moved`; running `verify` catches a broken anchor
 Frontmatter + `lw:anchors` marker parser, anchors/debt/undocumented tables, index

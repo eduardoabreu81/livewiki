@@ -27,7 +27,7 @@ import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import { walkRepo } from "./walker.js";
 import { sha256 } from "./hashes.js";
-import { initParser, parseSource, listSupportedGrammars } from "./parser.js";
+import { initParser, parseSource, listSupportedGrammars, grammarForExtension } from "./parser.js";
 import { extractSymbols, extractCalls, type SymbolRecord, type CallRecord } from "./symbols.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
 import { resolveCalls } from "./call-resolution.js";
@@ -45,10 +45,19 @@ export interface IndexResult {
   filesUpdated: number;
   filesDeleted: number;
   filesUnchanged: number;
+  /** Skipped: NUL byte in the first 8 KiB (binary safety net — SPEC Phase 1). */
+  filesSkippedBinary: number;
+  /** Skipped: larger than 1 MiB (size cap — SPEC Phase 1). */
+  filesSkippedTooLarge: number;
   symbolsAdded: number;
   symbolsDeleted: number;
   durationMs: number;
 }
+
+/** Files larger than this are skipped (SPEC Phase 1 size cap). */
+export const MAX_FILE_BYTES = 1024 * 1024;
+/** A NUL byte in this leading window marks the file as binary. */
+export const BINARY_SNIFF_BYTES = 8 * 1024;
 
 /**
  * Roda o index incremental. Idempotente: rodar 2x sem mudanças no repo é
@@ -135,16 +144,35 @@ async function orchestrateIndex(
   const plans: FilePlan[] = [];
 
   let filesUnchanged = 0;
+  let filesSkippedBinary = 0;
+  let filesSkippedTooLarge = 0;
   for (const entry of walked) {
     const absPath = nodePath.join(repoRoot, entry.path);
     let stat;
-    let content: string;
     try {
       stat = await nodeFs.stat(absPath);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[livewiki] skip ${entry.path}: ${(err as Error).message}`);
+      continue;
+    }
+    // Size cap first: never read a huge file into memory.
+    if (stat.size > MAX_FILE_BYTES) {
+      filesSkippedTooLarge++;
+      continue;
+    }
+    let content: string;
+    try {
       content = await nodeFs.readFile(absPath, "utf8");
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(`[livewiki] skip ${entry.path}: ${(err as Error).message}`);
+      continue;
+    }
+    // Binary safety net: a NUL byte in the leading window means this is not
+    // text, whatever the extension says.
+    if (content.slice(0, BINARY_SNIFF_BYTES).includes("\0")) {
+      filesSkippedBinary++;
       continue;
     }
 
@@ -158,13 +186,18 @@ async function orchestrateIndex(
     let symbols: SymbolRecord[] = [];
     let calls: CallRecord[] = [];
     const ext = nodePath.extname(entry.path);
-    try {
-      const tree = await parseSource(ext, content);
-      symbols = extractSymbols(tree, entry.path, content);
-      calls = extractCalls(tree, entry.path, content);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(`[livewiki] parse falhou em ${entry.path}: ${(err as Error).message}`);
+    // Tier 2 (SPEC §"Coverage ladder"): without a grammar there is no parse
+    // attempt at all — the file is indexed with zero symbols, no warning.
+    // Parse FAILURES on grammar-mapped files keep the warning behavior.
+    if (grammarForExtension(ext) !== undefined) {
+      try {
+        const tree = await parseSource(ext, content);
+        symbols = extractSymbols(tree, entry.path, content);
+        calls = extractCalls(tree, entry.path, content);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[livewiki] parse falhou em ${entry.path}: ${(err as Error).message}`);
+      }
     }
 
     plans.push({
@@ -307,6 +340,8 @@ async function orchestrateIndex(
     filesUpdated: result.filesUpdated,
     filesDeleted: result.filesDeleted,
     filesUnchanged: result.filesUnchanged,
+    filesSkippedBinary,
+    filesSkippedTooLarge,
     symbolsAdded: result.symbolsAdded,
     symbolsDeleted: result.symbolsDeleted,
     durationMs: Date.now() - startedAt,
@@ -327,5 +362,11 @@ export function formatHuman(result: IndexResult): string {
   lines.push(
     `  symbols: +${result.symbolsAdded} extracted  -${result.symbolsDeleted} marked deleted`,
   );
+  if (result.filesSkippedBinary > 0 || result.filesSkippedTooLarge > 0) {
+    lines.push(
+      `  skipped: ${result.filesSkippedBinary} binary (NUL byte)  ` +
+        `${result.filesSkippedTooLarge} too large (>1 MiB)`,
+    );
+  }
   return lines.join("\n");
 }
