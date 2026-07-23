@@ -24,6 +24,17 @@ symbols, import links, verifiable anchors; (B) later human/product narrative
 the MVP engine; B is a subsequent pass so human-written repos with zero docs
 still get a map first, then a story.
 
+**Layer B is the destination; layer A is the means.** The end product is a
+real, human-readable wiki for every developer: navigable HTML, application
+flow diagrams, per-function reference, with the maintainer complementing
+business context as in any wiki — publishable locally, on an intranet, or
+to a GitHub/GitLab wiki. The agent-facing layer exists to make that wiki
+cheap to build, verifiable, and self-maintaining. Universality follows
+from the cost thesis: a tool an order of magnitude cheaper is a tool every
+developer can afford, and the debt-driven incremental model is what a solo
+developer can sustain. Every prioritization decision should be checked
+against this destination.
+
 ## The problem
 
 1. **Documentation rots.** Every repo wiki is out of date three months later.
@@ -184,6 +195,12 @@ maintain, verify, navigate, and hand off documentation.
 | Name | **livewiki** | available on npm (verified 2026-07-08); `@livewiki/` scope for packages |
 
 ## Post-MVP already designed (SPEC phases 6 and 7)
+
+> Priority note (2026-07-23): because layer B is the product destination
+> (see "What it is"), `livewiki export` git-host targets and `livewiki view`
+> are promoted from "post-MVP, someday" to **the next lots after MVP
+> validation closes**. The human-readable wiki is the release, not an
+> appendix.
 
 - **Export to repository wiki** (`livewiki export`): GitHub wiki, GitLab wiki,
   and any host compatible with the format (git markdown repo). Lossy, one-way
