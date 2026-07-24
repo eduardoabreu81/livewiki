@@ -332,4 +332,38 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       delete process.env.OPENAI_API_KEY;
     }
   }, 90_000);
+
+  it("stage-4 prompt carries the indexed rationale evidence block (Etapa 2b)", async () => {
+    await writeCode(
+      "src/api/handler.ts",
+      "// WHY: bursts are smoothed to protect the upstream API\n" +
+        "export function handleRequest(input: string): string { return input.trim(); }\n",
+    );
+
+    // Capture every request the stub receives so we can assert what the
+    // model actually saw.
+    const captured: Array<{ system: string; user: string }> = [];
+    stub.setHandler((req) => {
+      captured.push(req);
+      return proseTierHandler(req);
+    });
+    await writeOpenAiConfig("gpt-test-mock", stub.url);
+    process.env["OPENAI_API_KEY"] = "test-canary-rationale-DONOTLEAK";
+    try {
+      const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch", "--no-refine"]);
+      expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
+
+      const stage4Requests = captured.filter((c) => c.user.includes("# Module: api"));
+      expect(stage4Requests.length, "expected at least one stage-4 request for module api").toBeGreaterThan(0);
+      // The indexed rationale reached the model, fenced as untrusted evidence.
+      expect(stage4Requests[0]!.user).toContain("# Rationale evidence");
+      expect(stage4Requests[0]!.user).toContain("WHY: bursts are smoothed to protect the upstream API");
+      // The system prompt pins rationale text out of the anchor-key space.
+      expect(stage4Requests[0]!.system).toMatch(/NEVER a source of anchor keys/);
+
+      await expectVerifyClean();
+    } finally {
+      delete process.env.OPENAI_API_KEY;
+    }
+  }, 90_000);
 });

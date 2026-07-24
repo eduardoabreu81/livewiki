@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { extractSymbols } from "./symbols.js";
+import { extractSymbols, extractRationales, isLikelyGenerated } from "./symbols.js";
+import { sha256 } from "./hashes.js";
 import { parseSource, initParser } from "./parser.js";
 
 beforeAll(async () => {
@@ -257,5 +258,196 @@ class RealModel:
     const symbols = extractSymbols(tree, "x.py", src);
     const names = symbols.map((s) => s.name);
     expect(names).toEqual(["helper", "RealModel", "RealModel.run"]);
+  });
+});
+
+// === Etapa 2b: rationale extraction (intent evidence) ===
+
+describe("extractRationales — tagged comments", () => {
+  it("captures all five tags, case-insensitive, with kind = lowercased tag", async () => {
+    const src = `// WHY: retries are bounded to avoid hammering the upstream API
+// note: lower case tag prefix also counts as a tagged comment
+// HACK: temporary workaround for an upstream parsing bug
+// TODO: replace this with a streaming parser eventually
+// FIXME: off-by-one when the last chunk is empty
+export function f() { return 1; }
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales.map((r) => r.kind)).toEqual(["why", "note", "hack", "todo", "fixme"]);
+    // The contiguous block ends immediately above the declaration.
+    for (const r of rationales) {
+      expect(r.symbol_key).toBe("x.ts#f");
+    }
+  });
+
+  it("matches the tag prefix case-insensitively", async () => {
+    const src = `// wHy: mixed case tag still counts as intent evidence
+export function f() { return 1; }
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("why");
+  });
+
+  it("ignores untagged comments", async () => {
+    const src = `// just a regular explanatory comment, no tag at all
+export function f() { return 1; }
+`;
+    const tree = await parse(".ts", src);
+    expect(extractRationales(tree, "x.ts", src)).toEqual([]);
+  });
+
+  it("stores content_hash as the sha256 of the normalized text", async () => {
+    const src = `// TODO: normalize the whitespace   and    markers
+export function f() { return 1; }
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.text).toBe("TODO: normalize the whitespace and markers");
+    expect(rationales[0]?.content_hash).toBe(sha256("TODO: normalize the whitespace and markers"));
+  });
+});
+
+describe("extractRationales — docstrings", () => {
+  it("rejects docstrings shorter than 20 normalized chars", async () => {
+    const src = `/** Short. */
+export function f() { return 1; }
+`;
+    const tree = await parse(".ts", src);
+    expect(extractRationales(tree, "x.ts", src)).toEqual([]);
+  });
+
+  it("captures a /** docstring but not a plain /* block comment", async () => {
+    const src = `/**
+ * Computes the retry backoff for the next attempt.
+ */
+export function f() { return 1; }
+
+/* A plain block comment that is long enough but is not a docstring. */
+export function g() { return 2; }
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("docstring");
+    expect(rationales[0]?.symbol_key).toBe("x.ts#f");
+    expect(rationales[0]?.text).toBe("Computes the retry backoff for the next attempt.");
+  });
+
+  it("captures Python module, class, and function docstrings with positional attribution", async () => {
+    const src = `"""Module docstring explaining the intent of this whole file."""
+
+CONST = 1
+
+class Worker:
+    """Class docstring describing the worker role in the pipeline."""
+
+    def run(self):
+        """Function docstring describing why run loops until drained."""
+        return 1
+`;
+    const tree = await parse(".py", src);
+    const rationales = extractRationales(tree, "x.py", src);
+    expect(rationales).toHaveLength(3);
+    const byText = new Map(rationales.map((r) => [r.text, r]));
+    expect(byText.get("Module docstring explaining the intent of this whole file.")?.symbol_key).toBeNull();
+    expect(byText.get("Class docstring describing the worker role in the pipeline.")?.symbol_key).toBe("x.py#Worker");
+    expect(byText.get("Function docstring describing why run loops until drained.")?.symbol_key).toBe("x.py#Worker.run");
+    expect(rationales.every((r) => r.kind === "docstring")).toBe(true);
+  });
+
+  it("captures a Python tagged comment inside a function body", async () => {
+    const src = `def drain():
+    # TODO: handle the empty queue case explicitly here
+    return 1
+`;
+    const tree = await parse(".py", src);
+    const rationales = extractRationales(tree, "x.py", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("todo");
+    expect(rationales[0]?.symbol_key).toBe("x.py#drain");
+  });
+});
+
+describe("extractRationales — attribution rule", () => {
+  it("attaches a comment inside a symbol's line range to that symbol", async () => {
+    const src = `export function f() {
+  // WHY: we clamp the value to avoid overflow downstream
+  return 1;
+}
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.symbol_key).toBe("x.ts#f");
+  });
+
+  it("attaches a comment inside a method to the method, not the class", async () => {
+    const src = `class Foo {
+  bar() {
+    // HACK: the innermost container wins over the outer class
+    return 1;
+  }
+}
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.symbol_key).toBe("x.ts#Foo.bar");
+  });
+
+  it("attaches a contiguous comment block ending immediately above the declaration", async () => {
+    const src = `// WHY: first line of the leading block
+// NOTE: second line, still no blank line between block and declaration
+export function f() { return 1; }
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales).toHaveLength(2);
+    expect(rationales.every((r) => r.symbol_key === "x.ts#f")).toBe(true);
+  });
+
+  it("leaves a comment file-level when a blank line separates it from the declaration", async () => {
+    const src = `// WHY: separated from the declaration by a blank line below
+
+export function f() { return 1; }
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.symbol_key).toBeNull();
+  });
+
+  it("leaves a trailing file-level comment unattached", async () => {
+    const src = `export function f() { return 1; }
+
+// WHY: explains the file as a whole, not one symbol
+`;
+    const tree = await parse(".ts", src);
+    const rationales = extractRationales(tree, "x.ts", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.symbol_key).toBeNull();
+  });
+});
+
+describe("isLikelyGenerated", () => {
+  it("detects generated-code header markers in the first 8 lines", () => {
+    expect(isLikelyGenerated("// Code generated by protoc. DO NOT EDIT.\npackage foo;\n")).toBe(true);
+    expect(isLikelyGenerated("/**\n * @generated by tool\n */\nexport const x = 1;\n")).toBe(true);
+    expect(isLikelyGenerated("# AUTO-GENERATED FILE\nx = 1\n")).toBe(true);
+    expect(isLikelyGenerated("// This file is auto-generated — do not hand edit\nexport const x = 1;\n")).toBe(true);
+  });
+
+  it("does not flag a normal source file", () => {
+    expect(isLikelyGenerated("// WHY: hand-written intent comment\nexport function f() { return 1; }\n")).toBe(false);
+  });
+
+  it("only sniffs the first 8 lines", () => {
+    const lines = Array.from({ length: 9 }, (_, i) => `// filler line ${i + 1}`);
+    lines.push("// DO NOT EDIT — but too deep to count");
+    expect(isLikelyGenerated(lines.join("\n") + "\n")).toBe(false);
   });
 });

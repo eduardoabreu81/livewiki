@@ -46,6 +46,7 @@ describe("db.openIndex", () => {
       expect(tables).toContain("batch_tasks");
       expect(tables).toContain("doc_pages");
       expect(tables).toContain("calls");
+      expect(tables).toContain("rationales");
     } finally {
       db.close();
     }
@@ -234,6 +235,83 @@ describe("db.openIndex", () => {
       expect(idxNames).toContain("idx_calls_file_id");
       expect(idxNames).toContain("idx_calls_caller_key");
       expect(idxNames).toContain("idx_calls_resolved_callee_key");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("migrates v5 → v6: creates the rationales table + indices", () => {
+    // Simulates a v5 DB — everything except the rationales table.
+    const Database = require("better-sqlite3");
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '5');
+      CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL UNIQUE,
+        lang TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mtime INTEGER NOT NULL,
+        indexed_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
+      );
+    `);
+    legacyDb.close();
+
+    const db = openIndex(dbPath);
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
+
+      const tables = (db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+      ).all() as { name: string }[]).map((r) => r.name);
+      expect(tables).toContain("rationales");
+
+      const cols = (db.prepare("PRAGMA table_info(rationales)").all() as Array<{ name: string }>)
+        .map((c) => c.name);
+      expect(cols).toEqual(["id", "file_id", "symbol_key", "kind", "text", "start_line", "content_hash"]);
+
+      const idx = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_rationales_%' ORDER BY name")
+        .all() as Array<{ name: string }>;
+      const idxNames = idx.map((i) => i.name);
+      expect(idxNames).toContain("idx_rationales_file_id");
+      expect(idxNames).toContain("idx_rationales_symbol_key");
+
+      // symbol_key is nullable (file-level rationales).
+      db.prepare(
+        "INSERT INTO files (path, lang, content_hash, size, mtime, indexed_at) VALUES ('a.ts', 'ts', 'h', 1, 1, 1)",
+      ).run();
+      db.prepare(
+        "INSERT INTO rationales (file_id, symbol_key, kind, text, start_line, content_hash) VALUES (1, NULL, 'todo', 'TODO: x', 1, 'h')",
+      ).run();
+      const inserted = db.prepare("SELECT symbol_key FROM rationales WHERE file_id = 1").get() as
+        | { symbol_key: string | null }
+        | undefined;
+      expect(inserted?.symbol_key).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v5 → v6 migration is idempotent: reopening a migrated v6 DB does not fail", () => {
+    openIndex(dbPath).close();
+    const db = openIndex(dbPath);
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
+      const tables = (db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+      ).all() as { name: string }[]).map((r) => r.name);
+      const unique = new Set(tables);
+      expect(unique.size).toBe(tables.length);
     } finally {
       db.close();
     }

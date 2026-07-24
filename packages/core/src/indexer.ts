@@ -28,7 +28,7 @@ import * as safeIo from "./safe-io.js";
 import { walkRepo } from "./walker.js";
 import { sha256 } from "./hashes.js";
 import { initParser, parseSource, listSupportedGrammars, grammarForExtension } from "./parser.js";
-import { extractSymbols, extractCalls, type SymbolRecord, type CallRecord } from "./symbols.js";
+import { extractSymbols, extractCalls, extractRationales, isLikelyGenerated, type SymbolRecord, type CallRecord, type RationaleRecord } from "./symbols.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
 import { resolveCalls } from "./call-resolution.js";
 
@@ -140,6 +140,7 @@ async function orchestrateIndex(
     hash: string;
     symbols: SymbolRecord[];
     calls: CallRecord[];
+    rationales: RationaleRecord[];
   }
   const plans: FilePlan[] = [];
 
@@ -185,6 +186,7 @@ async function orchestrateIndex(
 
     let symbols: SymbolRecord[] = [];
     let calls: CallRecord[] = [];
+    let rationales: RationaleRecord[] = [];
     const ext = nodePath.extname(entry.path);
     // Tier 2 (SPEC §"Coverage ladder"): without a grammar there is no parse
     // attempt at all — the file is indexed with zero symbols, no warning.
@@ -194,6 +196,11 @@ async function orchestrateIndex(
         const tree = await parseSource(ext, content);
         symbols = extractSymbols(tree, entry.path, content);
         calls = extractCalls(tree, entry.path, content);
+        // Etapa 2b: generated files (header sniff) yield zero rationale
+        // rows — migration/protobuf revision comments are noise.
+        if (!isLikelyGenerated(content)) {
+          rationales = extractRationales(tree, entry.path, content);
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(`[livewiki] parse falhou em ${entry.path}: ${(err as Error).message}`);
@@ -208,6 +215,7 @@ async function orchestrateIndex(
       hash,
       symbols,
       calls,
+      rationales,
     });
   }
 
@@ -256,6 +264,13 @@ async function orchestrateIndex(
     const insertCall = db.prepare(
       "INSERT INTO calls (file_id, caller_key, callee_name, line) VALUES (?, ?, ?, ?)",
     );
+    // Rationales mirror calls exactly (Etapa 2b): recomputed wholesale per
+    // file, no soft-delete — a rationale row has no identity worth
+    // preserving across a re-parse.
+    const deleteRationalesForFile = db.prepare("DELETE FROM rationales WHERE file_id = ?");
+    const insertRationale = db.prepare(
+      "INSERT INTO rationales (file_id, symbol_key, kind, text, start_line, content_hash) VALUES (?, ?, ?, ?, ?, ?)",
+    );
 
     for (const plan of plans) {
       const prev = existingFiles.get(plan.entry.path);
@@ -303,6 +318,17 @@ async function orchestrateIndex(
       for (const call of plan.calls) {
         insertCall.run(fileId, call.caller_key, call.callee_name, call.line);
       }
+      deleteRationalesForFile.run(fileId);
+      for (const rationale of plan.rationales) {
+        insertRationale.run(
+          fileId,
+          rationale.symbol_key,
+          rationale.kind,
+          rationale.text,
+          rationale.start_line,
+          rationale.content_hash,
+        );
+      }
     }
 
     // Arquivos que existiam no DB mas não no walk → marca como deleted (file + symbols)
@@ -318,6 +344,7 @@ async function orchestrateIndex(
         result.symbolsDeleted += oldSyms.length;
         markFileDeleted.run(prevRow.id);
         deleteCallsForFile.run(prevRow.id);
+        deleteRationalesForFile.run(prevRow.id);
         result.filesDeleted++;
       }
     }

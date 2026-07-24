@@ -167,6 +167,12 @@ export interface LivewikiConfig {
    * `outputTokenStrategy`. Default 4,096 (as a ceiling).
    */
   topicMaxOutputTokens?: number;
+  /**
+   * Maximum characters of the rationale evidence block injected into
+   * stage-4 and topic prompts (Etapa 2b). Carved inside the existing
+   * stage-4 char budget. Default 4,000; 0 disables the block.
+   */
+  rationaleMaxChars?: number;
 }
 
 /** Max safe timeout for Node `setTimeout` (signed 32-bit ms). */
@@ -241,6 +247,8 @@ export const CONFIG_DEFAULTS = {
   topicMaxSourceChars: 40_000,
   /** Same ceiling-under-dynamic-strategy semantics as `stage4MaxOutputTokens`. */
   topicMaxOutputTokens: 32_768,
+  /** Bounded rationale evidence block in stage-4/topic prompts (Etapa 2b). */
+  rationaleMaxChars: 4_000,
 } as const;
 
 /**
@@ -338,6 +346,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     topicMaxAnchors: CONFIG_DEFAULTS.topicMaxAnchors,
     topicMaxSourceChars: CONFIG_DEFAULTS.topicMaxSourceChars,
     topicMaxOutputTokens: CONFIG_DEFAULTS.topicMaxOutputTokens,
+    rationaleMaxChars: CONFIG_DEFAULTS.rationaleMaxChars,
     ...config,
   };
 }
@@ -573,6 +582,13 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error(`invalid topicMaxOutputTokens: must be an integer 256..32768, got ${JSON.stringify(v)}`);
     }
     out.topicMaxOutputTokens = v;
+  }
+  if (obj["rationaleMaxChars"] !== undefined) {
+    const v = obj["rationaleMaxChars"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 200_000) {
+      throw new Error(`invalid rationaleMaxChars: must be an integer 0..200000 (0 disables the rationale block), got ${JSON.stringify(v)}`);
+    }
+    out.rationaleMaxChars = v;
   }
   if (obj["flowMaxDiagramNodes"] !== undefined) {
     const v = obj["flowMaxDiagramNodes"];

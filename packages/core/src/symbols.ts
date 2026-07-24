@@ -40,7 +40,7 @@
  */
 
 import type { Tree, Node } from "web-tree-sitter";
-import { sha256Slice } from "./hashes.js";
+import { sha256, sha256Slice } from "./hashes.js";
 
 export type SymbolKind = "function" | "class" | "method" | "export";
 
@@ -399,4 +399,256 @@ function signatureFor(node: Node, source: string): string | null {
   if (!firstLine) return null;
   // Limita tamanho pra não estourar o banco
   return firstLine.length > 200 ? firstLine.slice(0, 200) + "…" : firstLine;
+}
+
+// === Etapa 2b: rationale extraction (intent evidence from comments/docstrings) ===
+
+export type RationaleKind = "why" | "note" | "hack" | "todo" | "fixme" | "docstring";
+
+export interface RationaleRecord {
+  /** Full symbol key (path#name) the rationale attaches to, or null for file-level. */
+  symbol_key: string | null;
+  kind: RationaleKind;
+  /** Normalized text (comment markers stripped, whitespace collapsed). */
+  text: string;
+  /** 1-based first line of the raw comment/docstring in the source file. */
+  start_line: number;
+  /** sha256 of the normalized text. */
+  content_hash: string;
+}
+
+/** Tags that mark an intent-bearing comment (matched case-insensitively). */
+const RATIONALE_TAG_RE = /^(why|note|hack|todo|fixme):/i;
+
+/** Minimum normalized length for a docstring to be captured (shorter = noise). */
+const MIN_DOCSTRING_CHARS = 20;
+
+/** Generated-code header markers sniffed in the first lines of a file. */
+const GENERATED_HEADER_MARKERS = [
+  "do not edit",
+  "@generated",
+  "code generated",
+  "auto-generated",
+] as const;
+
+/** How many leading lines the generated-file header sniff inspects. */
+const GENERATED_HEADER_SNIFF_LINES = 8;
+
+/**
+ * Header sniff: a file whose first 8 lines carry a generated-code marker
+ * (`DO NOT EDIT`, `@generated`, `Code generated`, `AUTO-GENERATED`,
+ * `auto-generated`, case-insensitive) is auto-generated output. Rationale
+ * extraction is skipped for the whole file — migration/protobuf revision
+ * comments are noise, not intent evidence.
+ */
+export function isLikelyGenerated(content: string): boolean {
+  const head = content.split("\n", GENERATED_HEADER_SNIFF_LINES);
+  for (const line of head) {
+    const lower = line.toLowerCase();
+    for (const marker of GENERATED_HEADER_MARKERS) {
+      if (lower.includes(marker)) return true;
+    }
+  }
+  return false;
+}
+
+interface RawRationaleCandidate {
+  /** 1-based inclusive line range of the raw comment/docstring node. */
+  startLine: number;
+  endLine: number;
+  /** Raw node text (markers still present). */
+  rawText: string;
+  /** True only for Python first-statement strings (docstring branch). */
+  pythonDocstring: boolean;
+}
+
+/**
+ * Extracts intent-bearing comments and docstrings as symbol-adjacent
+ * evidence. Two kinds only (SPEC §"Phase 1 — Indexer", rationale
+ * extraction):
+ *
+ *   - Tagged comments: stripped text starts with WHY:/NOTE:/HACK:/TODO:/
+ *     FIXME: (case-insensitive) — kind = lowercased tag.
+ *   - Docstrings: Python first-statement strings of module/class/function
+ *     bodies; TS/JS/TSX block comments opening with `/**`. Minimum 20
+ *     normalized chars.
+ *
+ * Attribution is positional (comments are tree-sitter extras): a comment
+ * whose line range falls inside a symbol's range attaches to the innermost
+ * such symbol; a contiguous comment block ending immediately above the
+ * declaration's first line (no blank lines) attaches to that symbol;
+ * everything else is file-level (`symbol_key: null`).
+ */
+export function extractRationales(
+  tree: Tree,
+  relPath: string,
+  source: string,
+): RationaleRecord[] {
+  const candidates: RawRationaleCandidate[] = [];
+  collectRationaleCandidates(tree.rootNode, candidates);
+  if (candidates.length === 0) return [];
+
+  const symbols = extractSymbols(tree, relPath, source);
+  const blocks = groupContiguousBlocks(candidates);
+  const out: RationaleRecord[] = [];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeRationaleText(candidate.rawText, candidate.pythonDocstring);
+    if (normalized === "") continue;
+
+    let kind: RationaleKind;
+    if (candidate.pythonDocstring || isTsDocstringComment(candidate.rawText)) {
+      if (normalized.length < MIN_DOCSTRING_CHARS) continue;
+      kind = "docstring";
+    } else {
+      const tag = RATIONALE_TAG_RE.exec(normalized);
+      if (!tag) continue;
+      kind = tag[1]!.toLowerCase() as RationaleKind;
+    }
+
+    out.push({
+      symbol_key: attributeRationale(candidate, blocks, symbols),
+      kind,
+      text: normalized,
+      start_line: candidate.startLine,
+      content_hash: sha256(normalized),
+    });
+  }
+
+  return out;
+}
+
+/** Collects comment nodes and Python docstrings from the named-children stream. */
+function collectRationaleCandidates(node: Node, out: RawRationaleCandidate[]): void {
+  if (node.type === "comment") {
+    out.push({
+      startLine: node.startPosition.row + 1,
+      endLine: node.endPosition.row + 1,
+      rawText: node.text,
+      pythonDocstring: false,
+    });
+    return; // comments have no meaningful named children to descend into
+  }
+
+  // Python docstring branch: a string as the FIRST statement of a module,
+  // class_definition, or function_definition body.
+  if (node.type === "module" || node.type === "class_definition" || node.type === "function_definition") {
+    const body = node.type === "module" ? node : node.childForFieldName("body");
+    const first = body?.firstNamedChild;
+    if (first && first.type === "expression_statement") {
+      const stringNode = first.firstNamedChild;
+      if (stringNode && stringNode.type === "string") {
+        out.push({
+          startLine: stringNode.startPosition.row + 1,
+          endLine: stringNode.endPosition.row + 1,
+          rawText: stringNode.text,
+          pythonDocstring: true,
+        });
+      }
+    }
+  }
+
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child) collectRationaleCandidates(child, out);
+  }
+}
+
+/** True for a TS/JS/TSX block comment opening with `/**` (not plain `/*`). */
+function isTsDocstringComment(rawText: string): boolean {
+  return rawText.startsWith("/**");
+}
+
+/**
+ * Normalizes comment/docstring text: strips comment markers and string
+ * quotes, drops decorative leading `*` on block-comment lines, collapses
+ * all whitespace to single spaces.
+ */
+function normalizeRationaleText(rawText: string, pythonDocstring: boolean): string {
+  let text = rawText;
+  if (pythonDocstring) {
+    // Strip optional string prefix (r/b/f/u combos) and the quote pair.
+    text = text.replace(/^[rubfRUBF]{0,3}("""|'''|"|')/, "");
+    text = text.replace(/("""|'''|"|')$/, "");
+  } else if (text.startsWith("//")) {
+    text = text.slice(2);
+  } else if (text.startsWith("#")) {
+    text = text.slice(1);
+  } else if (text.startsWith("/*")) {
+    text = text.replace(/^\/\*\*?/, "").replace(/\*\/$/, "");
+    text = text
+      .split("\n")
+      .map((line) => line.replace(/^\s*\*+ ?/, ""))
+      .join("\n");
+  }
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Groups raw candidates into contiguous blocks: two comments belong to the
+ * same block when the second starts on the line immediately after the first
+ * ends (no blank line between). Candidates are already in document order
+ * (the collector walks the tree in order).
+ */
+function groupContiguousBlocks(
+  candidates: RawRationaleCandidate[],
+): Map<RawRationaleCandidate, RawRationaleCandidate> {
+  // Maps each candidate to the LAST candidate of its block (blocks are
+  // maximal runs of adjacent candidates).
+  const blockEnd = new Map<RawRationaleCandidate, RawRationaleCandidate>();
+  let block: RawRationaleCandidate[] = [candidates[0]!];
+  const flush = () => {
+    const last = block[block.length - 1]!;
+    for (const member of block) blockEnd.set(member, last);
+  };
+  for (let i = 1; i < candidates.length; i++) {
+    const candidate = candidates[i]!;
+    const prev = block[block.length - 1]!;
+    if (candidate.startLine === prev.endLine + 1) {
+      block.push(candidate);
+    } else {
+      flush();
+      block = [candidate];
+    }
+  }
+  flush();
+  return blockEnd;
+}
+
+/**
+ * Positional attribution (pinned rule):
+ *   1. Line range inside a symbol's range → innermost such symbol.
+ *   2. Contiguous comment block whose last line is immediately above the
+ *      declaration's first line (no blank lines) → that symbol.
+ *   3. Otherwise file-level (null).
+ */
+function attributeRationale(
+  candidate: RawRationaleCandidate,
+  blockEnd: Map<RawRationaleCandidate, RawRationaleCandidate>,
+  symbols: SymbolRecord[],
+): string | null {
+  // Rule 1: inside a symbol's line range. The innermost container wins
+  // (largest start_line, then smallest end_line) so a method beats its class.
+  let innermost: SymbolRecord | null = null;
+  for (const symbol of symbols) {
+    if (candidate.startLine >= symbol.start_line && candidate.endLine <= symbol.end_line) {
+      if (
+        innermost === null ||
+        symbol.start_line > innermost.start_line ||
+        (symbol.start_line === innermost.start_line && symbol.end_line < innermost.end_line)
+      ) {
+        innermost = symbol;
+      }
+    }
+  }
+  if (innermost !== null) return innermost.key;
+
+  // Rule 2: the block this candidate belongs to ends immediately above the
+  // declaration's first line. Note this also covers single-comment blocks.
+  const lastOfBlock = blockEnd.get(candidate) ?? candidate;
+  for (const symbol of symbols) {
+    if (symbol.start_line === lastOfBlock.endLine + 1) return symbol.key;
+  }
+
+  return null;
 }

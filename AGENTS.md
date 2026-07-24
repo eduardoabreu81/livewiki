@@ -172,9 +172,9 @@ livewiki/
 │   │   │   ├── hashes.ts       # sha256 helper
 │   │   │   ├── walker.ts       # denylist walk (all text files; skips binaries/lockfiles/livewiki/)
 │   │   │   ├── parser.ts       # tree-sitter init + parse source
-│   │   │   ├── symbols.ts      # extract symbols from AST (TS/JS/Python)
-│   │   │   ├── db.ts           # SQLite schema v3→v4 + migrations
-│   │   │   ├── indexer.ts      # walk → read → hash → (parse if grammar) → upsert; NUL/1 MiB skips
+│   │   │   ├── symbols.ts      # extract symbols from AST (TS/JS/Python) + rationale extraction (Etapa 2b)
+│   │   │   ├── db.ts           # SQLite schema v3→v6 + migrations
+│   │   │   ├── indexer.ts      # walk → read → hash → (parse if grammar) → upsert; NUL/1 MiB skips; rationale capture
 │   │   │   ├── anchors.ts      # extracts anchors from markdown
 │   │   │   ├── frontmatter.ts  # YAML subset parser
 │   │   │   ├── anchor-ledger.ts# Phase 2: diff vs previous state → debt
@@ -227,7 +227,7 @@ livewiki/
 │           ├── server.test.ts  # Phase 4 E2E (12 tests, InMemoryTransport)
 │           └── phase5-e2e.test.ts# Phase 5 E2E (7 scenarios)
 └── .livewiki/                 # derived cache of the repo (allowlist)
-    ├── index.db               # SQLite schema v4
+    ├── index.db               # SQLite schema v6
     ├── search.db              # SQLite FTS5 (MCP, Phase 4)
     └── config.json            # local repo config
 ```
@@ -373,6 +373,16 @@ for closing the lot.
   `navigation.ts`; generated-only stale cleanup in `init.ts`. Config defaults:
   `maxTopics` 4, `topicMaxAnchors` 18, `topicMaxSourceChars` 40,000, and
   `topicMaxOutputTokens` 4,096.
+- **Rationale evidence (Etapa 2b)** → extraction (tagged comments
+  WHY/NOTE/HACK/TODO/FIXME + Python/`/**` docstrings, positional
+  attribution, generated-file header sniff) in `packages/core/src/symbols.ts`
+  (`extractRationales`, `isLikelyGenerated`); schema v6 `rationales` table in
+  `db.ts`; wholesale per-file persistence in `indexer.ts`; bounded rendering
+  and budget carve in `batch.ts` (`buildModuleDocContext`,
+  `buildTopicDocContext`); `# Rationale evidence` prompt block in
+  `prompts.ts`. Config key: `rationaleMaxChars` (default 4,000; 0 disables;
+  validated integer 0..200,000). Stage-5 flows and the topic planner receive
+  no rationale block.
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -538,7 +548,7 @@ for closing the lot.
   `regenerateArchitectureOverview` after stage 4 to link the
   newly-created pages.
 - **FTS5 in separate DB** (Phase 4): `livewiki_search` uses
-  `.livewiki/search.db` (NOT `index.db` — avoids touching schema v4
+  `.livewiki/search.db` (NOT `index.db` — avoids touching the index schema
   / migrations). Full rebuild on MCP server startup (fast, idempotent);
   incremental update via `indexPage()` in `write_doc`. Porter
   tokenizer (default FTS5). Decision in
@@ -739,6 +749,28 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   plus a report-only section. Topic write/verify exceptions
   short-circuit like stages 4/5. Validation: unit + stub suites only —
   no paid call, commit, or push.
+- **Etapa 2b (2026-07-24, implemented, uncommitted)**: rationale extraction
+  into the index (intent evidence; SPEC §"Phase 1 — Indexer" + §"Batch
+  pipeline"). The indexer captures tagged comments (`WHY:`/`NOTE:`/`HACK:`/
+  `TODO:`/`FIXME:`, case-insensitive) and docstrings (Python
+  module/class/function first-statement strings; TS/JS/TSX `/**` blocks,
+  ≥20 normalized chars) into the new schema-v6 `rationales` table
+  (`migrateV5ToV6`, recomputed wholesale per file, no soft-delete).
+  Attribution is positional: inside-symbol range → innermost symbol;
+  contiguous comment block ending immediately above the declaration → that
+  symbol; else file-level (`symbol_key` NULL). `content_hash` is the sha256
+  of the normalized text (enables a future rationale-changed debt signal —
+  out of scope). A generated-file header sniff (`isLikelyGenerated`, first
+  8 lines: DO NOT EDIT/@generated/Code generated/AUTO-GENERATED/
+  auto-generated) skips extraction for the whole file. Stage-4 (module,
+  initial + repair) and topic (initial + repair) prompts gain a bounded
+  `# Rationale evidence` block (neutralized + safe-fenced, system-prompt
+  line pinning rationale text out of the anchor-key space), capped by the
+  new `rationaleMaxChars` config key (default 4,000; 0 disables), carved
+  inside the stage-4 char budget and accounted before the hard
+  `topicMaxSourceChars` throw. Stage-5 flows and the topic planner are
+  untouched. Validation: unit + stub E2E (the prose-tier stub suite asserts
+  `# Rationale evidence` reached the model) — no paid call, commit, or push.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

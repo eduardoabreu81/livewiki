@@ -312,6 +312,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     const outputTokenStrategy: "dynamic" | "fixed" =
       resolvedConfig.outputTokenStrategy ?? "dynamic";
     const charBudget = opts.contextCharBudget ?? 60_000;
+    // Etapa 2b: bounded rationale evidence block, carved inside charBudget.
+    const rationaleMaxChars =
+      resolvedConfig.rationaleMaxChars ?? CONFIG_DEFAULTS.rationaleMaxChars;
     const thinkingMode = opts.thinking ?? resolvedConfig.thinking;
     const { maxFiles: maxModuleFiles, maxSymbols: maxModuleSymbols } =
       normalizeSplitLimits(
@@ -802,6 +805,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             language,
             llmClient: llmClient!,
             charBudget,
+            rationaleMaxChars,
             promptKind,
             priorCandidate,
             priorErrors,
@@ -1716,6 +1720,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         maxTopics,
         maxAnchors: resolvedConfig.topicMaxAnchors ?? CONFIG_DEFAULTS.topicMaxAnchors,
         sourceChars: resolvedConfig.topicMaxSourceChars ?? CONFIG_DEFAULTS.topicMaxSourceChars,
+        rationaleMaxChars,
         outputTokens: resolvedConfig.topicMaxOutputTokens ?? CONFIG_DEFAULTS.topicMaxOutputTokens,
         outputTokenStrategy,
         maxRepairAttempts,
@@ -1937,6 +1942,8 @@ async function runSemanticTopicStage(opts: {
   maxTopics: number;
   maxAnchors: number;
   sourceChars: number;
+  /** Cap (chars) for the topic rationale evidence block; accounted before the topicMaxSourceChars throw. */
+  rationaleMaxChars: number;
   outputTokens: number;
   outputTokenStrategy: "dynamic" | "fixed";
   maxRepairAttempts: number;
@@ -2156,6 +2163,7 @@ async function runSemanticTopicStage(opts: {
           language: opts.language,
           llmClient: opts.llmClient,
           charBudget: opts.sourceChars,
+          rationaleMaxChars: opts.rationaleMaxChars,
           promptKind,
           priorCandidate,
           priorErrors,
@@ -3158,6 +3166,8 @@ interface AttemptOpts {
   language: Language;
   llmClient: LlmClient;
   charBudget: number;
+  /** Cap (chars) for the rationale evidence block; carved inside charBudget. */
+  rationaleMaxChars: number;
   promptKind: "initial" | "repair";
   priorCandidate: string;
   priorErrors: ArtifactValidationError[];
@@ -3195,7 +3205,7 @@ async function attemptStage4Generation(
   // Load context (symbols + source) on each attempt. Repair prompts
   // need the same context (the closed list does not change between attempts —
   // unless the index changes, which would be out of batch scope).
-  const ctx = await buildModuleDocContext(opts.absRoot, opts.module, opts.charBudget);
+  const ctx = await buildModuleDocContext(opts.absRoot, opts.module, opts.charBudget, opts.rationaleMaxChars);
   const maxTokens = resolveOutputTokenBudget(
     opts.outputTokenStrategy,
     opts.outputTokenCeiling,
@@ -3218,6 +3228,7 @@ async function attemptStage4Generation(
       opts.language,
       attemptContext,
       classifyModuleRole(opts.module, opts.pathRoleConfig),
+      ctx.rationaleEvidence,
     );
   } else {
     prompt = buildStage4Prompt(
@@ -3227,6 +3238,7 @@ async function attemptStage4Generation(
       ctx.truncatedSource,
       opts.language,
       classifyModuleRole(opts.module, opts.pathRoleConfig),
+      ctx.rationaleEvidence,
     );
   }
 
@@ -3421,6 +3433,12 @@ interface ModuleDocContext {
   closedKeyList: string[];
   symbolsTable: string;
   truncatedSource: string;
+  /**
+   * Etapa 2b: rendered rationale evidence lines (unfenced, unneutralized —
+   * the prompt builders apply neutralize + safe fence). Empty string when
+   * there is nothing to show or `rationaleMaxChars` is 0.
+   */
+  rationaleEvidence: string;
 }
 
 interface ModuleSymbolRow {
@@ -3454,16 +3472,25 @@ async function getModuleSymbolRows(
   }
 }
 
-async function buildModuleDocContext(
+export async function buildModuleDocContext(
   absRoot: string,
   module: Module,
   charBudget: number,
+  rationaleMaxChars = 0,
 ): Promise<ModuleDocContext> {
   const symbols = await getModuleSymbolRows(absRoot, module);
   const closedKeyList = symbols.map((s) => s.key).sort();
   const symbolsTable = symbols
     .map((s) => `- ${s.key} (${s.kind}): ${s.signature ?? ""}`)
     .join("\n");
+  // Etapa 2b: bounded rationale evidence, carved INSIDE charBudget — the
+  // source excerpt below gets what the rationale block did not consume.
+  const rationaleEvidence = await getRationaleEvidenceForPaths(
+    absRoot,
+    module.paths,
+    rationaleMaxChars,
+  );
+  const sourceBudget = Math.max(0, charBudget - rationaleEvidence.length);
   // Fair per-file truncation: sequential first-fit left later files (and
   // their closed-list keys) with zero source context, which strongly
   // correlates with invented anchors. Give every path a share of the
@@ -3471,9 +3498,63 @@ async function buildModuleDocContext(
   const truncatedSource = await buildFairTruncatedSource(
     absRoot,
     module.paths,
-    charBudget,
+    sourceBudget,
   );
-  return { closedKeyList, symbolsTable, truncatedSource };
+  return { closedKeyList, symbolsTable, truncatedSource, rationaleEvidence };
+}
+
+interface RationaleEvidenceRow {
+  path: string;
+  symbol_key: string | null;
+  kind: string;
+  text: string;
+  start_line: number;
+}
+
+/**
+ * Etapa 2b: renders the indexed rationale rows for the given file paths as
+ * bounded evidence lines (`- [kind] path:line (key | file-level): text`),
+ * deterministically ordered by (path, start_line, rowid) and capped at
+ * `maxChars` total. Returns "" when maxChars <= 0 or no rows exist.
+ */
+async function getRationaleEvidenceForPaths(
+  absRoot: string,
+  paths: ReadonlyArray<string>,
+  maxChars: number,
+): Promise<string> {
+  if (maxChars <= 0 || paths.length === 0) return "";
+  const db = openIndex(
+    await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db"),
+  );
+  try {
+    const placeholders = paths.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT f.path, r.symbol_key, r.kind, r.text, r.start_line
+         FROM rationales r JOIN files f ON f.id = r.file_id
+         WHERE f.path IN (${placeholders})
+         ORDER BY f.path, r.start_line, r.id`,
+      )
+      .all(...paths) as RationaleEvidenceRow[];
+    return renderRationaleEvidence(rows, maxChars);
+  } finally {
+    db.close();
+  }
+}
+
+/** Shared bounded renderer for rationale evidence lines. */
+function renderRationaleEvidence(
+  rows: ReadonlyArray<RationaleEvidenceRow>,
+  maxChars: number,
+): string {
+  let out = "";
+  for (const row of rows) {
+    const target = row.symbol_key ?? "file-level";
+    const line = `- [${row.kind}] ${row.path}:${row.start_line} (${target}): ${row.text}`;
+    if (out.length + line.length + 1 > maxChars) break;
+    out += (out === "" ? "" : "\n") + line;
+  }
+  return out;
 }
 
 /**
@@ -3956,6 +4037,8 @@ interface TopicAttemptOpts {
   language: Language;
   llmClient: LlmClient;
   charBudget: number;
+  /** Cap (chars) for the rationale evidence block; accounted before the hard charBudget throw. */
+  rationaleMaxChars: number;
   promptKind: "initial" | "repair";
   priorCandidate: string;
   priorErrors: ArtifactValidationError[];
@@ -3972,7 +4055,7 @@ interface TopicAttemptOpts {
 }
 
 async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4AttemptResult> {
-  const ctx = await buildTopicDocContext(opts.absRoot, opts.candidate, opts.charBudget);
+  const ctx = await buildTopicDocContext(opts.absRoot, opts.candidate, opts.charBudget, opts.rationaleMaxChars);
   const topicKeySectionMap = assignTopicKeySections(opts.candidate);
   const maxTokens = resolveOutputTokenBudget(
     opts.outputTokenStrategy,
@@ -3995,6 +4078,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
         opts.language,
         opts.repairAttemptContext ?? { attempt: 1, total: 1 },
         topicKeySectionMap,
+        ctx.rationaleEvidence,
       )
     : buildTopicPrompt(
         opts.candidate,
@@ -4003,6 +4087,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
         ctx.truncatedSource,
         opts.language,
         topicKeySectionMap,
+        ctx.rationaleEvidence,
       );
   let result: GenerateResult;
   try {
@@ -4116,12 +4201,15 @@ interface TopicDocContext {
   symbolsTable: string;
   moduleDigest: string;
   truncatedSource: string;
+  /** Etapa 2b: rendered rationale evidence lines (unfenced, unneutralized). */
+  rationaleEvidence: string;
 }
 
-async function buildTopicDocContext(
+export async function buildTopicDocContext(
   absRoot: string,
   candidate: TopicCandidate,
   charBudget: number,
+  rationaleMaxChars = 0,
 ): Promise<TopicDocContext> {
   const db = openIndex(await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db"));
   try {
@@ -4160,13 +4248,29 @@ async function buildTopicDocContext(
       sourceSpans.push(`// === ${symbol.key} (${symbol.path}:${start + 1}-${end}) ===\n${lines.slice(start, end).join("\n")}`);
     }
     const truncatedSource = sourceSpans.join("\n\n");
-    if (truncatedSource.length > charBudget) {
-      throw new Error(`accepted topic evidence exceeds topicMaxSourceChars (${truncatedSource.length} > ${charBudget})`);
+    // Etapa 2b: rationale rows for the seed-key files, bounded by
+    // rationaleMaxChars and accounted BEFORE the hard topicMaxSourceChars
+    // throw, so the throw never fires on rationale alone.
+    const rationalePaths = [...new Set(symbols.map((symbol) => symbol.path))].sort();
+    const rationaleEvidence = rationaleMaxChars > 0 && rationalePaths.length > 0
+      ? renderRationaleEvidence(
+          db.prepare(
+            `SELECT f.path, r.symbol_key, r.kind, r.text, r.start_line
+             FROM rationales r JOIN files f ON f.id = r.file_id
+             WHERE f.path IN (${rationalePaths.map(() => "?").join(",")})
+             ORDER BY f.path, r.start_line, r.id`,
+          ).all(...rationalePaths) as RationaleEvidenceRow[],
+          rationaleMaxChars,
+        )
+      : "";
+    if (rationaleEvidence.length + truncatedSource.length > charBudget) {
+      throw new Error(`accepted topic evidence exceeds topicMaxSourceChars (${rationaleEvidence.length + truncatedSource.length} > ${charBudget})`);
     }
     return {
       symbolsTable,
       moduleDigest: digest.join("\n\n"),
       truncatedSource,
+      rationaleEvidence,
     };
   } finally {
     db.close();

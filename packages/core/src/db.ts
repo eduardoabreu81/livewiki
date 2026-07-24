@@ -15,7 +15,7 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -166,6 +166,26 @@ CREATE TABLE IF NOT EXISTS calls (
 CREATE INDEX IF NOT EXISTS idx_calls_file_id ON calls(file_id);
 CREATE INDEX IF NOT EXISTS idx_calls_caller_key ON calls(caller_key);
 CREATE INDEX IF NOT EXISTS idx_calls_resolved_callee_key ON calls(resolved_callee_key);
+
+-- Schema v6 (Etapa 2b — intent evidence): bounded rationale rows extracted
+-- per file from tagged comments (WHY:/NOTE:/HACK:/TODO:/FIXME:) and
+-- docstrings. Recomputed wholesale for a file whenever it's reindexed (no
+-- soft-delete, same policy as calls). \`symbol_key\` is NULL for file-level
+-- rationales that positional attribution could not attach to one symbol.
+-- \`content_hash\` is the sha256 of the normalized text — it enables a future
+-- "rationale changed" debt signal (not implemented yet).
+CREATE TABLE IF NOT EXISTS rationales (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  symbol_key TEXT,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL,
+  start_line INTEGER NOT NULL,
+  content_hash TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rationales_file_id ON rationales(file_id);
+CREATE INDEX IF NOT EXISTS idx_rationales_symbol_key ON rationales(symbol_key);
 `;
 
 /**
@@ -266,6 +286,29 @@ export function migrateV4ToV5(db: Database.Database): void {
 }
 
 /**
+ * Migration v5 → v6 (Etapa 2b): adds the `rationales` table (intent evidence
+ * from tagged comments/docstrings). `CREATE TABLE`/`CREATE INDEX ... IF NOT
+ * EXISTS` are already idempotent — reuses the same statements as SCHEMA_SQL
+ * instead of duplicating, so a from-scratch DB and a migrated DB converge to
+ * the same shape.
+ */
+export function migrateV5ToV6(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS rationales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_id INTEGER NOT NULL REFERENCES files(id),
+      symbol_key TEXT,
+      kind TEXT NOT NULL,
+      text TEXT NOT NULL,
+      start_line INTEGER NOT NULL,
+      content_hash TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_rationales_file_id ON rationales(file_id);
+    CREATE INDEX IF NOT EXISTS idx_rationales_symbol_key ON rationales(symbol_key);
+  `);
+}
+
+/**
  * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
  * Cada entry é o SQL (string) OU a função (db) => void pra aplicar quando o
  * DB está em uma versão menor.
@@ -291,6 +334,7 @@ export function postV3Migrations(
   const out: Array<(db: Database.Database) => void> = [];
   if (fromVersion < 4 && toVersion >= 4) out.push(migrateV3ToV4);
   if (fromVersion < 5 && toVersion >= 5) out.push(migrateV4ToV5);
+  if (fromVersion < 6 && toVersion >= 6) out.push(migrateV5ToV6);
   return out;
 }
 
@@ -375,4 +419,14 @@ export type CallRow = {
   callee_name: string;
   resolved_callee_key: string | null;
   line: number;
+};
+
+export type RationaleRow = {
+  id: number;
+  file_id: number;
+  symbol_key: string | null;
+  kind: string;
+  text: string;
+  start_line: number;
+  content_hash: string;
 };

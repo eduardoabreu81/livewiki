@@ -6,7 +6,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
-import { buildFairTruncatedSource } from "./batch.js";
+import { buildFairTruncatedSource, buildModuleDocContext, buildTopicDocContext } from "./batch.js";
+import { run as runIndexer } from "./indexer.js";
+import type { Module } from "./modules.js";
+import type { TopicCandidate } from "./topics.js";
 
 describe("buildFairTruncatedSource", () => {
   let root: string;
@@ -44,5 +47,114 @@ describe("buildFairTruncatedSource", () => {
     expect(out).toContain("export const a = 1;");
     expect(out).toContain("export const b = 2;");
     expect(out).not.toContain("// ... (truncated by budget)");
+  });
+});
+
+// === Etapa 2b: rationale evidence in doc contexts ===
+
+describe("rationale evidence in doc contexts (Etapa 2b)", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-rationale-ctx-"));
+    await nodeFs.mkdir(nodePath.join(root, "src"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(root, { recursive: true, force: true });
+  });
+
+  it("stage-4 module context carries the rationale block carved inside the char budget", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(root, "src", "intent.ts"),
+      `// WHY: the retry budget protects the upstream API from bursts
+export function retry() { return 1; }
+`,
+      "utf8",
+    );
+    await runIndexer(root, { quiet: true });
+
+    const module: Module = { id: "intent", paths: ["src/intent.ts"], symbolCount: 1 };
+    const ctx = await buildModuleDocContext(root, module, 60_000, 4_000);
+
+    expect(ctx.rationaleEvidence).toContain("[why]");
+    expect(ctx.rationaleEvidence).toContain("src/intent.ts#retry");
+    expect(ctx.rationaleEvidence).toContain("WHY: the retry budget protects the upstream API");
+    // Carved inside the budget: block + source never exceed charBudget.
+    expect(ctx.rationaleEvidence.length + ctx.truncatedSource.length).toBeLessThanOrEqual(60_000);
+    expect(ctx.truncatedSource).toContain("export function retry()");
+  });
+
+  it("caps the rationale block at rationaleMaxChars", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(root, "src", "intent.ts"),
+      `// WHY: first intent line of this block
+// NOTE: second intent line of this block
+export function f() { return 1; }
+`,
+      "utf8",
+    );
+    await runIndexer(root, { quiet: true });
+
+    const module: Module = { id: "intent", paths: ["src/intent.ts"], symbolCount: 1 };
+    const full = await buildModuleDocContext(root, module, 60_000, 4_000);
+    expect(full.rationaleEvidence).toContain("first intent line");
+    expect(full.rationaleEvidence).toContain("second intent line");
+
+    // The first rendered line fits the cap, the second does not.
+    const firstLineLength = full.rationaleEvidence.split("\n")[0]!.length;
+    const capped = await buildModuleDocContext(root, module, 60_000, firstLineLength + 5);
+    expect(capped.rationaleEvidence.length).toBeLessThanOrEqual(firstLineLength + 5);
+    expect(capped.rationaleEvidence).toContain("first intent line");
+    expect(capped.rationaleEvidence).not.toContain("second intent line");
+
+    // Zero disables the block entirely.
+    const disabled = await buildModuleDocContext(root, module, 60_000, 0);
+    expect(disabled.rationaleEvidence).toBe("");
+  });
+
+  it("topic context accounts rationale before the hard topicMaxSourceChars throw", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(root, "src", "t.ts"),
+      `/** Function docstring explaining why this helper exists at all. */
+export function helper() { return 1; }
+`,
+      "utf8",
+    );
+    await runIndexer(root, { quiet: true });
+
+    const candidate: TopicCandidate = {
+      title: "Helpers",
+      intent: "Explain the helper utilities",
+      modules: [],
+      flows: [],
+      groups: { contract: ["src/t.ts#helper"], state: [], output: [], failure: [] },
+      planOrder: 1,
+      evidenceHash: "abc123",
+      slug: "helpers",
+      seedKeys: ["src/t.ts#helper"],
+    };
+
+    // Baseline: no rationale — the source alone fits this exact budget.
+    const without = await buildTopicDocContext(root, candidate, 1_000_000, 0);
+    expect(without.rationaleEvidence).toBe("");
+    const exactSourceBudget = without.truncatedSource.length;
+    await expect(
+      buildTopicDocContext(root, candidate, exactSourceBudget, 0),
+    ).resolves.toBeTruthy();
+
+    // Same budget, rationale enabled: the combined size trips the throw,
+    // proving rationale is accounted BEFORE the check.
+    const withRationale = await buildTopicDocContext(root, candidate, 1_000_000, 4_000);
+    expect(withRationale.rationaleEvidence).toContain("Function docstring explaining why this helper exists");
+    await expect(
+      buildTopicDocContext(root, candidate, exactSourceBudget, 4_000),
+    ).rejects.toThrow(/accepted topic evidence exceeds topicMaxSourceChars/);
+
+    // A budget that fits both does not throw.
+    const combinedBudget = exactSourceBudget + withRationale.rationaleEvidence.length;
+    await expect(
+      buildTopicDocContext(root, candidate, combinedBudget, 4_000),
+    ).resolves.toBeTruthy();
   });
 });

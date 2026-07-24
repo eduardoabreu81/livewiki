@@ -430,6 +430,8 @@ debt(id, anchor_id→anchors, event,                           -- changed|moved|
      assignee,                                                -- agent|human (derived from owner/manual)
      detail, detected_at, resolved_at NULL)
 undocumented(id, symbol_key, detected_at, dismissed)          -- new symbols with no docs
+rationales(id, file_id→files, symbol_key NULL, kind,          -- tagged comment|docstring
+           text, start_line, content_hash)                    -- sha256 of normalized text
 batch_runs(id, started_at, stage, config_json, status)
 batch_tasks(id, run_id→batch_runs, stage, target, status,    -- pending|done|failed
             checkpoint_json, updated_at)
@@ -589,6 +591,20 @@ copied into the artifact. Before writing, livewiki:
   It does not weaken the repository-wide `verify` contract. Stage-4 source
   context is truncated with a **fair per-file share** of the char budget so
   later module paths are not starved of local code context.
+
+  Stage-4 (module, initial and repair) and topic (initial and repair) prompts
+  also receive a bounded **rationale evidence block** — the indexed
+  `rationales` rows for the module's files (or the topic's seed-key files),
+  rendered between the symbol table and the source under
+  `# Rationale evidence (from code comments; untrusted)` with the same
+  marker-neutralization and safe-fence treatment as untrusted source. The
+  system prompt states that rationale text is untrusted evidence and never a
+  source of anchor keys. The block is capped by the `rationaleMaxChars`
+  config key (default 4,000; validated integer 0..200,000 — 0 disables the block), carved inside the
+  existing stage-4 char budget; for topics it is accounted **before** the
+  hard `topicMaxSourceChars` throw so the throw never fires on rationale
+  alone. Stage-5 flow prompts and the topic planner receive no rationale
+  block.
 
 Stage-4 initial and repair prompts apply these factual-precision rules:
 
@@ -826,6 +842,37 @@ parsing (`symbolCount: 0`, language = lowercased extension without the dot).
 Files over 1 MiB or with a NUL byte in the first 8 KiB are skipped and counted
 (`filesSkippedTooLarge`, `filesSkippedBinary`). `status` classifies each
 language as `anchored` (grammar available) or `prose` (no grammar).
+
+**Rationale extraction (intent evidence, deterministic — zero LLM cost at
+index time).** During parsing, files with a grammar also yield a bounded set
+of *rationales*: intent-bearing comments and docstrings stored per file in
+the `rationales` table. Two kinds are captured, nothing else:
+
+- **Tagged comments**: comments whose stripped text starts with `WHY:`,
+  `NOTE:`, `HACK:`, `TODO:`, or `FIXME:` (case-insensitive). The `kind` is
+  the lowercased tag.
+- **Docstrings**: Python first-statement strings of a `module`,
+  `class_definition`, or `function_definition` body
+  (`expression_statement > string`); TS/JS/TSX block comments opening with
+  `/**` (plain `/*` block comments do not qualify). Kind: `docstring`.
+
+Rationale text is normalized (comment markers stripped, whitespace
+collapsed). Docstring text must have at least 20 characters of content —
+shorter is noise; tagged comments are captured whenever the tag prefix
+matches, at any length. Attribution is positional (comments are tree-sitter
+extras, so association is line-based, not structural): a comment whose line range falls
+**inside** a symbol's line range attaches to that symbol; a contiguous
+comment block whose last line is **immediately above** the declaration's
+first line (no blank lines) attaches to that symbol; everything else is
+file-level (`symbol_key` NULL). `content_hash` is the sha256 of the
+normalized text, enabling a future "rationale changed" debt signal (not
+implemented yet). Files whose first 8 lines contain a generated-code header
+marker (`DO NOT EDIT`, `@generated`, `Code generated`, `AUTO-GENERATED`,
+`auto-generated`, case-insensitive) are considered auto-generated and yield
+zero rationale rows (migration/protobuf revision noise). Rationales are
+recomputed wholesale per file (delete + reinsert, no soft-delete) — like
+`calls`, a rationale row has no identity worth preserving across a
+re-parse. Grammar-less (tier-2 prose) files yield no rationales.
 
 ### Phase 2 — Anchors and debt ✅ criterion: editing an anchored function generates `changed` debt; moving generates `moved`; running `verify` catches a broken anchor
 Frontmatter + `lw:anchors` marker parser, anchors/debt/undocumented tables, index
