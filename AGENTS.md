@@ -112,7 +112,7 @@ candidates (`packages/core/src/flows.ts`), reusing the stage-4
 artifact/repair/transactional-write machinery. The R11-A working tree adds a
 closed-inventory semantic topic planner and bounded topic pages under
 `livewiki/topics/`; implementation is uncommitted and validation has not run.
-The **MCP server (Phase 4)** exposes the wiki via 6 tools to any MCP
+The **MCP server (Phase 4)** exposes the wiki via 7 tools to any MCP
 client (Claude Code, Cursor, Codex, etc.) — FTS5 search, read,
 validated write, debt management.
 
@@ -221,7 +221,7 @@ livewiki/
 │   │           └── document-as-you-go/SKILL.md
 │   └── mcp/                   # @livewiki/mcp — Phase 4: MCP server
 │       └── src/
-│           ├── server.ts       # McpServer + 6 tools
+│           ├── server.ts       # McpServer + 7 tools
 │           ├── search.ts       # FTS5 (.livewiki/search.db)
 │           ├── index.ts        # stdio entry point (npx livewiki-mcp --repo)
 │           ├── server.test.ts  # Phase 4 E2E (12 tests, InMemoryTransport)
@@ -252,7 +252,7 @@ livewiki/
   page MUST be caught (the anti-hallucination promise: LLM-written docs
   are validatable without running `index` first).
 - **MCP server (Phase 4)** — `packages/mcp/src/server.ts` defines the
-  McpServer with 6 tools; `packages/mcp/src/index.ts` is the stdio
+  McpServer with 7 tools; `packages/mcp/src/index.ts` is the stdio
   entry point (`npx livewiki-mcp --repo <path>`). Typical
   configuration in Claude Code:
   ```json
@@ -272,8 +272,8 @@ livewiki/
   - `livewiki_debt` — open debt (= `livewiki status --json`)
   - `livewiki_write_doc` — writes a page (allowlist + post-write verify)
   - `livewiki_resolve_debt` — closes debts by ID
-- **MCP E2E** — `packages/mcp/src/server.test.ts` covers all 6 tools +
-  6 error/rejection scenarios (12 tests). Uses `InMemoryTransport`
+- **MCP E2E** — `packages/mcp/src/server.test.ts` covers all 7 tools +
+  error scenarios + Etapa 2d hint assertions (24 tests). Uses `InMemoryTransport`
   from the MCP SDK — no real stdio or subprocess needed.
 
 ## Validation workflow
@@ -290,7 +290,7 @@ pnpm --filter @livewiki/cli test -- src/cli-batch-e2e-subdirs.test.ts
 pnpm --filter @livewiki/core test -- src/key-leak.test.ts
                      # CRITICAL regression: key can NEVER appear in output
 pnpm --filter @livewiki/mcp test
-                     # Phase 4: 6 tools E2E (InMemoryTransport)
+                     # Phase 4/2d: 7 tools + hints E2E (InMemoryTransport)
 pnpm --filter @livewiki/mcp test -- src/phase5-e2e.test.ts
                      # Phase 5: end-to-end + [R] gitignore
 pnpm --filter @livewiki/core test -- src/export.test.ts
@@ -388,6 +388,9 @@ for closing the lot.
   `risk.test.ts`); consumed by `status.ts` (`applyRiskRanking`, additive
   `DebtItem.risk`, `[risk N]` human marker) and inherited by `update.ts`'s
   work package; config keys `riskAnalysis` / `riskChurnCommits` in `config.ts`.
+- **MCP `_hints` table (Etapa 2d)** → single `TOOL_HINTS` constant in
+  `packages/mcp/src/server.ts` (exported `ToolHint` type); per-tool
+  assertions in `server.test.ts`.
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -798,6 +801,22 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   omits `risk`) and `riskChurnCommits` (integer 0..10000, default 500; 0
   disables the spawn). Validation: unit + integration suites only (risk.test,
   status.test, update.test, config.test) — no paid call, commit, or push.
+
+- **Etapa 2d (2026-07-25, implemented, uncommitted)**: MCP
+  workflow-adjacency hints (capability backlog item 4). Every SUCCESS tool
+  response carries a static `_hints` block (one `TOOL_HINTS` constant +
+  exported `ToolHint` type in `packages/mcp/src/server.ts`) suggesting the
+  next most useful calls, so arbitrary MCP clients discover the livewiki
+  loop on their own. JSON-payload tools (search/debt/impact/resolve_debt)
+  gain a top-level `_hints` field; plain-text tools
+  (quickstart/read/write_doc) gain a trailing text block with
+  `{"_hints": [...]}` — the first block stays byte-identical. Error
+  responses carry no hints. The server registers SEVEN tools —
+  `livewiki_impact` (added in ec1b8d2) was missing from this file's tool
+  counts; the current-state mentions were corrected in the same pass.
+  Validation: mcp suite 31 passed (server.test.ts 24 = 16 pre-existing +
+  8 hint assertions incl. error-carries-no-hints; phase5-e2e 7
+  untouched) — no paid call, commit, or push.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

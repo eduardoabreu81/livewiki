@@ -515,6 +515,7 @@ when git is absent or the directory is not a repo it degrades silently (churn fa
 | `livewiki_debt` | open debt (equivalent to `status --json`) |
 | `livewiki_write_doc` | writes/updates a page (path validated by the allowlist; runs `verify` on the content before accepting) |
 | `livewiki_resolve_debt` | marks debt as paid (tied to a write) |
+| `livewiki_impact` | blast radius of a symbol key: resolved call-graph callers + the wiki pages documenting them (best-effort, bounded by maxDepth/maxNodes) |
 
 A successful, non-error `livewiki_write_doc` result means the page was written
 and passed `verify`, unless the caller explicitly requested `skipVerify: true`.
@@ -522,6 +523,15 @@ Any verify failure, including a crash of the verifier itself, triggers a
 best-effort rollback so no unverified page is left behind. If rollback fails,
 the tool returns an error that names the suspect path and warns that the disk
 may contain an unverified page requiring operator inspection.
+
+**Workflow-adjacency hints (Etapa 2d).** Every SUCCESS tool response carries a
+static `_hints` block suggesting the next most useful tool calls, so arbitrary
+MCP clients discover the livewiki loop on their own. JSON-payload tools
+(`search`, `debt`, `impact`, `resolve_debt`) carry a top-level `_hints` field;
+plain-text tools (`quickstart`, `read`, `write_doc`) carry a trailing text
+block with `{"_hints": [...]}` (the first block stays byte-identical). Error
+responses carry no hints. The table is pure presentation-layer data
+(`TOOL_HINTS` in `server.ts`) — no config, no state.
 
 ## Batch pipeline (5 stages, resumable)
 

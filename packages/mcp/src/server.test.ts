@@ -419,6 +419,174 @@ Conteudo.
   });
 });
 
+/**
+ * Etapa 2d — workflow-adjacency hints (capability backlog item 4).
+ * Every SUCCESS tool response must carry a static `_hints` block suggesting
+ * the next most useful tool calls; error responses carry no hints.
+ */
+describe("MCP server — workflow-adjacency hints (Etapa 2d)", () => {
+  it("livewiki_quickstart suggests search and read", async () => {
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({ name: "livewiki_quickstart", arguments: {} });
+      expect(hintTools(r)).toEqual(["livewiki_search", "livewiki_read"]);
+      assertWellFormedHints(r);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_read suggests search and write_doc", async () => {
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_read",
+        arguments: { path: "livewiki/quickstart.md" },
+      });
+      expect(hintTools(r)).toEqual(["livewiki_search", "livewiki_write_doc"]);
+      assertWellFormedHints(r);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_search suggests read and debt", async () => {
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_search",
+        arguments: { query: "modules", limit: 10 },
+      });
+      expect(hintTools(r)).toEqual(["livewiki_read", "livewiki_debt"]);
+      assertWellFormedHints(r);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_debt suggests write_doc and resolve_debt", async () => {
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({ name: "livewiki_debt", arguments: {} });
+      expect(hintTools(r)).toEqual(["livewiki_write_doc", "livewiki_resolve_debt"]);
+      assertWellFormedHints(r);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_impact suggests read and write_doc", async () => {
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_impact",
+        arguments: { symbolKey: "src/auth/login.ts#login" },
+      });
+      expect(hintTools(r)).toEqual(["livewiki_read", "livewiki_write_doc"]);
+      assertWellFormedHints(r);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_write_doc suggests debt and resolve_debt on success", async () => {
+    const c = await connect();
+    try {
+      const content = `---
+title: hints-scratch
+owner: generated
+---
+
+# hints-scratch
+
+Notes.
+`;
+      const r = await c.client.callTool({
+        name: "livewiki_write_doc",
+        arguments: { path: "livewiki/hints-scratch.md", content },
+      });
+      expect(r.isError).toBeFalsy();
+      expect(hintTools(r)).toEqual(["livewiki_debt", "livewiki_resolve_debt"]);
+      assertWellFormedHints(r);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_resolve_debt suggests debt", async () => {
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_resolve_debt",
+        arguments: { debtIds: [9999] },
+      });
+      expect(hintTools(r)).toEqual(["livewiki_debt"]);
+      assertWellFormedHints(r);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("error responses carry no hints", async () => {
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_read",
+        arguments: { path: "src/auth/login.ts" },
+      });
+      expect(r.isError).toBe(true);
+      expect(extractHints(r)).toEqual([]);
+    } finally {
+      await teardown(c);
+    }
+  });
+});
+
+interface HintEntry {
+  tool: string;
+  when: string;
+}
+
+/** Extracts the `_hints` array from a tool result: parses each text block as
+ *  JSON (plain-text blocks like raw markdown simply fail to parse) and
+ *  returns the first block carrying a `_hints` array. Empty when absent. */
+function extractHints(r: unknown): HintEntry[] {
+  if (typeof r !== "object" || r === null) return [];
+  const content = (r as { content?: unknown }).content;
+  if (!Array.isArray(content)) return [];
+  for (const block of content) {
+    if (
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      try {
+        const parsed = JSON.parse((block as { text: string }).text) as { _hints?: unknown };
+        if (Array.isArray(parsed._hints)) return parsed._hints as HintEntry[];
+      } catch {
+        // Not a JSON block (e.g. raw page markdown) — keep scanning.
+      }
+    }
+  }
+  return [];
+}
+
+function hintTools(r: unknown): string[] {
+  return extractHints(r).map((h) => h.tool);
+}
+
+/** Every hint entry must be a short `{ tool, when }` pair naming a real tool. */
+function assertWellFormedHints(r: unknown): void {
+  const hints = extractHints(r);
+  expect(hints.length).toBeGreaterThan(0);
+  for (const h of hints) {
+    expect(h.tool).toMatch(/^livewiki_/);
+    expect(typeof h.when).toBe("string");
+    expect(h.when.length).toBeGreaterThan(0);
+  }
+}
+
 /** Extrai texto do resultado MCP. callTool retorna tipo discriminado;
  *  aqui aceitamos qualquer objeto com `content: Array<{type, text?}>` e
  *  juntamos os blocos text. */

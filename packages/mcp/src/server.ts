@@ -24,7 +24,57 @@
  *   - InvalidParams: input do user inválido
  *   - InvalidRequest: estado inconsistente (ex.: wiki não inicializada)
  *   - InternalError: erro inesperado
+ *
+ * Workflow-adjacency hints (Etapa 2d): every SUCCESS tool response also
+ * carries a `_hints` block suggesting the next most useful tool calls, so
+ * arbitrary MCP clients discover the livewiki loop
+ * (quickstart → search → read → write_doc → debt) on their own. JSON
+ * payloads gain a top-level `_hints` field; plain-text responses
+ * (quickstart/read/write_doc) gain a trailing text block with
+ * `{"_hints": [...]}`. Error responses carry no hints.
  */
+
+/** One workflow-adjacency hint: a suggested next tool call and when to use it. */
+export interface ToolHint {
+  tool: string;
+  when: string;
+}
+
+/**
+ * Static presentation-layer hint table (capability backlog item 4,
+ * docs/plans/2026-07-23-capability-backlog.md). Pure data — no config, no
+ * state, no logic. Keys are tool names; values are the next most useful
+ * tool calls after a successful response from that tool.
+ */
+const TOOL_HINTS: Record<string, ToolHint[]> = {
+  livewiki_quickstart: [
+    { tool: "livewiki_search", when: "to find wiki pages about a specific topic or symbol" },
+    { tool: "livewiki_read", when: "to open in full a page linked from the quickstart" },
+  ],
+  livewiki_read: [
+    { tool: "livewiki_search", when: "to find other pages covering related topics" },
+    { tool: "livewiki_write_doc", when: "to update this page when the code it documents changed" },
+  ],
+  livewiki_search: [
+    { tool: "livewiki_read", when: "to read the full page behind a search hit" },
+    { tool: "livewiki_debt", when: "to check for open documentation debt before editing code" },
+  ],
+  livewiki_debt: [
+    { tool: "livewiki_write_doc", when: "to pay open debt by writing or updating the page for a debt item" },
+    { tool: "livewiki_resolve_debt", when: "to close debt items you have already addressed" },
+  ],
+  livewiki_impact: [
+    { tool: "livewiki_read", when: "to read the wiki pages that document affected symbols" },
+    { tool: "livewiki_write_doc", when: "to update affected pages after changing the symbol" },
+  ],
+  livewiki_write_doc: [
+    { tool: "livewiki_debt", when: "to re-check which debt items remain open after the write" },
+    { tool: "livewiki_resolve_debt", when: "to close the debt items this write addressed" },
+  ],
+  livewiki_resolve_debt: [
+    { tool: "livewiki_debt", when: "to confirm no debt items remain open" },
+  ],
+};
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
@@ -76,6 +126,17 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   function textResult(text: string) {
     return { content: [{ type: "text" as const, text }] };
   }
+  // Helper: textResult + trailing `_hints` block (Etapa 2d) for tools whose
+  // success response is plain text (quickstart/read/write_doc). The first
+  // block stays byte-identical; hints are purely additive.
+  function hintedTextResult(tool: string, text: string) {
+    const result = textResult(text);
+    result.content.push({
+      type: "text" as const,
+      text: JSON.stringify({ _hints: TOOL_HINTS[tool] ?? [] }),
+    });
+    return result;
+  }
   function errorResult(message: string) {
     return { content: [{ type: "text" as const, text: `error: ${message}` }], isError: true };
   }
@@ -97,7 +158,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     async () => {
       try {
         const text = await safeIo.readText(repoRoot, "livewiki/quickstart.md");
-        return textResult(text);
+        return hintedTextResult("livewiki_quickstart", text);
       } catch (err) {
         return errorResult(
           err instanceof Error ? err.message : `failed to read quickstart: ${String(err)}`,
@@ -120,7 +181,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     async ({ path }) => {
       try {
         const text = await safeIo.readText(repoRoot, path);
-        return textResult(text);
+        return hintedTextResult("livewiki_read", text);
       } catch (err) {
         // Mensagem NÃO vaza path absoluto nem conteúdo do repo (princípio safe-io).
         return errorResult(
@@ -151,7 +212,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     async ({ query, limit }) => {
       try {
         const hits = doSearch(searchIdx, query, { ...(limit !== undefined ? { limit } : {}) });
-        return textResult(JSON.stringify({ query, hits }, null, 2));
+        return textResult(
+          JSON.stringify({ query, hits, _hints: TOOL_HINTS.livewiki_search }, null, 2),
+        );
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : `search failed`);
       }
@@ -167,7 +230,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     async () => {
       try {
         const report = await runStatus(repoRoot);
-        return textResult(JSON.stringify(report, null, 2));
+        return textResult(
+          JSON.stringify({ ...report, _hints: TOOL_HINTS.livewiki_debt }, null, 2),
+        );
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : `status failed`);
       }
@@ -210,7 +275,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
             ...(maxDepth !== undefined ? { maxDepth } : {}),
             ...(maxNodes !== undefined ? { maxNodes } : {}),
           });
-          return textResult(JSON.stringify(result, null, 2));
+          return textResult(
+            JSON.stringify({ ...result, _hints: TOOL_HINTS.livewiki_impact }, null, 2),
+          );
         } finally {
           db.close();
         }
@@ -301,7 +368,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
       // 3) Atualiza índice FTS5 incrementalmente (write bem-sucedido).
       indexPage(searchIdx, path, content);
 
-      return textResult(`wrote ${path} (verified)`);
+      return hintedTextResult("livewiki_write_doc", `wrote ${path} (verified)`);
     },
   );
 
@@ -348,6 +415,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
                 notFound,
                 ...(writeRef !== undefined ? { writeRef } : {}),
                 timestamp: ts,
+                _hints: TOOL_HINTS.livewiki_resolve_debt,
               },
               null,
               2,
