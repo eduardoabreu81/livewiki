@@ -117,6 +117,10 @@
     "./import-resolution": {
       "types": "./dist/import-resolution.d.ts",
       "import": "./dist/import-resolution.js"
+    },
+    "./risk": {
+      "types": "./dist/risk.d.ts",
+      "import": "./dist/risk.js"
     }
   },
   "files": [

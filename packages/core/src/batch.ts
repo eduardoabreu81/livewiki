@@ -62,7 +62,7 @@ import {
   classifyPathRole,
   type Module,
 } from "./modules.js";
-import { collectImports } from "./imports.js";
+import { collectImportsForFiles } from "./imports.js";
 import { createLlmClient, LlmTimeoutError, type LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult, StopReason } from "./llm/types.js";
 import { loadConfig, applyDefaults, validateConfigForBatch, resolveExtraIgnores, CONFIG_DEFAULTS } from "./config.js";
@@ -539,7 +539,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // === Stage 3: Prioritization (with IDs already unique and stable) ===
     // Hoisted for stage 5: the flow detector re-derives external import
     // specifiers from the SAME per-file extraction stage 3 uses for edges.
-    const importsByFile = await collectAllImports(absRoot, filePaths);
+    const importsByFile = await collectImportsForFiles(absRoot, filePaths);
     const knownFiles = new Set(filePaths);
     // R10.1 (J): ONE resolver produces the file-level import edges —
     // relative AND declared-workspace specifiers. The same resolved edges
@@ -2621,22 +2621,6 @@ function validateRefinedModules(
     accepted: true,
     modules: applyRefinedDisplayTitles(cleanModules, displayTitleCandidates),
   };
-}
-
-async function collectAllImports(
-  absRoot: string,
-  filePaths: string[],
-): Promise<Map<string, Awaited<ReturnType<typeof collectImports>>>> {
-  const out = new Map<string, Awaited<ReturnType<typeof collectImports>>>();
-  for (const p of filePaths) {
-    try {
-      const content = await nodeFs.readFile(nodePath.join(absRoot, p), "utf8");
-      out.set(p, await collectImports(p, content));
-    } catch {
-      // skip unparseable
-    }
-  }
-  return out;
 }
 
 /**

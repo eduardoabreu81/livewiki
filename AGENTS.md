@@ -383,6 +383,11 @@ for closing the lot.
   `prompts.ts`. Config key: `rationaleMaxChars` (default 4,000; 0 disables;
   validated integer 0..200,000). Stage-5 flows and the topic planner receive
   no rationale block.
+- **Risk-weighted debt ordering (Etapa 2c)** → rubric, coverage/fan-in maps,
+  churn spawn, and sort comparator in `packages/core/src/risk.ts` (tests in
+  `risk.test.ts`); consumed by `status.ts` (`applyRiskRanking`, additive
+  `DebtItem.risk`, `[risk N]` human marker) and inherited by `update.ts`'s
+  work package; config keys `riskAnalysis` / `riskChurnCommits` in `config.ts`.
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -771,6 +776,28 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   `topicMaxSourceChars` throw. Stage-5 flows and the topic planner are
   untouched. Validation: unit + stub E2E (the prose-tier stub suite asserts
   `# Rationale evidence` reached the model) — no paid call, commit, or push.
+- **Etapa 2c (2026-07-25, implemented, uncommitted)**: risk-weighted debt
+  prioritization (SPEC §"CLI commands"; plan
+  `docs/plans/2026-07-25-etapa-2c-risk-prioritization.md`, option A,
+  compute-on-the-fly — no schema bump). `status` (and, through the same array,
+  `update`'s work package) ranks open debt by a deterministic rubric — event
+  (changed/deleted +10, moved +5), test gap (anchored-tier file with no
+  importing test file +40; prose-tier +10), fan-in bands (1–2/3–5/6–10/>10 ⇒
+  +5/+10/+15/+20), and git churn bands (1–3/4–9/≥10 ⇒ +5/+10/+15) — computed
+  in `packages/core/src/risk.ts` (pure; reuses `isTestPath` from `flows.ts`
+  and `resolveImportEdges` with an empty workspace map). Sort: score desc,
+  detected_at asc, id asc. Debt identity/dedup untouched; `DebtItem` gains the
+  additive optional `risk` field and the human output prints `[risk N]`.
+  Imports are recomputed on demand via the hoisted
+  `imports.ts:collectImportsForFiles` (batch's former private
+  `collectAllImports`); churn is ONE `git -c core.quotepath=false log
+  --no-merges --max-count=<N> --name-only --format=` spawn with `shell: false`
+  (quotepath off so non-ASCII paths are not C-quoted) that degrades to null
+  (churn 0, never an error) when git or a repo is unavailable. Config keys:
+  `riskAnalysis` (boolean, default true; false keeps chronological order and
+  omits `risk`) and `riskChurnCommits` (integer 0..10000, default 500; 0
+  disables the spawn). Validation: unit + integration suites only (risk.test,
+  status.test, update.test, config.test) — no paid call, commit, or push.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

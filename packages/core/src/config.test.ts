@@ -617,3 +617,64 @@ describe("config — stage4MaxOutputTokens ceiling", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/stage4MaxOutputTokens/);
   });
 });
+
+describe("config — Etapa 2c risk-prioritization keys", () => {
+  it("applyDefaults fills riskAnalysis=true and riskChurnCommits=500 when absent", () => {
+    const cfg = applyDefaults({});
+    expect(cfg.riskAnalysis).toBe(true);
+    expect(cfg.riskChurnCommits).toBe(500);
+  });
+
+  it("applyDefaults does NOT overwrite explicit values", () => {
+    const cfg = applyDefaults({ riskAnalysis: false, riskChurnCommits: 0 });
+    expect(cfg.riskAnalysis).toBe(false);
+    expect(cfg.riskChurnCommits).toBe(0);
+  });
+
+  it("loadConfig accepts riskAnalysis boolean and riskChurnCommits bounds", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ riskAnalysis: false, riskChurnCommits: 0 }),
+      "utf8",
+    );
+    let cfg = await loadConfig(repoRoot);
+    expect(cfg.riskAnalysis).toBe(false);
+    expect(cfg.riskChurnCommits).toBe(0);
+
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ riskAnalysis: true, riskChurnCommits: 10_000 }),
+      "utf8",
+    );
+    cfg = await loadConfig(repoRoot);
+    expect(cfg.riskAnalysis).toBe(true);
+    expect(cfg.riskChurnCommits).toBe(10_000);
+  });
+
+  it.each([
+    ["a string", "yes"],
+    ["a number", 1],
+    ["null", null],
+  ])("rejects riskAnalysis as %s", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ riskAnalysis: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/riskAnalysis/);
+  });
+
+  it.each([
+    ["a float", 1.5],
+    ["a string", "500"],
+    ["a negative", -1],
+    ["above the range", 10_001],
+  ])("rejects riskChurnCommits as %s", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ riskChurnCommits: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/riskChurnCommits/);
+  });
+});

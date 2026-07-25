@@ -173,6 +173,18 @@ export interface LivewikiConfig {
    * stage-4 char budget. Default 4,000; 0 disables the block.
    */
   rationaleMaxChars?: number;
+  /**
+   * Risk-weighted debt prioritization in `status`/`update` (Etapa 2c).
+   * Default true; set false to keep the chronological ordering and omit
+   * the additive `risk` field from debt items.
+   */
+  riskAnalysis?: boolean;
+  /**
+   * Git history window (commits) for the churn risk factor (Etapa 2c).
+   * Default 500; 0 disables the `git log` spawn entirely (churn factor 0).
+   * Must be an integer 0..10000.
+   */
+  riskChurnCommits?: number;
 }
 
 /** Max safe timeout for Node `setTimeout` (signed 32-bit ms). */
@@ -249,6 +261,10 @@ export const CONFIG_DEFAULTS = {
   topicMaxOutputTokens: 32_768,
   /** Bounded rationale evidence block in stage-4/topic prompts (Etapa 2b). */
   rationaleMaxChars: 4_000,
+  /** Risk-weighted debt ordering in status/update (Etapa 2c). */
+  riskAnalysis: true,
+  /** Git churn window for the risk score; 0 disables the git spawn. */
+  riskChurnCommits: 500,
 } as const;
 
 /**
@@ -347,6 +363,8 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     topicMaxSourceChars: CONFIG_DEFAULTS.topicMaxSourceChars,
     topicMaxOutputTokens: CONFIG_DEFAULTS.topicMaxOutputTokens,
     rationaleMaxChars: CONFIG_DEFAULTS.rationaleMaxChars,
+    riskAnalysis: CONFIG_DEFAULTS.riskAnalysis,
+    riskChurnCommits: CONFIG_DEFAULTS.riskChurnCommits,
     ...config,
   };
 }
@@ -589,6 +607,22 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error(`invalid rationaleMaxChars: must be an integer 0..200000 (0 disables the rationale block), got ${JSON.stringify(v)}`);
     }
     out.rationaleMaxChars = v;
+  }
+  // Etapa 2c risk-prioritization knobs: strict types, rejected instead of
+  // silently falling back to the defaults.
+  if (obj["riskAnalysis"] !== undefined) {
+    const v = obj["riskAnalysis"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid riskAnalysis: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.riskAnalysis = v;
+  }
+  if (obj["riskChurnCommits"] !== undefined) {
+    const v = obj["riskChurnCommits"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 10_000) {
+      throw new Error(`invalid riskChurnCommits: must be an integer 0..10000 (0 disables the git churn spawn), got ${JSON.stringify(v)}`);
+    }
+    out.riskChurnCommits = v;
   }
   if (obj["flowMaxDiagramNodes"] !== undefined) {
     const v = obj["flowMaxDiagramNodes"];

@@ -15,6 +15,16 @@ import * as safeIo from "./safe-io.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
 import { snapshotMetrics, type UpdateMetricsSnapshot } from "./update-metrics.js";
 import { EXTENSION_LANG } from "./walker.js";
+import { applyDefaults, loadConfig, CONFIG_DEFAULTS, type LivewikiConfig } from "./config.js";
+import { collectImportsForFiles } from "./imports.js";
+import {
+  collectGitChurn,
+  compareByRisk,
+  computeTestCoverageAndFanIn,
+  derivePathFromSymbolKey,
+  scoreDebtItem,
+  type RiskScore,
+} from "./risk.js";
 
 /** Coverage tier of a language (SPEC §"Coverage ladder"). */
 export type LangTier = "anchored" | "prose";
@@ -42,6 +52,12 @@ export interface DebtItem {
   wiki_path: string | null;
   detail: string | null;
   detected_at: number;
+  /**
+   * Additive risk metadata (Etapa 2c). Present when risk analysis ran
+   * (open debt exists and `riskAnalysis` is not disabled). Consumers
+   * reading only the fields above keep working.
+   */
+  risk?: RiskScore;
 }
 
 export interface StatusReport {
@@ -94,6 +110,12 @@ export async function run(
   const db = openIndex(dbPath);
   try {
     const report = collect(db, opts.topN ?? 10);
+    // Etapa 2c: risk-weighted debt ordering (presentation order + additive
+    // metadata only). Runs only when open debt exists; recomputes imports
+    // on demand, so status on a clean repo never parses files.
+    if (report.debt.items.length > 0) {
+      await applyRiskRanking(db, absRoot, report);
+    }
     // Métricas incrementais (best-effort — falha aqui não quebra status)
     try {
       report.metrics = await snapshotMetrics(absRoot);
@@ -224,6 +246,68 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
   };
 }
 
+/**
+ * Etapa 2c (docs/plans/2026-07-25-etapa-2c-risk-prioritization.md): ranks
+ * open debt by the deterministic risk score (test gap + fan-in + git churn)
+ * and attaches the additive `risk` field to each item. Debt identity/dedup
+ * is untouched — this is presentation order plus metadata. Config is loaded
+ * defensively: a repo without `.livewiki/config.json` (or with an
+ * unreadable one) gets the defaults, never an error. Git churn degrades to
+ * null when git or a repo is unavailable (churn factor 0).
+ */
+async function applyRiskRanking(
+  db: import("better-sqlite3").Database,
+  absRoot: string,
+  report: StatusReport,
+): Promise<void> {
+  let config: LivewikiConfig;
+  try {
+    config = applyDefaults(await loadConfig(absRoot));
+  } catch {
+    config = applyDefaults({});
+  }
+  if (config.riskAnalysis === false) return;
+
+  const files = db
+    .prepare("SELECT * FROM files WHERE status = 'active'")
+    .all() as FileRow[];
+  const anchored = anchoredLangs();
+  const tierByPath = new Map<string, LangTier>();
+  const allPaths: string[] = [];
+  const anchoredPaths: string[] = [];
+  for (const f of files) {
+    const tier: LangTier = anchored.has(f.lang) ? "anchored" : "prose";
+    tierByPath.set(f.path, tier);
+    allPaths.push(f.path);
+    if (tier === "anchored") anchoredPaths.push(f.path);
+  }
+
+  // Imports are never persisted: recompute on demand, like batch stage 3.
+  // Prose-tier files have no grammar — parsing them would yield no edges,
+  // so only anchored files are read.
+  const importsByFile = await collectImportsForFiles(absRoot, anchoredPaths);
+  const { coveredByTest, fanIn } = computeTestCoverageAndFanIn({
+    importsByFile,
+    knownFiles: new Set(allPaths),
+  });
+
+  const churnWindow = config.riskChurnCommits ?? CONFIG_DEFAULTS.riskChurnCommits;
+  const churn = churnWindow > 0 ? await collectGitChurn(absRoot, churnWindow) : null;
+
+  for (const item of report.debt.items) {
+    const path = derivePathFromSymbolKey(item.symbol_key);
+    const tier = path === null ? null : (tierByPath.get(path) ?? null);
+    item.risk = scoreDebtItem({
+      event: item.event,
+      tier,
+      coveredByTest: path !== null && coveredByTest.has(path),
+      fanIn: path === null ? 0 : (fanIn.get(path) ?? 0),
+      churnCount: churn === null || path === null ? null : (churn.get(path) ?? 0),
+    });
+  }
+  report.debt.items.sort(compareByRisk);
+}
+
 /** Format human-readable (text). */
 export function formatHuman(report: StatusReport): string {
   const lines: string[] = [];
@@ -261,7 +345,8 @@ export function formatHuman(report: StatusReport): string {
   );
   for (const item of report.debt.items) {
     const target = item.symbol_key ?? item.wiki_path ?? "(?)";
-    lines.push(`  [${item.event}] ${item.assignee.padEnd(5)} ${target}`);
+    const riskMarker = item.risk ? ` [risk ${item.risk.score}]` : "";
+    lines.push(`  [${item.event}] ${item.assignee.padEnd(5)} ${target}${riskMarker}`);
     if (item.detail) lines.push(`         ${item.detail}`);
   }
   lines.push("");

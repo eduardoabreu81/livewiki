@@ -18,6 +18,8 @@
  * inferir do contexto.
  */
 
+import * as nodeFs from "node:fs/promises";
+import * as nodePath from "node:path";
 import type { Tree } from "web-tree-sitter";
 import { initParser, parseSource } from "./parser.js";
 
@@ -132,4 +134,27 @@ export async function collectImports(
   }
   const lang = ext === "py" ? "python" : "ts";
   return extractImportsFromTree(tree, lang);
+}
+
+/**
+ * Reads each repo-relative file from disk and extracts its imports, returning
+ * the per-file map. Hoisted from the former private `collectAllImports` in
+ * batch.ts so the status risk analysis (Etapa 2c) recomputes the SAME
+ * on-demand map — imports are never persisted (plan option A). Unreadable
+ * or unparseable files are skipped.
+ */
+export async function collectImportsForFiles(
+  absRoot: string,
+  filePaths: readonly string[],
+): Promise<Map<string, ExtractedImport[]>> {
+  const out = new Map<string, ExtractedImport[]>();
+  for (const p of filePaths) {
+    try {
+      const content = await nodeFs.readFile(nodePath.join(absRoot, p), "utf8");
+      out.set(p, await collectImports(p, content));
+    } catch {
+      // skip unparseable
+    }
+  }
+  return out;
 }

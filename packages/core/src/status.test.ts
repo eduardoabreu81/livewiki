@@ -1,6 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { formatHuman } from "./status.js";
 import type { StatusReport } from "./status.js";
+import { run as runStatus } from "./status.js";
+import { run as runIndexer } from "./indexer.js";
+import { run as runLedger } from "./anchor-ledger.js";
 
 describe("status.formatHuman", () => {
   it("formats empty report", () => {
@@ -150,5 +156,129 @@ describe("status.formatHuman", () => {
     const out = formatHuman(report);
     expect(out).toMatch(/go\s+\(prose\)\s+12/);
     expect(out).toMatch(/typescript\s+\(anchored\)\s+3/);
+  });
+
+  it("prints the [risk N] marker after a debt item when risk is present", () => {
+    const report: StatusReport = {
+      files: { total: 0, byLang: {}, tiers: {}, top: [] },
+      symbols: { total: 0, byKind: {} },
+      debt: {
+        total: 1,
+        byEvent: { changed: 1, moved: 0, deleted: 0 },
+        byAssignee: { agent: 1, human: 0 },
+        items: [
+          {
+            id: 1,
+            event: "changed",
+            assignee: "agent",
+            symbol_key: "src/b.ts#beta",
+            wiki_path: "livewiki/b.md",
+            detail: null,
+            detected_at: 1700000000000,
+            risk: { score: 50, factors: { event: 10, testGap: 40, fanIn: 0, churn: 0 } },
+          },
+        ],
+      },
+      undocumented: { total: 0, sample: [] },
+      metrics: null,
+      meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
+    };
+    const out = formatHuman(report);
+    expect(out).toContain("[changed] agent src/b.ts#beta [risk 50]");
+  });
+});
+
+/**
+ * Etapa 2c integration: risk-weighted debt ordering end to end. Temp repo
+ * with `src/a.ts` (imported by `src/a.test.ts` — covered) and `src/b.ts`
+ * (uncovered); `changed` debt on both must rank the uncovered item first.
+ * The temp dir is not a git repo, so the churn factor degrades to 0.
+ */
+describe("status risk ranking (Etapa 2c) — integration", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), "livewiki-status-risk-"));
+    await mkdir(join(repoRoot, ".livewiki"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  async function writeRepoFile(rel: string, content: string): Promise<void> {
+    const abs = join(repoRoot, rel);
+    await mkdir(join(abs, ".."), { recursive: true });
+    await writeFile(abs, content);
+  }
+
+  /**
+   * Arrange pattern from update.test.ts: write source → indexer → ledger →
+   * wiki page with frontmatter anchors → indexer → ledger, then modify the
+   * sources so the ledger raises `changed` debt on both files.
+   */
+  async function setupChangedDebtOnBoth(): Promise<void> {
+    await writeRepoFile("src/a.ts", "export function alpha() { return 1; }");
+    await writeRepoFile("src/b.ts", "export function beta() { return 1; }");
+    await writeRepoFile(
+      "src/a.test.ts",
+      'import { alpha } from "./a";\nexport const probe = alpha();\n',
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    await writeRepoFile(
+      "livewiki/a.md",
+      `---\ntitle: a\nowner: generated\nanchors:\n  - src/a.ts#alpha\n---\n\n# a\n\nDocumentation.\n`,
+    );
+    await writeRepoFile(
+      "livewiki/b.md",
+      `---\ntitle: b\nowner: generated\nanchors:\n  - src/b.ts#beta\n---\n\n# b\n\nDocumentation.\n`,
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    await writeRepoFile("src/a.ts", "export function alpha() { return 2; }");
+    await writeRepoFile("src/b.ts", "export function beta() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+  }
+
+  it("ranks the uncovered file first and attaches the additive risk field", async () => {
+    await setupChangedDebtOnBoth();
+    const report = await runStatus(repoRoot);
+    expect(report.debt.items.length).toBe(2);
+
+    const [first, second] = report.debt.items;
+    expect(first?.symbol_key).toBe("src/b.ts#beta");
+    expect(first?.risk).toBeDefined();
+    expect(first?.risk?.factors).toEqual({ event: 10, testGap: 40, fanIn: 0, churn: 0 });
+    expect(first?.risk?.score).toBe(50);
+
+    expect(second?.symbol_key).toBe("src/a.ts#alpha");
+    expect(second?.risk?.factors).toEqual({ event: 10, testGap: 0, fanIn: 5, churn: 0 });
+    expect(second?.risk?.score).toBe(15);
+
+    const human = formatHuman(report);
+    expect(human).toContain("[risk 50]");
+    expect(human).toContain("[risk 15]");
+  });
+
+  it("riskAnalysis: false keeps chronological order and omits the risk field", async () => {
+    await setupChangedDebtOnBoth();
+    await writeFile(
+      join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ riskAnalysis: false }) + "\n",
+    );
+    const report = await runStatus(repoRoot);
+    expect(report.debt.items.length).toBe(2);
+    for (const item of report.debt.items) {
+      expect(item.risk).toBeUndefined();
+    }
+    // Chronological (detected_at ASC) order preserved.
+    for (let i = 1; i < report.debt.items.length; i++) {
+      expect(report.debt.items[i]!.detected_at).toBeGreaterThanOrEqual(
+        report.debt.items[i - 1]!.detected_at,
+      );
+    }
+    expect(formatHuman(report)).not.toContain("[risk ");
   });
 });

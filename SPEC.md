@@ -479,6 +479,32 @@ Commands set `process.exitCode` and return instead of calling
 This applies to normal status propagation and fatal command errors; documented
 numeric exit-code semantics remain unchanged.
 
+**Risk-weighted debt ordering (Etapa 2c).** `livewiki status` (and, through the
+same array, `livewiki update`'s work package) ranks open debt by a
+deterministic, transparent risk score computed without any LLM call. Ordering
+changes only — debt identity/dedup is untouched (§"Debt dedup"), and the JSON
+change is purely additive (`debt.items[].risk = { score, factors }`). The human
+output prints `[risk N]` after each debt item. Rubric (per debt item's source
+file; missing data ⇒ factor 0; score = sum; sort: score desc, then detected_at
+asc, then id asc):
+
+| Factor | Rule | Points |
+|---|---|---|
+| event | `changed` / `deleted` | +10 |
+| event | `moved` | +5 |
+| testGap | anchored-tier file with no importing test file | +40 |
+| testGap | prose-tier file (import coverage not possible) | +10 |
+| fanIn | 1–2 importers / 3–5 / 6–10 / >10 | +5 / +10 / +15 / +20 |
+| churn | 1–3 commits / 4–9 / ≥10 in window | +5 / +10 / +15 |
+
+Config keys: `riskAnalysis` (boolean, default `true`; `false` keeps the
+chronological ordering and omits the `risk` field) and `riskChurnCommits`
+(integer 0..10000, default 500; `0` disables the git spawn). Imports are
+recomputed on demand, never persisted. Git churn uses ONE `git -c
+core.quotepath=false log --no-merges --max-count=<N> --name-only --format=`
+subprocess via `child_process.spawn` with an argument array and `shell: false`;
+when git is absent or the directory is not a repo it degrades silently (churn factor 0, never an error).
+
 ## MCP tools (phase 4)
 
 | Tool | Action |

@@ -308,6 +308,64 @@ describe("update — CHARS_PER_TOKEN (heurística)", () => {
   });
 });
 
+describe("update — risk-ordered work package (Etapa 2c)", () => {
+  it("loadWorkPackage emits debt items and snippets in risk order", async () => {
+    // src/a.ts is imported by src/a.test.ts (covered); src/b.ts is
+    // uncovered — the uncovered item must lead the package.
+    await writeCode("src/a.ts", "export function alpha() { return 1; }");
+    await writeCode("src/b.ts", "export function beta() { return 1; }");
+    await writeCode(
+      "src/a.test.ts",
+      'import { alpha } from "./a";\nexport const probe = alpha();\n',
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    await writeWiki(
+      "livewiki/a.md",
+      `---
+title: a
+owner: generated
+anchors:
+  - src/a.ts#alpha
+---
+
+# a
+
+Documentation.
+`,
+    );
+    await writeWiki(
+      "livewiki/b.md",
+      `---
+title: b
+owner: generated
+anchors:
+  - src/b.ts#beta
+---
+
+# b
+
+Documentation.
+`,
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    await writeCode("src/a.ts", "export function alpha() { return 2; }");
+    await writeCode("src/b.ts", "export function beta() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const pkg = await loadWorkPackage(repoRoot);
+    expect(pkg.debt.length).toBe(2);
+    expect(pkg.debt[0]?.symbol_key).toBe("src/b.ts#beta");
+    expect(pkg.debt[1]?.symbol_key).toBe("src/a.ts#alpha");
+    // Snippets follow the same order (highest-risk items first).
+    expect(pkg.snippets.length).toBe(2);
+    expect(pkg.snippets[0]?.symbolKey).toBe("src/b.ts#beta");
+    expect(pkg.snippets[1]?.symbolKey).toBe("src/a.ts#alpha");
+  });
+});
+
 describe("update — files persistidos", () => {
   it("update_metrics.json é criado em .livewiki/", async () => {
     await setupWithAnchor();
