@@ -10,6 +10,7 @@ import {
   buildTopicPrompt,
   buildTopicRepairPrompt,
   buildTopicRefinePrompt,
+  buildSurgicalRepairPrompt,
   neutralizeUntrustedControlMarkers,
   neutralizeUntrustedControlMarkersExceptValidAnchors,
   DEFAULT_CONTEXT_TOKEN_BUDGET,
@@ -2074,5 +2075,120 @@ describe("prompts — rationale evidence block (Etapa 2b)", () => {
 
     const topic = buildTopicPrompt(sampleTopic, "digest", "sym", "source", "en");
     expect(topic.user).not.toContain("# Rationale evidence");
+  });
+});
+
+// === Recovery tier (Component 1) — surgical repair prompt ===
+
+describe("buildSurgicalRepairPrompt", () => {
+  const failedPage = [
+    "---",
+    "title: Auth module",
+    "owner: generated",
+    "anchors:",
+    "  - src/auth/login.ts#login",
+    "---",
+    "",
+    "# Auth module",
+    "",
+    "This page documents authentication.",
+    "",
+    "## When to use this page",
+    "",
+    "- Review the login behavior.",
+    "- Change the session handling.",
+    "",
+    "## How it fits",
+    "",
+    "Auth is one part of the repository.",
+    "",
+    "## Details",
+    "",
+    "<!-- lw:anchors src/auth/login.ts#login -->",
+    "",
+  ].join("\n");
+
+  const eligibleErrors: ArtifactValidationError[] = [
+    {
+      code: "empty_section",
+      message: "section marker at offset 200 has no real prose before the next heading/marker/end of page",
+      location: "section",
+      sectionSlug: "details",
+    },
+  ];
+
+  it("names ONLY the affected sections and states the byte-identical contract", () => {
+    const r = buildSurgicalRepairPrompt("module", failedPage, eligibleErrors, "", "en");
+    expect(r.system).toContain('Change ONLY the content of these sections: "Details".');
+    expect(r.system).toContain("byte-for-byte identical");
+    expect(r.user).toContain('# Sections you may change (everything else stays byte-for-byte identical):');
+    expect(r.user).toContain('- "Details"');
+    expect(r.user).not.toContain('"How it fits"\n- ');
+  });
+
+  it("renders each error with its ACTION directive from the closed repair contract", () => {
+    const r = buildSurgicalRepairPrompt("module", failedPage, eligibleErrors, "", "en");
+    expect(r.user).toContain("- [empty_section] (section \"details\")");
+    expect(r.user).toContain("ACTION:");
+  });
+
+  it("carries ONLY the supplied evidence slice — no closed list, no full symbol table", () => {
+    const slice = "- src/auth/login.ts#login (function): login()\n\n// === src/auth/login.ts#login (src/auth/login.ts:1-1) ===\nexport function login() {}";
+    const r = buildSurgicalRepairPrompt("module", failedPage, eligibleErrors, slice, "en");
+    expect(r.user).toContain(slice.split("\n")[0]!);
+    expect(r.user).not.toContain("# Closed list of canonical keys");
+    expect(r.user).not.toContain("# Symbol table:");
+    expect(r.user).not.toContain("# Source code (truncated by token budget");
+  });
+
+  it("size stays bounded by the inputs (page + capped evidence + small scaffold)", () => {
+    const evidence = "x".repeat(12_000);
+    const r = buildSurgicalRepairPrompt("module", failedPage, eligibleErrors, evidence, "en");
+    // Scaffold (contract + error lines + headers) is small; the total must
+    // track page + evidence, never the multi-hundred-KB full-context shape.
+    expect(r.user.length).toBeLessThan(failedPage.length + 12_000 + 4_000);
+    expect(r.system.length).toBeLessThan(4_000);
+  });
+
+  it("embeds the failed page with its lw:anchors markers verbatim (the syntax to preserve)", () => {
+    const r = buildSurgicalRepairPrompt("module", failedPage, eligibleErrors, "", "en");
+    expect(r.user).toContain("<!-- lw:anchors src/auth/login.ts#login -->");
+  });
+
+  it("says so explicitly when the affected sections cite no anchor keys", () => {
+    const r = buildSurgicalRepairPrompt("module", failedPage, eligibleErrors, "", "en");
+    expect(r.user).toContain("(no anchor keys are cited in the affected sections — no evidence slice)");
+  });
+
+  it("resolves the section name from a section-level missing_page_opening message", () => {
+    const flowErrors: ArtifactValidationError[] = [
+      {
+        code: "missing_page_opening",
+        message: 'page opening "Failure and recovery" must contain one or more prose paragraphs',
+        location: "body",
+      },
+    ];
+    const flowPage = [
+      "---",
+      "title: Flow",
+      "owner: generated",
+      "---",
+      "",
+      "# Flow",
+      "",
+      "Explains the flow.",
+      "",
+      "## Purpose",
+      "",
+      "Prose.",
+      "",
+      "## Failure and recovery",
+      "",
+      "- bullets are not prose",
+      "",
+    ].join("\n");
+    const r = buildSurgicalRepairPrompt("flow", flowPage, flowErrors, "", "en");
+    expect(r.system).toContain('"Failure and recovery"');
+    expect(r.user).toContain('- "Failure and recovery"');
   });
 });

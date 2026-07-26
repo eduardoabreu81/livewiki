@@ -25,6 +25,8 @@ import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { runBatch, runOnly } from "./batch.js";
+import { buildStatusReport } from "./batch-status.js";
+import { DEGRADED_NOTICE } from "./artifact.js";
 import * as safeIo from "./safe-io.js";
 import type { LlmClient } from "./llm/index.js";
 import { LlmTimeoutError } from "./llm/index.js";
@@ -720,6 +722,7 @@ describe("stage-4 per-attempt diagnostics", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
       maxIncompleteRetries: 0,
     });
@@ -758,6 +761,7 @@ describe("stage-4 per-attempt diagnostics", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
       maxIncompleteRetries: 0,
     });
@@ -867,6 +871,7 @@ describe("stage-4 per-attempt diagnostics", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
     });
 
@@ -880,6 +885,7 @@ describe("stage-4 per-attempt diagnostics", () => {
       noRefine: true,
       onlyTarget: "auth",
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
     });
 
@@ -1014,6 +1020,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
     });
 
@@ -1060,6 +1067,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
     });
     expect(llm.callCount).toBe(1);
@@ -1086,6 +1094,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
       maxIncompleteRetries: 0,
     });
@@ -1153,6 +1162,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
     });
     expect(firstResult.status).toBe("completed_with_failures");
@@ -1178,6 +1188,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
       noRefine: true,
       onlyTarget: "auth",
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
     });
     expect(secondResult.status).toBe("completed");
@@ -1495,6 +1506,7 @@ describe("batch X — verify failure rollbacks a new page", () => {
         llmClient: llm,
         noRefine: true,
         skipManifestWrite: true,
+        relaxedRound: false,
         maxRepairAttempts: 0, // no repair — test only the rollback of one call
       });
 
@@ -2184,6 +2196,7 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
       maxIncompleteRetries: 0,
     });
@@ -2354,6 +2367,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
     });
 
@@ -2436,6 +2450,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
       maxIncompleteRetries: 0,
     });
@@ -2465,6 +2480,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
       maxIncompleteRetries: 2,
     });
@@ -2489,6 +2505,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
       maxIncompleteRetries: 1,
     });
@@ -2517,6 +2534,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
       maxIncompleteRetries: 1,
     });
@@ -2531,6 +2549,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       noRefine: true,
       onlyTarget: "auth",
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
       maxIncompleteRetries: 1,
     });
@@ -2560,6 +2579,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
       maxIncompleteRetries: 0,
     });
@@ -2588,6 +2608,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       noRefine: true,
       onlyTarget: "auth",
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 0,
       maxIncompleteRetries: 0,
     });
@@ -2864,5 +2885,172 @@ describe("batch X — write/verify exception rolls the page back (R10.1 A)", () 
       spy.mockRestore();
       removeSpy.mockRestore();
     }
+  });
+});
+
+// === Recovery tier (Component 2): relaxed completion round ===
+//
+// After the strict loop would mark `repair_exhausted`, ONE final attempt
+// runs under the relaxed presentation contract. Success marks the task
+// DONE with the page flagged `quality: degraded` (frontmatter + reader
+// notice) — never a failure, exit code stays 0. Infra failures and error
+// sets containing unclassified codes never get the relaxed call.
+describe("batch recovery tier — relaxed completion round (Component 2)", () => {
+  const closedKeys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+
+  /**
+   * Fails STRICT with a classified contract-shape error (the task list has
+   * a single bullet; the strict rule wants 2 to 4). Passes relaxed.
+   */
+  function makeStrictFailingPage(): string {
+    return makeValidPage(closedKeys).replace(
+      "- Change this module's implementation.\n",
+      "",
+    );
+  }
+
+  /** Passes RELAXED only: 1-bullet task list AND bullets in How-it-fits. */
+  function makeRelaxedOnlyPage(): string {
+    return makeValidPage(closedKeys)
+      .replace("- Change this module's implementation.\n", "")
+      .replace(
+        "This module provides one part of the repository implementation.",
+        "- This module provides one part of the implementation.\n- It collaborates with the neighboring modules.",
+      );
+  }
+
+  /** Fails BOTH contracts (a required opening H2 is absent). */
+  function makeBothFailingPage(): string {
+    return makeValidPage(closedKeys).replace(
+      "## When to use this page\n\n- Review this module's behavior.\n- Change this module's implementation.\n\n## How it fits",
+      "## How it fits",
+    );
+  }
+
+  it("an exhausted contract-shaped failure completes as done with the degraded marking", async () => {
+    llm.responses = [
+      makeStrictFailingPage(),
+      makeStrictFailingPage(),
+      makeStrictFailingPage(),
+      makeRelaxedOnlyPage(),
+    ];
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    // Done, NOT a failure — the exit code stays 0 for a degraded-only run.
+    expect(result.status).toBe("completed");
+    expect(result.failures).toEqual([]);
+    expect(result.tasksDone).toBe(1);
+    expect(result.tasksFailed).toBe(0);
+    expect(llm.callCount).toBe(4); // 1 initial + 2 repairs + 1 relaxed
+    expect(result.degradedPages).toEqual(["livewiki/auth.md"]);
+    // Exact accounting: the relaxed attempt is a normal billed attempt.
+    expect(result.totals.inputTokens).toBe(400);
+    expect(result.totals.outputTokens).toBe(200);
+
+    // The page on disk carries the frontmatter flag + the reader notice
+    // as the FIRST body line.
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    expect(page).toContain("quality: degraded");
+    const bodyStart = page.indexOf("\n---\n") + "\n---\n".length;
+    expect(page.slice(bodyStart).startsWith(`\n${DEGRADED_NOTICE}\n`)).toBe(true);
+
+    // Checkpoint: done + degraded flag; the relaxed attempt joined the
+    // normal 1:1 usage/diagnostic histories with the relaxed marker.
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.status).toBe("done");
+    expect(checkpoint.degraded).toBe(true);
+    expect(checkpoint.usageHistory).toHaveLength(4);
+    expectJoinedAttempts(checkpoint);
+    const relaxedDiag = checkpoint.diagnosticHistory![3]!;
+    expect(relaxedDiag.outcome).toBe("success");
+    expect((relaxedDiag as { relaxed?: boolean }).relaxed).toBe(true);
+
+    // The run summary persisted the degraded pages (batch status surface).
+    const report = await buildStatusReport(repoRoot);
+    expect(report.run.summary?.degradedPages).toEqual(["livewiki/auth.md"]);
+  });
+
+  it("llm_timeout is in the no-relax set: original failure, no relaxed call", async () => {
+    llm.generate = async () => {
+      throw new LlmTimeoutError("openai-compat", 300_000);
+    };
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(result.failures[0]!.error.code).toBe("llm_timeout");
+    expect(result.degradedPages).toBeUndefined();
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.status).toBe("failed");
+    // The timeout is terminal for the task — no repair, no relaxed call.
+    expect(checkpoint.usageHistory).toHaveLength(1);
+  });
+
+  it("an error set containing unclassified codes gets no relaxed call", async () => {
+    // Generic transport failures surface as llm_error — not a classified
+    // validation code, so the exhaustion is not a contract-shape failure.
+    llm.throwOn = new Set([0, 1, 2, 3]);
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(result.failures[0]!.error.code).toBe("repair_exhausted");
+    expect(llm.callCount).toBe(3); // 1 initial + 2 repairs, NO relaxed call
+    expect(result.degradedPages).toBeUndefined();
+  });
+
+  it("a failing relaxed attempt keeps the original repair_exhausted", async () => {
+    llm.responses = [makeBothFailingPage()]; // repeated for every call
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(result.failures[0]!.error.code).toBe("repair_exhausted");
+    expect(result.failures[0]!.error.message).toContain("exhausted 4 LLM call(s)");
+    expect(llm.callCount).toBe(4);
+    expect(result.degradedPages).toBeUndefined();
+    const checkpoint = await readStage4Checkpoint(repoRoot);
+    expect(checkpoint.status).toBe("failed");
+    expect(checkpoint.degraded).toBeUndefined();
+    expectJoinedAttempts(checkpoint);
+    expect((checkpoint.diagnosticHistory![3] as { relaxed?: boolean }).relaxed).toBe(true);
+  });
+
+  it("relaxedRound: false disables the completion round", async () => {
+    llm.responses = [makeRelaxedOnlyPage()]; // would pass the relaxed round
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+      relaxedRound: false,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    expect(result.failures[0]!.error.code).toBe("repair_exhausted");
+    expect(llm.callCount).toBe(3); // no relaxed call
+    expect(result.degradedPages).toBeUndefined();
   });
 });

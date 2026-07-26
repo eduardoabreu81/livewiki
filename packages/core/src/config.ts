@@ -185,6 +185,25 @@ export interface LivewikiConfig {
    * Must be an integer 0..10000.
    */
   riskChurnCommits?: number;
+  /**
+   * Surgical section-scoped repair calls (recovery tier, Component 1).
+   * Default true; when a repair error set is section-scoped and eligible,
+   * the repair attempt uses a small focused prompt plus the deterministic
+   * anti-cascade guard instead of the full-context repair prompt. Set
+   * false to always use the full-context repair path.
+   */
+  surgicalRepair?: boolean;
+  /**
+   * Relaxed completion round (recovery tier, Component 2). Default true;
+   * when the strict loop would mark `repair_exhausted`, ONE final attempt
+   * runs under a relaxed presentation contract (prose/bullet shape and
+   * required-section sets relax; anchors, closed-list exactness,
+   * frontmatter identity, the diagram placeholder, marker placement, the
+   * TODO ban, `empty_section`, tier coverage, and verify NEVER relax).
+   * Success marks the task done with the page flagged `quality: degraded`;
+   * failure keeps the original `repair_exhausted`. Set false to disable.
+   */
+  relaxedRound?: boolean;
 }
 
 /** Max safe timeout for Node `setTimeout` (signed 32-bit ms). */
@@ -265,6 +284,10 @@ export const CONFIG_DEFAULTS = {
   riskAnalysis: true,
   /** Git churn window for the risk score; 0 disables the git spawn. */
   riskChurnCommits: 500,
+  /** Surgical section-scoped repair calls (recovery tier, Component 1). */
+  surgicalRepair: true,
+  /** Relaxed completion round after strict exhaustion (recovery tier, Component 2). */
+  relaxedRound: true,
 } as const;
 
 /**
@@ -365,6 +388,8 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     rationaleMaxChars: CONFIG_DEFAULTS.rationaleMaxChars,
     riskAnalysis: CONFIG_DEFAULTS.riskAnalysis,
     riskChurnCommits: CONFIG_DEFAULTS.riskChurnCommits,
+    surgicalRepair: CONFIG_DEFAULTS.surgicalRepair,
+    relaxedRound: CONFIG_DEFAULTS.relaxedRound,
     ...config,
   };
 }
@@ -623,6 +648,20 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error(`invalid riskChurnCommits: must be an integer 0..10000 (0 disables the git churn spawn), got ${JSON.stringify(v)}`);
     }
     out.riskChurnCommits = v;
+  }
+  if (obj["surgicalRepair"] !== undefined) {
+    const v = obj["surgicalRepair"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid surgicalRepair: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.surgicalRepair = v;
+  }
+  if (obj["relaxedRound"] !== undefined) {
+    const v = obj["relaxedRound"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid relaxedRound: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.relaxedRound = v;
   }
   if (obj["flowMaxDiagramNodes"] !== undefined) {
     const v = obj["flowMaxDiagramNodes"];

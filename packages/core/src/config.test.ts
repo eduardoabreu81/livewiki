@@ -678,3 +678,73 @@ describe("config — Etapa 2c risk-prioritization keys", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/riskChurnCommits/);
   });
 });
+
+describe("config — recovery tier surgicalRepair key", () => {
+  it("applyDefaults fills surgicalRepair=true when absent", () => {
+    const cfg = applyDefaults({});
+    expect(cfg.surgicalRepair).toBe(true);
+  });
+
+  it("applyDefaults does NOT overwrite an explicit value", () => {
+    const cfg = applyDefaults({ surgicalRepair: false });
+    expect(cfg.surgicalRepair).toBe(false);
+  });
+
+  it("loadConfig accepts a surgicalRepair boolean", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ surgicalRepair: false }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.surgicalRepair).toBe(false);
+  });
+
+  it.each([
+    ["a string", "yes"],
+    ["a number", 1],
+    ["null", null],
+  ])("rejects surgicalRepair as %s", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ surgicalRepair: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/surgicalRepair/);
+  });
+});
+
+describe("config — recovery tier relaxedRound key", () => {
+  it("applyDefaults fills relaxedRound=true when absent", () => {
+    const cfg = applyDefaults({});
+    expect(cfg.relaxedRound).toBe(true);
+  });
+
+  it("applyDefaults does NOT overwrite an explicit value", () => {
+    const cfg = applyDefaults({ relaxedRound: false });
+    expect(cfg.relaxedRound).toBe(false);
+  });
+
+  it("loadConfig accepts a relaxedRound boolean", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ relaxedRound: false }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.relaxedRound).toBe(false);
+  });
+
+  it.each([
+    ["a string", "yes"],
+    ["a number", 1],
+    ["null", null],
+  ])("rejects relaxedRound as %s", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ relaxedRound: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/relaxedRound/);
+  });
+});

@@ -1349,6 +1349,7 @@ describe("review #10 — repair_exhausted preserves the structured diagnostics",
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
+      relaxedRound: false,
       maxRepairAttempts: 2,
     });
 

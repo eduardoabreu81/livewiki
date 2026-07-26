@@ -134,6 +134,15 @@ export interface Stage4ValidationContext {
   readonly expectedTopicFlows?: readonly string[];
   readonly topicKeyGroups?: TopicKeyGroups;
   readonly topicProductKeys?: readonly string[];
+  /**
+   * Recovery tier (Component 2): relaxed presentation contract for the ONE
+   * final completion attempt after the strict loop exhausted. Only
+   * prose-vs-bullet shape and the required-section set relax — frontmatter
+   * identity/exactness, anchors, closed-list completeness, the diagram
+   * placeholder, marker placement, the TODO ban, `empty_section`, tier
+   * coverage, and all of `verify.ts` NEVER relax.
+   */
+  readonly relaxed?: boolean;
 }
 
 /** Regex for a complete reasoning block: from `<think>` to `</think>`. */
@@ -174,6 +183,47 @@ const TOPIC_ANCHOR_SECTIONS = [
 const TOPIC_ANCHOR_SECTION_NORMALIZED: ReadonlySet<string> = new Set(
   TOPIC_ANCHOR_SECTIONS.map((section) => section.normalized),
 );
+
+/**
+ * Recovery tier (Component 2): reader-visible notice inserted as the FIRST
+ * body line of a page completed under the relaxed contract. Defined once so
+ * the relaxed writer (batch.ts) and the relaxed opening checks (which skip
+ * EXACTLY this known line — deterministic, no prose guessing) can never
+ * drift apart.
+ */
+export const DEGRADED_NOTICE =
+  "> **Degraded page** — generated under the relaxed contract after strict attempts failed; anchors verified, presentation reduced.";
+
+/** Drop lines whose trimmed content is EXACTLY the known degraded notice. */
+function dropDegradedNoticeLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => line.trim() !== DEGRADED_NOTICE)
+    .join("\n");
+}
+
+/**
+ * Recovery tier (Component 2): mark an artifact as degraded — the
+ * frontmatter gains the additive `quality: degraded` line (the validator
+ * never rejects unknown keys) and `DEGRADED_NOTICE` becomes the first body
+ * line. Applied by the relaxed writer BEFORE validation, so the artifact
+ * that validation (and verify) sees is byte-for-byte the artifact written
+ * to disk. Idempotent: an already-marked page is returned unchanged apart
+ * from notice deduplication. A page without a frontmatter block is returned
+ * unchanged — validation rejects it as `no_frontmatter` regardless.
+ */
+export function markDegradedArtifact(content: string): string {
+  if (!content.startsWith("---\n")) return content;
+  const closeIdx = content.indexOf("\n---", 4);
+  if (closeIdx === -1) return content;
+  const fmEnd = closeIdx + "\n---".length;
+  const yamlBlock = content.slice(4, closeIdx);
+  const frontmatter = /^[ \t]*quality:/m.test(yamlBlock)
+    ? content.slice(0, fmEnd)
+    : `${content.slice(0, closeIdx)}\nquality: degraded\n---`;
+  const body = dropDegradedNoticeLines(content.slice(fmEnd)).replace(/^\n+/, "");
+  return `${frontmatter}\n\n${DEGRADED_NOTICE}\n\n${body}`;
+}
 
 /**
  * Normalizes the raw LLM output into a Markdown artifact.
@@ -294,6 +344,16 @@ export function validateStage4Artifact(
     body = parsed.body;
   } catch (e) {
     frontmatterParseError = (e as Error).message;
+  }
+
+  // Recovery tier (Component 2): the relaxed writer inserts DEGRADED_NOTICE
+  // as the first body line before validation. The relaxed contract tolerates
+  // EXACTLY that known line — strip it up front so every opening check sees
+  // the page as if the notice were absent (offsets stay internally
+  // consistent because every downstream scan derives from this `body`).
+  // Strict validation never strips: there the notice is ordinary content.
+  if (context?.relaxed === true) {
+    body = dropDegradedNoticeLines(body);
   }
 
   if (frontmatterParseError) {
@@ -481,12 +541,13 @@ export function validateStage4Artifact(
     ? lastHeadingBefore(headingMatches, firstSectionMarker.index!)
     : null;
   const openingEnd = firstAnchoredHeading?.offset ?? firstSectionMarker?.index ?? markerScanBody.length;
+  const relaxed = context?.relaxed === true;
   const openingFailure =
     pageKind === "flow"
-      ? checkRequiredFlowOpening(markerScanBody, body, context?.expectedFlowDiagram)
+      ? checkRequiredFlowOpening(markerScanBody, body, context?.expectedFlowDiagram, relaxed)
       : pageKind === "topic"
-        ? checkRequiredTopicOpening(markerScanBody, context?.expectedTopicTitle)
-        : checkRequiredPageOpening(markerScanBody.slice(0, openingEnd));
+        ? checkRequiredTopicOpening(markerScanBody, context?.expectedTopicTitle, relaxed)
+        : checkRequiredPageOpening(markerScanBody.slice(0, openingEnd), relaxed);
   if (openingFailure !== null) {
     errors.push(
       err(
@@ -597,7 +658,13 @@ export function validateStage4Artifact(
   // presence in all three sections is mandatory for stage-5 artifacts;
   // module pages are not affected.
   if (pageKind === "flow") {
-    for (const section of FLOW_ANCHOR_SECTIONS) {
+    // Relaxed contract: Failure and recovery is optional, so its marker
+    // presence is not required either. Marker PLACEMENT (the allowed-
+    // section rule above) and tier coverage stay strict.
+    const requiredFlowMarkerSections = context?.relaxed === true
+      ? FLOW_ANCHOR_SECTIONS.filter((section) => section.normalized !== "failure and recovery")
+      : FLOW_ANCHOR_SECTIONS;
+    for (const section of requiredFlowMarkerSections) {
       if (!coveredFlowSections.has(section.normalized)) {
         errors.push(
           err(
@@ -643,7 +710,14 @@ export function validateStage4Artifact(
   }
 
   if (pageKind === "topic") {
-    for (const section of TOPIC_ANCHOR_SECTIONS) {
+    // Relaxed contract: only the still-required sections (Purpose,
+    // Behavioral contract) must carry markers.
+    const requiredTopicMarkerSections = context?.relaxed === true
+      ? TOPIC_ANCHOR_SECTIONS.filter(
+          (section) => section.normalized === "purpose" || section.normalized === "behavioral contract",
+        )
+      : TOPIC_ANCHOR_SECTIONS;
+    for (const section of requiredTopicMarkerSections) {
       if (!coveredTopicSections.has(section.normalized)) {
         errors.push(
           err(
@@ -1086,7 +1160,7 @@ function validateExactTopicList(
 }
 
 /** Structural-only check for the required page opening, in contract order. */
-function checkRequiredPageOpening(text: string): PageOpeningFailure | null {
+function checkRequiredPageOpening(text: string, relaxed = false): PageOpeningFailure | null {
   const lines = text.split("\n");
   while (lines.length > 0 && lines[0]!.trim() === "") lines.shift();
   while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
@@ -1135,7 +1209,15 @@ function checkRequiredPageOpening(text: string): PageOpeningFailure | null {
     .map((line) => line.trim())
     .filter(Boolean);
   const malformedTaskLine = taskLines.find((line) => !/^[-*+]\s+\S/.test(line));
-  if (taskLines.length < 2 || taskLines.length > 4 || malformedTaskLine !== undefined) {
+  // Relaxed contract: bullets or prose, any count — only presence remains.
+  if (relaxed) {
+    if (taskLines.length === 0) {
+      return {
+        message: 'page opening "When to use this page" must contain at least one task line (relaxed contract: bullets or prose, any count)',
+        offending: "(absent)",
+      };
+    }
+  } else if (taskLines.length < 2 || taskLines.length > 4 || malformedTaskLine !== undefined) {
     return {
       message: 'page opening "When to use this page" task list must contain only 2 to 4 non-empty Markdown bullets',
       offending: malformedTaskLine ?? openingSnippet(taskLines),
@@ -1156,10 +1238,13 @@ function checkRequiredPageOpening(text: string): PageOpeningFailure | null {
   const howBlockEnd = findNextImplementationHeading(lines, howIndex + 1);
   const howBlockLines =
     howBlockEnd < 0 ? lines.slice(howIndex + 1) : lines.slice(howIndex + 1, howBlockEnd);
-  const howFailure = proseBlockFailure(howBlockLines, false, true);
+  // Relaxed contract: How-it-fits accepts bullets.
+  const howFailure = proseBlockFailure(howBlockLines, false, true, relaxed);
   if (howFailure !== null) {
     return {
-      message: 'page opening "How it fits" must contain one or more prose paragraphs without headings, bullets, or lw: markers',
+      message: relaxed
+        ? 'page opening "How it fits" must contain one or more prose paragraphs or bullets without headings or lw: markers'
+        : 'page opening "How it fits" must contain one or more prose paragraphs without headings, bullets, or lw: markers',
       offending: howFailure,
     };
   }
@@ -1181,7 +1266,7 @@ function checkRequiredPageOpening(text: string): PageOpeningFailure | null {
  * they neither satisfy nor violate section content requirements; the dual
  * closed-key completeness rule governs their placement.
  */
-function checkRequiredTopicOpening(masked: string, expectedTitle?: string): PageOpeningFailure | null {
+function checkRequiredTopicOpening(masked: string, expectedTitle?: string, relaxed = false): PageOpeningFailure | null {
   const lines = masked.split("\n");
   while (lines.length > 0 && lines[0]!.trim() === "") lines.shift();
   while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
@@ -1192,21 +1277,30 @@ function checkRequiredTopicOpening(masked: string, expectedTitle?: string): Page
     return { message: `topic H1 must match the accepted title "${expectedTitle}"`, offending: lines[0]!.trim() };
   }
 
-  const required = [
-    "Purpose",
-    "When to use this page",
-    "Behavioral contract",
-    "Failure and recovery",
-    "Change map",
-    "Related pages",
-  ] as const;
+  // Relaxed contract: the required-section set reduces to Purpose,
+  // Behavioral contract, and Related pages; the other contract sections
+  // may be present (unchecked) or absent.
+  const required: readonly string[] = relaxed
+    ? ["Purpose", "Behavioral contract", "Related pages"]
+    : [
+        "Purpose",
+        "When to use this page",
+        "Behavioral contract",
+        "Failure and recovery",
+        "Change map",
+        "Related pages",
+      ];
   const purposeIndex = findExactOpeningH2(lines, "Purpose", 1);
   const firstH2 = findNextH2(lines, 1);
   const problemEnd = firstPresentIndex(purposeIndex, firstH2, lines.length);
-  const problemFailure = proseBlockFailure(lines.slice(1, problemEnd), true, false);
+  // Relaxed contract: the reader-problem block accepts bullets and is no
+  // longer limited to a single paragraph.
+  const problemFailure = proseBlockFailure(lines.slice(1, problemEnd), !relaxed, false, relaxed);
   if (problemFailure !== null) {
     return {
-      message: "topic opening must contain exactly one reader-problem sentence between H1 and Purpose",
+      message: relaxed
+        ? "topic opening must contain a reader-problem block between H1 and Purpose (relaxed contract: prose or bullets)"
+        : "topic opening must contain exactly one reader-problem sentence between H1 and Purpose",
       offending: problemFailure,
     };
   }
@@ -1222,7 +1316,7 @@ function checkRequiredTopicOpening(masked: string, expectedTitle?: string): Page
     }
     const sectionFailure = flowSectionProseFailure(
       lines.slice(index + 1, flowSectionEnd(lines, index)),
-      title === "When to use this page" || title === "Change map" || title === "Related pages",
+      relaxed || title === "When to use this page" || title === "Change map" || title === "Related pages",
     );
     if (sectionFailure !== null) {
       return { message: `topic section "${title}" must contain grounded prose, bullets, or links`, offending: sectionFailure };
@@ -1236,6 +1330,7 @@ function checkRequiredFlowOpening(
   masked: string,
   raw: string,
   expectedFlowDiagram?: string,
+  relaxed = false,
 ): PageOpeningFailure | null {
   const maskedLines = masked.split("\n");
   const rawLines = raw.split("\n");
@@ -1293,9 +1388,10 @@ function checkRequiredFlowOpening(
     };
   }
 
+  // Relaxed contract: Purpose accepts bullets.
   const purposeFailure = flowSectionProseFailure(
     lines.slice(purposeIndex + 1, flowSectionEnd(lines, purposeIndex)),
-    false,
+    relaxed,
   );
   if (purposeFailure !== null) {
     return {
@@ -1361,51 +1457,66 @@ function checkRequiredFlowOpening(
     }
   }
 
-  const invariantsIndex = findExactOpeningH2(lines, "Invariants", diagramIndex + 1);
+  // Relaxed contract: the required-section set reduces to Purpose, Ordered
+  // flow, Diagram, and Related pages. Invariants and Failure and recovery
+  // are content-checked when present but are no longer required.
+  let sectionCursor = diagramIndex + 1;
+  const invariantsIndex = findExactOpeningH2(lines, "Invariants", sectionCursor);
   if (invariantsIndex < 0) {
-    return {
-      message: 'required page opening H2 "Invariants" is missing or malformed',
-      offending: offendingHeading(
-        lines,
-        findOpeningHeadingCandidate(lines, "Invariants", diagramIndex + 1),
-        findNextH2(lines, diagramIndex + 1),
-      ),
-    };
-  }
-  const invariantsFailure = flowSectionProseFailure(
-    lines.slice(invariantsIndex + 1, flowSectionEnd(lines, invariantsIndex)),
-    true,
-  );
-  if (invariantsFailure !== null) {
-    return {
-      message: 'page opening "Invariants" must contain prose or bullets',
-      offending: invariantsFailure,
-    };
+    if (!relaxed) {
+      return {
+        message: 'required page opening H2 "Invariants" is missing or malformed',
+        offending: offendingHeading(
+          lines,
+          findOpeningHeadingCandidate(lines, "Invariants", sectionCursor),
+          findNextH2(lines, sectionCursor),
+        ),
+      };
+    }
+  } else {
+    const invariantsFailure = flowSectionProseFailure(
+      lines.slice(invariantsIndex + 1, flowSectionEnd(lines, invariantsIndex)),
+      true,
+    );
+    if (invariantsFailure !== null) {
+      return {
+        message: 'page opening "Invariants" must contain prose or bullets',
+        offending: invariantsFailure,
+      };
+    }
+    sectionCursor = invariantsIndex + 1;
   }
 
-  const failureIndex = findExactOpeningH2(lines, "Failure and recovery", invariantsIndex + 1);
+  const failureIndex = findExactOpeningH2(lines, "Failure and recovery", sectionCursor);
   if (failureIndex < 0) {
-    return {
-      message: 'required page opening H2 "Failure and recovery" is missing or malformed',
-      offending: offendingHeading(
-        lines,
-        findOpeningHeadingCandidate(lines, "Failure and recovery", invariantsIndex + 1),
-        findNextH2(lines, invariantsIndex + 1),
-      ),
-    };
-  }
-  const failureFailure = flowSectionProseFailure(
-    lines.slice(failureIndex + 1, flowSectionEnd(lines, failureIndex)),
-    false,
-  );
-  if (failureFailure !== null) {
-    return {
-      message: 'page opening "Failure and recovery" must contain one or more prose paragraphs',
-      offending: failureFailure,
-    };
+    if (!relaxed) {
+      return {
+        message: 'required page opening H2 "Failure and recovery" is missing or malformed',
+        offending: offendingHeading(
+          lines,
+          findOpeningHeadingCandidate(lines, "Failure and recovery", sectionCursor),
+          findNextH2(lines, sectionCursor),
+        ),
+      };
+    }
+  } else {
+    // Relaxed contract: Failure and recovery accepts bullets.
+    const failureFailure = flowSectionProseFailure(
+      lines.slice(failureIndex + 1, flowSectionEnd(lines, failureIndex)),
+      relaxed,
+    );
+    if (failureFailure !== null) {
+      return {
+        message: relaxed
+          ? 'page opening "Failure and recovery" must contain prose or bullets'
+          : 'page opening "Failure and recovery" must contain one or more prose paragraphs',
+        offending: failureFailure,
+      };
+    }
+    sectionCursor = failureIndex + 1;
   }
 
-  const relatedIndex = findExactOpeningH2(lines, "Related pages", failureIndex + 1);
+  const relatedIndex = findExactOpeningH2(lines, "Related pages", sectionCursor);
   if (relatedIndex < 0) {
     return {
       message: 'required page opening H2 "Related pages" is missing or malformed',
@@ -1569,12 +1680,16 @@ function proseBlockFailure(
   lines: ReadonlyArray<string>,
   requireSingleParagraph: boolean,
   rejectClosingLwMarker: boolean,
+  // Relaxed contract (recovery tier, Component 2): bullets are accepted
+  // where the strict contract demanded prose.
+  allowBullets = false,
 ): string | null {
   const nonblank = lines.map((line) => line.trim()).filter(Boolean);
   if (nonblank.length === 0) return "(absent)";
 
   const forbidden = nonblank.find((line) =>
-    /^#{1,6}\s|^[-*+]\s|^<!--\s*lw:/.test(line)
+    /^#{1,6}\s|^<!--\s*lw:/.test(line)
+      || (!allowBullets && /^[-*+]\s/.test(line))
       || (rejectClosingLwMarker && /^<!--\s*\/lw:/.test(line)),
   );
   if (forbidden !== undefined) return forbidden;

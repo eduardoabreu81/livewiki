@@ -759,6 +759,37 @@ carries an enumerated, machine-checkable repair contract per page kind
   `write_verify_exception` short-circuits the task without burning repair
   slots.
 
+**Recovery tier.** Two mechanisms backstop the strict repair loop; anchors,
+the closed key list, `verify`, ownership rules, and accounting are never
+relaxed by either.
+
+- **Surgical section-scoped repair.** When every error in a failed attempt's
+  set is a prose-level code (`missing_page_opening`, `todo_marker_present`,
+  `empty_section`, `broken_internal_link`,
+  `anchor_missing_in_required_section`) with a resolvable section, the repair
+  attempt uses a small scoped prompt (the failed page + the error directives
+  + only the affected sections' evidence, capped ~12k chars) with an explicit
+  "fix ONLY the named sections" contract. A deterministic anti-cascade guard
+  (`section-guard.ts`) splits the page into H2 sections and splices back only
+  the named ones; a response that alters any other byte is rejected
+  (`surgical_cascade_rejected`). Ineligible error sets use the full-context
+  repair prompt unchanged. Config: `surgicalRepair` (boolean, default `true`).
+- **Relaxed completion round.** When the strict loop exhausts
+  (`repair_exhausted` would be assigned) and the failure is not infra
+  (`llm_timeout`, `write_verify_exception`, `context_build_exception`,
+  `rollback_failed`, `unrepairable`, ownership refusals, unclassified codes),
+  the task gets ONE final attempt under a relaxed presentation contract: flow
+  reduces required sections to Purpose / Ordered flow / Diagram / Related
+  pages, topic to Purpose / Behavioral contract / Related pages, module keeps
+  its opening; bullets are accepted where prose paragraphs were required.
+  Frontmatter exactness, anchors, diagram placeholder, marker placement, tier
+  coverage, the TODO ban, and `verify` stay strict. Success marks the task
+  done and the page degraded: frontmatter `quality: degraded` plus a fixed
+  reader notice as the first body line; the batch report and `batch status`
+  list `degradedPages`, and `livewiki status` recounts degraded pages fresh
+  from disk. Degraded tasks are `done`: a degraded-only run is `completed`
+  (exit 0). Config: `relaxedRound` (boolean, default `true`).
+
 Stage-4 output budget defaults to `stage4MaxOutputTokens` **8192** (config
 override allowed). Provider presets carry market defaults; **where an API can
 disable thinking/reasoning for documentation, livewiki disables it by default**

@@ -11,8 +11,10 @@
  */
 
 import * as nodePath from "node:path";
+import * as nodeFs from "node:fs/promises";
 import * as safeIo from "./safe-io.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
+import { parseFrontmatter } from "./frontmatter.js";
 import { snapshotMetrics, type UpdateMetricsSnapshot } from "./update-metrics.js";
 import { EXTENSION_LANG } from "./walker.js";
 import { applyDefaults, loadConfig, CONFIG_DEFAULTS, type LivewikiConfig } from "./config.js";
@@ -93,6 +95,16 @@ export interface StatusReport {
    * null se nunca houve update (estado inicial).
    */
   metrics: UpdateMetricsSnapshot | null;
+  /**
+   * Recovery tier (Component 2): pages flagged `quality: degraded` in
+   * frontmatter, recounted fresh from disk on every call (verify-style
+   * walk — no schema change, never stale). The frontmatter flag is the
+   * single source of truth.
+   */
+  degraded: {
+    total: number;
+    pages: string[];
+  };
   meta: {
     schemaVersion: number;
     lastIndexedAt: number | null;
@@ -122,6 +134,8 @@ export async function run(
     } catch {
       report.metrics = null;
     }
+    // Recovery tier (Component 2): degraded pages, fresh from disk.
+    report.degraded = await collectDegradedPages(absRoot);
     return report;
   } finally {
     db.close();
@@ -238,6 +252,8 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
     },
     // metrics é setado por run() após collect (precisa repoRoot, não db)
     metrics: null,
+    // degraded é setado por run() após collect (disk walk, não db)
+    degraded: { total: 0, pages: [] },
     meta: {
       schemaVersion: versionRow ? Number.parseInt(versionRow.value, 10) : 0,
       lastIndexedAt: lastIndexRow ? Number.parseInt(lastIndexRow.value, 10) : null,
@@ -308,6 +324,51 @@ async function applyRiskRanking(
   report.debt.items.sort(compareByRisk);
 }
 
+/**
+ * Recovery tier (Component 2): walk the `livewiki/` tree fresh from disk
+ * and collect Markdown pages whose frontmatter declares `quality: degraded`.
+ * Same walk discipline as verify.ts: hidden DIRECTORIES are never
+ * descended, but dot-prefixed PAGES are legit artifacts (tier-2 pages from
+ * hidden source dirs, e.g. `livewiki/.github.md`). An unreadable file or
+ * unparseable frontmatter is simply not degraded — status never fails
+ * because of one.
+ */
+async function collectDegradedPages(
+  absRoot: string,
+): Promise<{ total: number; pages: string[] }> {
+  const pages: string[] = [];
+  const stack = [nodePath.join(absRoot, "livewiki")];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await nodeFs.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const abs = nodePath.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith(".")) continue;
+        stack.push(abs);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        const source = await nodeFs.readFile(abs, "utf8").catch(() => null);
+        if (source === null) continue;
+        try {
+          const { frontmatter } = parseFrontmatter(source);
+          if (frontmatter?.["quality"] === "degraded") {
+            pages.push(nodePath.relative(absRoot, abs).split(nodePath.sep).join("/"));
+          }
+        } catch {
+          // Unparseable frontmatter — not a degraded page.
+        }
+      }
+    }
+  }
+  pages.sort();
+  return { total: pages.length, pages };
+}
+
 /** Format human-readable (text). */
 export function formatHuman(report: StatusReport): string {
   const lines: string[] = [];
@@ -355,6 +416,13 @@ export function formatHuman(report: StatusReport): string {
     lines.push(`  ${u.symbol_key}`);
   }
   lines.push("");
+  if (report.degraded.total > 0) {
+    lines.push(`Degraded pages (relaxed contract): ${report.degraded.total}`);
+    for (const page of report.degraded.pages) {
+      lines.push(`  ${page}`);
+    }
+    lines.push("");
+  }
   lines.push(
     `schema_version: ${report.meta.schemaVersion}  |  ` +
       `last_indexed_at: ${

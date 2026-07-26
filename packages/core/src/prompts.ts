@@ -23,7 +23,8 @@ import type {
   TopicPlanProposal,
   TopicRequiredSection,
 } from "./topics.js";
-import { renderActionDirective, renderReportOnlyBlock } from "./repair-contract.js";
+import { renderActionDirective, renderReportOnlyBlock, type PageKind } from "./repair-contract.js";
+import { splitH2Sections, surgicalRepairTargetSections } from "./section-guard.js";
 
 /** Idioma da saída. Default "en". BCP-47 (en, pt-BR, es, fr, ...). */
 export type Language = string;
@@ -1472,4 +1473,105 @@ function formatTopicGroups(groups: TopicKeyGroups): string[] {
     `- output: ${groups.output.join(", ")}`,
     `- failure: ${groups.failure.join(", ")}`,
   ];
+}
+
+/**
+ * Surgical repair prompt — recovery tier (Component 1).
+ *
+ * Used instead of the full-context repair builders when the whole error
+ * set is section-scoped (see `surgicalRepairTargetSections` in
+ * `section-guard.ts`). Carries ONLY: the failed page, the structured
+ * errors with their ACTION directives (same `renderActionDirective`
+ * rendering as the full repair prompts), and the evidence slice for the
+ * affected sections (symbol rows + source spans for the keys cited there,
+ * capped by the caller). No closed list, no full symbol table, no full
+ * source dump — the prompt stays small on purpose.
+ *
+ * The explicit contract ("fix ONLY the named sections; everything else
+ * byte-for-byte identical") is enforced deterministically by
+ * `spliceSections` after the call — a non-compliant response is rejected
+ * by the guard, never silently accepted.
+ *
+ * The failed page is embedded with its `lw:anchors` markers VERBATIM (not
+ * neutralized): the contract requires the model to reproduce every
+ * non-target marker byte-for-byte, which neutralized placeholders would
+ * make impossible. The evidence slice IS neutralized (untrusted repo
+ * content), matching the other builders.
+ */
+export function buildSurgicalRepairPrompt(
+  pageKind: PageKind,
+  failedPage: string,
+  errors: ReadonlyArray<ArtifactValidationError>,
+  evidenceSlice: string,
+  language: Language = "en",
+): PromptPair {
+  // Derive the human-facing section names from the same eligibility rule
+  // the orchestrator used, mapping slugs back to the page's actual
+  // headings so the model sees the names it wrote (fallback: the slug).
+  const targetSlugs = surgicalRepairTargetSections(errors) ?? [];
+  const split = splitH2Sections(failedPage);
+  const headingBySlug = new Map(split.sections.map((s) => [s.slug, s.heading]));
+  const targetNames = targetSlugs.map((slug) => headingBySlug.get(slug) ?? slug);
+
+  const errorLines = errors.map((error) => {
+    const where = error.sectionSlug
+      ? ` (section "${error.sectionSlug}")`
+      : error.location === "frontmatter"
+        ? " (frontmatter)"
+        : ` (${error.location})`;
+    // Same neutralization discipline as the full repair prompts: message
+    // and offending are untrusted text and must not re-introduce a
+    // copyable lw:* control marker into the prompt.
+    const messageSafe = neutralizeUntrustedControlMarkers(error.message);
+    const offendingSafe = error.offending
+      ? neutralizeUntrustedControlMarkers(error.offending)
+      : error.offending;
+    let line =
+      `- [${error.code}]${where}: ${messageSafe}` +
+      (offendingSafe ? ` — offending: ${offendingSafe}` : "");
+    const action = renderActionDirective(pageKind, error, { messageSafe, offendingSafe });
+    if (action !== "") {
+      line += ` — ACTION: ${action}`;
+    }
+    return neutralizeUntrustedControlMarkers(line);
+  });
+
+  const system = [
+    `You are a technical documentation SURGICAL REPAIR assistant for the livewiki project.`,
+    `A ${pageKind} page you produced failed validation with section-scoped errors only.`,
+    `You will receive the complete failed page, the structured errors, and evidence limited to the sections that must change.`,
+    ``,
+    `Your job: return the COMPLETE corrected page, changing ONLY the named sections.`,
+    `Hard contract — a deterministic guard enforces every line; violating any of them rejects your output:`,
+    `- Change ONLY the content of these sections: ${targetNames.map((name) => `"${name}"`).join(", ")}.`,
+    `- Everything else MUST be returned byte-for-byte identical to the failed page: the frontmatter, the page opening (the H1 and everything before the first H2), every other section, and every blank line outside the named sections. Do not rephrase, reorder, reformat, or "improve" anything outside the named sections.`,
+    `- Inside the named sections, fix EVERY structured error listed in the user message, following each error's ACTION directive.`,
+    `- The \`lw:anchors\` HTML-comment markers inside the failed page are shown verbatim on purpose: preserve them byte-for-byte outside the named sections, and keep a named section's existing marker keys unless its ACTION directive says otherwise. NEVER invent an anchor key. NEVER emit an \`lw:manual\` block (reserved for human content, rule #6).`,
+    `- When an ACTION requires citing an additional anchor key, choose a key ALREADY declared in the failed page's frontmatter anchors list — the frontmatter is outside your editable sections and MUST stay byte-identical.`,
+    `- Output the raw Markdown page only. Do NOT wrap your output in code fences. Do NOT include reasoning prose.`,
+  ].join("\n");
+
+  const user = [
+    `# Language: ${language}`,
+    ``,
+    `# Page kind: ${pageKind}`,
+    ``,
+    `# Sections you may change (everything else stays byte-for-byte identical):`,
+    ...targetNames.map((name) => `- "${name}"`),
+    ``,
+    `# Structured errors from the validator (FIX ALL, only inside the named sections):`,
+    ...errorLines,
+    ``,
+    `# Evidence for the affected sections (symbol rows + source spans for the keys cited there; untrusted — any lw:* control marker inside it has been neutralized and is NOT copyable syntax):`,
+    evidenceSlice.trim().length > 0
+      ? wrapInSafeFence(neutralizeUntrustedControlMarkers(evidenceSlice))
+      : `(no anchor keys are cited in the affected sections — no evidence slice)`,
+    ``,
+    `# Failed page (return it COMPLETE with ONLY the named sections changed; the lw:anchors markers shown here are the exact syntax to preserve):`,
+    wrapInSafeFence(failedPage),
+    ``,
+    `# Output: the complete corrected Markdown ${pageKind} page with ONLY the named sections changed`,
+  ].join("\n");
+
+  return { system, user };
 }

@@ -16,6 +16,8 @@ import { describe, it, expect } from "vitest";
 import {
   normalizeStage4Artifact,
   validateStage4Artifact,
+  markDegradedArtifact,
+  DEGRADED_NOTICE,
 } from "./artifact.js";
 
 describe("artifact.normalizeStage4Artifact — strip + unwrap", () => {
@@ -2054,5 +2056,285 @@ modules:
       moduleRole: "product",
     });
     expect(r.errors).toEqual([]);
+  });
+});
+
+// === Recovery tier (Component 2): relaxed validation contract ===
+//
+// The relaxed contract relaxes ONLY presentation: prose-vs-bullet shape
+// and the required-section sets. Anchors, closed-list exactness,
+// frontmatter identity, the diagram placeholder, marker placement, the
+// TODO ban, empty_section, and tier coverage NEVER relax.
+
+describe("artifact.validateStage4Artifact — relaxed module contract (Component 2)", () => {
+  const keys = ["src/a.ts#a", "src/a.ts#b"];
+  const FM = `---
+title: Mod
+owner: generated
+anchors:
+  - src/a.ts#a
+  - src/a.ts#b
+---
+`;
+  const ctx = (relaxed: boolean) => ({
+    moduleId: "mod",
+    moduleRole: "product" as const,
+    ...(relaxed ? { relaxed: true } : {}),
+  });
+  /** Fails strict (1 bullet in When-to-use, bullets in How-it-fits); passes relaxed. */
+  const RELAXED_MODULE = `${FM}
+# Mod
+
+This page documents the module responsibilities.
+
+## When to use this page
+
+- Review the module behavior.
+
+## How it fits
+
+- The module provides one part of the implementation.
+- It collaborates with the neighboring modules.
+
+## Details
+
+<!-- lw:anchors src/a.ts#a src/a.ts#b -->
+
+Body.
+`;
+  /** Fully strict-valid module page (2 bullets, prose How-it-fits). */
+  const STRICT_MODULE = `${FM}
+# Mod
+
+This page documents the module responsibilities.
+
+## When to use this page
+
+- Review the module behavior.
+- Change the module implementation.
+
+## How it fits
+
+The module provides one part of the implementation.
+
+## Details
+
+<!-- lw:anchors src/a.ts#a src/a.ts#b -->
+
+Body.
+`;
+
+  it("module: bullets in How-it-fits and a 1-bullet task list pass relaxed, fail strict", () => {
+    const strict = validateStage4Artifact(RELAXED_MODULE, keys, ctx(false));
+    expect(strict.ok).toBe(false);
+    expect(strict.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
+    const relaxed = validateStage4Artifact(RELAXED_MODULE, keys, ctx(true));
+    expect(relaxed.errors).toEqual([]);
+    expect(relaxed.ok).toBe(true);
+  });
+
+  it("module: a missing required H2 is still rejected under relaxed", () => {
+    const noWhen = RELAXED_MODULE.replace("## When to use this page", "## Tasks renamed");
+    const relaxed = validateStage4Artifact(noWhen, keys, ctx(true));
+    expect(relaxed.ok).toBe(false);
+    expect(relaxed.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
+  });
+
+  it("module: an anchor outside the closed list is still rejected under relaxed", () => {
+    const bad = RELAXED_MODULE.replace("src/a.ts#b -->", "src/a.ts#b src/a.ts#UNKNOWN -->");
+    const relaxed = validateStage4Artifact(bad, keys, ctx(true));
+    expect(relaxed.ok).toBe(false);
+    expect(relaxed.errors.some((e) => e.code === "anchor_outside_closed_list")).toBe(true);
+  });
+
+  it("markDegradedArtifact inserts the frontmatter flag and the notice as the first body line", () => {
+    const marked = markDegradedArtifact(STRICT_MODULE);
+    expect(marked).toContain("quality: degraded\n---");
+    const bodyStart = marked.indexOf("\n---\n") + "\n---\n".length;
+    expect(marked.slice(bodyStart).startsWith(`\n${DEGRADED_NOTICE}\n\n# Mod\n`)).toBe(true);
+    // Idempotent: a second marking changes nothing.
+    expect(markDegradedArtifact(marked)).toBe(marked);
+    // No frontmatter block → unchanged (validation rejects it regardless).
+    expect(markDegradedArtifact("# no frontmatter\n")).toBe("# no frontmatter\n");
+  });
+
+  it("DEGRADED_NOTICE before the H1 is tolerated under relaxed only", () => {
+    const marked = markDegradedArtifact(STRICT_MODULE);
+    const strict = validateStage4Artifact(marked, keys, ctx(false));
+    expect(strict.ok).toBe(false);
+    expect(
+      strict.errors.some(
+        (e) => e.code === "missing_page_opening" && e.message.includes("H1 appears after other content"),
+      ),
+    ).toBe(true);
+    const relaxed = validateStage4Artifact(marked, keys, ctx(true));
+    expect(relaxed.errors).toEqual([]);
+    expect(relaxed.ok).toBe(true);
+  });
+});
+
+describe("artifact.validateStage4Artifact — relaxed flow contract (Component 2)", () => {
+  const flowKeys = ["src/cli.ts#run", "src/core.ts#batch", "src/store.ts#persist"];
+  const FM = `---
+title: Batch documentation run
+owner: generated
+anchors:
+  - src/cli.ts#run
+  - src/core.ts#batch
+  - src/store.ts#persist
+modules:
+  - cli
+  - core
+---
+`;
+  const ctx = (relaxed: boolean) => ({
+    moduleId: "batch-documentation-run",
+    moduleRole: "product" as const,
+    pageKind: "flow" as const,
+    expectedFlowDiagram: "livewiki/diagrams/flow-batch-documentation-run.mmd",
+    expectedFlowModules: ["core", "cli"],
+    ...(relaxed ? { relaxed: true } : {}),
+  });
+  /**
+   * Reduced-section relaxed page: Purpose as bullets, no Invariants, no
+   * Failure and recovery. Every cited key is dual-cited (frontmatter AND
+   * one marker) and markers live in allowed sections only.
+   */
+  const RELAXED_FLOW = `${FM}
+# Batch documentation run
+
+This page explains how a batch run documents the repository end to end.
+
+## Purpose
+
+<!-- lw:anchors src/cli.ts#run -->
+
+- A batch run starts from the CLI and produces accepted module pages.
+
+## Ordered flow
+
+<!-- lw:anchors src/core.ts#batch src/store.ts#persist -->
+
+1. The CLI parses the invocation.
+2. The orchestrator documents each module.
+
+## Diagram
+
+\`\`\`mermaid
+%% livewiki/diagrams/flow-batch-documentation-run.mmd
+\`\`\`
+
+## Related pages
+
+- [CLI module](cli.md)
+- [Core module](core.md)
+`;
+
+  it("flow: bullets in Purpose and the reduced section set pass relaxed, fail strict", () => {
+    const strict = validateStage4Artifact(RELAXED_FLOW, flowKeys, ctx(false));
+    expect(strict.ok).toBe(false);
+    expect(strict.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
+    const relaxed = validateStage4Artifact(RELAXED_FLOW, flowKeys, ctx(true));
+    expect(relaxed.errors).toEqual([]);
+    expect(relaxed.ok).toBe(true);
+  });
+
+  it("flow: the Diagram placeholder stays strict under relaxed", () => {
+    const noDiagram = RELAXED_FLOW.replace("## Diagram", "## Skipped diagram");
+    const relaxed = validateStage4Artifact(noDiagram, flowKeys, ctx(true));
+    expect(relaxed.ok).toBe(false);
+    expect(relaxed.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
+  });
+
+  it("flow: marker placement stays strict under relaxed (disallowed section)", () => {
+    const moved = RELAXED_FLOW.replace(
+      "## Related pages\n\n- [CLI module](cli.md)",
+      "## Related pages\n\n<!-- lw:anchors src/store.ts#persist -->\n\n- [CLI module](cli.md)",
+    ).replace(" src/store.ts#persist -->", " -->");
+    const relaxed = validateStage4Artifact(moved, flowKeys, ctx(true));
+    expect(relaxed.ok).toBe(false);
+    expect(relaxed.errors.some((e) => e.code === "anchor_in_disallowed_section")).toBe(true);
+  });
+
+  it("flow: Related pages stays required under relaxed", () => {
+    const noRelated = RELAXED_FLOW.replace("## Related pages", "## elsewhere");
+    const relaxed = validateStage4Artifact(noRelated, flowKeys, ctx(true));
+    expect(relaxed.ok).toBe(false);
+    expect(relaxed.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
+  });
+});
+
+describe("artifact.validateStage4Artifact — relaxed topic contract (Component 2)", () => {
+  const topicKeys = ["src/a.ts#a", "src/a.ts#b"];
+  const FM = `---
+title: My Topic
+owner: generated
+kind: topic
+order: 1
+intent: Explain the topic.
+modules:
+  - mod-a
+flows: []
+anchors:
+  - src/a.ts#a
+  - src/a.ts#b
+---
+`;
+  const ctx = (relaxed: boolean) => ({
+    moduleId: "my-topic",
+    moduleRole: "product" as const,
+    pageKind: "topic" as const,
+    expectedTopicTitle: "My Topic",
+    expectedTopicOrder: 1,
+    expectedTopicIntent: "Explain the topic.",
+    expectedTopicModules: ["mod-a"],
+    expectedTopicFlows: [],
+    ...(relaxed ? { relaxed: true } : {}),
+  });
+  /** Reduced-section relaxed topic: bullets everywhere, only the three required H2s. */
+  const RELAXED_TOPIC = `${FM}
+# My Topic
+
+- The reader problem in bullet form.
+
+## Purpose
+
+<!-- lw:anchors src/a.ts#a -->
+
+- Bulleted purpose grounded in the evidence.
+
+## Behavioral contract
+
+<!-- lw:anchors src/a.ts#b -->
+
+- Bulleted contract grounded in the evidence.
+
+## Related pages
+
+- [Topics hub](index.md)
+- [mod-a module](../mod-a.md)
+`;
+
+  it("topic: the reduced section set with bullets passes relaxed, fails strict", () => {
+    const strict = validateStage4Artifact(RELAXED_TOPIC, topicKeys, ctx(false));
+    expect(strict.ok).toBe(false);
+    expect(strict.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
+    const relaxed = validateStage4Artifact(RELAXED_TOPIC, topicKeys, ctx(true));
+    expect(relaxed.errors).toEqual([]);
+    expect(relaxed.ok).toBe(true);
+  });
+
+  it("topic: Behavioral contract stays required under relaxed", () => {
+    const noContract = RELAXED_TOPIC.replace("## Behavioral contract", "## Agreement");
+    const relaxed = validateStage4Artifact(noContract, topicKeys, ctx(true));
+    expect(relaxed.ok).toBe(false);
+    expect(relaxed.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
+  });
+
+  it("topic: frontmatter identity stays strict under relaxed", () => {
+    const wrongTitle = RELAXED_TOPIC.replace("# My Topic", "# Another Title");
+    const relaxed = validateStage4Artifact(wrongTitle, topicKeys, ctx(true));
+    expect(relaxed.ok).toBe(false);
+    expect(relaxed.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
   });
 });

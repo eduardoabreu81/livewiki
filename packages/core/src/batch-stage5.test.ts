@@ -39,6 +39,7 @@ import {
   countFlowDiagramElements,
   flowDiagramPlaceholder,
   FLOW_DIAGRAM_SOURCE_MAX_CHARS,
+  DEGRADED_NOTICE,
 } from "./artifact.js";
 import type { LlmClient } from "./llm/index.js";
 import { LlmTimeoutError } from "./llm/index.js";
@@ -2185,5 +2186,378 @@ describe("batch stage 5 — flow candidate skipped when a participating module f
     expect(skipped).toBeDefined();
     expect(skipped!.code).toBe("participating_module_failed");
     expect(skipped!.message).toContain("core");
+  }, 60_000);
+});
+
+// === Recovery tier (Component 2): relaxed completion round (flow + topic) ===
+//
+// The relaxed round runs once after the strict loop exhausts on a
+// contract-shaped failure. Success marks the task done with the page
+// flagged `quality: degraded`; failure keeps the original
+// repair_exhausted. Mirrors the stage-4 suite in batch-repair.test.ts.
+describe("batch stage 5 — relaxed completion round (Component 2)", () => {
+  /**
+   * Flow page that fails STRICT only: Purpose written as bullets (the
+   * strict rule demands prose). Every cited key stays dual-cited and every
+   * marker lives in an allowed section, so the failure is contract-shaped
+   * and classified — the relaxed round is eligible.
+   */
+  function makeStrictFailingFlowPage(ctx: FlowPromptCtx): string {
+    const [firstKey, secondKey, ...restKeys] = ctx.closedKeys;
+    return [
+      "---",
+      "title: CLI to core flow",
+      "owner: generated",
+      "anchors:",
+      ...ctx.closedKeys.map((k) => `  - ${k}`),
+      "modules:",
+      ...ctx.moduleIds.map((m) => `  - ${m}`),
+      "---",
+      "",
+      "# CLI to core flow",
+      "",
+      "This page explains how the CLI drives the core end to end.",
+      "",
+      "## Purpose",
+      "",
+      ...(firstKey ? [`<!-- lw:anchors ${firstKey} -->`, ""] : []),
+      "- The CLI invocation starts the flow and the core produces a stored result.",
+      "",
+      "## Ordered flow",
+      "",
+      ...(secondKey ? [`<!-- lw:anchors ${secondKey} -->`, ""] : []),
+      "1. The CLI parses the invocation.",
+      "2. The core persists the result.",
+      "",
+      "## Invariants",
+      "",
+      "- Every step preserves the input payload.",
+      "",
+      "## Failure and recovery",
+      "",
+      ...(restKeys.length > 0 ? [`<!-- lw:anchors ${restKeys.join(" ")} -->`, ""] : []),
+      "The supplied source shows no retry or rollback path; the flow fails open.",
+      "",
+      "## Related pages",
+      "",
+      ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
+      "",
+    ].join("\n");
+  }
+
+  /**
+   * Passes RELAXED: the reduced section set (no Invariants, no Failure and
+   * recovery), Purpose as bullets, every key dual-cited across the two
+   * remaining marker-carrying sections.
+   */
+  function makeRelaxedFlowPage(ctx: FlowPromptCtx): string {
+    const [firstKey, ...restKeys] = ctx.closedKeys;
+    return [
+      "---",
+      "title: CLI to core flow",
+      "owner: generated",
+      "anchors:",
+      ...ctx.closedKeys.map((k) => `  - ${k}`),
+      "modules:",
+      ...ctx.moduleIds.map((m) => `  - ${m}`),
+      "---",
+      "",
+      "# CLI to core flow",
+      "",
+      "This page explains how the CLI drives the core end to end.",
+      "",
+      "## Purpose",
+      "",
+      ...(firstKey ? [`<!-- lw:anchors ${firstKey} -->`, ""] : []),
+      "- The CLI invocation starts the flow and the core produces a stored result.",
+      "",
+      "## Ordered flow",
+      "",
+      ...(restKeys.length > 0 ? [`<!-- lw:anchors ${restKeys.join(" ")} -->`, ""] : []),
+      "1. The CLI parses the invocation.",
+      "2. The core persists the result.",
+      "",
+      "## Related pages",
+      "",
+      ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
+      "",
+    ].join("\n");
+  }
+
+  it("flow: an exhausted contract-shaped failure completes degraded under the relaxed contract", async () => {
+    await writeFlowRepo(repoRoot);
+    llm.flowResponder = (ctx, flowCallIndex) =>
+      flowCallIndex < 3 ? makeStrictFailingFlowPage(ctx) : makeRelaxedFlowPage(ctx);
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      // The mock detects flow calls by the `# Flow:` prompt header, which
+      // the surgical repair prompt (Component 1) does not carry — the
+      // relaxed round is orthogonal to surgical repair (its attempt always
+      // uses the initial prompt), so keep this test on the full-repair path.
+      surgicalRepair: false,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.failures).toEqual([]);
+    expect(llm.flowCallCount).toBe(4); // 1 initial + 2 repairs + 1 relaxed
+    expect(result.degradedPages).toEqual([FLOW_PAGE_PATH]);
+
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, FLOW_PAGE_PATH), "utf8");
+    expect(page).toContain("quality: degraded");
+    expect(page).toContain(DEGRADED_NOTICE);
+    expect(page).toContain(`%% livewiki/diagrams/flow-${FLOW_SLUG}.mmd`);
+    // The reduced page has no Invariants section — the deterministic
+    // diagram insertion anchored on the Ordered flow section instead.
+    expect(page).not.toContain("## Invariants");
+    expect(await fileExists(repoRoot, FLOW_DIAGRAM_PATH)).toBe(true);
+
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
+    expect(checkpoint!.status).toBe("done");
+    expect(checkpoint!.degraded).toBe(true);
+    expect(checkpoint!.usageHistory).toHaveLength(4);
+    expect(checkpoint!.diagnosticHistory).toHaveLength(4);
+    expect((checkpoint!.diagnosticHistory![3] as { relaxed?: boolean }).relaxed).toBe(true);
+
+    // Verify NEVER relaxes: zero issues of any severity on the flow artifacts.
+    const verify = await runVerify(repoRoot);
+    expect(
+      verify.issues.filter(
+        (i) => i.wikiPath === FLOW_PAGE_PATH || i.wikiPath === FLOW_DIAGRAM_PATH,
+      ),
+    ).toEqual([]);
+  }, 60_000);
+
+  it("flow: a failing relaxed attempt keeps the original repair_exhausted", async () => {
+    await writeFlowRepo(repoRoot);
+    // Ordered flow is required in BOTH contracts — the relaxed attempt
+    // fails too.
+    llm.flowResponder = (ctx) =>
+      makeStrictFailingFlowPage(ctx).replace("## Ordered flow", "## Steps renamed");
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      // Same mock-detection rationale as the relaxed success test above.
+      surgicalRepair: false,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    const failure = result.failures.find((f) => f.module === FLOW_TARGET);
+    expect(failure).toBeDefined();
+    expect(failure!.error.code).toBe("repair_exhausted");
+    expect(llm.flowCallCount).toBe(4);
+    expect(result.degradedPages).toBeUndefined();
+
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
+    expect(checkpoint!.status).toBe("failed");
+    expect(checkpoint!.degraded).toBeUndefined();
+    expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
+  }, 60_000);
+
+  // === Topic variant ===
+
+  interface TopicPrompt {
+    title: string;
+    order: string;
+    intent: string;
+    modules: string[];
+    flows: string[];
+    closedKeys: string[];
+  }
+
+  function parseTopicPrompt(user: string): TopicPrompt {
+    const title = /^# Accepted title: (.+)$/m.exec(user)?.[1] ?? "Topic";
+    const order = /^# Accepted order: (\d+)$/m.exec(user)?.[1] ?? "1";
+    const intent = /^# Accepted intent: (.+)$/m.exec(user)?.[1] ?? "Explain the topic.";
+    const modules = (/^# Required modules: (.+)$/m.exec(user)?.[1] ?? "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    const flowsRaw = /^# Required flows: (.+)$/m.exec(user)?.[1] ?? "(none)";
+    const flows = flowsRaw === "(none)" ? [] : flowsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    return { title, order, intent, modules, flows, closedKeys: parseClosedKeys(user) };
+  }
+
+  function topicFrontmatter(t: TopicPrompt, anchors: readonly string[]): string[] {
+    return [
+      "---",
+      `title: ${t.title}`,
+      "owner: generated",
+      "kind: topic",
+      `order: ${t.order}`,
+      `intent: ${t.intent}`,
+      "modules:",
+      ...t.modules.map((m) => `  - ${m}`),
+      "flows:",
+      ...t.flows.map((f) => `  - ${f}`),
+      "anchors:",
+      ...anchors.map((k) => `  - ${k}`),
+      "---",
+    ];
+  }
+
+  function topicRelatedPages(t: TopicPrompt): string[] {
+    return [
+      "## Related pages",
+      "",
+      "- [Topics hub](index.md)",
+      ...t.modules.map((m) => `- [${m} module](../${m}.md)`),
+      ...t.flows.flatMap((f) => [
+        `- [${f} flow](../flows/${f}.md)`,
+        `- [${f} diagram](../diagrams/flow-${f}.mmd)`,
+      ]),
+    ];
+  }
+
+  /** Fails STRICT only: full section set, but Purpose written as bullets. */
+  function makeStrictFailingTopicPage(user: string): string {
+    const t = parseTopicPrompt(user);
+    const sections = ["Purpose", "When to use this page", "Behavioral contract", "Failure and recovery", "Change map"];
+    const cited = sections.map((_, i) => t.closedKeys[i % t.closedKeys.length]!);
+    return [
+      ...topicFrontmatter(t, cited),
+      "",
+      `# ${t.title}`,
+      "",
+      "This page explains how these modules coordinate as one cross-module concept.",
+      "",
+      "## Purpose",
+      "",
+      `<!-- lw:anchors ${cited[0]} -->`,
+      "",
+      "- The purpose in bullet form fails the strict prose rule.",
+      "",
+      "## When to use this page",
+      "",
+      `<!-- lw:anchors ${cited[1]} -->`,
+      "",
+      "Use this page when changing cross-module behavior.",
+      "",
+      "## Behavioral contract",
+      "",
+      `<!-- lw:anchors ${cited[2]} -->`,
+      "",
+      "The behavioral contract is documented here.",
+      "",
+      "## Failure and recovery",
+      "",
+      `<!-- lw:anchors ${cited[3]} -->`,
+      "",
+      "No retry or rollback path is shown; the flow fails open.",
+      "",
+      "## Change map",
+      "",
+      `<!-- lw:anchors ${cited[4]} -->`,
+      "",
+      "Changing this behavior requires updating the modules listed above.",
+      "",
+      ...topicRelatedPages(t),
+      "",
+    ].join("\n");
+  }
+
+  /**
+   * Passes RELAXED: the reduced section set (Purpose, Behavioral contract,
+   * Related pages) with bullets, every seed key dual-cited across the two
+   * remaining marker-carrying sections.
+   */
+  function makeRelaxedTopicPage(user: string): string {
+    const t = parseTopicPrompt(user);
+    const [firstKey, ...restKeys] = t.closedKeys;
+    return [
+      ...topicFrontmatter(t, t.closedKeys),
+      "",
+      `# ${t.title}`,
+      "",
+      "- The reader problem in bullet form.",
+      "",
+      "## Purpose",
+      "",
+      ...(firstKey ? [`<!-- lw:anchors ${firstKey} -->`, ""] : []),
+      "- Bulleted purpose grounded in the accepted evidence.",
+      "",
+      "## Behavioral contract",
+      "",
+      ...(restKeys.length > 0 ? [`<!-- lw:anchors ${restKeys.join(" ")} -->`, ""] : []),
+      "- Bulleted contract grounded in the accepted evidence.",
+      "",
+      ...topicRelatedPages(t),
+      "",
+    ].join("\n");
+  }
+
+  /** Stage5MockLlm + topic-page responses driven by the topic page call index. */
+  class RelaxedTopicMockLlm extends Stage5MockLlm {
+    public topicPageCallCount = 0;
+
+    override async generate(req: GenerateRequest): Promise<GenerateResult> {
+      if (req.user.includes("# Accepted title:")) {
+        const idx = this.topicPageCallCount++;
+        const content = idx < 3
+          ? makeStrictFailingTopicPage(req.user)
+          : makeRelaxedTopicPage(req.user);
+        return {
+          content,
+          usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+        };
+      }
+      return super.generate(req);
+    }
+  }
+
+  it("topic: an exhausted contract-shaped failure completes degraded under the relaxed contract", async () => {
+    await writeFlowRepo(repoRoot);
+    // Boost past the topic-eligibility floor (same fixture shape as the
+    // topic-plan suite above).
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "core/db.ts"),
+      [
+        'export function connect() { return "db"; }',
+        "export function disconnect() {}",
+        "export function query() {}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const topicLlm = new RelaxedTopicMockLlm();
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: topicLlm,
+      noRefine: true,
+      skipManifestWrite: true,
+      // Same mock-detection rationale as the flow tests above (the topic
+      // mock keys on `# Accepted title:`, absent from the surgical prompt).
+      surgicalRepair: false,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.failures).toEqual([]);
+
+    const plannerCheckpoint = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
+    const plan = plannerCheckpoint!.topicPlan!;
+    expect(plan.length).toBeGreaterThan(0);
+    // Every topic: 1 initial + 2 repairs (strict contract) + 1 relaxed.
+    expect(topicLlm.topicPageCallCount).toBe(4 * plan.length);
+    expect(result.degradedPages).toEqual(
+      plan.map((candidate) => `livewiki/topics/${candidate.slug}.md`),
+    );
+
+    const candidate = plan[0]!;
+    const wikiPath = `livewiki/topics/${candidate.slug}.md`;
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, wikiPath), "utf8");
+    expect(page).toContain("quality: degraded");
+    expect(page).toContain(DEGRADED_NOTICE);
+
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, `topic:${candidate.evidenceHash}`);
+    expect(checkpoint!.status).toBe("done");
+    expect(checkpoint!.degraded).toBe(true);
+    expect(checkpoint!.usageHistory).toHaveLength(4);
+    expect(checkpoint!.diagnosticHistory).toHaveLength(4);
+    expect((checkpoint!.diagnosticHistory![3] as { relaxed?: boolean }).relaxed).toBe(true);
   }, 60_000);
 });

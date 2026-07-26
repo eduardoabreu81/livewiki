@@ -398,6 +398,16 @@ for closing the lot.
 - **MCP `_hints` table (Etapa 2d)** → single `TOOL_HINTS` constant in
   `packages/mcp/src/server.ts` (exported `ToolHint` type); per-tool
   assertions in `server.test.ts`.
+- **Surgical repair (recovery tier)** → H2 split/splice + eligibility in
+  `packages/core/src/section-guard.ts`; prompt builder
+  `buildSurgicalRepairPrompt` in `prompts.ts`; branches in the three repair
+  loops in `batch.ts`; config `surgicalRepair`. Tests: `section-guard.test.ts`,
+  `batch-surgical-repair.test.ts`.
+- **Relaxed completion round (recovery tier)** → `relaxed` flag +
+  `DEGRADED_NOTICE`/`markDegradedArtifact` in `artifact.ts`; slot-in at the
+  three `repair_exhausted` points in `batch.ts`; degraded plumbing through
+  `batch-state.ts`, `status.ts` (`degraded` block, fresh disk walk), and
+  `packages/cli/src/commands/batch.ts`; config `relaxedRound`.
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -864,6 +874,24 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   proxy exact); corpus + metrics preserved LOCAL-ONLY under
   `docs/tasks/2026-07-25-etapa-3-e2e/` (untracked per the local-evidence
   rule).**
+- **Recovery tier (2026-07-26, implemented, uncommitted)**: the two
+  mechanisms from `docs/plans/2026-07-26-recovery-tier.md` (maintainer
+  decisions recorded there). Surgical section-scoped repair: prose-level
+  error sets (5 codes with a resolvable section) get a small scoped prompt
+  (~12k evidence cap) under a "fix ONLY the named sections" contract, with a
+  deterministic anti-cascade splice guard (`section-guard.ts`;
+  `surgical_cascade_rejected` when any other byte changes); ineligible sets
+  keep the full-context repair. Relaxed completion round: at the three
+  `repair_exhausted` points (never for infra failures or unclassified sets),
+  ONE final attempt under a relaxed presentation contract (flow Purpose /
+  Ordered flow / Diagram / Related pages; topic Purpose / Behavioral
+  contract / Related pages; module opening with bullets allowed) —
+  anchors/frontmatter exactness/diagram placeholder/tier coverage/TODO
+  ban/verify all STRICT. Success marks the task done and the page degraded
+  (`quality: degraded` + fixed reader notice), listed as `degradedPages` in
+  the batch report/summary and recounted fresh from disk by `status`;
+  exit 0 preserved. Config keys `surgicalRepair` / `relaxedRound` (bool,
+  default true). Gate: core 1319 / CLI 93 / MCP 31, zero paid calls.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

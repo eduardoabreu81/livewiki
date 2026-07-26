@@ -197,6 +197,13 @@ export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusR
     lines.push(
       `  tasks: ${report.run.summary.tasksDone} done, ${report.run.summary.tasksFailed} failed`,
     );
+    // Recovery tier (Component 2): degraded pages are done, never failures
+    // — surfaced as a count, never silent.
+    if ((report.run.summary.degradedPages?.length ?? 0) > 0) {
+      lines.push(
+        `  degraded pages (relaxed contract): ${report.run.summary.degradedPages!.length}`,
+      );
+    }
   }
   lines.push("");
   lines.push("Tokens (primary metric):");
@@ -283,6 +290,11 @@ export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>):
   // per-task counters, consistent everywhere they're reported.
   lines.push(`  tasks done: ${result.tasksDone}`);
   lines.push(`  failures: ${result.failures.length}`);
+  // Recovery tier (Component 2): pages completed under the relaxed
+  // contract (quality: degraded) — done, not failures, never silent.
+  if (result.degradedPages && result.degradedPages.length > 0) {
+    lines.push(`  degraded pages (relaxed contract): ${result.degradedPages.length}`);
+  }
   if (result.circuitBreakerTriggered) {
     lines.push(`  circuit breaker: TRIGGERED`);
   }

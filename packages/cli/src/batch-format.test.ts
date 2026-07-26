@@ -340,3 +340,85 @@ describe("batch human format — skipped generated hubs", () => {
     expect(out).not.toContain("auxiliary hub");
   });
 });
+
+// === Recovery tier (Component 2): degraded page count in human output ===
+describe("batch human format — degraded pages (recovery tier, Component 2)", () => {
+  const summaryBase = {
+    totals: { ...baseTotals },
+    byStage: { "4": { ...baseTotals } },
+    byModule: [],
+    tasksDone: 1,
+    tasksFailed: 0,
+    tasksPending: 0,
+    modulesRefined: null,
+  };
+
+  it("formatStatusHuman prints the degraded count when the summary lists degraded pages", () => {
+    const out = formatStatusHuman({
+      run: {
+        id: 1,
+        status: "completed",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+        startedBy: "cli",
+        summary: { ...summaryBase, degradedPages: ["livewiki/auth.md"] },
+      },
+      totals: { ...baseTotals },
+      byStage: { "4": { ...baseTotals } },
+      byModule: [],
+      tasks: [],
+      failures: [],
+      pricingRefDate: "2026-01-01",
+    });
+    expect(out).toContain("degraded pages (relaxed contract): 1");
+  });
+
+  it("formatStatusHuman omits the degraded line when there are none", () => {
+    const out = formatStatusHuman({
+      run: {
+        id: 1,
+        status: "completed",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+        startedBy: "cli",
+        summary: { ...summaryBase },
+      },
+      totals: { ...baseTotals },
+      byStage: { "4": { ...baseTotals } },
+      byModule: [],
+      tasks: [],
+      failures: [],
+      pricingRefDate: "2026-01-01",
+    });
+    expect(out).not.toContain("degraded pages");
+  });
+
+  it("formatResultHuman prints the degraded count when the result lists degraded pages", () => {
+    const out = formatResultHuman({
+      runId: 1,
+      status: "completed",
+      totals: { ...baseTotals },
+      byModule: [],
+      failures: [],
+      circuitBreakerTriggered: false,
+      tasksDone: 1,
+      tasksFailed: 0,
+      degradedPages: ["livewiki/auth.md", "livewiki/flows/cli-to-core.md"],
+    });
+    expect(out).toContain("degraded pages (relaxed contract): 2");
+  });
+
+  it("formatResultHuman omits the degraded line when there are none", () => {
+    const out = formatResultHuman({
+      runId: 1,
+      status: "completed",
+      totals: { ...baseTotals },
+      byModule: [],
+      failures: [],
+      circuitBreakerTriggered: false,
+      tasksDone: 1,
+      tasksFailed: 0,
+    });
+    expect(out).not.toContain("degraded pages");
+  });
+});

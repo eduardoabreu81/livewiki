@@ -76,6 +76,7 @@ import {
   buildTopicRefinePrompt,
   buildTopicPrompt,
   buildTopicRepairPrompt,
+  buildSurgicalRepairPrompt,
   type FlowDiagramBudget,
   type Language,
   type ArtifactValidationError,
@@ -84,6 +85,7 @@ import {
 import {
   normalizeStage4Artifact,
   validateStage4Artifact,
+  markDegradedArtifact,
 } from "./artifact.js";
 import {
   repairStage4ArtifactMechanically,
@@ -92,9 +94,15 @@ import {
   type MechanicalArtifactRepair,
 } from "./artifact-repair.js";
 import {
+  collectUnclassified,
   formatUnrepairableMessage,
   isUnrepairableErrorSet,
 } from "./repair-contract.js";
+import {
+  splitH2Sections,
+  spliceSections,
+  surgicalRepairTargetSections,
+} from "./section-guard.js";
 import { detectFlowCandidates, assignFlowKeySections, type FlowCandidate } from "./flows.js";
 import {
   buildTopicPlanningInventory,
@@ -173,6 +181,21 @@ export interface BatchOptions {
   maxRepairAttempts?: number;
   /** Non-consuming retries for normalized incomplete responses (default 2). */
   maxIncompleteRetries?: number;
+  /**
+   * Recovery tier (Component 1): override of `surgicalRepair` (default =
+   * config or true). When on, an eligible section-scoped repair error set
+   * uses the surgical prompt + anti-cascade guard instead of the
+   * full-context repair prompt.
+   */
+  surgicalRepair?: boolean;
+  /**
+   * Recovery tier (Component 2): override of `relaxedRound` (default =
+   * config or true). When on, a strict loop that would mark
+   * `repair_exhausted` gets ONE final attempt under the relaxed
+   * presentation contract; success marks the task done with the page
+   * flagged `quality: degraded`.
+   */
+  relaxedRound?: boolean;
   /** Stage-4 max output tokens (default from config / 8192). */
   stage4MaxOutputTokens?: number;
   /** Override thinking mode for openai-compat (MiniMax-M3 etc.). */
@@ -229,6 +252,15 @@ export interface BatchRunResult {
    * task normally — only the "exhausted, no valid plan" outcome is skipped.
    */
   skippedTopicPlan?: { reason: string; retryCommand: string };
+  /**
+   * Recovery tier (Component 2): wiki paths of pages completed under the
+   * relaxed contract (`quality: degraded` frontmatter flag + reader
+   * notice). Degraded tasks are DONE — they never flow through the failure
+   * counters, so a degraded-only run stays `completed` (exit 0). Surfaced
+   * here (human/JSON) and persisted in `batch_runs.summary_json`;
+   * `livewiki status` recounts them fresh from disk.
+   */
+  degradedPages?: string[];
 }
 
 /**
@@ -311,6 +343,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         `invalid maxIncompleteRetries: must be a non-negative integer, got ${JSON.stringify(maxIncompleteRetries)}`,
       );
     }
+    // Recovery tier (Component 1): surgical repair toggle
+    // (opts > config > default true).
+    const surgicalRepair =
+      opts.surgicalRepair ?? resolvedConfig.surgicalRepair ?? true;
+    // Recovery tier (Component 2): relaxed completion round toggle
+    // (opts > config > default true).
+    const relaxedRound =
+      opts.relaxedRound ?? resolvedConfig.relaxedRound ?? true;
     const stage4MaxOutputTokens =
       opts.stage4MaxOutputTokens ??
       resolvedConfig.stage4MaxOutputTokens ??
@@ -573,6 +613,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // (cb.done counts stages 4 + 5 combined once stage 5 runs).
     let moduleTasksDone = 0;
     const failures: BatchRunResult["failures"] = [];
+    // Recovery tier (Component 2): wiki paths of pages completed under the
+    // relaxed contract this run. Surfaced in the result and persisted in
+    // the run summary; degraded tasks count as done, never as failures.
+    const degradedPages: string[] = [];
+    // Recovery tier (Component 2): attach the run's degraded pages to a
+    // result only when non-empty (additive field, same surfacing pattern
+    // as skippedFlowCandidates).
+    const withDegraded = (result: BatchRunResult): BatchRunResult => {
+      if (degradedPages.length > 0) result.degradedPages = [...degradedPages];
+      return result;
+    };
     // Priority-0 fix (v-next paid E2E on MoneyPrinterTurbo-Plus): a flow
     // candidate spanning a module whose own stage-4 page failed to write
     // is a guaranteed, retry-proof verify failure (its "Related pages"
@@ -673,6 +724,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       let diagnosticHistory: DiagnosticAttempt[] = [];
       let taskError: TaskCheckpoint["error"] | undefined;
       let artifacts: TaskCheckpoint["artifacts"] | undefined;
+      // Recovery tier (Component 2): set when this task completed via the
+      // relaxed completion round (checkpoint flag + degradedPages entry).
+      let degraded = false;
       const prevCheckpoint = task.checkpoint_json ? safeJsonParse<TaskCheckpoint>(task.checkpoint_json) : null;
       if (prevCheckpoint?.usageHistory) {
         usageHistory = [...prevCheckpoint.usageHistory];
@@ -823,6 +877,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             outputTokenStrategy,
             thinking: thinkingMode,
             pathRoleConfig: resolvedConfig.pathRoles,
+            surgicalRepair,
             // A local fallback is allowed only after the model has consumed
             // the final configured repair slot. It never adds or replaces an
             // LLM call and still must pass the complete artifact validator.
@@ -1045,6 +1100,141 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           }
         }
 
+        // Recovery tier (Component 2): ONE relaxed completion attempt when
+        // the strict loop exhausted on a contract-shaped failure (never on
+        // infra failures — those set taskError above — and never on error
+        // sets containing unclassified codes). Same attempt helper with
+        // `promptKind: "initial"` under the relaxed validation contract;
+        // success marks the task DONE with the page flagged degraded
+        // (exit code untouched), failure keeps the original
+        // repair_exhausted path below, byte-for-byte unchanged.
+        if (!attemptDone && !taskError && relaxedRound && isRelaxedEligible("module", lastErrorsForReporting)) {
+          attempt++;
+          const relaxedResult = await attemptStage4Generation({
+            attemptNumber: attempt,
+            module,
+            language,
+            llmClient: llmClient!,
+            charBudget,
+            rationaleMaxChars,
+            promptKind: "initial",
+            priorCandidate: "",
+            priorErrors: [],
+            absRoot,
+            pricing: resolvedConfig.pricing,
+            outputTokenCeiling: stage4MaxOutputTokens,
+            outputTokenStrategy,
+            thinking: thinkingMode,
+            pathRoleConfig: resolvedConfig.pathRoles,
+            surgicalRepair: false,
+            allowMechanicalFallback: false,
+            relaxed: true,
+          });
+          relaxedResult.relaxedAttempt = true;
+          usageHistory.push(relaxedResult.usageEntry);
+          moduleUsageEntry = accumulateUsage(
+            moduleUsageEntry,
+            relaxedResult.usageEntry,
+            resolvedConfig.pricing,
+          );
+          stageUsageTotals = accumulateUsage(
+            stageUsageTotals,
+            relaxedResult.usageEntry,
+            resolvedConfig.pricing,
+          );
+          if (relaxedResult.llmError) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult: relaxedResult,
+                promptKind: "initial",
+                outcome: "llm_error",
+                errors: summarizeLlmDiagnosticError(relaxedResult.llmError),
+              }),
+            );
+          } else if (relaxedResult.artifact === null) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult: relaxedResult,
+                promptKind: "initial",
+                outcome: relaxedResult.diagnosticOutcome!,
+                errors: summarizeDiagnosticErrors(relaxedResult.validationErrors),
+              }),
+            );
+          } else {
+            const writeResult = await tryWriteAndVerify(
+              absRoot,
+              wikiPath,
+              relaxedResult.artifact,
+              existing,
+            );
+            if (writeResult.ok) {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult: relaxedResult,
+                  promptKind: "initial",
+                  outcome: "success",
+                  errors: { errors: [], truncatedErrorCount: 0 },
+                }),
+              );
+              attemptDone = true;
+              artifacts = writeResult.artifacts;
+              degraded = true;
+            } else if (writeResult.rollbackFailed) {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult: relaxedResult,
+                  promptKind: "initial",
+                  outcome: "verify_failed",
+                  errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+                }),
+              );
+              // Same terminal semantics as the strict path: disk may be
+              // inconsistent — the whole run aborts.
+              taskError = {
+                code: "rollback_failed",
+                message:
+                  `rollback failed after verify rejection for ${wikiPath}: ${writeResult.rollbackFailed.reason}. ` +
+                  `This is a terminal state for the ENTIRE run — the disk may have an inconsistent page. ` +
+                  `Operator must inspect ${wikiPath} and re-run with --only after manual repair.`,
+              };
+              attemptDone = true;
+              runAbortedByRollback = true;
+            } else if (writeResult.exception) {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult: relaxedResult,
+                  promptKind: "initial",
+                  outcome: "write_verify_exception",
+                  errors: summarizeLlmDiagnosticError({
+                    code: "write_verify_exception",
+                    message: writeResult.exception.message,
+                  }),
+                }),
+              );
+              // Not model-fixable — same short-circuit as the strict path.
+              taskError = {
+                code: "write_verify_exception",
+                message:
+                  `write/verify step threw for ${wikiPath}: ${writeResult.exception.message}. ` +
+                  `The candidate was rolled back; no repair retry because the failure is not model-fixable.`,
+                failedAt: 4,
+              };
+              attemptDone = true;
+            } else {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult: relaxedResult,
+                  promptKind: "initial",
+                  outcome: "verify_failed",
+                  errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+                }),
+              );
+              // Verify NEVER relaxes — the original repair_exhausted path
+              // below is unchanged.
+            }
+          }
+        }
+
         if (!attemptDone && !taskError) {
           // B1 (Lot B): repair_exhausted is built from the
           // `diagnosticHistory` slice for THIS bounded loop, not from
@@ -1114,6 +1304,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           usageHistory,
           diagnosticHistory,
           ...(artifacts ? { artifacts } : {}),
+          ...(degraded ? { degraded: true } : {}),
         };
         db.prepare(
           "UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?",
@@ -1122,6 +1313,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         cb.consecutive = 0;
         cb.done++;
         moduleTasksDone++;
+        if (degraded) degradedPages.push(wikiPath);
       }
 
       // Circuit breaker check: 3 CONSECUTIVE failures, OR >50% with at least
@@ -1143,8 +1335,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           })),
           tasksDone: cb.done,
           tasksFailed: cb.fails,
+          degradedPages,
         });
-        return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, true, cb.done, cb.fails);
+        return withDegraded(buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, true, cb.done, cb.fails));
       }
       moduleUsage.push({ module: module.id, ...moduleUsageEntry });
 
@@ -1164,8 +1357,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           })),
           tasksDone: cb.done,
           tasksFailed: cb.fails,
+          degradedPages,
         });
-        return buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, false, cb.done, cb.fails);
+        return withDegraded(buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, false, cb.done, cb.fails));
       }
     }
     byStageAcc["4"] = stageUsageTotals;
@@ -1298,6 +1492,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       let diagnosticHistory: DiagnosticAttempt[] = [];
       let taskError: TaskCheckpoint["error"] | undefined;
       let artifacts: TaskCheckpoint["artifacts"] | undefined;
+      // Recovery tier (Component 2): set when this flow completed via the
+      // relaxed completion round (checkpoint flag + degradedPages entry).
+      let degraded = false;
       const prevCheckpoint = task.checkpoint_json ? safeJsonParse<TaskCheckpoint>(task.checkpoint_json) : null;
       if (prevCheckpoint?.usageHistory) {
         usageHistory = [...prevCheckpoint.usageHistory];
@@ -1371,6 +1568,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             outputTokenStrategy,
             thinking: thinkingMode,
             diagramBudgets: flowDiagramBudgets,
+            surgicalRepair,
             ...(repairAttemptContext !== undefined
               ? { repairAttemptContext }
               : {}),
@@ -1582,6 +1780,134 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           }
         }
 
+        // Recovery tier (Component 2): ONE relaxed completion attempt when
+        // the strict loop exhausted on a contract-shaped failure — same
+        // contract as stage 4 (relaxed validation, degraded marking, task
+        // DONE on success, original repair_exhausted path on failure).
+        if (!attemptDone && !taskError && relaxedRound && isRelaxedEligible("flow", lastErrorsForReporting)) {
+          attempt++;
+          const relaxedResult = await attemptStage5Generation({
+            attemptNumber: attempt,
+            candidate,
+            modules: ordered,
+            language,
+            llmClient: llmClient!,
+            charBudget,
+            promptKind: "initial",
+            priorCandidate: "",
+            priorErrors: [],
+            absRoot,
+            pricing: resolvedConfig.pricing,
+            outputTokenCeiling: stage4MaxOutputTokens,
+            outputTokenStrategy,
+            thinking: thinkingMode,
+            diagramBudgets: flowDiagramBudgets,
+            surgicalRepair: false,
+            relaxed: true,
+          });
+          relaxedResult.relaxedAttempt = true;
+          usageHistory.push(relaxedResult.usageEntry);
+          flowUsageEntry = accumulateUsage(
+            flowUsageEntry,
+            relaxedResult.usageEntry,
+            resolvedConfig.pricing,
+          );
+          stage5UsageTotals = accumulateUsage(
+            stage5UsageTotals,
+            relaxedResult.usageEntry,
+            resolvedConfig.pricing,
+          );
+          if (relaxedResult.llmError) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult: relaxedResult,
+                promptKind: "initial",
+                outcome: "llm_error",
+                errors: summarizeLlmDiagnosticError(relaxedResult.llmError),
+              }),
+            );
+          } else if (relaxedResult.artifact === null) {
+            diagnosticHistory.push(
+              diagnosticAttempt({
+                attemptResult: relaxedResult,
+                promptKind: "initial",
+                outcome: relaxedResult.diagnosticOutcome!,
+                errors: summarizeDiagnosticErrors(relaxedResult.validationErrors),
+              }),
+            );
+          } else {
+            const writeResult = await tryWriteFlowAndVerify(
+              absRoot,
+              flowPagePath,
+              flowDiagramPath,
+              relaxedResult.artifact,
+              relaxedResult.diagramSource!,
+              existing,
+            );
+            if (writeResult.ok) {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult: relaxedResult,
+                  promptKind: "initial",
+                  outcome: "success",
+                  errors: { errors: [], truncatedErrorCount: 0 },
+                }),
+              );
+              attemptDone = true;
+              artifacts = writeResult.artifacts;
+              degraded = true;
+            } else if (writeResult.rollbackFailed) {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult: relaxedResult,
+                  promptKind: "initial",
+                  outcome: "verify_failed",
+                  errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+                }),
+              );
+              taskError = {
+                code: "rollback_failed",
+                message:
+                  `rollback failed after verify rejection for ${flowPagePath}: ${writeResult.rollbackFailed.reason}. ` +
+                  `This is a terminal state for the ENTIRE run — the disk may have an inconsistent page. ` +
+                  `Operator must inspect ${flowPagePath} and re-run with --only after manual repair.`,
+              };
+              attemptDone = true;
+              runAbortedByRollback = true;
+            } else if (writeResult.exception) {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult: relaxedResult,
+                  promptKind: "initial",
+                  outcome: "write_verify_exception",
+                  errors: summarizeLlmDiagnosticError({
+                    code: "write_verify_exception",
+                    message: writeResult.exception.message,
+                  }),
+                }),
+              );
+              taskError = {
+                code: "write_verify_exception",
+                message:
+                  `write/verify step threw for ${flowPagePath}: ${writeResult.exception.message}. ` +
+                  `The artifact pair was rolled back; no repair retry because the failure is not model-fixable.`,
+                failedAt: 5,
+              };
+              attemptDone = true;
+            } else {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult: relaxedResult,
+                  promptKind: "initial",
+                  outcome: "verify_failed",
+                  errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+                }),
+              );
+              // Verify NEVER relaxes — repair_exhausted below, unchanged.
+            }
+          }
+        }
+
         if (!attemptDone && !taskError) {
           // Same B1 reporting as stage 4: the repair_exhausted message is
           // built only from THIS loop's diagnostic slice.
@@ -1642,6 +1968,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           usageHistory,
           diagnosticHistory,
           ...(artifacts ? { artifacts } : {}),
+          ...(degraded ? { degraded: true } : {}),
         };
         db.prepare(
           "UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?",
@@ -1650,6 +1977,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         cb.consecutive = 0;
         cb.done++;
         stage5Done++;
+        if (degraded) degradedPages.push(flowPagePath);
       }
 
       // Circuit breaker: stage-5 tasks count exactly like stage-4 tasks.
@@ -1670,8 +1998,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           })),
           tasksDone: cb.done,
           tasksFailed: cb.fails,
+          degradedPages,
         });
-        const abortedByBreaker = buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, true, cb.done, cb.fails);
+        const abortedByBreaker = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, true, cb.done, cb.fails));
         if (skippedFlowCandidates.length > 0) abortedByBreaker.skippedFlowCandidates = skippedFlowCandidates;
         return abortedByBreaker;
       }
@@ -1693,8 +2022,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           })),
           tasksDone: cb.done,
           tasksFailed: cb.fails,
+          degradedPages,
         });
-        const abortedByRollback = buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, false, cb.done, cb.fails);
+        const abortedByRollback = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, false, cb.done, cb.fails));
         if (skippedFlowCandidates.length > 0) abortedByRollback.skippedFlowCandidates = skippedFlowCandidates;
         return abortedByRollback;
       }
@@ -1730,6 +2060,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         outputTokens: resolvedConfig.topicMaxOutputTokens ?? CONFIG_DEFAULTS.topicMaxOutputTokens,
         outputTokenStrategy,
         maxRepairAttempts,
+        surgicalRepair,
+        relaxedRound,
         mode: opts.mode,
         onlyIdentity: onlyTopicIdentity,
         noRefine: opts.noRefine ?? false,
@@ -1762,6 +2094,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       // second, cumulative abort check.
       cb.consecutive = topicStage.endingConsecutive;
       failures.push(...topicStage.failures);
+      degradedPages.push(...topicStage.degradedPages);
       moduleUsage.push(...topicStage.usageByTask);
       runAbortedByRollback ||= topicStage.rollbackFailed;
       if (topicStage.skippedTopicPlan) skippedTopicPlan = topicStage.skippedTopicPlan;
@@ -1782,8 +2115,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           })),
           tasksDone: cb.done,
           tasksFailed: cb.fails,
+          degradedPages,
         });
-        const aborted = buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, combinedCircuitBreaker, cb.done, cb.fails);
+        const aborted = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, combinedCircuitBreaker, cb.done, cb.fails));
         if (skippedFlowCandidates.length > 0) aborted.skippedFlowCandidates = skippedFlowCandidates;
         if (skippedTopicPlan) aborted.skippedTopicPlan = skippedTopicPlan;
         return aborted;
@@ -1839,6 +2173,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       })),
       tasksDone: cb.done,
       tasksFailed: cb.fails,
+      degradedPages,
     });
 
     // Manifest at the end (if not skipped)
@@ -1896,7 +2231,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       }
     }
 
-    const finalResult = buildResult(
+    const finalResult = withDegraded(buildResult(
       runId,
       status,
       aggregateTotals(stageUsageTotals, stage5UsageTotals),
@@ -1905,7 +2240,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       false,
       cb.done,
       cb.fails,
-    );
+    ));
     if (skippedFlowsHub) finalResult.skippedFlowsHub = skippedFlowsHub;
     if (skippedAuxiliaryHub) finalResult.skippedAuxiliaryHub = skippedAuxiliaryHub;
     if (skippedTopicsHub) finalResult.skippedTopicsHub = skippedTopicsHub;
@@ -1931,6 +2266,8 @@ interface TopicStageResult {
   circuitBreakerTriggered: boolean;
   endingConsecutive: number;
   skippedTopicPlan?: BatchRunResult["skippedTopicPlan"];
+  /** Recovery tier (Component 2): topic pages completed under the relaxed contract. */
+  degradedPages: string[];
 }
 
 async function runSemanticTopicStage(opts: {
@@ -1953,6 +2290,10 @@ async function runSemanticTopicStage(opts: {
   outputTokens: number;
   outputTokenStrategy: "dynamic" | "fixed";
   maxRepairAttempts: number;
+  /** Recovery tier (Component 1): surgical repair toggle for topic repairs. */
+  surgicalRepair: boolean;
+  /** Recovery tier (Component 2): relaxed completion round toggle for topic exhaustion. */
+  relaxedRound: boolean;
   mode: "run" | "resume" | "only";
   onlyIdentity: string | null;
   allowedFlowSlugs?: ReadonlySet<string>;
@@ -1966,6 +2307,7 @@ async function runSemanticTopicStage(opts: {
     usage: emptyUsage(), taskCount: 0, done: 0, fails: 0, candidates: [],
     failures: [], usageByTask: [], rollbackFailed: false, circuitBreakerTriggered: false,
     endingConsecutive: opts.initialConsecutiveFailures,
+    degradedPages: [],
   };
   const inventory = await buildTopicPlanningInventory({
     repoRoot: opts.absRoot,
@@ -2147,6 +2489,9 @@ async function runSemanticTopicStage(opts: {
     const owner = readOwnerFromFrontmatter(existing);
     let taskError: TaskCheckpoint["error"] | undefined;
     let artifacts: TaskCheckpoint["artifacts"] | undefined;
+    // Recovery tier (Component 2): set when this topic completed via the
+    // relaxed completion round (checkpoint flag + degradedPages entry).
+    let degraded = false;
     if (owner === "human" || owner === "mixed" || owner === "untrusted" || owner === "unparseable") {
       taskError = { code: "refused_owned_topic", message: `topic page ${wikiPath} is not automation-owned; human/mixed/untrusted content is preserved`, failedAt: 5 };
     } else {
@@ -2191,6 +2536,7 @@ async function runSemanticTopicStage(opts: {
             pricing: opts.pricing,
             outputTokenCeiling: opts.outputTokens,
             outputTokenStrategy: opts.outputTokenStrategy,
+            surgicalRepair: opts.surgicalRepair,
             anchorSourceChars: candidate.seedKeys.reduce(
               (sum, key) => sum + (inventory.anchorSourceChars[key] ?? 0),
               0,
@@ -2257,6 +2603,76 @@ async function runSemanticTopicStage(opts: {
         artifacts = write.artifacts;
         break;
       }
+      // Recovery tier (Component 2): ONE relaxed completion attempt when
+      // the bounded loop exhausted on a contract-shaped failure — same
+      // contract as stages 4/5 (relaxed validation, degraded marking, task
+      // DONE on success, original repair_exhausted on failure).
+      if (!artifacts && !taskError && opts.relaxedRound && isRelaxedEligible("topic", priorErrors)) {
+        attempt++;
+        let relaxedResult: Stage4AttemptResult | null = null;
+        try {
+          relaxedResult = await attemptTopicGeneration({
+            attemptNumber: attempt,
+            candidate,
+            language: opts.language,
+            llmClient: opts.llmClient,
+            charBudget: opts.sourceChars,
+            rationaleMaxChars: opts.rationaleMaxChars,
+            promptKind: "initial",
+            priorCandidate: "",
+            priorErrors: [],
+            absRoot: opts.absRoot,
+            pricing: opts.pricing,
+            outputTokenCeiling: opts.outputTokens,
+            outputTokenStrategy: opts.outputTokenStrategy,
+            surgicalRepair: false,
+            anchorSourceChars: candidate.seedKeys.reduce(
+              (sum, key) => sum + (inventory.anchorSourceChars[key] ?? 0),
+              0,
+            ),
+            ...(opts.thinking ? { thinking: opts.thinking } : {}),
+            ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
+            relaxed: true,
+          });
+        } catch (err) {
+          // Same short-circuit as the strict loop: the context-build throw
+          // is not model-fixable — the task fails without further calls.
+          taskError = {
+            code: "context_build_exception",
+            message:
+              `topic context build threw for ${target}: ${(err as Error).message}. ` +
+              `No repair retry because the failure is not model-fixable.`,
+            failedAt: 5,
+          };
+        }
+        if (relaxedResult !== null) {
+          relaxedResult.relaxedAttempt = true;
+          usageHistory.push(relaxedResult.usageEntry);
+          taskUsage = accumulateUsage(taskUsage, relaxedResult.usageEntry, opts.pricing);
+          result.usage = accumulateUsage(result.usage, relaxedResult.usageEntry, opts.pricing);
+          diagnosticHistory.push(topicAttemptDiagnostic(attempt, "initial", relaxedResult));
+          if (relaxedResult.artifact !== null) {
+            const write = await tryWriteAndVerify(opts.absRoot, wikiPath, relaxedResult.artifact, existing, true);
+            if (write.rollbackFailed) {
+              taskError = { code: "rollback_failed", message: write.rollbackFailed.reason, failedAt: 5 };
+              result.rollbackFailed = true;
+            } else if (write.exception) {
+              taskError = {
+                code: "write_verify_exception",
+                message:
+                  `write/verify step threw for ${wikiPath}: ${write.exception.message}. ` +
+                  `The candidate was rolled back; no repair retry because the failure is not model-fixable.`,
+                failedAt: 5,
+              };
+            } else if (!write.issues) {
+              artifacts = write.artifacts;
+              degraded = true;
+            }
+            // A verify rejection keeps the original repair_exhausted path
+            // below — verify NEVER relaxes.
+          }
+        }
+      }
       if (!artifacts && !taskError) {
         taskError = { code: "repair_exhausted", message: `task "${target}" exhausted its bounded generation/repair attempts`, failedAt: 5 };
       }
@@ -2269,10 +2685,11 @@ async function runSemanticTopicStage(opts: {
       result.fails++; cumulativeFails++; consecutive++;
       result.failures.push({ taskId: task.id, module: target, error: taskError, retryCommand: `livewiki batch --only ${target} ${opts.runId}` });
     } else {
-      const checkpoint: TaskCheckpoint = { stage: 5, status: "done", attempt, startedAt, finishedAt: Date.now(), usageHistory, diagnosticHistory, ...(artifacts ? { artifacts } : {}) };
+      const checkpoint: TaskCheckpoint = { stage: 5, status: "done", attempt, startedAt, finishedAt: Date.now(), usageHistory, diagnosticHistory, ...(artifacts ? { artifacts } : {}), ...(degraded ? { degraded: true } : {}) };
       opts.db.prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
         .run("done", JSON.stringify(checkpoint), Date.now(), task.id);
       result.done++; cumulativeDone++; consecutive = 0;
+      if (degraded) result.degradedPages.push(wikiPath);
     }
     result.endingConsecutive = consecutive;
     result.usageByTask.push({ module: target, ...taskUsage });
@@ -2316,7 +2733,7 @@ function topicAttemptDiagnostic(
   attempt: number,
   promptKind: "initial" | "repair",
   result: Stage4AttemptResult,
-): DiagnosticAttempt {
+): DiagnosticAttemptWithSurgical {
   const summarized = summarizeDiagnosticErrors(result.validationErrors);
   return {
     attempt,
@@ -2333,6 +2750,10 @@ function topicAttemptDiagnostic(
     ...(result.diagnosticCandidate !== null
       ? { candidateChars: result.diagnosticCandidate.length, candidateSha256: sha256(result.diagnosticCandidate) }
       : {}),
+    ...(result.surgicalOutcome !== undefined
+      ? { surgicalOutcome: result.surgicalOutcome }
+      : {}),
+    ...(result.relaxedAttempt === true ? { relaxed: true } : {}),
     finishedAt: Date.now(),
   };
 }
@@ -3112,7 +3533,7 @@ function diagnosticAttempt(input: {
   outcome: DiagnosticOutcome;
   errors: DiagnosticErrors;
   budgetConsumed?: boolean;
-}): DiagnosticAttempt {
+}): DiagnosticAttemptWithSurgical {
   const candidate = input.attemptResult.diagnosticCandidate;
   return {
     attempt: input.attemptResult.usageEntry.attempt,
@@ -3135,11 +3556,184 @@ function diagnosticAttempt(input: {
     ...(input.attemptResult.mechanicalRepairs !== undefined
       ? { mechanicalRepairs: input.attemptResult.mechanicalRepairs }
       : {}),
+    ...(input.attemptResult.surgicalOutcome !== undefined
+      ? { surgicalOutcome: input.attemptResult.surgicalOutcome }
+      : {}),
+    ...(input.attemptResult.relaxedAttempt === true ? { relaxed: true } : {}),
     finishedAt: Date.now(),
   };
 }
 
+// === Recovery tier (Component 1): surgical repair preparation ===
+
+/**
+ * Cap (chars) for the surgical evidence slice: the symbols-table rows plus
+ * the source spans of the keys cited in the affected sections. Deliberately
+ * far below the stage-4 context budget — the surgical call is small.
+ */
+const SURGICAL_EVIDENCE_MAX_CHARS = 12_000;
+
+interface SurgicalRepairPlan {
+  /**
+   * The failed page as the validator saw it (normalized prior candidate).
+   * Used as the splice base AND embedded in the surgical prompt.
+   */
+  basePage: string;
+  /** Target section slugs (deduplicated, first-seen order). */
+  targetSections: string[];
+  /** Symbols rows + source spans for the keys cited in the target sections. */
+  evidenceSlice: string;
+}
+
+/**
+ * Decides whether THIS repair attempt may use the surgical path and, if
+ * so, pre-computes everything the attempt needs. Returns null (→ caller
+ * uses the existing full-context repair prompt, unchanged) when:
+ *
+ *   - the error set is not eligible (`surgicalRepairTargetSections`);
+ *   - the prior candidate does not normalize (cannot map validator
+ *     sections onto it deterministically);
+ *   - a target section is absent from the failed page (a missing section
+ *     must be ADDED, which the section-replacement guard cannot do
+ *     safely — the full prompt handles it).
+ */
+async function prepareSurgicalRepair(
+  absRoot: string,
+  priorCandidate: string,
+  priorErrors: ReadonlyArray<ArtifactValidationError>,
+  symbolsTable: string,
+): Promise<SurgicalRepairPlan | null> {
+  const targetSections = surgicalRepairTargetSections(priorErrors);
+  if (targetSections === null) return null;
+  const base = normalizeStage4Artifact(priorCandidate);
+  if (!base.ok) return null;
+  const split = splitH2Sections(base.content);
+  const present = new Set(split.sections.map((s) => s.slug));
+  if (!targetSections.every((slug) => present.has(slug))) return null;
+  // Anchor keys cited inside the affected sections drive the evidence slice.
+  const targetSet = new Set(targetSections);
+  const citedKeys = new Set<string>();
+  for (const section of split.sections) {
+    if (!targetSet.has(section.slug)) continue;
+    const text = base.content.slice(section.start, section.end);
+    for (const m of text.matchAll(/<!--\s*lw:anchors\s+([^>]*?)\s*-->/g)) {
+      for (const key of (m[1] ?? "").split(/\s+/)) {
+        if (key !== "") citedKeys.add(key);
+      }
+    }
+  }
+  const evidenceSlice = await buildSurgicalEvidenceSlice(
+    absRoot,
+    symbolsTable,
+    [...citedKeys].sort(),
+  );
+  return { basePage: base.content, targetSections, evidenceSlice };
+}
+
+/**
+ * Evidence for the surgical prompt: the symbols-table rows of the cited
+ * keys plus one bounded source span per cited key (same
+ * `renderTopicSourceSpan` extraction the topic context uses), capped at
+ * SURGICAL_EVIDENCE_MAX_CHARS total. Keys absent from the index contribute
+ * nothing.
+ */
+async function buildSurgicalEvidenceSlice(
+  absRoot: string,
+  symbolsTable: string,
+  citedKeys: readonly string[],
+): Promise<string> {
+  if (citedKeys.length === 0) return "";
+  const keySet = new Set(citedKeys);
+  const rows = symbolsTable.split("\n").filter((line) => {
+    const m = /^- (\S+) \(/.exec(line);
+    return m?.[1] !== undefined && keySet.has(m[1]);
+  });
+  const rowsBlock = rows.join("\n");
+  const spanBudget = Math.max(
+    0,
+    SURGICAL_EVIDENCE_MAX_CHARS - rowsBlock.length - 2,
+  );
+  const db = openIndex(
+    await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db"),
+  );
+  try {
+    const placeholders = citedKeys.map(() => "?").join(",");
+    const symbols = db
+      .prepare(
+        `SELECT s.key, s.start_line AS startLine, s.end_line AS endLine, f.path
+         FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE s.status = 'active' AND s.key IN (${placeholders})`,
+      )
+      .all(...citedKeys) as Array<{
+      key: string;
+      startLine: number;
+      endLine: number;
+      path: string;
+    }>;
+    symbols.sort((a, b) => a.key.localeCompare(b.key));
+    const spans: string[] = [];
+    let budget = spanBudget;
+    for (const symbol of symbols) {
+      if (budget <= 0) break;
+      const source = await nodeFs
+        .readFile(nodePath.join(absRoot, symbol.path), "utf8")
+        .catch(() => null);
+      if (source === null) continue;
+      const span = renderTopicSourceSpan(symbol, source.split("\n"));
+      if (span.length > budget) {
+        spans.push(
+          span.slice(0, budget) + "\n// ... (truncated by budget)",
+        );
+        break;
+      }
+      spans.push(span);
+      budget -= span.length + TOPIC_SOURCE_SPAN_SEPARATOR.length;
+    }
+    const spanBlock = spans.join(TOPIC_SOURCE_SPAN_SEPARATOR);
+    if (rowsBlock === "") return spanBlock;
+    if (spanBlock === "") return rowsBlock;
+    return `${rowsBlock}\n\n${spanBlock}`;
+  } finally {
+    db.close();
+  }
+}
+
 // === Stage 4 attempt abstraction ===
+
+/**
+ * Recovery tier (Component 1): additive outcome recorded on a diagnostic
+ * entry for attempts that used the surgical repair path. Absent on
+ * non-surgical attempts. Carried on the persisted checkpoint JSON via an
+ * intersection type in `diagnosticAttempt`/`topicAttemptDiagnostic` — the
+ * canonical `DiagnosticAttempt` interface (batch-state.ts) is unchanged.
+ */
+export type SurgicalOutcome = "surgical_ok" | "surgical_cascade_rejected";
+
+type DiagnosticAttemptWithSurgical = DiagnosticAttempt & {
+  surgicalOutcome?: SurgicalOutcome;
+  /**
+   * Recovery tier (Component 2): this attempt ran under the relaxed
+   * contract (the final completion round after strict exhaustion).
+   * Absent on strict attempts.
+   */
+  relaxed?: boolean;
+};
+
+/**
+ * Recovery tier (Component 2): the relaxed completion round exists for
+ * contract-shape failures, not infra failures. Eligible iff the last
+ * reported error set is non-empty and contains NO unclassified code for
+ * the page kind (report-only codes are never relaxed by design). Infra
+ * failures — llm_timeout, write_verify_exception, context_build_exception,
+ * rollback_failed, unrepairable, ownership refusals — set `taskError`
+ * before the exhaustion point and never reach this check.
+ */
+function isRelaxedEligible(
+  pageKind: "module" | "flow" | "topic",
+  errors: ReadonlyArray<ArtifactValidationError>,
+): boolean {
+  return errors.length > 0 && collectUnclassified(pageKind, errors).length === 0;
+}
 
 /**
  * Result of ONE LLM attempt (initial or repair) inside the bounded
@@ -3172,6 +3766,10 @@ interface Stage4AttemptResult {
   llmError: { code: string; message: string } | null;
   /** Content-safe deterministic repairs applied after the final LLM repair. */
   mechanicalRepairs?: MechanicalArtifactRepair[];
+  /** Set only on attempts that used the surgical repair path (recovery tier). */
+  surgicalOutcome?: SurgicalOutcome;
+  /** Set on the relaxed completion attempt (recovery tier, Component 2). */
+  relaxedAttempt?: boolean;
 }
 
 interface AttemptOpts {
@@ -3204,6 +3802,15 @@ interface AttemptOpts {
     attempt: number;
     total: number;
   };
+  /** Recovery tier (Component 1): allow the surgical repair path. */
+  surgicalRepair: boolean;
+  /**
+   * Recovery tier (Component 2): run under the relaxed validation contract
+   * and mark the artifact degraded (frontmatter `quality: degraded` +
+   * reader notice) BEFORE validation, so the validated artifact is exactly
+   * what gets written. Used only with `promptKind: "initial"`.
+   */
+  relaxed?: boolean;
 }
 
 /**
@@ -3229,21 +3836,41 @@ async function attemptStage4Generation(
 
   // Build prompt
   let prompt: { system: string; user: string };
+  // Recovery tier (Component 1): an eligible section-scoped error set swaps
+  // the full-context repair prompt for the surgical one. The guard result
+  // (surgicalPlan) is consumed after normalization, before validation.
+  let surgicalPlan: SurgicalRepairPlan | null = null;
   if (opts.promptKind === "repair") {
     const attemptContext = opts.repairAttemptContext ?? { attempt: 1, total: 1 };
-    prompt = buildRepairPrompt(
-      opts.module,
-      ctx.closedKeyList,
-      ctx.symbolsTable,
-      ctx.truncatedSource,
-      opts.priorCandidate,
-      opts.priorErrors,
-      opts.charBudget,
-      opts.language,
-      attemptContext,
-      classifyModuleRole(opts.module, opts.pathRoleConfig),
-      ctx.rationaleEvidence,
-    );
+    if (opts.surgicalRepair) {
+      surgicalPlan = await prepareSurgicalRepair(
+        opts.absRoot,
+        opts.priorCandidate,
+        opts.priorErrors,
+        ctx.symbolsTable,
+      );
+    }
+    prompt = surgicalPlan !== null
+      ? buildSurgicalRepairPrompt(
+          "module",
+          surgicalPlan.basePage,
+          opts.priorErrors,
+          surgicalPlan.evidenceSlice,
+          opts.language,
+        )
+      : buildRepairPrompt(
+          opts.module,
+          ctx.closedKeyList,
+          ctx.symbolsTable,
+          ctx.truncatedSource,
+          opts.priorCandidate,
+          opts.priorErrors,
+          opts.charBudget,
+          opts.language,
+          attemptContext,
+          classifyModuleRole(opts.module, opts.pathRoleConfig),
+          ctx.rationaleEvidence,
+        );
   } else {
     prompt = buildStage4Prompt(
       opts.module,
@@ -3374,15 +4001,56 @@ async function attemptStage4Generation(
     };
   }
 
+  // Recovery tier (Component 1): a surgical attempt's response passes the
+  // anti-cascade guard BEFORE validation — the candidate that validation
+  // (and, on success, the transactional write) sees is the failed page
+  // with ONLY the target sections replaced. A null splice means the model
+  // changed something outside the named sections: the attempt fails with
+  // the ORIGINAL errors (the page is unchanged by definition) and the
+  // diagnostic entry records the rejection.
+  let candidateContent = normalize.content;
+  let surgicalOutcome: SurgicalOutcome | undefined;
+  if (surgicalPlan !== null) {
+    const spliced = spliceSections(
+      surgicalPlan.basePage,
+      normalize.content,
+      surgicalPlan.targetSections,
+    );
+    if (spliced === null) {
+      return {
+        usageEntry,
+        // The cascade attempt contributes nothing usable: keep the
+        // ORIGINAL failed page as the repair input for the next slot, so
+        // the splice base cannot drift onto the rejected response.
+        normalizedRaw: opts.priorCandidate,
+        diagnosticCandidate: normalize.content,
+        diagnosticOutcome: "artifact_validation_failed",
+        artifact: null,
+        validationErrors: opts.priorErrors,
+        llmError: null,
+        surgicalOutcome: "surgical_cascade_rejected",
+      };
+    }
+    candidateContent = spliced;
+    surgicalOutcome = "surgical_ok";
+  }
+
   // Validate against closed key list
-  const validation = validateStage4Artifact(normalize.content, ctx.closedKeyList, {
+  // Recovery tier (Component 2): the relaxed writer marks the artifact
+  // degraded BEFORE validation, so the artifact that validation (and
+  // verify) sees is byte-for-byte the artifact written to disk.
+  if (opts.relaxed === true) {
+    candidateContent = markDegradedArtifact(candidateContent);
+  }
+  const validation = validateStage4Artifact(candidateContent, ctx.closedKeyList, {
     moduleId: opts.module.id,
     moduleRole: classifyModuleRole(opts.module, opts.pathRoleConfig),
+    ...(opts.relaxed === true ? { relaxed: true } : {}),
   });
   if (!validation.ok) {
     if (opts.allowMechanicalFallback) {
       const mechanical = repairStage4ArtifactMechanically(
-        normalize.content,
+        candidateContent,
         validation.errors,
         ctx.closedKeyList,
         {
@@ -3400,28 +4068,31 @@ async function attemptStage4Generation(
           validationErrors: [],
           llmError: null,
           mechanicalRepairs: mechanical.repairs,
+          ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
         };
       }
     }
     return {
       usageEntry,
       normalizedRaw: raw,
-      diagnosticCandidate: normalize.content,
+      diagnosticCandidate: candidateContent,
       diagnosticOutcome: "artifact_validation_failed",
       artifact: null,
       validationErrors: validation.errors,
       llmError: null,
+      ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
     };
   }
 
   return {
     usageEntry,
     normalizedRaw: raw,
-    diagnosticCandidate: normalize.content,
+    diagnosticCandidate: candidateContent,
     diagnosticOutcome: null,
-    artifact: normalize.content,
+    artifact: candidateContent,
     validationErrors: [],
     llmError: null,
+    ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
   };
 }
 
@@ -3630,6 +4301,8 @@ function finalizeRun(
     modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }>;
     tasksDone: number;
     tasksFailed: number;
+    /** Recovery tier (Component 2): persisted only when non-empty. */
+    degradedPages?: string[];
   },
 ): void {
   // FIX J (rev2): summary_json lives in batch_runs.summary_json — it is a
@@ -3643,6 +4316,9 @@ function finalizeRun(
     tasksFailed: opts.tasksFailed,
     tasksPending: 0,
     modulesRefined: opts.modulesRefined,
+    ...(opts.degradedPages !== undefined && opts.degradedPages.length > 0
+      ? { degradedPages: [...opts.degradedPages] }
+      : {}),
   };
   db.prepare(
     "UPDATE batch_runs SET status = ?, finished_at = ?, summary_json = ? WHERE id = ?",
@@ -3730,6 +4406,10 @@ interface Stage5AttemptOpts {
     attempt: number;
     total: number;
   };
+  /** Recovery tier (Component 1): allow the surgical repair path. */
+  surgicalRepair: boolean;
+  /** Recovery tier (Component 2): relaxed contract + degraded marking (see AttemptOpts.relaxed). */
+  relaxed?: boolean;
 }
 
 /**
@@ -3787,23 +4467,44 @@ async function attemptStage5Generation(
   const flowKeySectionMap = assignFlowKeySections(opts.candidate);
 
   let prompt: { system: string; user: string };
+  // Recovery tier (Component 1): same surgical swap as stage 4. The splice
+  // runs on the MODEL-EMITTED form (no deterministic `## Diagram` section
+  // yet) — a target section that only exists post-insertion (e.g. Diagram)
+  // is absent from the model form and therefore never becomes eligible.
+  let surgicalPlan: SurgicalRepairPlan | null = null;
   if (opts.promptKind === "repair") {
     const attemptContext = opts.repairAttemptContext ?? { attempt: 1, total: 1 };
-    prompt = buildStage5RepairPrompt(
-      opts.candidate,
-      ctx.closedKeyList,
-      ctx.moduleOpenings,
-      ctx.symbolsTable,
-      ctx.truncatedSource,
-      opts.priorCandidate,
-      opts.priorErrors,
-      opts.charBudget,
-      opts.language,
-      attemptContext,
-      opts.diagramBudgets,
-      flowKeyGroups,
-      flowKeySectionMap,
-    );
+    if (opts.surgicalRepair) {
+      surgicalPlan = await prepareSurgicalRepair(
+        opts.absRoot,
+        opts.priorCandidate,
+        opts.priorErrors,
+        ctx.symbolsTable,
+      );
+    }
+    prompt = surgicalPlan !== null
+      ? buildSurgicalRepairPrompt(
+          "flow",
+          surgicalPlan.basePage,
+          opts.priorErrors,
+          surgicalPlan.evidenceSlice,
+          opts.language,
+        )
+      : buildStage5RepairPrompt(
+          opts.candidate,
+          ctx.closedKeyList,
+          ctx.moduleOpenings,
+          ctx.symbolsTable,
+          ctx.truncatedSource,
+          opts.priorCandidate,
+          opts.priorErrors,
+          opts.charBudget,
+          opts.language,
+          attemptContext,
+          opts.diagramBudgets,
+          flowKeyGroups,
+          flowKeySectionMap,
+        );
   } else {
     prompt = buildStage5Prompt(
       opts.candidate,
@@ -3933,15 +4634,51 @@ async function attemptStage5Generation(
     };
   }
 
+  // Recovery tier (Component 1): anti-cascade guard on the model-emitted
+  // form, BEFORE the deterministic diagram insertion and validation.
+  let candidateContent = normalize.content;
+  let surgicalOutcome: SurgicalOutcome | undefined;
+  if (surgicalPlan !== null) {
+    const spliced = spliceSections(
+      surgicalPlan.basePage,
+      normalize.content,
+      surgicalPlan.targetSections,
+    );
+    if (spliced === null) {
+      return {
+        usageEntry,
+        // Keep the ORIGINAL failed page as the next slot's repair input
+        // (same anti-drift rule as stage 4).
+        normalizedRaw: opts.priorCandidate,
+        diagnosticCandidate: normalize.content,
+        diagnosticOutcome: "artifact_validation_failed",
+        artifact: null,
+        validationErrors: opts.priorErrors,
+        llmError: null,
+        diagramSource: null,
+        surgicalOutcome: "surgical_cascade_rejected",
+      };
+    }
+    candidateContent = spliced;
+    surgicalOutcome = "surgical_ok";
+  }
+
+  // Recovery tier (Component 2): the relaxed writer marks the artifact
+  // degraded BEFORE the deterministic diagram insertion and validation.
+  if (opts.relaxed === true) {
+    candidateContent = markDegradedArtifact(candidateContent);
+  }
+
   const invalid = (errors: ArtifactValidationError[]): Stage5AttemptResult => ({
     usageEntry,
     normalizedRaw: raw,
-    diagnosticCandidate: normalize.content,
+    diagnosticCandidate: candidateContent,
     diagnosticOutcome: "artifact_validation_failed",
     artifact: null,
     validationErrors: errors,
     llmError: null,
     diagramSource: null,
+    ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
   });
 
   // (a) Generate the diagram deterministically — zero LLM involvement.
@@ -3966,8 +4703,12 @@ async function attemptStage5Generation(
 
   // (b) Insert the complete `## Diagram` section (heading + real fence)
   //     between `## Ordered flow` and `## Invariants` — the LLM's raw
-  //     output never had this section at all.
-  const pageWithDiagram = insertFlowDiagramSection(normalize.content, opts.candidate.slug);
+  //     output never had this section at all. Under the relaxed contract
+  //     `## Invariants` is optional, so the insertion may anchor on the
+  //     Ordered flow section instead.
+  const pageWithDiagram = insertFlowDiagramSection(candidateContent, opts.candidate.slug, {
+    allowMissingInvariants: opts.relaxed === true,
+  });
   if (pageWithDiagram === null) {
     return invalid([
       {
@@ -3989,6 +4730,7 @@ async function attemptStage5Generation(
     moduleId: opts.candidate.slug,
     moduleRole: "product" as const,
     flowKeyGroups,
+    ...(opts.relaxed === true ? { relaxed: true } : {}),
   };
   const validation = validateStage4Artifact(pageWithDiagram, ctx.closedKeyList, validationContext);
   let pageContent = pageWithDiagram;
@@ -4020,6 +4762,7 @@ async function attemptStage5Generation(
     validationErrors: [],
     llmError: null,
     diagramSource,
+    ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
   };
 }
 
@@ -4044,6 +4787,10 @@ interface TopicAttemptOpts {
   thinking?: "disabled" | "adaptive" | "omit" | undefined;
   pathRoleConfig?: import("./modules.js").PathRoleConfig;
   repairAttemptContext?: { attempt: number; total: number };
+  /** Recovery tier (Component 1): allow the surgical repair path. */
+  surgicalRepair: boolean;
+  /** Recovery tier (Component 2): relaxed contract + degraded marking (see AttemptOpts.relaxed). */
+  relaxed?: boolean;
 }
 
 async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4AttemptResult> {
@@ -4058,7 +4805,25 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
     },
     MODULE_OUTPUT_BUDGET_OPTIONS,
   );
-  const prompt = opts.promptKind === "repair"
+  // Recovery tier (Component 1): same surgical swap as stages 4/5.
+  let surgicalPlan: SurgicalRepairPlan | null = null;
+  if (opts.promptKind === "repair" && opts.surgicalRepair) {
+    surgicalPlan = await prepareSurgicalRepair(
+      opts.absRoot,
+      opts.priorCandidate,
+      opts.priorErrors,
+      ctx.symbolsTable,
+    );
+  }
+  const prompt = surgicalPlan !== null
+    ? buildSurgicalRepairPrompt(
+        "topic",
+        surgicalPlan.basePage,
+        opts.priorErrors,
+        surgicalPlan.evidenceSlice,
+        opts.language,
+      )
+    : opts.promptKind === "repair"
     ? buildTopicRepairPrompt(
         opts.candidate,
         ctx.moduleDigest,
@@ -4133,6 +4898,37 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
       llmError: null,
     };
   }
+  // Recovery tier (Component 1): anti-cascade guard before validation.
+  let candidateContent = normalized.content;
+  let surgicalOutcome: SurgicalOutcome | undefined;
+  if (surgicalPlan !== null) {
+    const spliced = spliceSections(
+      surgicalPlan.basePage,
+      normalized.content,
+      surgicalPlan.targetSections,
+    );
+    if (spliced === null) {
+      return {
+        usageEntry,
+        // Keep the ORIGINAL failed page as the next slot's repair input
+        // (same anti-drift rule as stage 4).
+        normalizedRaw: opts.priorCandidate,
+        diagnosticCandidate: normalized.content,
+        diagnosticOutcome: "artifact_validation_failed",
+        artifact: null,
+        validationErrors: opts.priorErrors,
+        llmError: null,
+        surgicalOutcome: "surgical_cascade_rejected",
+      };
+    }
+    candidateContent = spliced;
+    surgicalOutcome = "surgical_ok";
+  }
+  // Recovery tier (Component 2): the relaxed writer marks the artifact
+  // degraded BEFORE validation (same rule as stages 4/5).
+  if (opts.relaxed === true) {
+    candidateContent = markDegradedArtifact(candidateContent);
+  }
   const validationContext = {
     pageKind: "topic" as const,
     moduleId: opts.candidate.slug,
@@ -4146,9 +4942,10 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
     topicProductKeys: opts.candidate.seedKeys.filter((key) =>
       classifyPathRole(key.split("#", 1)[0] ?? "", opts.pathRoleConfig) === "product"
     ),
+    ...(opts.relaxed === true ? { relaxed: true } : {}),
   };
-  const validation = validateStage4Artifact(normalized.content, opts.candidate.seedKeys, validationContext);
-  let pageContent = normalized.content;
+  const validation = validateStage4Artifact(candidateContent, opts.candidate.seedKeys, validationContext);
+  let pageContent = candidateContent;
   if (!validation.ok) {
     // Same upper-bound contract as flow pages: duplicate_anchor and
     // missing_closed_key have an unambiguous mechanical fix. Try it before
@@ -4158,7 +4955,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
     // (assignTopicKeySections) lets dedup prefer the assigned section's
     // occurrence, exactly like the flow path's flowKeySectionMap.
     const mechanical = repairUpperBoundArtifactMechanically(
-      normalized.content,
+      candidateContent,
       validation.errors,
       opts.candidate.seedKeys,
       validationContext,
@@ -4169,11 +4966,12 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
       return {
         usageEntry,
         normalizedRaw: normalized.content,
-        diagnosticCandidate: normalized.content,
+        diagnosticCandidate: candidateContent,
         diagnosticOutcome: "artifact_validation_failed",
         artifact: null,
         validationErrors: validation.errors,
         llmError: null,
+        ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
       };
     }
     pageContent = mechanical.content;
@@ -4186,6 +4984,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
     artifact: pageContent,
     validationErrors: [],
     llmError: null,
+    ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
   };
 }
 

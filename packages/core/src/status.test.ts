@@ -21,6 +21,7 @@ describe("status.formatHuman", () => {
       },
       undocumented: { total: 0, sample: [] },
       metrics: null,
+      degraded: { total: 0, pages: [] },
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);
@@ -82,6 +83,7 @@ describe("status.formatHuman", () => {
         lastPackage: null,
         lastWrite: null,
       },
+      degraded: { total: 0, pages: [] },
       meta: {
         schemaVersion: 2,
         lastIndexedAt: 1700000000000,
@@ -127,6 +129,7 @@ describe("status.formatHuman", () => {
       },
       undocumented: { total: 0, sample: [] },
       metrics: null,
+      degraded: { total: 0, pages: [] },
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);
@@ -151,6 +154,7 @@ describe("status.formatHuman", () => {
       },
       undocumented: { total: 0, sample: [] },
       metrics: null,
+      degraded: { total: 0, pages: [] },
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);
@@ -181,6 +185,7 @@ describe("status.formatHuman", () => {
       },
       undocumented: { total: 0, sample: [] },
       metrics: null,
+      degraded: { total: 0, pages: [] },
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
     };
     const out = formatHuman(report);
@@ -280,5 +285,60 @@ describe("status risk ranking (Etapa 2c) — integration", () => {
       );
     }
     expect(formatHuman(report)).not.toContain("[risk ");
+  });
+});
+
+/**
+ * Recovery tier (Component 2): `status` recovers degraded pages fresh from
+ * disk — the frontmatter `quality: degraded` flag is the single source of
+ * truth (no schema change). Dot-prefixed PAGES are legit artifacts and
+ * must be counted; hidden directories are never descended.
+ */
+describe("status degraded pages (recovery tier, Component 2)", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), "livewiki-status-degraded-"));
+    await mkdir(join(repoRoot, ".livewiki"), { recursive: true });
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(join(repoRoot, "src/a.ts"), "export function alpha() { return 1; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+  });
+
+  afterEach(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  async function writeWikiPage(rel: string, frontmatter: string): Promise<void> {
+    const abs = join(repoRoot, rel);
+    await mkdir(join(abs, ".."), { recursive: true });
+    await writeFile(abs, `---\n${frontmatter}\n---\n\n# Page\n\nBody.\n`);
+  }
+
+  it("counts pages flagged quality: degraded, including dot-prefixed and nested pages", async () => {
+    await writeWikiPage("livewiki/ok.md", "title: ok\nowner: generated");
+    await writeWikiPage("livewiki/degraded-page.md", "title: d\nowner: generated\nquality: degraded");
+    await writeWikiPage("livewiki/.hidden.md", "title: h\nowner: generated\nquality: degraded");
+    await writeWikiPage("livewiki/flows/flow-x.md", "title: f\nowner: generated\nquality: degraded");
+
+    const report = await runStatus(repoRoot);
+    expect(report.degraded.total).toBe(3);
+    expect(report.degraded.pages).toEqual([
+      "livewiki/.hidden.md",
+      "livewiki/degraded-page.md",
+      "livewiki/flows/flow-x.md",
+    ]);
+
+    const human = formatHuman(report);
+    expect(human).toContain("Degraded pages (relaxed contract): 3");
+    expect(human).toContain("livewiki/flows/flow-x.md");
+  });
+
+  it("reports zero and prints no line when no page is degraded", async () => {
+    await writeWikiPage("livewiki/ok.md", "title: ok\nowner: generated");
+
+    const report = await runStatus(repoRoot);
+    expect(report.degraded).toEqual({ total: 0, pages: [] });
+    expect(formatHuman(report)).not.toContain("Degraded pages");
   });
 });

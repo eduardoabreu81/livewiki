@@ -264,7 +264,20 @@ export function generateFlowDiagram(
  * a structural opening failure, same as any other missing/out-of-order
  * required section.
  */
-export function insertFlowDiagramSection(pageContent: string, slug: string): string | null {
+export function insertFlowDiagramSection(
+  pageContent: string,
+  slug: string,
+  opts?: {
+    /**
+     * Recovery tier (Component 2): under the relaxed contract `## Invariants`
+     * is optional, so the Diagram section is inserted right after the
+     * `## Ordered flow` section when no Invariants heading exists. Returns
+     * null only when the Ordered flow heading is also absent (a structural
+     * opening failure in every contract).
+     */
+    allowMissingInvariants?: boolean;
+  },
+): string | null {
   const masked = maskCodeSpansPreservingLength(pageContent);
   const headingRe = /^##[ \t]+(.+?)[ \t]*$/gm;
   const matches = [...masked.matchAll(headingRe)];
@@ -282,6 +295,15 @@ export function insertFlowDiagramSection(pageContent: string, slug: string): str
   }
 
   const invariants = headings.find((h) => h.name === "invariants");
-  if (invariants === undefined) return null;
-  return pageContent.slice(0, invariants.start) + insertion + pageContent.slice(invariants.start);
+  if (invariants !== undefined) {
+    return pageContent.slice(0, invariants.start) + insertion + pageContent.slice(invariants.start);
+  }
+  if (opts?.allowMissingInvariants === true) {
+    const ordered = headings.find((h) => h.name === "ordered flow");
+    if (ordered === undefined) return null;
+    const before = pageContent.slice(0, ordered.end);
+    const separator = before.endsWith("\n") ? "" : "\n";
+    return before + separator + insertion + pageContent.slice(ordered.end);
+  }
+  return null;
 }

@@ -171,6 +171,12 @@ export interface TaskCheckpoint {
   topicPlan?: TopicCandidate[];
   /** Exact accepted planner response, retained for audit and deterministic reuse. */
   topicPlanRaw?: string;
+  /**
+   * Recovery tier (Component 2): this task completed under the relaxed
+   * contract — the page carries `quality: degraded` in frontmatter plus the
+   * reader notice. Additive; absent on strict completions and failures.
+   */
+  degraded?: boolean;
 }
 
 export interface TaskError {
@@ -261,6 +267,13 @@ export interface BatchRunSummary {
   tasksPending: number;
   /** Lista final de módulos (pós-refinamento). Null se ainda não foi gravado. */
   modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }> | null;
+  /**
+   * Recovery tier (Component 2): wiki paths of pages completed under the
+   * relaxed contract (`quality: degraded`). Additive, mirroring the
+   * `modulesRefined` precedent — absent on runs with no degraded pages and
+   * in summaries persisted before this field existed.
+   */
+  degradedPages?: string[];
 }
 
 /** Módulo lightweight (sem symbolCount) pra serializar no summary_json. */
