@@ -605,7 +605,7 @@ describe("batch X — repair success (Criterion #6)", () => {
       "",
       "F".repeat(17_000),
       "FULL_NEAR_MISS_TAIL",
-      "TODO replace this single placeholder.",
+      "TODO: replace this single placeholder.",
       "",
     ].join("\n");
     llm.responses = [nearMiss, makeValidPage(closedKeys)];
@@ -2078,7 +2078,7 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
       "",
       "F".repeat(17_000),
       "CORE_SRC_04_FULL_NEAR_MISS_TAIL",
-      "TODO replace this single placeholder.",
+      "TODO: replace this single placeholder.",
       "",
     ].join("\n");
     expect(nearMiss.length).toBeGreaterThan(16_000);
@@ -2153,7 +2153,7 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
       validMarker,
       "",
       "Body.",
-      "TODO replace this single placeholder.",
+      "TODO: replace this single placeholder.",
       "",
     ].join("\n");
     const partialAbort = "PARTIAL_ABORT_FROM_CORE_SRC_03";

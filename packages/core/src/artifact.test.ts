@@ -1012,6 +1012,31 @@ const x = 1;
       expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(false);
     });
 
+    it("TODO as legitimate prose about the source (Etapa 3 run #4) → NOT flagged", () => {
+      // The rationale evidence (Etapa 2b) deliberately feeds TODO-tagged
+      // source comments to the prompt; documenting them is content, not a
+      // placeholder. Only the model's own placeholder forms are banned.
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+The module tracks remaining work in TODO comments, mainly the retry backoff and the session expiry review noted in app/config.py.
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(false);
+    });
+
+    it("standalone TODO bullet (model's own placeholder) → flagged", () => {
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+- TODO
+`);
+      const r = validateStage4Artifact(art, closedKeys);
+      expect(r.errors.some((e) => e.code === "todo_marker_present")).toBe(true);
+    });
+
     it("plain prose without TODO/TBD → not flagged", () => {
       const art = fullArt(`# x
 
@@ -1164,8 +1189,8 @@ The validate function checks the token signature.
       // truncation, and the message must still carry the correct
       // body-relative line number. Spaces around TODO create the word
       // boundaries the `\b(TODO|TBD)\b` regex requires.
-      const longLine = "A".repeat(20_000) + " TODO " + "B".repeat(20_000);
-      expect(longLine.length).toBe(40_006);
+      const longLine = "A".repeat(20_000) + " TODO: " + "B".repeat(20_000);
+      expect(longLine.length).toBe(40_007);
       const longArt = fullArt(`# x
 
 <!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->

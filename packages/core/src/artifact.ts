@@ -44,7 +44,10 @@
  *        a response truncated mid-token.
  *      - "TODO"/"TBD" placeholders are banned from the body,
  *        except inside a fenced/inline code example or an
- *        `<!-- lw:manual -->` block (`todo_marker_present`).
+ *        `<!-- lw:manual -->` block (`todo_marker_present`). The ban
+ *        covers only the model's own placeholder forms (directive
+ *        `TODO:`/`TBD:`, standalone marker lines, any `TBD`) —
+ *        legitimate prose about the source's TODO items passes.
  *      - Requires non-empty body after the frontmatter.
  *      - Rejects ANY `<!-- lw:manual -->` block in the body (rule #6:
  *        manual blocks are reserved for human content and the orchestrator
@@ -1500,6 +1503,16 @@ interface TodoPlaceholderMatch {
  */
 function findFirstTodoPlaceholder(text: string): TodoPlaceholderMatch | null {
   const tokenRe = /\b(?:TODO|TBD)\b/gi;
+  // Etapa 3 run #4 finding (2026-07-26): banning the bare WORD also flagged
+  // legitimate prose about the source's own TODO items — and since Etapa 2b
+  // the rationale evidence deliberately feeds TODO-tagged comments to the
+  // prompt, because documenting pending work is content, not a placeholder.
+  // The ban now covers only the MODEL's own unfinished-work placeholders:
+  //   - directive form: "TODO:" / "TBD:" (colon right after the token);
+  //   - standalone form: a line/bullet that IS just the marker.
+  // Prose mentions ("tracks remaining work in TODO comments") pass, and
+  // "TBD" is always banned (never produced by rationale evidence).
+  const standaloneRe = /^[-*+>\s]*(?:\d+[.)]\s*)?(?:TODO|TBD)[\s.]*$/i;
   const categoryRe = /\bTODO\b\s*\/\s*\bTBD\b(?=\s+prose\b)/gi;
 
   for (const match of text.matchAll(tokenRe)) {
@@ -1508,12 +1521,22 @@ function findFirstTodoPlaceholder(text: string): TodoPlaceholderMatch | null {
     const lineEnd = findOriginalLineEnd(text, index);
     const line = text.slice(lineStart, lineEnd);
     const offsetInLine = index - lineStart;
+    // A slash-joined "TODO/TBD prose" pair is a reference to the validation
+    // category itself, not a placeholder — exempt both tokens of the pair.
     const isCategoryReference = [...line.matchAll(categoryRe)].some((category) => {
       const start = category.index!;
       const end = start + category[0].length;
       return offsetInLine >= start && offsetInLine < end;
     });
-    if (!isCategoryReference) {
+    if (isCategoryReference) continue;
+    // "TBD" is always the model's own dodge (rationale evidence feeds
+    // TODO/FIXME-tagged source comments, never TBD) — keep the blanket ban.
+    if (match[0].toUpperCase() === "TBD") {
+      return { index, text: match[0] };
+    }
+    const afterToken = line.slice(offsetInLine + match[0].length);
+    const isDirective = afterToken.trimStart().startsWith(":");
+    if (isDirective || standaloneRe.test(line.trim())) {
       return { index, text: match[0] };
     }
   }
