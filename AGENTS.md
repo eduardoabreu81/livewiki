@@ -842,8 +842,23 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   python anchored + 12 prose languages; 444 rationale rows extracted.
   Evidence (LOCAL-ONLY, deliberately not committed — internal pre-launch
   test artifact): `docs/tasks/2026-07-25-etapa-3-e2e/RESULTS.md`.
-  Open: topic budget estimate excludes span padding (deferred);
-  `.github.md` page naming (cosmetic).
+  Follow-up runs #3/#4 surfaced three more classes, each fixed with
+  individual deterministic tests: flow repair directive off-target for
+  section-level prose failures (`fc26de1`), the bare-word TODO/TBD ban
+  flagging legitimate prose about the source's own TODO items (Fix D,
+  ban narrowed to the model's own placeholder forms), and the exact
+  topic-budget estimate + coverage-preserving flow dedup from the earlier
+  pair (`0b5fb24`, `ec8de58`). The remaining Diagram-placeholder loop
+  (run #4) proved non-reproducible model flakiness (the `--only` rerun
+  passed first try) — the standing answer is the recovery-tier design
+  (`docs/plans/2026-07-26-recovery-tier.md`, DRAFT awaiting maintainer
+  review): surgical section-scoped repair calls with an anti-cascade
+  guard + one relaxed completion round that never relaxes anchors/verify.
+  **Run #5 (2026-07-26): COMPLETED — 40 done / 0 failed, exit 0, verify
+  OK (45 pages, no issues); 54 calls, 965,047 tokens (checkpoint ==
+  proxy exact); corpus + metrics preserved LOCAL-ONLY under
+  `docs/tasks/2026-07-25-etapa-3-e2e/` (untracked per the local-evidence
+  rule).**
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series
@@ -876,13 +891,13 @@ starts from the committed tree. The untracked v21 benchmark evidence remains
 protected and untouched.
 
 Next planned steps:
-1. Maintainer review of the combined uncommitted R10/R10.1 + R11-NAV body.
-2. Decide whether to authorize one fresh full paid acceptance E2E, with no
-   `--only` recovery or rerun-to-green loop, or explicitly record a waiver of
-   the autonomous-run criterion before committing the current body.
-3. After review, authorize commit/push separately and launch the beta; use real
-   navigation failures to decide whether the deferred R11-A topic layer earns
-   its complexity.
+1. Maintainer review of the recovery-tier design
+   (`docs/plans/2026-07-26-recovery-tier.md`) — the standing mitigation for
+   model flakiness under the strict contract; implement only after review.
+2. Maintainer review of the R11-A topic-layer working tree (still
+   uncommitted, unvalidated) — decide whether it earns its complexity.
+3. Push authorization for the accumulated main (Etapa 2c/2d + Etapa 3
+   fixes), then beta launch decisions.
 4. Only after local product flows pass, return to GitHub/cross-platform CI.
 5. Phase 7: local viewer + templates rendering the same canonical artifacts.
 
