@@ -1912,6 +1912,58 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     expect(await fileExists(repoRoot, "livewiki/topics")).toBe(true);
   }, 60_000);
 
+  it("a topic whose evidence exceeds topicMaxSourceChars fails the task without killing the run (Etapa 3 E2E)", async () => {
+    // Real acceptance-run defect (2026-07-25, MoneyPrinterTurbo-Plus):
+    // buildTopicDocContext's hard budget throw escaped the task loop and
+    // killed init --batch mid-stage (run row left "running"). The failure
+    // policy requires: mark the task, CONTINUE the run. Reproduced via
+    // --only: the plan comes from the prior checkpoint (no planner budget
+    // re-selection), and the tightened config budget makes the context
+    // build throw deterministically.
+    await writeTopicEligibleRepo();
+    const topicLlm = new TopicMockLlm();
+    const first = await runBatch({
+      repoRoot,
+      llmClient: topicLlm,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+    expect(first.status).toBe("completed");
+
+    const plannerCheckpoint = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
+    const candidate = plannerCheckpoint!.topicPlan![0]!;
+    const topicTarget = `topic:${candidate.evidenceHash}`;
+    expect(first.failures.some((f) => f.module === topicTarget)).toBe(false);
+
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ topicMaxSourceChars: 1 }), // any evidence exceeds it
+      "utf8",
+    );
+    const callsBefore = topicLlm.topicPageCallCount;
+    const result = await runOnly({
+      repoRoot,
+      llmClient: topicLlm,
+      onlyTarget: topicTarget,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+
+    // The run SURVIVES: the topic task is marked failed, not fatal.
+    expect(result.status).toBe("completed_with_failures");
+    const topicFailure = result.failures.find((f) => f.module === topicTarget);
+    expect(topicFailure).toBeDefined();
+    expect(topicFailure!.error.code).toBe("context_build_exception");
+    expect(topicFailure!.error.message).toContain("exceeds topicMaxSourceChars");
+    // Not model-fixable ⇒ zero LLM calls burned on the topic page.
+    expect(topicLlm.topicPageCallCount).toBe(callsBefore);
+
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, topicTarget);
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint!.status).toBe("failed");
+    expect(checkpoint!.error?.code).toBe("context_build_exception");
+  }, 60_000);
+
   it("an LLM refine call that returns invalid JSON degrades silently to the deterministic plan (no failure, no skip)", async () => {
     await writeTopicEligibleRepo();
     const topicLlm = new TopicMockLlm();

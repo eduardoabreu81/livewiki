@@ -2157,28 +2157,48 @@ async function runSemanticTopicStage(opts: {
           break;
         }
         attempt++;
-        const attemptResult = await attemptTopicGeneration({
-          attemptNumber: attempt,
-          candidate,
-          language: opts.language,
-          llmClient: opts.llmClient,
-          charBudget: opts.sourceChars,
-          rationaleMaxChars: opts.rationaleMaxChars,
-          promptKind,
-          priorCandidate,
-          priorErrors,
-          absRoot: opts.absRoot,
-          pricing: opts.pricing,
-          outputTokenCeiling: opts.outputTokens,
-          outputTokenStrategy: opts.outputTokenStrategy,
-          anchorSourceChars: candidate.seedKeys.reduce(
-            (sum, key) => sum + (inventory.anchorSourceChars[key] ?? 0),
-            0,
-          ),
-          ...(opts.thinking ? { thinking: opts.thinking } : {}),
-          ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
-          ...(promptKind === "repair" ? { repairAttemptContext: { attempt: slot, total: opts.maxRepairAttempts } } : {}),
-        });
+        // Etapa 3 E2E finding (2026-07-25): buildTopicDocContext can THROW
+        // (the hard topicMaxSourceChars guard) before any LLM call. Without
+        // this catch the exception escaped the task loop and killed the
+        // whole run mid-stage (run row left "running"), violating the
+        // failure policy (failed task → mark + reason, RUN continues).
+        // The failure is not model-fixable, so the task fails WITHOUT
+        // burning repair slots — mirrors the write_verify_exception
+        // short-circuit (R10.1 item A); the circuit breaker still applies.
+        let attemptResult: Stage4AttemptResult;
+        try {
+          attemptResult = await attemptTopicGeneration({
+            attemptNumber: attempt,
+            candidate,
+            language: opts.language,
+            llmClient: opts.llmClient,
+            charBudget: opts.sourceChars,
+            rationaleMaxChars: opts.rationaleMaxChars,
+            promptKind,
+            priorCandidate,
+            priorErrors,
+            absRoot: opts.absRoot,
+            pricing: opts.pricing,
+            outputTokenCeiling: opts.outputTokens,
+            outputTokenStrategy: opts.outputTokenStrategy,
+            anchorSourceChars: candidate.seedKeys.reduce(
+              (sum, key) => sum + (inventory.anchorSourceChars[key] ?? 0),
+              0,
+            ),
+            ...(opts.thinking ? { thinking: opts.thinking } : {}),
+            ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
+            ...(promptKind === "repair" ? { repairAttemptContext: { attempt: slot, total: opts.maxRepairAttempts } } : {}),
+          });
+        } catch (err) {
+          taskError = {
+            code: "context_build_exception",
+            message:
+              `topic context build threw for ${target}: ${(err as Error).message}. ` +
+              `No repair retry because the failure is not model-fixable.`,
+            failedAt: 5,
+          };
+          break;
+        }
         usageHistory.push(attemptResult.usageEntry);
         taskUsage = accumulateUsage(taskUsage, attemptResult.usageEntry, opts.pricing);
         result.usage = accumulateUsage(result.usage, attemptResult.usageEntry, opts.pricing);
