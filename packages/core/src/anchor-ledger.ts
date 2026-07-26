@@ -808,9 +808,13 @@ async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
       continue;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue; // .manifest.json fica pra Fase 3
       const abs = nodePath.join(dir, entry.name);
       if (entry.isDirectory()) {
+        // Never descend hidden dirs. Dot-prefixed PAGES are legit: tier-2
+        // modules from hidden source dirs (e.g. .github/) produce pages
+        // like livewiki/.github.md (Etapa 3 E2E). .manifest.json stays out
+        // via the .md extension check.
+        if (entry.name.startsWith(".")) continue;
         stack.push(abs);
       } else if (entry.isFile() && entry.name.endsWith(".md")) {
         const rel = nodePath.relative(absRoot, abs).split(nodePath.sep).join("/");

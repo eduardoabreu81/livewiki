@@ -289,9 +289,13 @@ async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
       continue;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
       const abs = nodePath.join(dir, entry.name);
       if (entry.isDirectory()) {
+        // Never descend hidden dirs. Dot-prefixed PAGES are legit: tier-2
+        // modules from hidden source dirs (e.g. .github/) produce pages
+        // like livewiki/.github.md (Etapa 3 E2E). .manifest.json stays out
+        // via the .md extension check.
+        if (entry.name.startsWith(".")) continue;
         stack.push(abs);
       } else if (entry.isFile() && entry.name.endsWith(".md")) {
         out.push({
@@ -322,9 +326,12 @@ async function collectWikiArtifactPaths(absRoot: string): Promise<Set<string>> {
       continue;
     }
     for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
       const abs = nodePath.join(dir, entry.name);
       if (entry.isDirectory()) {
+        // Never descend hidden dirs (.git and friends). Dot-prefixed FILES
+        // are fine: tier-2 modules from hidden source dirs (e.g. .github/)
+        // produce legit pages like livewiki/.github.md (Etapa 3 E2E).
+        if (entry.name.startsWith(".")) continue;
         stack.push(abs);
       } else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".mmd"))) {
         out.add(nodePath.relative(absRoot, abs).split(nodePath.sep).join("/"));

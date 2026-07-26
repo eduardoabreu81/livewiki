@@ -817,6 +817,28 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   Validation: mcp suite 31 passed (server.test.ts 24 = 16 pre-existing +
   8 hint assertions incl. error-carries-no-hints; phase5-e2e 7
   untouched) — no paid call, commit, or push.
+- **Etapa 3 (2026-07-25/26, acceptance E2E PASSED)**: single autonomous
+  `init --batch` (no `--only` recovery, no manual edits) on the pruned
+  MoneyPrinterTurbo-Plus clone, MiniMax-M3 via openai-compat + token
+  proxy (OpenWiki-identical shape). Run #1 exposed a fatal defect:
+  `buildTopicDocContext`'s hard `topicMaxSourceChars` guard threw outside
+  the topic task loop and killed the run mid-stage (38/41 done, run row
+  left "running") — fixed in `a64ad2c` (`context_build_exception` task
+  failure, zero repair slots, run continues; regression test via `--only`).
+  Run #2: `completed_with_failures` 38/40 (topic `context_build_exception`
+  working as designed; one flow `repair_exhausted`), checkpoint == proxy
+  accounting (50 calls, 883,648 tokens), passive prompt caching live.
+  Corpus validation exposed defect 2: the three wiki walkers
+  (`verify.ts` x2, `anchor-ledger.ts` x1) skipped dot-prefixed entries, so
+  tier-2 pages from hidden source dirs (`livewiki/.github.md`) were
+  invisible to the ledger and false-positive broken links — fixed (skip
+  dot-DIRECTORIES only; dot `.md`/`.mmd` files are normal artifacts), and
+  the corpus re-verified to **OK (42 pages), no issues**. Tiers live:
+  python anchored + 12 prose languages; 444 rationale rows extracted.
+  Evidence (LOCAL-ONLY, deliberately not committed — internal pre-launch
+  test artifact): `docs/tasks/2026-07-25-etapa-3-e2e/RESULTS.md`.
+  Open: topic budget estimate excludes span padding (deferred);
+  `.github.md` page naming (cosmetic).
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

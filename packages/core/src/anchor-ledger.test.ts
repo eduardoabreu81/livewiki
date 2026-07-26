@@ -55,6 +55,35 @@ describe("anchor-ledger — sem wiki", () => {
   });
 });
 
+describe("anchor-ledger — dot-prefixed pages (tier-2 hidden-dir modules)", () => {
+  it("parses anchors from livewiki/.github.md and raises debt when the symbol changes", async () => {
+    // Etapa 3 E2E finding: tier-2 modules from hidden source dirs (e.g.
+    // .github/) produce dot-prefixed pages; the wiki walker skipped them,
+    // so their anchors were never registered or validated.
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/.github.md", `---
+title: GH
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+
+Docs.
+`);
+
+    await runIndexer(repoRoot, { quiet: true });
+    const first = await runLedger(repoRoot, { quiet: true });
+    expect(first.pagesProcessed).toBe(1);
+    expect(first.anchorsUpserted).toBe(1);
+
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    const second = await runLedger(repoRoot, { quiet: true });
+    expect(second.debtCreated).toBe(1);
+    expect(second.debtByEvent.changed).toBe(1);
+  });
+});
+
 describe("anchor-ledger — primeira run", () => {
   it("upsert anchors sem gerar debt (estado inicial)", async () => {
     await writeCode("src/auth.ts", "export function validate() { return true; }");

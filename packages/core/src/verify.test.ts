@@ -133,6 +133,34 @@ describe("verify — link interno aponta para página fora do allowlist", () => 
   });
 });
 
+describe("verify — dot-prefixed wiki pages (tier-2 hidden-dir modules)", () => {
+  it("a link to an existing dot-page is not flagged, and the dot-page's anchors are validated", async () => {
+    // Etapa 3 E2E finding: verify's artifact walker skipped dot entries,
+    // so a legit generated page like livewiki/.github.md was reported as
+    // "página inexistente" (false positive broken_internal_link).
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/.github.md", `---
+title: GH
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+
+Docs.
+`);
+    await writeWiki("livewiki/tasks.md", "# Tasks\n\nSee [GH](.github.md).\n");
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    // Full zero-issues assertion: covers all THREE wiki walkers (verify's
+    // page list, verify's artifact existence set, the ledger's page list)
+    // — a dot-page must be parsed, linked, and validated like any other.
+    expect(result.issues).toEqual([]);
+  });
+});
+
 describe("verify — manual block byte-a-byte (regra #6)", () => {
   it("matches preserved manual blocks by hash after large offset shifts", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
