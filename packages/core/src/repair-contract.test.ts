@@ -171,6 +171,30 @@ describe("repair-contract — directive rendering (behavioral parity with the hi
     expect(action).toContain("`Purpose`, `Ordered flow` (numbered list), `Invariants`, `Failure and recovery`, `Related pages`");
   });
 
+  it("flow missing_page_opening with a section-level prose failure gets a targeted section directive (Etapa 3 run #3)", () => {
+    const action = renderActionDirective(
+      "flow",
+      err("missing_page_opening"),
+      { messageSafe: 'page opening "Failure and recovery" must contain one or more prose paragraphs' },
+    );
+    expect(action).toContain("section-content failure, not a page-structure one");
+    expect(action).toContain("`Failure and recovery` H2 heading");
+    expect(action).toContain("no bullet lists");
+    // The page-structure rewrite text must NOT be offered for this shape.
+    expect(action).not.toContain("Replace the opening after frontmatter");
+  });
+
+  it("flow missing_page_opening section directive allows bullets only for Invariants", () => {
+    const action = renderActionDirective(
+      "flow",
+      err("missing_page_opening"),
+      { messageSafe: 'page opening "Invariants" must contain prose or bullets' },
+    );
+    expect(action).toContain("`Invariants` H2 heading");
+    expect(action).toContain("prose paragraphs or bullets");
+    expect(action).not.toContain("no bullet lists");
+  });
+
   it("topic missing_page_opening mirrors the topic opening contract", () => {
     const action = renderActionDirective(
       "topic",

@@ -242,8 +242,31 @@ const FLOW_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
   invalid_frontmatter: INVALID_FRONTMATTER,
   missing_owner: MISSING_OWNER,
   wrong_owner: WRONG_OWNER,
-  missing_page_opening: (ctx) =>
-    `SPECIFIC FAILURE: ${ctx.detail}. Replace the opening after frontmatter with the complete required flow opening: an H1, one responsibility sentence, then the H2 sections \`Purpose\`, \`Ordered flow\` (numbered list), \`Invariants\`, \`Failure and recovery\`, \`Related pages\` — in that order. Do NOT write a \`Diagram\` section — the orchestrator inserts it itself. Put no \`lw:anchors\` marker before \`Purpose\`.`,
+  missing_page_opening: (ctx) => {
+    // Etapa 3 run #3 finding (2026-07-26): the flow opening validator also
+    // emits this code for SECTION-level prose failures ("Purpose" /
+    // "Failure and recovery" require prose paragraphs — bullets rejected;
+    // "Invariants" accepts prose or bullets). The page-structure directive
+    // alone gave the model no actionable fix: two identical failures, then
+    // a third attempt that broke other sections (repair_exhausted).
+    const sectionProse =
+      /page opening "(Purpose|Invariants|Failure and recovery)" must contain/.exec(
+        ctx.detail ?? "",
+      );
+    if (sectionProse !== null) {
+      const section = sectionProse[1] as string;
+      const form =
+        section === "Invariants"
+          ? "prose paragraphs or bullets"
+          : "one or more prose paragraphs (full sentences — no bullet lists, no tables, no marker-only content)";
+      return (
+        `SPECIFIC FAILURE: ${ctx.detail}. This is a section-content failure, not a page-structure one — ` +
+        `do NOT restructure the page. Directly under the \`${section}\` H2 heading, write ${form} ` +
+        `describing that aspect of the flow, and keep the section's \`lw:anchors\` marker and every other section as-is.`
+      );
+    }
+    return `SPECIFIC FAILURE: ${ctx.detail}. Replace the opening after frontmatter with the complete required flow opening: an H1, one responsibility sentence, then the H2 sections \`Purpose\`, \`Ordered flow\` (numbered list), \`Invariants\`, \`Failure and recovery\`, \`Related pages\` — in that order. Do NOT write a \`Diagram\` section — the orchestrator inserts it itself. Put no \`lw:anchors\` marker before \`Purpose\`.`;
+  },
   title_equals_module_id: TITLE_EQUALS_MODULE_ID,
   anchor_outside_closed_list: REMOVE_OUTSIDE_LIST_ANCHOR,
   duplicate_anchor: FLOW_DUPLICATE_ANCHOR,
