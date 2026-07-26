@@ -22,7 +22,9 @@
 > remains open. R11-NAV intent-first deterministic navigation is implemented
 > and green in the same uncommitted body. R11-A concept topics, topic-first
 > navigation, and compact auxiliary-page depth are implemented in the working
-> tree but intentionally not built, tested, or benchmarked yet. GitHub and
+> tree, validated end-to-end by the Etapa 3 acceptance run
+> (2026-07-26: topic planner + topic page generated, verify zero issues).
+> GitHub and
 > cross-platform work remain deliberately deferred.
 
 ## Language policy
@@ -727,7 +729,7 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   surfaced in init/batch results. Build clean; core 966 / CLI 86 / MCP 21,
   with 12 expected Windows symlink skips. No paid call, benchmark, commit, or
   push.
-- **R11-A (2026-07-20, implemented, uncommitted, unvalidated)**: one bounded
+- **R11-A (2026-07-20; VALIDATED + KEEP decided 2026-07-26)**: one bounded
   `topic-plan` task builds a closed concept inventory from accepted module and
   flow evidence; strict validation produces `topic:<evidence-hash>` tasks and
   bounded, anchored `livewiki/topics/<slug>.md` pages. Topics use transactional
@@ -735,8 +737,11 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   accounting, deterministic topic-first Quickstart/Tasks/module/flow routes,
   and a title-link-only topics hub. Non-product stage-4 pages use the compact
   auxiliary reference contract without changing exact anchor coverage. This
-  implementation pass ran static syntax/diff checks only; build, tests, MMX,
-  paid E2E, benchmark comparison, commit, and push await separate alignment.
+  implementation pass ran static syntax/diff checks only at the time; it was
+  later committed and VALIDATED end-to-end by the Etapa 3 acceptance run
+  (2026-07-26, run #5: deterministic topic planner, exact budget accounting
+  after 0b5fb24, 1 topic page generated, verify zero issues). Maintainer
+  decision 2026-07-26: KEEP on main.
 - **Etapa 1 (2026-07-23, implemented, uncommitted)**: tier-2 universal prose
   floor (SPEC §"Coverage ladder"). The walker uses a denylist (all text files
   walked; archives/binaries, media/fonts, maps/minified, and lockfiles
@@ -894,8 +899,8 @@ Next planned steps:
 1. Maintainer review of the recovery-tier design
    (`docs/plans/2026-07-26-recovery-tier.md`) — the standing mitigation for
    model flakiness under the strict contract; implement only after review.
-2. Maintainer review of the R11-A topic-layer working tree (still
-   uncommitted, unvalidated) — decide whether it earns its complexity.
+2. R11-A topic layer: DECIDED 2026-07-26 — keep on main (validated by
+   Etapa 3 run #5).
 3. Push authorization for the accumulated main (Etapa 2c/2d + Etapa 3
    fixes), then beta launch decisions.
 4. Only after local product flows pass, return to GitHub/cross-platform CI.

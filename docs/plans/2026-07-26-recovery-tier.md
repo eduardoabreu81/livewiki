@@ -82,17 +82,15 @@ still failed gets ONE final attempt under a relaxed presentation contract:
 - Accounting stays exact: every extra call lands in `usageHistory` and the
   report, marked by which tier consumed it.
 
-## Open questions for the maintainer
+## Maintainer decisions (2026-07-26)
 
-1. Exact relaxed contract per page kind (which sections may collapse to
-   bullets; minimum viable flow page).
-2. Degraded-marker surface: frontmatter-only vs. also a `status` count and
-   a hub badge.
-3. Does a degraded page block `completed` (exit 0) or count as its own
-   `completed_with_degraded` status? (Recommendation: exit 0 with an
-   explicit degraded count in the report — the directive is "never fail to
-   document", and degraded pages ARE documented.)
-4. Surgical-repair eligibility by code: initial set above, or narrower?
+- **Exit semantics: exit 0 + explicit degraded count** in the report
+  (documented is documented; degraded is a floor, retried strict on update).
+- **Degraded marker: frontmatter flag + reader-visible notice + `status`
+  count.** No hub badges (keeps the navigation surface untouched).
+- Surgical-repair eligibility and the exact relaxed contract per page kind
+  are implementation-time decisions, to be reviewed in the implementation
+  plan when this lot is scheduled.
 
 ## Out of scope
 
