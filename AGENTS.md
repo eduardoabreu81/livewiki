@@ -71,6 +71,11 @@ harnesses, or publication infrastructure as an iterative debugger.
 - Benchmark/proxy/orchestrator harnesses are reserved for explicit benchmark
   or publication evidence. They are not part of the normal fix-and-retest
   loop.
+- Internal test evidence stays LOCAL and untracked: E2E corpora, proxy
+  metrics, benchmark reruns, and scratch working notes are pre-launch
+  internal material, not repository content. Only a fully green acceptance
+  result (exit 0, `completed` — never `completed_with_failures`) may be
+  published, for OpenWiki comparison purposes.
 - Paid/provider calls require explicit maintainer approval. Prefer the active
   development LLM through livewiki's CLI, MCP, or packaged skill when testing
   an existing repository.
