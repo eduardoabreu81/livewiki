@@ -9,7 +9,12 @@ import * as nodeFs from "node:fs/promises";
 import { buildFairTruncatedSource, buildModuleDocContext, buildTopicDocContext } from "./batch.js";
 import { run as runIndexer } from "./indexer.js";
 import type { Module } from "./modules.js";
-import type { TopicCandidate } from "./topics.js";
+import {
+  estimateTopicSourceChars,
+  measureTopicAnchorEvidence,
+  type TopicCandidate,
+  type TopicPlanningInventory,
+} from "./topics.js";
 
 describe("buildFairTruncatedSource", () => {
   let root: string;
@@ -156,5 +161,68 @@ export function helper() { return 1; }
     await expect(
       buildTopicDocContext(root, candidate, combinedBudget, 4_000),
     ).resolves.toBeTruthy();
+  });
+
+  it("planner estimate equals the generator context byte-for-byte (Fix A)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(root, "src", "a.ts"),
+      `// WHY: alpha exists to protect the upstream API from bursts
+export function alpha() { return 1; }
+export function beta() { return 2; }
+`,
+      "utf8",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(root, "src", "b.ts"),
+      `/** Gamma docstring explaining why this helper exists at all here. */
+export function gamma() { return 3; }
+`,
+      "utf8",
+    );
+    await runIndexer(root, { quiet: true });
+
+    const keys = ["src/a.ts#alpha", "src/a.ts#beta", "src/b.ts#gamma"];
+    const evidence = await measureTopicAnchorEvidence(root, keys);
+    // Sanity: every requested anchor was actually measured from the index,
+    // so the comparison below is not vacuous.
+    expect(Object.keys(evidence.anchorSourceChars).sort()).toEqual([...keys].sort());
+    expect(Object.keys(evidence.anchorRationaleRows).sort()).toEqual(["src/a.ts", "src/b.ts"]);
+    const inventory: TopicPlanningInventory = {
+      modules: [],
+      flows: [],
+      anchorRoles: {},
+      anchorSourceChars: evidence.anchorSourceChars,
+      anchorRationaleRows: evidence.anchorRationaleRows,
+    };
+    const candidate: TopicCandidate = {
+      title: "Helpers",
+      intent: "Explain the helper utilities",
+      modules: [],
+      flows: [],
+      groups: {
+        contract: ["src/a.ts#alpha"],
+        state: ["src/a.ts#beta"],
+        output: ["src/b.ts#gamma"],
+        failure: [],
+      },
+      planOrder: 1,
+      evidenceHash: "abc123",
+      slug: "helpers",
+      seedKeys: keys,
+    };
+
+    // The estimate must equal rationaleEvidence + truncatedSource for any
+    // rationale cap: disabled, truncating, and full.
+    for (const rationaleCap of [0, 60, 4_000]) {
+      const estimate = estimateTopicSourceChars(keys, inventory, rationaleCap);
+      const ctx = await buildTopicDocContext(root, candidate, 1_000_000, rationaleCap);
+      expect(estimate).toBe(ctx.rationaleEvidence.length + ctx.truncatedSource.length);
+    }
+    // The rationale block is genuinely non-empty in this fixture.
+    const full = await buildTopicDocContext(root, candidate, 1_000_000, 4_000);
+    expect(full.rationaleEvidence.length).toBeGreaterThan(0);
+    expect(estimateTopicSourceChars(keys, inventory, 4_000)).toBeGreaterThan(
+      estimateTopicSourceChars(keys, inventory, 0),
+    );
   });
 });

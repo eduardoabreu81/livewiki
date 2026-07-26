@@ -101,10 +101,16 @@ import {
   validateTopicPlan,
   proposeTopicPlanDeterministically,
   assignTopicKeySections,
+  renderTopicSourceSpan,
+  TOPIC_SOURCE_SPAN_SEPARATOR,
   type TopicCandidate,
   type TopicPlanProposal,
   type TopicPlanValidationError,
 } from "./topics.js";
+import {
+  renderRationaleEvidence,
+  type RationaleEvidenceRow,
+} from "./rationale-evidence.js";
 import {
   loadEffectiveTsconfig,
   loadWorkspacePackages,
@@ -2025,6 +2031,10 @@ async function runSemanticTopicStage(opts: {
       maxTopics: opts.maxTopics,
       maxAnchors: opts.maxAnchors,
       maxSourceChars: opts.sourceChars,
+      // Fix A (2026-07-26): the planner's source-budget estimate must
+      // account the same rationale block the generator appends, or an
+      // accepted candidate can overflow the hard topicMaxSourceChars throw.
+      rationaleMaxChars: opts.rationaleMaxChars,
     };
     const centrality = computeCallerCentrality(opts.db);
     let candidates = proposeTopicPlanDeterministically(inventory, centrality, planValidationOpts);
@@ -3507,19 +3517,12 @@ export async function buildModuleDocContext(
   return { closedKeyList, symbolsTable, truncatedSource, rationaleEvidence };
 }
 
-interface RationaleEvidenceRow {
-  path: string;
-  symbol_key: string | null;
-  kind: string;
-  text: string;
-  start_line: number;
-}
-
 /**
  * Etapa 2b: renders the indexed rationale rows for the given file paths as
- * bounded evidence lines (`- [kind] path:line (key | file-level): text`),
- * deterministically ordered by (path, start_line, rowid) and capped at
- * `maxChars` total. Returns "" when maxChars <= 0 or no rows exist.
+ * bounded evidence lines via the shared `renderRationaleEvidence`
+ * (rationale-evidence.ts), deterministically ordered by
+ * (path, start_line, rowid) and capped at `maxChars` total. Returns "" when
+ * maxChars <= 0 or no rows exist.
  */
 async function getRationaleEvidenceForPaths(
   absRoot: string,
@@ -3544,21 +3547,6 @@ async function getRationaleEvidenceForPaths(
   } finally {
     db.close();
   }
-}
-
-/** Shared bounded renderer for rationale evidence lines. */
-function renderRationaleEvidence(
-  rows: ReadonlyArray<RationaleEvidenceRow>,
-  maxChars: number,
-): string {
-  let out = "";
-  for (const row of rows) {
-    const target = row.symbol_key ?? "file-level";
-    const line = `- [${row.kind}] ${row.path}:${row.start_line} (${target}): ${row.text}`;
-    if (out.length + line.length + 1 > maxChars) break;
-    out += (out === "" ? "" : "\n") + line;
-  }
-  return out;
 }
 
 /**
@@ -4247,11 +4235,11 @@ export async function buildTopicDocContext(
         lines = source.split("\n");
         sourceFiles.set(symbol.path, lines);
       }
-      const start = Math.max(0, symbol.startLine - 1 - 6);
-      const end = Math.min(lines.length, symbol.endLine + 10);
-      sourceSpans.push(`// === ${symbol.key} (${symbol.path}:${start + 1}-${end}) ===\n${lines.slice(start, end).join("\n")}`);
+      // Shared exact span math with the topic planner estimate
+      // (renderTopicSourceSpan in topics.ts) — the two must never drift.
+      sourceSpans.push(renderTopicSourceSpan(symbol, lines));
     }
-    const truncatedSource = sourceSpans.join("\n\n");
+    const truncatedSource = sourceSpans.join(TOPIC_SOURCE_SPAN_SEPARATOR);
     // Etapa 2b: rationale rows for the seed-key files, bounded by
     // rationaleMaxChars and accounted BEFORE the hard topicMaxSourceChars
     // throw, so the throw never fires on rationale alone.

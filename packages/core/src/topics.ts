@@ -21,6 +21,7 @@ import {
   type PathRoleConfig,
 } from "./modules.js";
 import type { FlowCandidate } from "./flows.js";
+import { renderRationaleEvidence, type RationaleEvidenceRow } from "./rationale-evidence.js";
 
 export const TOPIC_GROUP_NAMES = ["contract", "state", "output", "failure"] as const;
 export type TopicGroupName = (typeof TOPIC_GROUP_NAMES)[number];
@@ -55,8 +56,20 @@ export interface TopicPlanningInventory {
   flows: TopicFlowEvidence[];
   /** Exact role for every anchor known to the inventory. */
   anchorRoles: Record<string, PathRole>;
-  /** Complete defining span plus a small controlling-branch margin. */
+  /**
+   * Exact length of each anchor's rendered evidence span
+   * (`renderTopicSourceSpan` — the same helper `buildTopicDocContext` in
+   * batch.ts uses), i.e. the defining span with a -6/+10 line margin
+   * clamped to file bounds plus the `// === ... ===` header line.
+   */
   anchorSourceChars: Record<string, number>;
+  /**
+   * Indexed rationale rows per anchor file (ordered by start_line, rowid),
+   * so the planner can render the same bounded rationale block the
+   * generator will. Optional so hand-built fixtures without rationale
+   * evidence stay valid; treated as "no rationale rows" when absent.
+   */
+  anchorRationaleRows?: Record<string, RationaleEvidenceRow[]>;
 }
 
 /** One deterministic module cluster (Workstream B): a connected component of the product-module import graph plus its directly-connected auxiliary modules. */
@@ -118,6 +131,71 @@ export interface TopicPlanValidationOptions {
   minimumProductAnchorRatio?: number;
   maximumOverlapRatio?: number;
   maxSourceChars?: number;
+  /**
+   * Cap (chars) for the rationale evidence block the generator will append
+   * (`rationaleMaxChars` config, default 4,000). The planner's source-budget
+   * estimate accounts this block exactly; 0/undefined disables it, matching
+   * `buildTopicDocContext`.
+   */
+  rationaleMaxChars?: number;
+}
+
+/** The separator `buildTopicDocContext` (batch.ts) places between consecutive evidence spans. */
+export const TOPIC_SOURCE_SPAN_SEPARATOR = "\n\n";
+
+/**
+ * Exact topic evidence span math, shared by the planner estimate
+ * (`measureTopicAnchorEvidence` / `estimateTopicSourceChars` below) and the
+ * generator context (`buildTopicDocContext` in batch.ts) so the two can
+ * never drift: the `// === <key> (<path>:<start+1>-<end>) ===` header line
+ * plus the file lines from `max(0, startLine-1-6)` to
+ * `min(lines.length, endLine+10)` joined with "\n".
+ */
+export function renderTopicSourceSpan(
+  symbol: { key: string; path: string; startLine: number; endLine: number },
+  lines: readonly string[],
+): string {
+  const start = Math.max(0, symbol.startLine - 1 - 6);
+  const end = Math.min(lines.length, symbol.endLine + 10);
+  return `// === ${symbol.key} (${symbol.path}:${start + 1}-${end}) ===\n${lines.slice(start, end).join("\n")}`;
+}
+
+/**
+ * Exact planner-side estimate of what `buildTopicDocContext` (batch.ts)
+ * will measure for a candidate's evidence:
+ *
+ *   estimate = sum(renderTopicSourceSpan(k).length for measured k in keys)
+ *            + TOPIC_SOURCE_SPAN_SEPARATOR.length * (measured count - 1)
+ *            + renderRationaleEvidence(rows of distinct seed-key files,
+ *              rationaleMaxChars).length
+ *
+ * "Measured" means present in `inventory.anchorSourceChars` (a key absent
+ * from the index contributes no span and no separator, exactly like the
+ * generator skipping a symbol missing from the DB). The rationale side is
+ * per-FILE: the generator bounds ONE block over the candidate's distinct
+ * seed-key files with the shared `renderRationaleEvidence` cap, so the
+ * estimate does the same over `inventory.anchorRationaleRows` rather than
+ * reserving a per-anchor share — file paths derive from the key prefix
+ * (`path#name`), the same convention the rest of the topic code uses.
+ *
+ * An accepted candidate can therefore never overflow the hard
+ * `topicMaxSourceChars` throw at generation time (Fix A, 2026-07-26).
+ */
+export function estimateTopicSourceChars(
+  keys: readonly string[],
+  inventory: TopicPlanningInventory,
+  rationaleMaxChars = 0,
+): number {
+  const measured = keys.filter((key) => inventory.anchorSourceChars[key] !== undefined);
+  if (measured.length === 0) return 0;
+  let total = measured.reduce((sum, key) => sum + inventory.anchorSourceChars[key]!, 0);
+  total += TOPIC_SOURCE_SPAN_SEPARATOR.length * (measured.length - 1);
+  if (rationaleMaxChars > 0) {
+    const paths = [...new Set(measured.map((key) => key.split("#", 1)[0] ?? ""))].sort();
+    const rows = paths.flatMap((path) => inventory.anchorRationaleRows?.[path] ?? []);
+    total += renderRationaleEvidence(rows, rationaleMaxChars).length;
+  }
+  return total;
 }
 
 /** Builds the closed, sorted planner inventory only from accepted pages. */
@@ -211,7 +289,8 @@ export async function buildTopicPlanningInventory(opts: {
     }
   }
 
-  const anchorSourceChars = await measureAnchorSourceChars(opts.repoRoot, Object.keys(anchorRoles));
+  const anchorEvidence = await measureTopicAnchorEvidence(opts.repoRoot, Object.keys(anchorRoles));
+  const anchorSourceChars = anchorEvidence.anchorSourceChars;
   const activeKeys = new Set(Object.keys(anchorSourceChars));
   const activeModules = modules.map((module) => ({
     ...module,
@@ -231,7 +310,13 @@ export async function buildTopicPlanningInventory(opts: {
   const activeRoles = Object.fromEntries(
     Object.entries(anchorRoles).filter(([key]) => activeKeys.has(key)),
   ) as Record<string, PathRole>;
-  return { modules: activeModules, flows: activeFlows, anchorRoles: activeRoles, anchorSourceChars };
+  return {
+    modules: activeModules,
+    flows: activeFlows,
+    anchorRoles: activeRoles,
+    anchorSourceChars,
+    anchorRationaleRows: anchorEvidence.anchorRationaleRows,
+  };
 }
 
 /** Stable JSON representation used by the planner prompt and evidence hash. */
@@ -331,9 +416,9 @@ export function validateTopicPlan(
     if (keys.length < 5 || keys.length > opts.maxAnchors) {
       errors.push(errorAt("topic_plan_anchor_budget", index, `a topic requires 5-${opts.maxAnchors} unique anchors`));
     }
-    const sourceChars = keys.reduce((sum, key) => sum + (inventory.anchorSourceChars[key] ?? 0), 0);
+    const sourceChars = estimateTopicSourceChars(keys, inventory, opts.rationaleMaxChars ?? 0);
     if (opts.maxSourceChars !== undefined && sourceChars > opts.maxSourceChars) {
-      errors.push(errorAt("topic_plan_source_budget", index, `selected evidence requires approximately ${sourceChars} source characters; maximum is ${opts.maxSourceChars}`));
+      errors.push(errorAt("topic_plan_source_budget", index, `selected evidence requires ${sourceChars} source characters; maximum is ${opts.maxSourceChars}`));
     }
     for (const group of TOPIC_GROUP_NAMES) {
       if (proposal.groups[group].length === 0) {
@@ -499,7 +584,7 @@ export function selectTopicAnchors(
   cluster: TopicModuleCluster,
   inventory: TopicPlanningInventory,
   centrality: ReadonlyMap<string, number>,
-  opts: { maxAnchors: number; maxSourceChars?: number; minimumProductAnchorRatio?: number },
+  opts: { maxAnchors: number; maxSourceChars?: number; minimumProductAnchorRatio?: number; rationaleMaxChars?: number },
 ): TopicKeyGroups | null {
   const moduleIds = [...cluster.productModuleIds, ...cluster.auxiliaryModuleIds];
   const moduleById = new Map(inventory.modules.map((m) => [m.id, m]));
@@ -562,7 +647,7 @@ export function selectTopicAnchors(
     groups[group].push(chosen.key);
   }
 
-  let totalChars = [...picked].reduce((sum, e) => sum + e.chars, 0);
+  const pickedKeys = [...picked].map((e) => e.key);
   let productCount = [...picked].filter((e) => e.isProduct).length;
   let totalCount = picked.size;
 
@@ -578,14 +663,17 @@ export function selectTopicAnchors(
       const pool = pools.get(group)!;
       const entry = pool.find((e) => !picked.has(e));
       if (entry === undefined) continue;
-      const nextChars = totalChars + entry.chars;
+      // Exact estimate (spans + separators + rationale block), not an
+      // incremental sum: the rationale block is bounded per FILE set with
+      // a global cap, so its marginal cost is not additive per anchor.
+      const nextChars = estimateTopicSourceChars([...pickedKeys, entry.key], inventory, opts.rationaleMaxChars ?? 0);
       if (opts.maxSourceChars !== undefined && nextChars > opts.maxSourceChars) continue;
       const nextTotal = totalCount + 1;
       const nextProduct = productCount + (entry.isProduct ? 1 : 0);
       if (nextProduct / nextTotal < minimumRatio) continue;
       picked.add(entry);
       groups[group].push(entry.key);
-      totalChars = nextChars;
+      pickedKeys.push(entry.key);
       productCount = nextProduct;
       totalCount = nextTotal;
       progressed = true;
@@ -672,6 +760,7 @@ export function proposeTopicPlanDeterministically(
       ...(opts.minimumProductAnchorRatio !== undefined
         ? { minimumProductAnchorRatio: opts.minimumProductAnchorRatio }
         : {}),
+      ...(opts.rationaleMaxChars !== undefined ? { rationaleMaxChars: opts.rationaleMaxChars } : {}),
     };
     const groups = selectTopicAnchors(cluster, inventory, centrality, selectOpts);
     if (groups === null) continue;
@@ -793,7 +882,11 @@ export function repairTopicPlanSourceBudgetMechanically(
       }
     }
 
-    let totalChars = entries.reduce((sum, e) => sum + e.chars, 0);
+    let totalChars = estimateTopicSourceChars(
+      entries.map((e) => e.key),
+      inventory,
+      opts.rationaleMaxChars ?? 0,
+    );
     if (totalChars <= maxSourceChars) continue; // nothing to drop for this proposal
 
     const removed = new Set<Entry>();
@@ -817,7 +910,13 @@ export function repairTopicPlanSourceBudgetMechanically(
         if (totalChars <= maxSourceChars) break;
         if (removed.has(entry) || !canRemove(entry)) continue;
         removed.add(entry);
-        totalChars -= entry.chars;
+        // Recompute the exact estimate after each removal — the rationale
+        // block's per-file-set cap makes the marginal cost non-additive.
+        totalChars = estimateTopicSourceChars(
+          entries.filter((e) => !removed.has(e)).map((e) => e.key),
+          inventory,
+          opts.rationaleMaxChars ?? 0,
+        );
       }
     };
     dropPass(entries.filter((e) => !e.isProduct));
@@ -934,9 +1033,24 @@ function classifyTopicSignals(paths: readonly string[], body: string): string[] 
   return signals;
 }
 
-async function measureAnchorSourceChars(repoRoot: string, keys: string[]): Promise<Record<string, number>> {
-  const result: Record<string, number> = {};
-  if (keys.length === 0) return result;
+/** Measured evidence cost for every requested anchor, exact against the generator. */
+export interface TopicAnchorEvidence {
+  anchorSourceChars: Record<string, number>;
+  anchorRationaleRows: Record<string, RationaleEvidenceRow[]>;
+}
+
+/**
+ * Measures the exact per-anchor evidence cost used by the planner estimate:
+ * `anchorSourceChars[key]` is the full length of the rendered span produced
+ * by `renderTopicSourceSpan` (the same helper `buildTopicDocContext` uses),
+ * and `anchorRationaleRows` holds the indexed rationale rows per anchor file
+ * (per-file slices of the same `ORDER BY f.path, r.start_line, r.id` query
+ * the generator runs, so each slice stays in start_line/rowid order).
+ */
+export async function measureTopicAnchorEvidence(repoRoot: string, keys: string[]): Promise<TopicAnchorEvidence> {
+  const anchorSourceChars: Record<string, number> = {};
+  const anchorRationaleRows: Record<string, RationaleEvidenceRow[]> = {};
+  if (keys.length === 0) return { anchorSourceChars, anchorRationaleRows };
   const db = openIndex(await safeIo.resolveAndValidate(repoRoot, ".livewiki/index.db"));
   try {
     const rows = db.prepare(
@@ -952,11 +1066,21 @@ async function measureAnchorSourceChars(repoRoot: string, keys: string[]): Promi
         lines = source.split("\n");
         files.set(row.path, lines);
       }
-      const start = Math.max(0, row.startLine - 1 - 6);
-      const end = Math.min(lines.length, row.endLine + 10);
-      result[row.key] = lines.slice(start, end).join("\n").length + row.path.length + row.key.length + 48;
+      anchorSourceChars[row.key] = renderTopicSourceSpan(row, lines).length;
     }
-    return result;
+    const paths = [...new Set(rows.map((row) => row.path))].sort();
+    if (paths.length > 0) {
+      const rationaleRows = db.prepare(
+        `SELECT f.path, r.symbol_key, r.kind, r.text, r.start_line
+         FROM rationales r JOIN files f ON f.id = r.file_id
+         WHERE f.path IN (${paths.map(() => "?").join(",")})
+         ORDER BY f.path, r.start_line, r.id`,
+      ).all(...paths) as RationaleEvidenceRow[];
+      for (const row of rationaleRows) {
+        (anchorRationaleRows[row.path] ??= []).push(row);
+      }
+    }
+    return { anchorSourceChars, anchorRationaleRows };
   } finally {
     db.close();
   }

@@ -6,6 +6,8 @@ import {
   selectTopicAnchors,
   proposeTopicPlanDeterministically,
   assignTopicKeySections,
+  estimateTopicSourceChars,
+  TOPIC_SOURCE_SPAN_SEPARATOR,
   type TopicPlanProposal,
   type TopicPlanningInventory,
   type TopicPlanValidationError,
@@ -13,6 +15,7 @@ import {
   type TopicModuleEvidence,
   type TopicCandidate,
 } from "./topics.js";
+import { renderRationaleEvidence, type RationaleEvidenceRow } from "./rationale-evidence.js";
 
 const moduleOneAnchors = ["src/a.ts#a", "src/a.ts#b", "src/a.ts#c"];
 const moduleTwoAnchors = ["src/b.ts#d", "src/b.ts#e", "src/b.ts#f"];
@@ -182,7 +185,10 @@ function budgetProposal(overrides: Partial<TopicPlanProposal> = {}): TopicPlanPr
 }
 
 describe("repairTopicPlanSourceBudgetMechanically", () => {
-  const budgetOpts = { maxTopics: 4, maxAnchors: 18, maxSourceChars: 600 };
+  // 610 = 6 product anchors x 100 chars + 5 span separators x 2 chars: the
+  // estimate is now byte-exact against the generator (Fix A), which joins
+  // evidence spans with "\n\n", so the post-repair floor costs 610, not 600.
+  const budgetOpts = { maxTopics: 4, maxAnchors: 18, maxSourceChars: 610 };
 
   it("drops the costliest non-product anchors first and re-validates clean", () => {
     const inv = budgetInventory();
@@ -273,6 +279,123 @@ describe("repairTopicPlanSourceBudgetMechanically", () => {
     expect(
       repairTopicPlanSourceBudgetMechanically(raw, errors, inv, { maxTopics: 4, maxAnchors: 18 }),
     ).toBeNull();
+  });
+});
+
+/**
+ * Fix A (2026-07-26): the planner estimate is byte-exact against what
+ * `buildTopicDocContext` assembles — span lengths via the shared
+ * `renderTopicSourceSpan`, the "\n\n" join between spans, and the bounded
+ * rationale block. A candidate that previously passed the per-anchor sum
+ * but overflows at generation time must now be rejected at plan time.
+ */
+describe("topic_plan_source_budget exact accounting (Fix A)", () => {
+  it("counts the span-join overhead the generator adds between evidence spans", () => {
+    const inv = inventory(); // 6 anchors at 100 chars each -> span sum 600
+    const raw = JSON.stringify({ topics: [proposal()] });
+    const separators = TOPIC_SOURCE_SPAN_SEPARATOR.length * 5; // 6 spans, 5 joins
+
+    // The old per-anchor sum (600) fit under 605; the exact estimate
+    // (600 + 10 join chars) must reject with topic_plan_source_budget.
+    const overflow = validateTopicPlan(raw, inv, { ...options, maxSourceChars: 605 });
+    expect(overflow.ok).toBe(false);
+    expect(overflow.errors.map((e) => e.code)).toEqual(["topic_plan_source_budget"]);
+
+    // The exact boundary (600 + separators) still fits.
+    const fits = validateTopicPlan(raw, inv, { ...options, maxSourceChars: 600 + separators });
+    expect(fits.ok).toBe(true);
+    expect(fits.errors).toEqual([]);
+  });
+
+  it("rejects a candidate that only overflows once the rationale block is accounted", () => {
+    const inv = inventory(); // source side: 6 spans = 600 + 10 join chars = 610
+    const row: RationaleEvidenceRow = {
+      path: "src/a.ts",
+      symbol_key: "src/a.ts#a",
+      kind: "why",
+      text: "protects the upstream API from bursts",
+      start_line: 1,
+    };
+    inv.anchorRationaleRows = { "src/a.ts": [row] };
+    const rationaleChars = renderRationaleEvidence([row], 4000).length;
+    const raw = JSON.stringify({ topics: [proposal()] });
+
+    // 610 source + rationaleChars rationale: reject one char below the
+    // exact total, accept at the exact total.
+    const overflow = validateTopicPlan(raw, inv, {
+      ...options,
+      maxSourceChars: 610 + rationaleChars - 1,
+      rationaleMaxChars: 4000,
+    });
+    expect(overflow.ok).toBe(false);
+    expect(overflow.errors.map((e) => e.code)).toEqual(["topic_plan_source_budget"]);
+
+    const fits = validateTopicPlan(raw, inv, {
+      ...options,
+      maxSourceChars: 610 + rationaleChars,
+      rationaleMaxChars: 4000,
+    });
+    expect(fits.ok).toBe(true);
+
+    // Rationale disabled (cap 0): the same candidate fits under 610 again,
+    // matching buildTopicDocContext's rationaleMaxChars = 0 behavior.
+    const disabled = validateTopicPlan(raw, inv, { ...options, maxSourceChars: 610, rationaleMaxChars: 0 });
+    expect(disabled.ok).toBe(true);
+  });
+
+  it("deterministic planning yields zero topics when the rationale-inclusive floor exceeds the budget", () => {
+    const modules = [
+      mod({ id: "module-a", signals: ["entry/boundary"], anchors: ["src/a.ts#1", "src/a.ts#2"], importNeighbors: ["module-b"] }),
+      mod({ id: "module-b", signals: ["persistence/state"], anchors: ["src/b.ts#1", "src/b.ts#2"], importNeighbors: ["module-a", "module-c"] }),
+      mod({ id: "module-c", signals: ["output"], anchors: ["src/c.ts#1", "src/c.ts#2"], importNeighbors: ["module-b", "module-d"] }),
+      mod({ id: "module-d", signals: ["validation/recovery"], anchors: ["src/d.ts#1", "src/d.ts#2"], importNeighbors: ["module-c"] }),
+    ];
+    const inv = clusterInventory(modules); // 8 anchors at 100 chars each
+    const rationaleRow = (path: string): RationaleEvidenceRow => ({
+      path,
+      symbol_key: `${path}#1`,
+      kind: "why",
+      text: "rationale long enough to push the minimal selection over budget",
+      start_line: 1,
+    });
+
+    // Control, no rationale: the minimal 5-anchor selection costs
+    // 500 + 8 join chars = 508 and fits under 600.
+    const control = proposeTopicPlanDeterministically(inv, new Map(), {
+      maxTopics: 4,
+      maxAnchors: 18,
+      maxSourceChars: 600,
+    });
+    expect(control).toHaveLength(1);
+
+    // Every viable selection spans all 4 files (one floor anchor per
+    // group), so the rationale block adds 4 rendered lines and even the
+    // 5-anchor floor overflows 600 — a deterministic no-op, zero topics.
+    inv.anchorRationaleRows = {
+      "src/a.ts": [rationaleRow("src/a.ts")],
+      "src/b.ts": [rationaleRow("src/b.ts")],
+      "src/c.ts": [rationaleRow("src/c.ts")],
+      "src/d.ts": [rationaleRow("src/d.ts")],
+    };
+    const withRationale = proposeTopicPlanDeterministically(inv, new Map(), {
+      maxTopics: 4,
+      maxAnchors: 18,
+      maxSourceChars: 600,
+      rationaleMaxChars: 4000,
+    });
+    expect(withRationale).toEqual([]);
+  });
+
+  it("estimateTopicSourceChars matches its documented formula", () => {
+    const inv = inventory();
+    const keys = [...moduleOneAnchors, ...moduleTwoAnchors].sort();
+    // No rationale configured: spans + separators only.
+    expect(estimateTopicSourceChars(keys, inv, 0)).toBe(6 * 100 + TOPIC_SOURCE_SPAN_SEPARATOR.length * 5);
+    // A key absent from the index contributes no span and no separator,
+    // exactly like the generator skipping a symbol missing from the DB.
+    const partial = estimateTopicSourceChars([keys[0]!, "src/ghost.ts#missing"], inv, 0);
+    expect(partial).toBe(100);
+    expect(estimateTopicSourceChars([], inv, 4000)).toBe(0);
   });
 });
 
