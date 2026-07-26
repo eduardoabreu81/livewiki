@@ -250,6 +250,15 @@ export function repairStage4ArtifactMechanically(
  * occurrence sits in the assigned section (or the map is omitted), this
  * falls back to the original "keep first occurrence" behavior exactly as
  * before — never a regression for existing callers.
+ *
+ * Keeper precedence when `keySectionMap` is supplied (highest first):
+ * required-section coverage > assigned-section preference > keep-first.
+ * The coverage rule (2026-07-26 defect fix, see
+ * `removeLaterSectionAnchorOccurrences`) exists because every required
+ * section must keep >= 1 marker for the mandatory re-validation below to
+ * pass; honoring the assigned-section preference blindly could strip a
+ * required section's last marker and turn a fixable `duplicate_anchor`
+ * set into an unfixable `anchor_missing_in_required_section`.
  */
 export function repairUpperBoundArtifactMechanically(
   artifact: string,
@@ -477,6 +486,24 @@ function sectionAncestorAt(
  * section, rather than unconditionally the first occurrence in the
  * document. If no occurrence sits in the assigned section (or the map is
  * omitted), the original "keep first" behavior applies unchanged.
+ *
+ * Keeper precedence when `keySectionMap` is supplied (highest first):
+ *
+ *   1. Required-section coverage: a required section (any section in the
+ *      `headingMap` vocabulary) never loses its last surviving marker.
+ *      If the assigned-section preference would strip it, ONE duplicate
+ *      key of that section keeps its occurrence there instead, provided
+ *      the key's preferred keeper marker retains another surviving key
+ *      (a "safe" move that cannot strip a second required section).
+ *   2. Assigned-section preference (Workstream A, described above).
+ *   3. Keep-first fallback (no occurrence in the assigned section).
+ *
+ * Coverage only ever applies when `keySectionMap` is supplied — the
+ * stage-4 module path (no map, no required sections) is byte-for-byte
+ * unchanged. A section that cannot be covered without stripping another
+ * one is genuinely unfixable by dedup alone, so the function stays
+ * fail-closed and returns null (the same outcome the mandatory caller-side
+ * re-validation would produce, reached earlier).
  */
 function removeLaterSectionAnchorOccurrences(
   text: string,
@@ -502,6 +529,15 @@ function removeLaterSectionAnchorOccurrences(
     return null;
   }
 
+  // Precomputed once per marker: its parsed key list and its ancestor
+  // section (used by both keeper selection and the coverage pass).
+  const keysByMatch = matches.map((match) =>
+    match[1]!.trim().split(/\s+/).filter(Boolean),
+  );
+  const ancestorByMatch = matches.map((match) =>
+    sectionAncestorAt(masked, match.index!, headingMap),
+  );
+
   // Decide, per duplicate key, which match-array index is the keeper: the
   // first occurrence in its assigned section if one exists, else the
   // first occurrence overall (identical to the pre-existing behavior).
@@ -510,19 +546,66 @@ function removeLaterSectionAnchorOccurrences(
     const assignedSection = keySectionMap?.get(key);
     let firstOverall = -1;
     let firstInSection = -1;
-    for (const [i, match] of matches.entries()) {
-      const keys = match[1]!.trim().split(/\s+/).filter(Boolean);
+    for (const [i, keys] of keysByMatch.entries()) {
       if (!keys.includes(key)) continue;
       if (firstOverall === -1) firstOverall = i;
-      if (
-        firstInSection === -1 &&
-        assignedSection !== undefined &&
-        sectionAncestorAt(masked, match.index!, headingMap) === assignedSection
-      ) {
+      if (firstInSection === -1 && assignedSection !== undefined && ancestorByMatch[i] === assignedSection) {
         firstInSection = i;
       }
     }
     keeperIndexByKey.set(key, firstInSection !== -1 ? firstInSection : firstOverall);
+  }
+
+  // Coverage-preserving pass (2026-07-26 paid-E2E defect: flow task
+  // `flow:webui-01-to-app-utils` burned all repair rounds because dedup
+  // honored the assigned-section preference and stripped "Ordered flow"'s
+  // only marker, turning fixable duplicate_anchor errors into an
+  // unfixable anchor_missing_in_required_section). A marker survives
+  // dedup iff at least one of its keys is not a duplicate target or is
+  // the kept occurrence of one; a required section is covered iff at
+  // least one of its markers survives.
+  if (keySectionMap !== undefined) {
+    const markerSurvives = (i: number): boolean =>
+      keysByMatch[i]!.some((key) => !targetKeys.has(key) || keeperIndexByKey.get(key) === i);
+
+    // Required sections in document order of their first marker.
+    const requiredSections: string[] = [];
+    for (const ancestor of ancestorByMatch) {
+      if (ancestor !== null && !requiredSections.includes(ancestor)) {
+        requiredSections.push(ancestor);
+      }
+    }
+    for (const section of requiredSections) {
+      const sectionMarkers: number[] = [];
+      for (const [i, ancestor] of ancestorByMatch.entries()) {
+        if (ancestor === section) sectionMarkers.push(i);
+      }
+      if (sectionMarkers.some(markerSurvives)) continue;
+
+      // Every marker in this required section would be stripped. Reassign
+      // ONE duplicate key to an occurrence here (coverage precedence over
+      // the assigned-section preference), but only via a safe move: the
+      // key's current keeper marker must retain another surviving key, so
+      // the move cannot strip a second required section. Chained moves
+      // (two sections sharing a single key) are left fail-closed.
+      let moved = false;
+      for (const i of sectionMarkers) {
+        if (moved) break;
+        for (const key of keysByMatch[i]!) {
+          if (!targetKeys.has(key)) continue;
+          const keeper = keeperIndexByKey.get(key)!;
+          const keeperRetainsOtherKey = keysByMatch[keeper]!.some(
+            (other) =>
+              other !== key && (!targetKeys.has(other) || keeperIndexByKey.get(other) === keeper),
+          );
+          if (!keeperRetainsOtherKey) continue;
+          keeperIndexByKey.set(key, i);
+          moved = true;
+          break;
+        }
+      }
+      if (!moved) return null;
+    }
   }
 
   const seen = new Set<string>();

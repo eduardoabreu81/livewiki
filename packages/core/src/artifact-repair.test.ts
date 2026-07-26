@@ -419,3 +419,164 @@ describe("repairUpperBoundArtifactMechanically — flowKeySectionMap section pre
     expect(validateStage4Artifact(repaired!.content, anchors, context).ok).toBe(true);
   });
 });
+
+describe("repairUpperBoundArtifactMechanically — required-section coverage preservation (2026-07-26 defect fix)", () => {
+  // Paid-E2E defect (MoneyPrinterTurbo-Plus, MiniMax-M3, two runs): the
+  // keySectionMap-preferred keeper of a duplicated key stripped the LAST
+  // marker of "Ordered flow", so the mandatory re-validation failed with
+  // anchor_missing_in_required_section and the mechanical repair returned
+  // null on every attempt (repair_exhausted). Coverage must outrank the
+  // assigned-section preference.
+  const modules = ["a-mod", "b-mod"];
+  const k0 = "src/a.ts#a";
+  const k1 = "src/b.ts#b";
+  const k2 = "src/c.ts#c";
+  const kDup = "src/d.ts#d";
+
+  const context = {
+    pageKind: "flow" as const,
+    moduleId: "example-flow",
+    moduleRole: "product" as const,
+    expectedFlowModules: modules,
+    expectedFlowDiagram: flowDiagramPlaceholder("example-flow").replace(/^%%\s*/, ""),
+  };
+
+  function makePage(purposeKeys: string[], orderedKeys: string[], failureKeys: string[]): string {
+    const allKeys = [...new Set([...purposeKeys, ...orderedKeys, ...failureKeys])];
+    return [
+      "---",
+      "title: Example flow",
+      "owner: generated",
+      "anchors:",
+      ...allKeys.map((k) => `  - ${k}`),
+      "modules:",
+      ...modules.map((m) => `  - ${m}`),
+      "updated: 2026-07-26",
+      "---",
+      "",
+      "# Example flow",
+      "",
+      "This page explains an example flow end to end.",
+      "",
+      "## Purpose",
+      "",
+      `<!-- lw:anchors ${purposeKeys.join(" ")} -->`,
+      "",
+      "The flow begins here and produces a stored result.",
+      "",
+      "## Ordered flow",
+      "",
+      `<!-- lw:anchors ${orderedKeys.join(" ")} -->`,
+      "",
+      "1. Step one runs first.",
+      "2. Step two persists the result.",
+      "",
+      "## Diagram",
+      "",
+      "```mermaid",
+      flowDiagramPlaceholder("example-flow"),
+      "```",
+      "",
+      "## Invariants",
+      "",
+      "- Every step preserves the input payload.",
+      "",
+      "## Failure and recovery",
+      "",
+      `<!-- lw:anchors ${failureKeys.join(" ")} -->`,
+      "",
+      "No retry or rollback path is shown; the flow fails open.",
+      "",
+      "## Related pages",
+      "",
+      ...modules.map((m) => `- [${m} module](../${m}.md)`),
+      "",
+    ].join("\n");
+  }
+
+  it("(a) keeps a required section's last marker when the keySectionMap preference would strip it", () => {
+    // "Ordered flow" carries ONLY kDup; kDup is duplicated in Purpose and
+    // the map assigns kDup to "purpose". The preference alone would strip
+    // Ordered flow's last marker — coverage must win instead.
+    const anchors = [k0, k2, kDup];
+    const broken = makePage([k0, kDup], [kDup], [k2]);
+    const before = validateStage4Artifact(broken, anchors, context);
+    expect(before.ok).toBe(false);
+    expect(before.errors.some((e) => e.code === "duplicate_anchor" && e.offending === kDup)).toBe(true);
+
+    const sectionMap: FlowKeySectionMap = new Map([
+      [k0, "purpose"],
+      [kDup, "purpose"],
+      [k2, "failure-and-recovery"],
+    ]);
+    const repaired = repairUpperBoundArtifactMechanically(
+      broken,
+      before.errors,
+      anchors,
+      context,
+      sectionMap,
+    );
+    expect(repaired).not.toBeNull();
+    expect(repaired!.repairs).toEqual(["remove_duplicate_section_anchors"]);
+    // Coverage preserved: kDup stays in "Ordered flow" (its only marker),
+    // and is removed from the map-preferred Purpose occurrence instead.
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k0} -->`);
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${kDup} -->`);
+    const after = validateStage4Artifact(repaired!.content, anchors, context);
+    expect(after.ok).toBe(true);
+    expect(
+      after.errors.some((e) => e.code === "anchor_missing_in_required_section"),
+    ).toBe(false);
+  });
+
+  it("(b) keeps the keySectionMap preference when it does not conflict with coverage", () => {
+    // Both duplicated sections retain another key after dedup, so the map
+    // preference (kDup -> ordered-flow) applies unchanged — no regression.
+    const anchors = [k0, k1, k2, kDup];
+    const broken = makePage([k0, kDup], [k1, kDup], [k2]);
+    const before = validateStage4Artifact(broken, anchors, context);
+    expect(before.ok).toBe(false);
+
+    const sectionMap: FlowKeySectionMap = new Map([
+      [k0, "purpose"],
+      [k1, "ordered-flow"],
+      [kDup, "ordered-flow"],
+      [k2, "failure-and-recovery"],
+    ]);
+    const repaired = repairUpperBoundArtifactMechanically(
+      broken,
+      before.errors,
+      anchors,
+      context,
+      sectionMap,
+    );
+    expect(repaired).not.toBeNull();
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k0} -->`);
+    expect(repaired!.content).toContain(`<!-- lw:anchors ${k1} ${kDup} -->`);
+    expect(validateStage4Artifact(repaired!.content, anchors, context).ok).toBe(true);
+  });
+
+  it("(c) returns null when two required sections share a single duplicated key (genuinely unfixable)", () => {
+    // Purpose and Ordered flow each carry ONLY kDup. Dedup must strip one
+    // of them no matter which occurrence is kept — no coverage-preserving
+    // repair exists, so the function stays fail-closed.
+    const anchors = [k2, kDup];
+    const broken = makePage([kDup], [kDup], [k2]);
+    const before = validateStage4Artifact(broken, anchors, context);
+    expect(before.ok).toBe(false);
+    expect(before.errors.some((e) => e.code === "duplicate_anchor" && e.offending === kDup)).toBe(true);
+
+    const sectionMap: FlowKeySectionMap = new Map([
+      [kDup, "purpose"],
+      [k2, "failure-and-recovery"],
+    ]);
+    const repaired = repairUpperBoundArtifactMechanically(
+      broken,
+      before.errors,
+      anchors,
+      context,
+      sectionMap,
+    );
+    expect(repaired).toBeNull();
+  });
+});
