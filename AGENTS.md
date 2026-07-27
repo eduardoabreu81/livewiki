@@ -979,6 +979,19 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   prompt inventory authoritative for counts/file lists; README prose may be
   stale), present in all five builders that share the rule. Gate: core 1372
   / CLI 93 / MCP 31, zero paid calls.
+- **A/B cycle round 5 — series best (2026-07-26)**: run #10 (41/41 exit 0,
+  1,078,557 tokens, ~7.8% of OpenWiki). Weighted: claude **7.65**, codex
+  **7.85** vs OpenWiki 8.05/8.30 — gaps **Δ0.40/Δ0.45**, narrowest of the
+  series; claude frames the corpora as "close to complementary". Coverage
+  9/9 both (first time ahead of OpenWiki on both cards); stale-README class
+  dead (test.md describes the real suite); parametrized coverage note OUT
+  of the duplicate groups (audit 4 groups/9 extras); navigation improve-or-
+  hold four consecutive rounds. Residuals named for the final tuning lot:
+  (a) degraded-page notices form a dup group (3 degraded pages re-appeared
+  via the relaxed round — recovery tier working as designed);
+  (b) the three `flows/root-01-to-*` pages near-duplicate the same
+  CLI-validator evidence (flow-candidate overlap);
+  (c) voice/subtitle false claims reduced to 2 (codex).
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series
