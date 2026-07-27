@@ -785,6 +785,11 @@ describe("D2 — spoke-merge fallback and concern-grouped candidates", () => {
     const deployment = candidates.find((c) => c.title === "Deployment");
     expect(deployment).toBeDefined();
     expect(deployment!.modules).toEqual(["compose", "deploy", "scripts"]);
+    // The deterministic intent names the matched deployment surfaces, so a
+    // refine pass or reader sees Docker/config files even though prose
+    // files contribute no anchors (MPTP defect, 2026-07-27).
+    expect(deployment!.intent).toContain("deployment");
+    expect(deployment!.intent).toContain("docker-compose.yml");
   });
 
   it("produces a testing concern candidate from fixture modules plus their connected product modules", () => {

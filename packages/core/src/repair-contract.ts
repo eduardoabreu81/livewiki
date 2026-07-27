@@ -91,6 +91,7 @@ export const ALL_ARTIFACT_VALIDATION_CODES = [
   "topic_frontmatter_mismatch",
   "topic_related_link_mismatch",
   "topic_insufficient_product_evidence",
+  "topic_source_link",
   "auxiliary_page_not_compact",
   "llm_error",
   "truncated_by_token_limit",
@@ -340,6 +341,10 @@ const TOPIC_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
     `rewrite \`Related pages\` to link exactly the accepted modules/flows/diagrams/topics-hub paths given above — no more, no fewer.`,
   topic_insufficient_product_evidence: () =>
     `cite more non-test product symbols from the closed list (in the section that documents them) until at least 75% of cited keys are product symbols; drop a test-only citation if needed instead of adding an unrelated one.`,
+  topic_source_link: (ctx) =>
+    ctx.offending !== undefined
+      ? `rewrite this citation "${ctx.offending}": a Markdown link to a source path does not resolve for readers. Name the symbol as inline code with its exact closed-list key (e.g. \`path#symbol\`), or link to the module page that documents it (\`../<moduleId>.md\`). Keep every lw:anchors marker and the frontmatter anchors list unchanged.`
+      : "",
   auxiliary_page_not_compact: AUXILIARY_COMPACT,
   truncated_by_token_limit: REWRITE_COMPLETE_PAGE,
   incomplete_generation: REWRITE_COMPLETE_PAGE,
@@ -399,6 +404,7 @@ export const UNCLASSIFIED: Record<
     topic_frontmatter_mismatch: TOPIC_CONTRACT_NOT_MODULE_REASON,
     topic_related_link_mismatch: TOPIC_CONTRACT_NOT_MODULE_REASON,
     topic_insufficient_product_evidence: TOPIC_CONTRACT_NOT_MODULE_REASON,
+    topic_source_link: TOPIC_CONTRACT_NOT_MODULE_REASON,
     manual_block_altered: MANUAL_BLOCK_ALTERED_REASON,
     missing_wiki_path: MISSING_WIKI_PATH_REASON,
   },
@@ -411,6 +417,7 @@ export const UNCLASSIFIED: Record<
     topic_frontmatter_mismatch: TOPIC_CONTRACT_NOT_FLOW_REASON,
     topic_related_link_mismatch: TOPIC_CONTRACT_NOT_FLOW_REASON,
     topic_insufficient_product_evidence: TOPIC_CONTRACT_NOT_FLOW_REASON,
+    topic_source_link: TOPIC_CONTRACT_NOT_FLOW_REASON,
     auxiliary_page_not_compact: AUXILIARY_NOT_FLOW_REASON,
     manual_block_altered: MANUAL_BLOCK_ALTERED_REASON,
     missing_wiki_path: MISSING_WIKI_PATH_REASON,

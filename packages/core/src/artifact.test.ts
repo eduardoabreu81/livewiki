@@ -2338,3 +2338,112 @@ anchors:
     expect(relaxed.errors.some((e) => e.code === "missing_page_opening")).toBe(true);
   });
 });
+
+describe("artifact.validateStage4Artifact — topic source-link citations (D2 follow-up)", () => {
+  // MPTP measurement run (2026-07-27): 18 citations written as Markdown
+  // links to source paths (`[sym](app/services/bgm.py#sym)`) passed the
+  // topic validator AND verify (which only checks .md/.mmd targets) but do
+  // not resolve for readers.
+  const topicKeys = ["src/a.ts#a", "src/a.ts#b", "src/a.ts#c", "src/a.ts#d", "src/a.ts#e"];
+  const FM = `---
+title: My Topic
+owner: generated
+kind: topic
+order: 1
+intent: Explain the topic.
+modules:
+  - mod-a
+flows: []
+anchors:
+  - src/a.ts#a
+  - src/a.ts#b
+  - src/a.ts#c
+  - src/a.ts#d
+  - src/a.ts#e
+---
+`;
+  const ctx = {
+    moduleId: "my-topic",
+    moduleRole: "product" as const,
+    pageKind: "topic" as const,
+    expectedTopicTitle: "My Topic",
+    expectedTopicOrder: 1,
+    expectedTopicIntent: "Explain the topic.",
+    expectedTopicModules: ["mod-a"],
+    expectedTopicFlows: [],
+  };
+  const topicPage = (purposeProse: string) => `${FM}
+# My Topic
+
+The reader needs the topic contract in one place.
+
+## Purpose
+
+<!-- lw:anchors src/a.ts#a -->
+
+${purposeProse}
+
+## When to use this page
+
+<!-- lw:anchors src/a.ts#b -->
+
+Read this when changing the coordinated behavior.
+
+## Behavioral contract
+
+<!-- lw:anchors src/a.ts#c -->
+
+The behavioral contract grounded in the cited evidence.
+
+## Failure and recovery
+
+<!-- lw:anchors src/a.ts#d -->
+
+The excerpt shows no retry path; the flow fails open.
+
+## Change map
+
+<!-- lw:anchors src/a.ts#e -->
+
+Change requires updating the cited symbol and its module page.
+
+## Related pages
+
+- [Topics hub](index.md)
+- [mod-a module](../mod-a.md)
+`;
+
+  it("flags a Markdown link to a source path as topic_source_link", () => {
+    const page = topicPage(
+      "The uploader [`save_bgm_upload`](app/services/bgm.py#save_bgm_upload) stages the stream into a temp file.",
+    );
+    const result = validateStage4Artifact(page, topicKeys, ctx);
+    expect(result.ok).toBe(false);
+    const error = result.errors.find((e) => e.code === "topic_source_link");
+    expect(error).toBeDefined();
+    expect(error!.offending).toBe("app/services/bgm.py#save_bgm_upload");
+  });
+
+  it("flags a source-path link even without a #fragment", () => {
+    const page = topicPage("The service is configured in [the compose file](docker-compose.yml).");
+    const result = validateStage4Artifact(page, topicKeys, ctx);
+    expect(result.errors.some((e) => e.code === "topic_source_link")).toBe(true);
+  });
+
+  it("accepts the inline-code closed-list key citation form", () => {
+    const page = topicPage(
+      "The uploader `app/services/bgm.py#save_bgm_upload` stages the stream into a temp file.",
+    );
+    const result = validateStage4Artifact(page, topicKeys, ctx);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts wiki-artifact and external links in prose", () => {
+    const page = topicPage(
+      "See [the module page](../mod-a.md), [the diagram](../diagrams/flow-x.mmd), and [the upstream docs](https://example.com/docs).",
+    );
+    const result = validateStage4Artifact(page, topicKeys, ctx);
+    expect(result.errors.some((e) => e.code === "topic_source_link")).toBe(false);
+  });
+});

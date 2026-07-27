@@ -2332,6 +2332,12 @@ async function runSemanticTopicStage(opts: {
     ...inventory.modules.flatMap((module) => module.anchors),
     ...inventory.flows.flatMap((flow) => flow.anchors),
   ]);
+  // D2 follow-up: module id → source paths for the topic prose evidence
+  // block (buildTopicDocContext excerpts the candidate modules' symbol-less
+  // files so deployment/prose surfaces can be described honestly).
+  const topicModulePaths = new Map<string, readonly string[]>(
+    inventory.modules.map((module) => [module.id, module.paths]),
+  );
   const hasCrossModuleBasis =
     inventory.modules.filter((module) => module.role === "product").length >= 2 ||
     inventory.flows.some((flow) => flow.modules.length >= 3);
@@ -2553,6 +2559,7 @@ async function runSemanticTopicStage(opts: {
               (sum, key) => sum + (inventory.anchorSourceChars[key] ?? 0),
               0,
             ),
+            modulePaths: topicModulePaths,
             ...(opts.thinking ? { thinking: opts.thinking } : {}),
             ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
             ...(promptKind === "repair" ? { repairAttemptContext: { attempt: slot, total: opts.maxRepairAttempts } } : {}),
@@ -2642,6 +2649,7 @@ async function runSemanticTopicStage(opts: {
               (sum, key) => sum + (inventory.anchorSourceChars[key] ?? 0),
               0,
             ),
+            modulePaths: topicModulePaths,
             ...(opts.thinking ? { thinking: opts.thinking } : {}),
             ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
             relaxed: true,
@@ -4803,10 +4811,12 @@ interface TopicAttemptOpts {
   surgicalRepair: boolean;
   /** Recovery tier (Component 2): relaxed contract + degraded marking (see AttemptOpts.relaxed). */
   relaxed?: boolean;
+  /** D2 follow-up: module id → source paths, for the prose evidence block in buildTopicDocContext. */
+  modulePaths?: ReadonlyMap<string, readonly string[]>;
 }
 
 async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4AttemptResult> {
-  const ctx = await buildTopicDocContext(opts.absRoot, opts.candidate, opts.charBudget, opts.rationaleMaxChars);
+  const ctx = await buildTopicDocContext(opts.absRoot, opts.candidate, opts.charBudget, opts.rationaleMaxChars, opts.modulePaths);
   const topicKeySectionMap = assignTopicKeySections(opts.candidate);
   const maxTokens = resolveOutputTokenBudget(
     opts.outputTokenStrategy,
@@ -4848,6 +4858,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
         opts.repairAttemptContext ?? { attempt: 1, total: 1 },
         topicKeySectionMap,
         ctx.rationaleEvidence,
+        ctx.proseEvidence,
       )
     : buildTopicPrompt(
         opts.candidate,
@@ -4857,6 +4868,7 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
         opts.language,
         topicKeySectionMap,
         ctx.rationaleEvidence,
+        ctx.proseEvidence,
       );
   let result: GenerateResult;
   try {
@@ -5006,13 +5018,19 @@ interface TopicDocContext {
   truncatedSource: string;
   /** Etapa 2b: rendered rationale evidence lines (unfenced, unneutralized). */
   rationaleEvidence: string;
+  /** D2 follow-up: rendered prose-file excerpts (unfenced, unneutralized); "" when no prose paths or no budget left. */
+  proseEvidence: string;
 }
+
+/** Per-file cap for one prose evidence excerpt in a topic prompt (D2 follow-up). */
+const TOPIC_PROSE_FILE_MAX_CHARS = 1_500;
 
 export async function buildTopicDocContext(
   absRoot: string,
   candidate: TopicCandidate,
   charBudget: number,
   rationaleMaxChars = 0,
+  modulePaths?: ReadonlyMap<string, readonly string[]>,
 ): Promise<TopicDocContext> {
   const db = openIndex(await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db"));
   try {
@@ -5069,11 +5087,48 @@ export async function buildTopicDocContext(
     if (rationaleEvidence.length + truncatedSource.length > charBudget) {
       throw new Error(`accepted topic evidence exceeds topicMaxSourceChars (${rationaleEvidence.length + truncatedSource.length} > ${charBudget})`);
     }
+    // D2 follow-up (MPTP measurement run, 2026-07-27): prose-tier files
+    // (Dockerfile, compose files, launchers, docs) have no symbol keys, so
+    // the closed list can never reference them — without their content the
+    // model could not describe deployment surfaces honestly (the
+    // "deployment" topic came out about the CLI because cli.py owned every
+    // closed key). Excerpt the candidate modules' prose files here, carved
+    // from the budget LEFT OVER after anchors + rationale, so the hard
+    // throw above stays unreachable and the planner estimate needs no
+    // change. Prose = an indexed file with zero active symbols.
+    let proseEvidence = "";
+    if (modulePaths !== undefined) {
+      const candidatePaths = [
+        ...new Set(candidate.modules.flatMap((id) => modulePaths.get(id) ?? [])),
+      ].sort();
+      if (candidatePaths.length > 0) {
+        const proseRows = db.prepare(
+          `SELECT f.path FROM files f
+           WHERE f.path IN (${candidatePaths.map(() => "?").join(",")})
+             AND NOT EXISTS (SELECT 1 FROM symbols s WHERE s.file_id = f.id AND s.status = 'active')
+           ORDER BY f.path`,
+        ).all(...candidatePaths) as Array<{ path: string }>;
+        let remaining = charBudget - (rationaleEvidence.length + truncatedSource.length);
+        const blocks: string[] = [];
+        for (const row of proseRows) {
+          const header = `// === ${row.path} (prose file — no canonical keys; describe, never cite as an anchor) ===\n`;
+          const budget = Math.min(TOPIC_PROSE_FILE_MAX_CHARS, remaining - header.length);
+          if (budget <= 0) break;
+          const source = await nodeFs.readFile(nodePath.join(absRoot, row.path), "utf8").catch(() => null);
+          if (source === null || source.trim() === "") continue;
+          const block = header + source.slice(0, budget);
+          blocks.push(block);
+          remaining -= block.length;
+        }
+        proseEvidence = blocks.join(TOPIC_SOURCE_SPAN_SEPARATOR);
+      }
+    }
     return {
       symbolsTable,
       moduleDigest: digest.join("\n\n"),
       truncatedSource,
       rationaleEvidence,
+      proseEvidence,
     };
   } finally {
     db.close();

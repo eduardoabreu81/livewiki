@@ -1844,6 +1844,8 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     public topicRefineCallCount = 0;
     public topicPageCallCount = 0;
     public refineBehavior: "reject" | "accept" = "accept";
+    /** Captured (title, user) of every topic-page generation prompt. */
+    public topicPrompts: Array<{ title: string; user: string }> = [];
 
     async generate(req: GenerateRequest): Promise<GenerateResult> {
       const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
@@ -1862,6 +1864,8 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
       }
       if (req.user.includes("# Accepted title:")) {
         this.topicPageCallCount++;
+        const title = /^# Accepted title: (.+)$/m.exec(req.user)?.[1] ?? "Topic";
+        this.topicPrompts.push({ title, user: req.user });
         return { content: makeTopicPage(req.user), usage };
       }
       if (req.user.includes("Zero-key contract")) {
@@ -1962,10 +1966,15 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
       'export function build() { return "ok"; }\n',
       "utf8",
     );
-    // Tier-2 prose deployment surface: product-role module, zero anchors.
+    // Tier-2 prose deployment surfaces: product-role module, zero anchors.
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "docker-compose.yml"),
       'services:\n  app:\n    build: .\n',
+      "utf8",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "Dockerfile.gpu"),
+      'FROM python:3.11-slim\n# DOCKER_PROSE_MARKER\nCOPY . /app\n',
       "utf8",
     );
   }
@@ -2016,9 +2025,25 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     // One spoke-merge cluster topic (svc-a/b/c sharing the fixture module)
     // plus exactly one deployment concern topic.
     expect(checkpoint!.topicPlan?.length).toBeGreaterThanOrEqual(2);
-    expect(checkpoint!.topicPlan!.some((candidate) => candidate.title === "Deployment")).toBe(true);
+    const deploymentCandidate = checkpoint!.topicPlan!.find((candidate) => candidate.title === "Deployment");
+    expect(deploymentCandidate).toBeDefined();
+    // The deterministic intent names the matched deployment surfaces.
+    expect(deploymentCandidate!.intent).toContain("docker-compose.yml");
 
     expect(await fileExists(repoRoot, "livewiki/topics")).toBe(true);
+
+    // D2 follow-up (MPTP defect 1): the deployment topic's generation
+    // prompt carries the bounded prose evidence block — the symbol-less
+    // Dockerfile/compose content the closed key list can never reference —
+    // while the spoke topic (no prose paths) is untouched by it.
+    const deploymentPrompt = topicLlm.topicPrompts.find((p) => p.title === "Deployment");
+    expect(deploymentPrompt).toBeDefined();
+    expect(deploymentPrompt!.user).toContain("# Prose source evidence");
+    expect(deploymentPrompt!.user).toContain("DOCKER_PROSE_MARKER");
+    const spokePrompt = topicLlm.topicPrompts.find((p) => p.title !== "Deployment");
+    expect(spokePrompt).toBeDefined();
+    expect(spokePrompt!.user).not.toContain("# Prose source evidence");
+    expect(spokePrompt!.user).not.toContain("DOCKER_PROSE_MARKER");
   }, 60_000);
 
   it("a topic whose evidence exceeds topicMaxSourceChars fails the task without killing the run (Etapa 3 E2E)", async () => {

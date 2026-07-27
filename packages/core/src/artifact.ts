@@ -1118,6 +1118,27 @@ export function validateStage4Artifact(
         errors.push(err("topic_code_fence", "topic pages may not contain non-Mermaid fenced code blocks", "body", fence[0]));
       }
     }
+    // D2 follow-up (MPTP measurement run, 2026-07-27): 18 citations written
+    // as Markdown links to SOURCE paths (`[sym](app/services/bgm.py#sym)`)
+    // passed both this validator and verify (verify only checks .md/.mmd
+    // link targets), yet they do not resolve for readers — from
+    // livewiki/topics/ the relative source path does not exist. Topic prose
+    // names source symbols as inline-code closed-list keys; Markdown links
+    // are for wiki artifacts only. Code spans/fences are masked first so an
+    // inline-code key (the RECOMMENDED form) is never flagged.
+    const maskedForLinks = maskCodeSpansPreservingLength(body);
+    for (const match of maskedForLinks.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)) {
+      const target = match[1]!;
+      if (/^(?:https?:|mailto:|#)/i.test(target)) continue;
+      const targetPath = target.split("#", 1)[0]!;
+      if (targetPath === "" || /\.(?:md|mmd)$/i.test(targetPath)) continue;
+      errors.push(err(
+        "topic_source_link",
+        `link target "${target}" points at a source path outside the wiki and does not resolve for readers; name the symbol as inline code with its exact closed-list key, or link to its module page (../<moduleId>.md)`,
+        "body",
+        target,
+      ));
+    }
   }
 
   return { ok: errors.length === 0, errors };

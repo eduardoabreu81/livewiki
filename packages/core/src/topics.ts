@@ -640,6 +640,8 @@ interface ConcernGroupRule {
   /** Wording used in the deterministic intent sentence. */
   intentSignal: string;
   matches(module: TopicModuleEvidence): boolean;
+  /** The module paths that evidence the concern; their basenames name the concern's surfaces in the deterministic intent. */
+  surfacePaths(module: TopicModuleEvidence): string[];
 }
 
 /**
@@ -653,11 +655,13 @@ const CONCERN_GROUP_RULES: readonly ConcernGroupRule[] = [
     title: "Deployment",
     intentSignal: "deployment",
     matches: (module) => module.paths.some((path) => matchesAnyPathPattern(path, DEPLOYMENT_PATH_PATTERNS)),
+    surfacePaths: (module) => module.paths.filter((path) => matchesAnyPathPattern(path, DEPLOYMENT_PATH_PATTERNS)),
   },
   {
     title: "Testing",
     intentSignal: "testing",
     matches: (module) => module.role === "fixture",
+    surfacePaths: (module) => [...module.paths],
   },
 ];
 
@@ -675,15 +679,13 @@ const CONCERN_GROUP_RULES: readonly ConcernGroupRule[] = [
  */
 export function collectConcernTopicClusters(
   inventory: TopicPlanningInventory,
-): Array<{ cluster: TopicModuleCluster; title: string; intentSignal: string }> {
+): Array<{ cluster: TopicModuleCluster; title: string; intentSignal: string; surfaces: string[] }> {
   const productIds = new Set(inventory.modules.filter((m) => m.role === "product").map((m) => m.id));
   const moduleById = new Map(inventory.modules.map((m) => [m.id, m]));
-  const results: Array<{ cluster: TopicModuleCluster; title: string; intentSignal: string }> = [];
+  const results: Array<{ cluster: TopicModuleCluster; title: string; intentSignal: string; surfaces: string[] }> = [];
   for (const rule of CONCERN_GROUP_RULES) {
-    const matched = inventory.modules
-      .filter((module) => rule.matches(module))
-      .map((m) => m.id)
-      .sort();
+    const matchedModules = inventory.modules.filter((module) => rule.matches(module));
+    const matched = matchedModules.map((m) => m.id).sort();
     if (matched.length === 0) continue;
     const matchedSet = new Set(matched);
     let productModuleIds = matched.filter((id) => productIds.has(id));
@@ -699,10 +701,20 @@ export function collectConcernTopicClusters(
       .filter((id) => !productSet.has(id))
       .filter((id) => (moduleById.get(id)?.importNeighbors ?? []).some((n) => productSet.has(n)))
       .sort();
+    // Up to 4 sorted surface basenames (Dockerfile, docker-compose.yml, …)
+    // name the concern's concrete evidence in the deterministic intent —
+    // the MPTP deployment topic retitled itself "CLI …" because neither the
+    // intent nor the closed list ever mentioned Docker.
+    const surfaces = uniqueSorted(
+      matchedModules.flatMap((module) =>
+        rule.surfacePaths(module).map((path) => path.split("/").pop() ?? path),
+      ),
+    ).slice(0, 4);
     results.push({
       cluster: capClusterSize({ productModuleIds, auxiliaryModuleIds }),
       title: rule.title,
       intentSignal: rule.intentSignal,
+      surfaces,
     });
   }
   return results;
@@ -951,11 +963,12 @@ export function proposeTopicPlanDeterministically(
   // selection fails (zero or insufficient evidence) yields NO candidate,
   // never a stub.
   if (opts.concernTopics !== false) {
-    for (const { cluster, title, intentSignal } of collectConcernTopicClusters(inventory)) {
+    for (const { cluster, title, intentSignal, surfaces } of collectConcernTopicClusters(inventory)) {
       const groups = selectTopicAnchors(cluster, inventory, centrality, selectOpts);
       if (groups === null) continue;
       const moduleIds = [...cluster.productModuleIds, ...cluster.auxiliaryModuleIds].sort();
-      const intent = `Explains how ${moduleIds.length} related modules coordinate ${intentSignal}.`.slice(0, 160);
+      const surfaceSuffix = surfaces.length > 0 ? ` (${surfaces.join(", ")})` : "";
+      const intent = `Explains how ${moduleIds.length} related modules coordinate ${intentSignal}${surfaceSuffix}.`.slice(0, 160);
       proposals.push({ title, intent, modules: moduleIds, flows: flowsWithin(moduleIds), groups });
     }
   }

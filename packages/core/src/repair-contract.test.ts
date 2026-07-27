@@ -95,6 +95,19 @@ describe("repair-contract — exhaustiveness (the closed contract)", () => {
 });
 
 describe("repair-contract — directive rendering (behavioral parity with the historical if-chains)", () => {
+  it("topic topic_source_link: names the offending link and the inline-code fix; empty without an offending target", () => {
+    const text = renderActionDirective(
+      "topic",
+      err("topic_source_link", { offending: "app/services/bgm.py#save_bgm_upload" }),
+      { messageSafe: "m", offendingSafe: "app/services/bgm.py#save_bgm_upload" },
+    );
+    expect(text).toContain("app/services/bgm.py#save_bgm_upload");
+    expect(text).toContain("inline code");
+    expect(
+      renderActionDirective("topic", err("topic_source_link"), { messageSafe: "m" }),
+    ).toBe("");
+  });
+
   it("module anchor_outside_closed_list: ellipsis variant and plain removal, verbatim", () => {
     const ellipsis = renderActionDirective(
       "module",

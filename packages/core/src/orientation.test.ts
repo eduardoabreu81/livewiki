@@ -55,6 +55,63 @@ describe("repo orientation (D1)", () => {
     expect(orientation.fastPathSection).toBe("Quick Start");
   });
 
+  it("traverses HTML containers to reach the purpose sentence inside them (real MPTP README head)", async () => {
+    // The real MoneyPrinterTurbo-Plus head: the product purpose sentence sits
+    // INSIDE the centered header div; the first plain-markdown paragraph is
+    // the "About This Fork" colon lead-in, which is not a purpose statement.
+    await write("README.md", [
+      "<div align=\"center\">",
+      "  <img src=\"docs/logo.png\" alt=\"logo\" width=\"200\"/>",
+      "  <h1>MoneyPrinterTurbo-Plus</h1>",
+      "  <a href=\"https://ci.example\"><img src=\"https://img.shields.io/badge/ci-passing-green\"/></a>",
+      "",
+      "Simply provide a <b>topic</b> or <b>keyword</b>, and it will automatically generate the video copy, video materials, video subtitles, and video background music, then synthesize a high-definition short video with one click.",
+      "</div>",
+      "",
+      "### WebUI",
+      "",
+      "## About This Fork",
+      "",
+      "This is a fork of [harry0703/MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo), with additional features ported/built on top:",
+      "",
+      "- Feature one",
+      "- Feature two",
+    ].join("\n"));
+
+    const orientation = await extractRepoOrientation(repoRoot);
+    expect(orientation.purpose).toBe(
+      "Simply provide a topic or keyword, and it will automatically generate the video copy, video materials, video subtitles, and video background music, then synthesize a high-definition short video with one click.",
+    );
+    expect(orientation.purpose).not.toContain("<b>");
+    expect(orientation.purpose).not.toContain("fork");
+  });
+
+  it("rejects a colon-terminated list lead-in and keeps scanning to the next paragraph", () => {
+    const purpose = extractPurpose([
+      "This repository extends the upstream project with additional features ported on top:",
+      "",
+      "The pipeline renders short videos from a topic brief, wiring script generation, voice synthesis, and subtitle alignment into one local flow.",
+    ].join("\n"));
+    expect(purpose).toBe(
+      "The pipeline renders short videos from a topic brief, wiring script generation, voice synthesis, and subtitle alignment into one local flow.",
+    );
+  });
+
+  it("returns null when the only prose candidate is a list lead-in", () => {
+    expect(
+      extractPurpose([
+        "This is a fork of [upstream/project](https://example.com), with additional features ported/built on top:",
+        "",
+        "- Feature one",
+        "- Feature two",
+      ].join("\n")),
+    ).toBeNull();
+    // Fullwidth colon lead-ins are rejected the same way.
+    expect(
+      extractPurpose("这是一个用于本地视频生成的工具仓库分支，新增功能与特性说明如下：\n"),
+    ).toBeNull();
+  });
+
   it("reads plain prose READMEs and detects surfaces in the planned order", async () => {
     await write("README.md", "Plain tool.\n\nThis repository indexes local files and serves them over a tiny HTTP interface for quick browsing.\n");
     await write("main.py", "print('hi')\n");

@@ -35,12 +35,6 @@ const PURPOSE_MIN_CHARS = 40;
 /** READMEs are read through this cap only (they are near the top anyway). */
 const README_MAX_BYTES = 256 * 1024;
 
-/** HTML container tags whose whole block is skipped while scanning. */
-const HTML_CONTAINERS = new Set([
-  "div", "p", "h1", "h2", "h3", "h4", "h5", "h6", "table", "center",
-  "details", "summary", "span", "picture", "section", "figure", "a", "ul", "ol",
-]);
-
 const FAST_PATH_HEADING_RE =
   /quick ?start|getting started|installation|setup|run locally|local development|usage/i;
 
@@ -115,15 +109,20 @@ async function readBounded(absFile: string): Promise<string | null> {
 }
 
 /**
- * First meaningful prose paragraph of a README. Skips fenced code, HTML
- * blocks, badge/image/link-only lines (language switchers), headings,
- * thematic breaks, and list items; joins the remaining consecutive lines
- * into paragraphs and returns the first one with enough real prose, clipped
- * to PURPOSE_MAX_CHARS at a sentence boundary.
+ * First meaningful prose paragraph of a README. HTML container blocks
+ * (div/p/section/…) are TRAVERSED, not skipped: inline tags (`<b>`, `<i>`,
+ * `<a>`, `<span>`, …) are stripped and their text content is kept, because
+ * real READMEs (e.g. MoneyPrinterTurbo-Plus) place the product purpose
+ * sentence inside a centered header div. Still skipped: fenced code,
+ * multi-line tags, pure-tag lines, badge/image/link-only lines (language
+ * switchers), markdown AND HTML headings (`# …` and `<h1>`–`<h6>` — a
+ * heading is not purpose prose), thematic breaks, and list items. A
+ * candidate paragraph ending with a colon is a list lead-in, not a purpose
+ * statement, and scanning continues. The first paragraph with enough real
+ * prose wins, clipped to PURPOSE_MAX_CHARS at a sentence boundary.
  */
 export function extractPurpose(markdown: string): string | null {
   const lines = markdown.split(/\r?\n/);
-  const htmlStack: string[] = [];
   let inFence = false;
   let inTag = false;
   let paragraph: string[] = [];
@@ -132,7 +131,8 @@ export function extractPurpose(markdown: string): string | null {
     if (paragraph.length === 0) return null;
     const candidate = paragraph.join(" ").replace(/\s+/g, " ").trim();
     paragraph = [];
-    return isMeaningfulProse(candidate) ? clipSentence(candidate) : null;
+    if (!isMeaningfulProse(candidate) || isListLeadIn(candidate)) return null;
+    return clipSentence(candidate);
   };
 
   for (const rawLine of lines) {
@@ -150,29 +150,12 @@ export function extractPurpose(markdown: string): string | null {
       if (line.includes(">")) inTag = false;
       continue;
     }
-
-    if (htmlStack.length > 0) {
-      const top = htmlStack[htmlStack.length - 1]!;
-      if (line.toLowerCase().includes(`</${top}`)) htmlStack.pop();
-      continue;
-    }
-
-    if (line.startsWith("<")) {
+    // Multi-line HTML tag opener (e.g. an <img split across lines): skip
+    // until the tag closes.
+    if (line.startsWith("<") && !line.includes(">")) {
       const done = flush();
       if (done !== null) return done;
-      if (!line.includes(">")) {
-        inTag = true;
-        continue;
-      }
-      const open = /^<([a-zA-Z][a-zA-Z0-9]*)/.exec(line)?.[1]?.toLowerCase();
-      if (
-        open !== undefined &&
-        HTML_CONTAINERS.has(open) &&
-        !line.toLowerCase().includes(`</${open}`) &&
-        !line.endsWith("/>")
-      ) {
-        htmlStack.push(open);
-      }
+      inTag = true;
       continue;
     }
 
@@ -181,20 +164,48 @@ export function extractPurpose(markdown: string): string | null {
       if (done !== null) return done;
       continue;
     }
-    if (line.startsWith("#") || /^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
-      const done = flush();
-      if (done !== null) return done;
-      continue;
-    }
-    if (isBadgeOrLinkOnlyLine(line) || /^([-*+]|\d+[.)])\s/.test(line)) {
+    if (
+      line.startsWith("#") ||
+      HTML_HEADING_RE.test(line) ||
+      /^(-{3,}|\*{3,}|_{3,})$/.test(line) ||
+      isBadgeOrLinkOnlyLine(line) ||
+      /^([-*+]|\d+[.)])\s/.test(line)
+    ) {
       const done = flush();
       if (done !== null) return done;
       continue;
     }
 
-    paragraph.push(line.replace(/^>\s?/, ""));
+    // Traverse containers: strip inline tags, keep the text content.
+    const text = stripHtmlTags(line.replace(/^>\s?/, "")).replace(/\s+/g, " ").trim();
+    if (text === "") {
+      const done = flush();
+      if (done !== null) return done;
+      continue;
+    }
+    paragraph.push(text);
   }
   return flush();
+}
+
+/** `<h1>`–`<h6>` open tags (not `<header>`); headings are not purpose prose. */
+const HTML_HEADING_RE = /<h[1-6](\s|>)/i;
+
+/** Removes every HTML tag, keeping only the text content. */
+function stripHtmlTags(text: string): string {
+  return text.replace(/<[^>]*>/g, "");
+}
+
+/**
+ * A paragraph that ends with a colon (after markdown stripping) introduces a
+ * list — it is a lead-in, not a statement of what the product does.
+ */
+function isListLeadIn(text: string): boolean {
+  const plain = text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`~]/g, "")
+    .trim();
+  return plain.endsWith(":") || plain.endsWith("：");
 }
 
 /** Badge lines, images, and language switchers carry no prose: only links/tags/separators. */

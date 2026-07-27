@@ -228,7 +228,9 @@ order:
 
 1. `# Quickstart` plus one orientation paragraph;
 2. `## What this repository is` (when evidence exists): a product-purpose
-   paragraph extracted from the repository README with an explicit
+   paragraph extracted from the repository README (HTML containers
+   traversed with tags stripped, badges/headings/link-only lines skipped,
+   colon-terminated list lead-ins rejected) with an explicit
    provenance line, deterministic entry-point surface bullets (entry
    scripts, package bin, Dockerfile, build manifests), and a code-span
    pointer to the README's fastest-path section when one is detected. When
@@ -424,6 +426,15 @@ go through the same anchor selection and whole-plan validation — zero or
 insufficient anchors means no candidate, never a stub. Import clusters take
 precedence over concern groups within `maxTopics`. Config: `concernTopics`
 (boolean, default `true`).
+
+Topic prompts carry, besides the anchor spans, a bounded prose evidence
+block of the candidate modules' zero-symbol files (prose tier — this is
+how deployment content like Dockerfiles honestly reaches the page); the
+block is carved from the budget left after anchor spans and rationale,
+so the hard `topicMaxSourceChars` guard stays unreachable. Topic pages
+reject Markdown links to non-wiki targets (`topic_source_link`) — source
+symbols are cited as inline-code closed-list keys, Markdown links are
+reserved for wiki artifacts.
 
 Each candidate becomes `livewiki/topics/<title-slug>-<hash>.md`. Topic
 frontmatter declares `kind: topic`, its accepted plan order and intent, exact module/flow sets,

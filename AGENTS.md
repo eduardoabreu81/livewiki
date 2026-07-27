@@ -921,6 +921,22 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   the same topic machinery, gated by `concernTopics` (bool, default true).
   Gate: core 1352 / CLI 93 / MCP 31, zero paid calls. The blind re-eval on
   the same harness is the scheduled measurement, pending authorization.
+- **Measurement round + re-eval fixes (2026-07-26, uncommitted)**: run #7
+  (MPTP, orientation lot live) — 41/41 exit 0, 690,949 tokens (−28% vs run
+  #6, ~5% of OpenWiki), 46 pages verify 0 issues, 0 degraded. Blind re-eval
+  (same harness, OpenWiki control stable 8.20→8.20): navigation flat
+  (the digest did not move it), and THREE confirmed defects, all fixed with
+  deterministic tests: (1) the orientation extractor skipped HTML container
+  blocks wholesale and shipped a colon-terminated list lead-in as "purpose" —
+  now traverses containers (tags stripped) and rejects colon lead-ins;
+  (2) Docker invisible — prose-tier files had no channel into topic pages:
+  topic prompts now carry a bounded prose evidence block for zero-symbol
+  files (carved from leftover budget, hard guard unreachable) and concern
+  intents name the detected surface files; (3) 18 unresolvable
+  `app/services/*.py#symbol` Markdown links in a topic page — new
+  `topic_source_link` validation code (topic pages: source symbols as
+  inline-code closed-list keys; Markdown links only for wiki artifacts),
+  repair-contract directive included. Gate: core 1365 / CLI 93 / MCP 31.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series
