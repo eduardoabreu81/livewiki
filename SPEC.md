@@ -366,7 +366,10 @@ the index — entry modules, module-graph walks, persistence and
 external-boundary signals (gitignore-style pattern overrides in
 `config.flowSignals`) — never from repository-specific names. Detection,
 slugs, hub, and links are deterministic under input reordering. The set is
-capped by `maxFlows` (default 4; 0 disables). Synthesis is an ordinary gated
+capped by `maxFlows` (default 4; 0 disables). A ranked candidate whose
+seed-key set overlaps an already-accepted candidate above `flowMaxOverlap`
+(default 0.75; 1 disables) is dropped and reported via
+`skippedFlowCandidates`. Synthesis is an ordinary gated
 batch task kind (stage 5, target `flow:<slug>`): closed key list (≤
 `flowMaxAnchors`, default 25) as an **upper bound, not an assignment** —
 the page cites only the keys it uses, each exactly once in frontmatter and

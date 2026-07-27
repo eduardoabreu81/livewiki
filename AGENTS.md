@@ -992,6 +992,16 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   (b) the three `flows/root-01-to-*` pages near-duplicate the same
   CLI-validator evidence (flow-candidate overlap);
   (c) voice/subtitle false claims reduced to 2 (codex).
+- **Final tuning lot (2026-07-26)**: the three round-5 residuals. (a)
+  degraded notice parametrized per page (`buildDegradedNotice(title)`,
+  prefix-tolerant relaxed checks) — notices no longer form a duplicate
+  group. (b) flow-candidate overlap cap (`flowMaxOverlap`, default 0.75,
+  intersection-over-min-set like topics; drops surface via
+  `skippedFlowCandidates`). (c) branch-precision prompt rule
+  (`BRANCH_PRECISION_PROMPT_RULE` in all five builders: state which side is
+  enforced and which input shapes a check covers; never generalize
+  one-sided into two-sided). Gate: core 1381 / CLI 93 / MCP 31, zero paid
+  calls. Next: final measurement round #11 + re-eval round 6.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series
