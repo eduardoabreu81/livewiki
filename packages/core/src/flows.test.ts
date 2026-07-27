@@ -1322,3 +1322,95 @@ describe("detectFlowCandidates — resolvedCrossModuleCallees (symbol call graph
     expect(withSignal.entryKeys).toEqual(withoutSignal.entryKeys);
   });
 });
+
+describe("flows.detectFlowCandidates — seed-key overlap cap (round-5 re-eval fix (b))", () => {
+  /**
+   * Two entry roots (cli, main) walking through the SAME core+db modules:
+   * each candidate holds 5 seed keys, 4 of them shared (80% > 75%).
+   */
+  function overlapFixture() {
+    const modules = [
+      mod("cli", ["src/cli.ts"]),
+      mod("main", ["src/main.ts"]),
+      mod("core", ["src/core.ts"]),
+      mod("db", ["src/db.ts"]),
+    ];
+    const edges: ModuleGraphEdge[] = [
+      { from: "cli", to: "core" },
+      { from: "main", to: "core" },
+      { from: "core", to: "db" },
+    ];
+    const symbolsByFile = new Map<string, string[]>([
+      ["src/cli.ts", ["src/cli.ts#run"]],
+      ["src/main.ts", ["src/main.ts#run"]],
+      ["src/core.ts", ["src/core.ts#batch", "src/core.ts#helper"]],
+      ["src/db.ts", ["src/db.ts#close", "src/db.ts#open"]],
+    ]);
+    return { modules, edges, symbolsByFile };
+  }
+
+  it("drops a ranked candidate whose seed keys overlap an accepted candidate above 75%", () => {
+    const { modules, edges, symbolsByFile } = overlapFixture();
+    const candidates = detectFlowCandidates({ modules, edges, symbolsByFile });
+    expect(candidates).toHaveLength(2);
+    // Tie on product count and centrality → slug asc: cli-to-db wins.
+    expect(candidates[0]!.slug).toBe("cli-to-db");
+    expect(candidates[0]!.skip).toBeUndefined();
+    expect(candidates[1]!.slug).toBe("main-to-db");
+    expect(candidates[1]!.skip?.code).toBe("seed_key_overlap");
+    expect(candidates[1]!.skip?.message).toContain("80%");
+    expect(candidates[1]!.skip?.message).toContain('"cli-to-db"');
+  });
+
+  it("keeps candidates with disjoint seed-key sets", () => {
+    const modules = [
+      mod("cli", ["src/cli.ts"]),
+      mod("core", ["src/core.ts"]),
+      mod("db", ["src/db.ts"]),
+      mod("www", ["bin/www.ts"]),
+      mod("store", ["src/store/index.ts"]),
+    ];
+    const edges: ModuleGraphEdge[] = [
+      { from: "cli", to: "core" },
+      { from: "core", to: "db" },
+      { from: "www", to: "store" },
+    ];
+    const symbolsByFile = new Map<string, string[]>([
+      ["src/cli.ts", ["src/cli.ts#run"]],
+      ["src/core.ts", ["src/core.ts#batch"]],
+      ["src/db.ts", ["src/db.ts#open"]],
+      ["bin/www.ts", ["bin/www.ts#listen"]],
+      ["src/store/index.ts", ["src/store/index.ts#load", "src/store/index.ts#save"]],
+    ]);
+    const candidates = detectFlowCandidates({ modules, edges, symbolsByFile });
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every((c) => c.skip === undefined)).toBe(true);
+  });
+
+  it("is deterministic under input reordering", () => {
+    const { modules, edges, symbolsByFile } = overlapFixture();
+    const base = detectFlowCandidates({ modules, edges, symbolsByFile });
+    const shape = (list: FlowCandidate[]) =>
+      list.map((c) => [c.slug, c.seedKeys, c.skip?.code ?? null]);
+    for (const seed of [1, 7, 42]) {
+      const rerun = detectFlowCandidates({
+        modules: shuffled(modules, seed),
+        edges: shuffled(edges, seed),
+        symbolsByFile: shuffledMap([...symbolsByFile.entries()], seed),
+      });
+      expect(shape(rerun)).toEqual(shape(base));
+    }
+  });
+
+  it("flowMaxOverlap: 1 disables the cap", () => {
+    const { modules, edges, symbolsByFile } = overlapFixture();
+    const candidates = detectFlowCandidates({
+      modules,
+      edges,
+      symbolsByFile,
+      flowMaxOverlap: 1,
+    });
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every((c) => c.skip === undefined)).toBe(true);
+  });
+});

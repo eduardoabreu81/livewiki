@@ -825,7 +825,9 @@ relaxed by either.
   reader notice as the first body line; the batch report and `batch status`
   list `degradedPages`, and `livewiki status` recounts degraded pages fresh
   from disk. Degraded tasks are `done`: a degraded-only run is `completed`
-  (exit 0). Config: `relaxedRound` (boolean, default `true`).
+  (exit 0). Config: `relaxedRound` (boolean, default `true`). The degraded
+  notice names its own page (per-page title), so notices never form a
+  duplicate-boilerplate group.
 
 **Navigation and clarity contract (post-A/B round 3).** Module-page
 `## Navigate` blocks contain only page-specific links (flow, topics,

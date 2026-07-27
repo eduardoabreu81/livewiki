@@ -185,32 +185,59 @@ const TOPIC_ANCHOR_SECTION_NORMALIZED: ReadonlySet<string> = new Set(
 );
 
 /**
- * Recovery tier (Component 2): reader-visible notice inserted as the FIRST
- * body line of a page completed under the relaxed contract. Defined once so
- * the relaxed writer (batch.ts) and the relaxed opening checks (which skip
- * EXACTLY this known line — deterministic, no prose guessing) can never
- * drift apart.
+ * Recovery tier (Component 2): stable prefix of the reader-visible notice
+ * inserted as the FIRST body line of a page completed under the relaxed
+ * contract. Defined once so the relaxed writer (batch.ts) and the relaxed
+ * opening checks (which skip lines carrying EXACTLY this prefix —
+ * deterministic, no prose guessing) can never drift apart. The full notice
+ * is parametrized per page (`buildDegradedNotice`); the round-5 legacy
+ * notice was this prefix followed by a fixed sentence, so prefix matching
+ * also recognizes degraded pages written before the parametrization.
  */
-export const DEGRADED_NOTICE =
-  "> **Degraded page** — generated under the relaxed contract after strict attempts failed; anchors verified, presentation reduced.";
+export const DEGRADED_NOTICE_PREFIX = "> **Degraded page** —";
 
-/** Drop lines whose trimmed content is EXACTLY the known degraded notice. */
+/**
+ * Reader-visible degraded notice for ONE page, parametrized by the page
+ * title (A/B round-5 re-eval fix (a): the previous verbatim constant formed
+ * a duplicate-paragraph group across degraded pages).
+ */
+export function buildDegradedNotice(title: string): string {
+  return `${DEGRADED_NOTICE_PREFIX} "${title}" was generated under the relaxed contract after strict attempts failed; anchors verified, presentation reduced.`;
+}
+
+/** Drop lines whose trimmed content carries the known degraded-notice prefix. */
 function dropDegradedNoticeLines(text: string): string {
   return text
     .split("\n")
-    .filter((line) => line.trim() !== DEGRADED_NOTICE)
+    .filter((line) => !line.trim().startsWith(DEGRADED_NOTICE_PREFIX))
     .join("\n");
+}
+
+/**
+ * Title for the degraded notice: the page's first H1, else the frontmatter
+ * `title:` value, else a neutral fallback. Pure line scan — deterministic,
+ * no Markdown parsing.
+ */
+function extractDegradedTitle(yamlBlock: string, body: string): string {
+  for (const line of body.split("\n")) {
+    const h1 = /^#\s+(.+?)\s*$/.exec(line);
+    if (h1 !== null) return h1[1]!;
+  }
+  const fmTitle = /^[ \t]*title:[ \t]*(.+?)\s*$/m.exec(yamlBlock);
+  if (fmTitle !== null) return fmTitle[1]!;
+  return "This page";
 }
 
 /**
  * Recovery tier (Component 2): mark an artifact as degraded — the
  * frontmatter gains the additive `quality: degraded` line (the validator
- * never rejects unknown keys) and `DEGRADED_NOTICE` becomes the first body
- * line. Applied by the relaxed writer BEFORE validation, so the artifact
- * that validation (and verify) sees is byte-for-byte the artifact written
- * to disk. Idempotent: an already-marked page is returned unchanged apart
- * from notice deduplication. A page without a frontmatter block is returned
- * unchanged — validation rejects it as `no_frontmatter` regardless.
+ * never rejects unknown keys) and the per-page degraded notice
+ * (`buildDegradedNotice`) becomes the first body line. Applied by the
+ * relaxed writer BEFORE validation, so the artifact that validation (and
+ * verify) sees is byte-for-byte the artifact written to disk. Idempotent:
+ * an already-marked page is returned unchanged apart from notice
+ * deduplication. A page without a frontmatter block is returned unchanged —
+ * validation rejects it as `no_frontmatter` regardless.
  */
 export function markDegradedArtifact(content: string): string {
   if (!content.startsWith("---\n")) return content;
@@ -222,7 +249,7 @@ export function markDegradedArtifact(content: string): string {
     ? content.slice(0, fmEnd)
     : `${content.slice(0, closeIdx)}\nquality: degraded\n---`;
   const body = dropDegradedNoticeLines(content.slice(fmEnd)).replace(/^\n+/, "");
-  return `${frontmatter}\n\n${DEGRADED_NOTICE}\n\n${body}`;
+  return `${frontmatter}\n\n${buildDegradedNotice(extractDegradedTitle(yamlBlock, body))}\n\n${body}`;
 }
 
 /**
@@ -346,9 +373,9 @@ export function validateStage4Artifact(
     frontmatterParseError = (e as Error).message;
   }
 
-  // Recovery tier (Component 2): the relaxed writer inserts DEGRADED_NOTICE
+  // Recovery tier (Component 2): the relaxed writer inserts the degraded notice
   // as the first body line before validation. The relaxed contract tolerates
-  // EXACTLY that known line — strip it up front so every opening check sees
+  // lines with the DEGRADED_NOTICE_PREFIX prefix — strip them up front so every opening check sees
   // the page as if the notice were absent (offsets stay internally
   // consistent because every downstream scan derives from this `body`).
   // Strict validation never strips: there the notice is ordinary content.

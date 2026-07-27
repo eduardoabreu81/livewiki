@@ -1435,6 +1435,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           : {}),
         maxFlows,
         flowMaxAnchors: resolvedConfig.flowMaxAnchors ?? CONFIG_DEFAULTS.flowMaxAnchors,
+        flowMaxOverlap: resolvedConfig.flowMaxOverlap ?? CONFIG_DEFAULTS.flowMaxOverlap,
         resolvedCrossModuleCallees,
       });
     }

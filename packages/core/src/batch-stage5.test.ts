@@ -39,7 +39,7 @@ import {
   countFlowDiagramElements,
   flowDiagramPlaceholder,
   FLOW_DIAGRAM_SOURCE_MAX_CHARS,
-  DEGRADED_NOTICE,
+  DEGRADED_NOTICE_PREFIX,
 } from "./artifact.js";
 import type { LlmClient } from "./llm/index.js";
 import { LlmTimeoutError } from "./llm/index.js";
@@ -2441,7 +2441,7 @@ describe("batch stage 5 — relaxed completion round (Component 2)", () => {
 
     const page = await nodeFs.readFile(nodePath.join(repoRoot, FLOW_PAGE_PATH), "utf8");
     expect(page).toContain("quality: degraded");
-    expect(page).toContain(DEGRADED_NOTICE);
+    expect(page).toContain(DEGRADED_NOTICE_PREFIX);
     expect(page).toContain(`%% livewiki/diagrams/flow-${FLOW_SLUG}.mmd`);
     // The reduced page has no Invariants section — the deterministic
     // diagram insertion anchored on the Ordered flow section instead.
@@ -2684,7 +2684,7 @@ describe("batch stage 5 — relaxed completion round (Component 2)", () => {
     const wikiPath = `livewiki/topics/${candidate.slug}.md`;
     const page = await nodeFs.readFile(nodePath.join(repoRoot, wikiPath), "utf8");
     expect(page).toContain("quality: degraded");
-    expect(page).toContain(DEGRADED_NOTICE);
+    expect(page).toContain(DEGRADED_NOTICE_PREFIX);
 
     const checkpoint = await readTaskCheckpoint(repoRoot, 5, `topic:${candidate.evidenceHash}`);
     expect(checkpoint!.status).toBe("done");

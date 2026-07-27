@@ -428,6 +428,7 @@ describe("config — stage-5 flow keys", () => {
   it("CONFIG_DEFAULTS carries the documented flow defaults", () => {
     expect(CONFIG_DEFAULTS.maxFlows).toBe(4);
     expect(CONFIG_DEFAULTS.flowMaxAnchors).toBe(25);
+    expect(CONFIG_DEFAULTS.flowMaxOverlap).toBe(0.75);
     expect(CONFIG_DEFAULTS.flowMaxDiagramNodes).toBe(12);
     expect(CONFIG_DEFAULTS.flowMaxDiagramEdges).toBe(20);
   });
@@ -436,11 +437,14 @@ describe("config — stage-5 flow keys", () => {
     const d = applyDefaults({});
     expect(d.maxFlows).toBe(4);
     expect(d.flowMaxAnchors).toBe(25);
+    expect(d.flowMaxOverlap).toBe(0.75);
     expect(d.flowMaxDiagramNodes).toBe(12);
     expect(d.flowMaxDiagramEdges).toBe(20);
     // 0 disables flow synthesis and must survive applyDefaults.
     expect(applyDefaults({ maxFlows: 0 }).maxFlows).toBe(0);
     expect(applyDefaults({ flowMaxAnchors: 10 }).flowMaxAnchors).toBe(10);
+    // 1 disables the overlap cap and must survive applyDefaults.
+    expect(applyDefaults({ flowMaxOverlap: 1 }).flowMaxOverlap).toBe(1);
   });
 
   it("DEFAULT_FLOW_SIGNAL_PATTERNS carries the generic entry/persistence defaults", () => {
@@ -467,6 +471,7 @@ describe("config — stage-5 flow keys", () => {
         model: "claude-sonnet-5",
         maxFlows: 2,
         flowMaxAnchors: 10,
+        flowMaxOverlap: 0.5,
         flowMaxDiagramNodes: 6,
         flowMaxDiagramEdges: 8,
       }),
@@ -475,6 +480,7 @@ describe("config — stage-5 flow keys", () => {
     const cfg = await loadConfig(repoRoot);
     expect(cfg.maxFlows).toBe(2);
     expect(cfg.flowMaxAnchors).toBe(10);
+    expect(cfg.flowMaxOverlap).toBe(0.5);
     expect(cfg.flowMaxDiagramNodes).toBe(6);
     expect(cfg.flowMaxDiagramEdges).toBe(8);
   });
@@ -484,6 +490,9 @@ describe("config — stage-5 flow keys", () => {
     ["maxFlows", 1.5],
     ["maxFlows", "4"],
     ["flowMaxAnchors", 0],
+    ["flowMaxOverlap", -0.1],
+    ["flowMaxOverlap", 1.5],
+    ["flowMaxOverlap", "0.5"],
     ["flowMaxDiagramNodes", 0],
     ["flowMaxDiagramEdges", -2],
     ["flowMaxDiagramEdges", 2.5],

@@ -20,6 +20,7 @@ import {
   LITERAL_SIGNATURE_PROMPT_RULE,
   EXCEPTION_BRANCH_PROMPT_RULE,
   INVENTORY_AUTHORITY_PROMPT_RULE,
+  BRANCH_PRECISION_PROMPT_RULE,
 } from "./prompts.js";
 import type { ArtifactValidationError } from "./prompts.js";
 import type { Module } from "./modules.js";
@@ -2219,5 +2220,73 @@ describe("buildSurgicalRepairPrompt", () => {
     const r = buildSurgicalRepairPrompt("flow", flowPage, flowErrors, "", "en");
     expect(r.system).toContain('"Failure and recovery"');
     expect(r.user).toContain('- "Failure and recovery"');
+  });
+});
+
+// === A/B round-5 re-eval fix (c): branch-precision rule ===
+
+describe("prompts — branch precision rule (round-5 re-eval fix (c))", () => {
+  const flowCandidate: FlowCandidate = {
+    slug: "cli-to-core",
+    titleSeed: "Cli to Core",
+    moduleIds: ["cli", "core"],
+    seedKeys: ["src/cli.ts#run", "src/core.ts#batch", "src/store.ts#persist"],
+    entryKeys: ["src/cli.ts#run"],
+    boundaryKeys: ["src/core.ts#batch"],
+    sinkKeys: ["src/store.ts#persist"],
+    otherProductKeys: [],
+    auxiliaryKeys: [],
+    signals: { entry: ["cli"], persistence: ["core"], external: [] },
+  };
+  const topicCandidate: TopicCandidate = {
+    title: "Auth lifecycle",
+    intent: "Explain how authentication state is created and refreshed",
+    modules: ["auth"],
+    flows: [],
+    groups: { contract: ["src/auth.ts#login"], state: [], output: [], failure: [] },
+    planOrder: 1,
+    evidenceHash: "abc123",
+    slug: "auth-lifecycle",
+    seedKeys: ["src/auth.ts#login"],
+  };
+
+  it("BRANCH_PRECISION_PROMPT_RULE is present in all five builders that share the factual-precision rules", () => {
+    const moduleInitial = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "sym", "code");
+    const moduleRepair = buildRepairPrompt(
+      sampleModule,
+      ["src/auth.ts#login"],
+      "sym",
+      "code",
+      "prior",
+      [],
+      60_000,
+      "en",
+    );
+    const flowInitial = buildStage5Prompt(
+      flowCandidate,
+      flowCandidate.seedKeys,
+      "openings",
+      "symbols",
+      "source",
+    );
+    const flowRepair = buildStage5RepairPrompt(
+      flowCandidate,
+      flowCandidate.seedKeys,
+      "openings",
+      "symbols",
+      "source",
+      "prior",
+      [],
+      60_000,
+    );
+    const topicInitial = buildTopicPrompt(topicCandidate, "digest", "sym", "source", "en");
+    for (const prompt of [moduleInitial, moduleRepair, flowInitial, flowRepair, topicInitial]) {
+      expect(prompt.system).toContain(BRANCH_PRECISION_PROMPT_RULE);
+    }
+    // The rule names the exact failure mode: one-sided checks inflated into
+    // two-sided invariants (clamp-to-range, containment for every input shape).
+    expect(BRANCH_PRECISION_PROMPT_RULE).toContain("which side is enforced");
+    expect(BRANCH_PRECISION_PROMPT_RULE).toContain("which input shapes each check covers");
+    expect(BRANCH_PRECISION_PROMPT_RULE).toContain("Never generalize a one-sided check");
   });
 });

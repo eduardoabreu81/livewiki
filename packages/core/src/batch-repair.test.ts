@@ -26,7 +26,7 @@ import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { runBatch, runOnly } from "./batch.js";
 import { buildStatusReport } from "./batch-status.js";
-import { DEGRADED_NOTICE } from "./artifact.js";
+import { DEGRADED_NOTICE_PREFIX } from "./artifact.js";
 import * as safeIo from "./safe-io.js";
 import type { LlmClient } from "./llm/index.js";
 import { LlmTimeoutError } from "./llm/index.js";
@@ -2958,7 +2958,7 @@ describe("batch recovery tier — relaxed completion round (Component 2)", () =>
     const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
     expect(page).toContain("quality: degraded");
     const bodyStart = page.indexOf("\n---\n") + "\n---\n".length;
-    expect(page.slice(bodyStart).startsWith(`\n${DEGRADED_NOTICE}\n`)).toBe(true);
+    expect(page.slice(bodyStart).startsWith(`\n${DEGRADED_NOTICE_PREFIX}`)).toBe(true);
 
     // Checkpoint: done + degraded flag; the relaxed attempt joined the
     // normal 1:1 usage/diagnostic histories with the relaxed marker.

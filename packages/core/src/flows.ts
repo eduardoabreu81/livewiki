@@ -55,6 +55,15 @@
  * qualifying walk produces zero candidates — a valid outcome, not a
  * failure.
  *
+ * Overlap cap (A/B round-5 re-eval fix (b)): after ranking, the ranked
+ * list is walked in order and a candidate whose seed-key set overlaps an
+ * already-accepted candidate's set above `flowMaxOverlap` (intersection
+ * over the smaller set — the same formula as the topic plan's pair-overlap
+ * rule; default 0.75, 1 disables) is dropped with a recorded
+ * `seed_key_overlap` skip, so near-duplicate flows over the same entry
+ * evidence never reach stage 5. Candidates already carrying a K-a/K-b
+ * skip never block others and are never blocked themselves.
+ *
  * Seed keys (R10.1 K): every key of the walk is classified by path role
  * (product vs auxiliary — `classifyPathRole` combined with the
  * deterministic `isTestPath`) and by semantic role (T1 entry / T2
@@ -131,7 +140,9 @@ export type FlowSkipCode =
   /** K-a: `flowMaxAnchors` cannot fit the mandatory T1/T2/T3 group reservation. */
   | "insufficient_anchor_capacity"
   /** K-b: fewer than 3 distinct seed keys available (the three required flow sections each need their own anchor). */
-  | "insufficient_section_anchor_coverage";
+  | "insufficient_section_anchor_coverage"
+  /** Round-5 fix (b): seed-key overlap with an already-accepted candidate above `flowMaxOverlap`. */
+  | "seed_key_overlap";
 
 export interface FlowCandidateSkip {
   code: FlowSkipCode;
@@ -195,6 +206,12 @@ export interface FlowDetectionOptions {
   maxFlows?: number;
   /** Default 25. */
   flowMaxAnchors?: number;
+  /**
+   * Seed-key overlap cap between accepted candidates (round-5 fix (b)):
+   * intersection over the smaller set, same formula as the topic plan's
+   * pair-overlap rule. Default 0.75; 1 disables the cap.
+   */
+  flowMaxOverlap?: number;
   /**
    * Priority-0 Phase 3 (symbol call graph): symbol keys PROVEN to be
    * called from a different module by a resolved edge in the indexed
@@ -444,6 +461,47 @@ export function detectFlowCandidates(opts: FlowDetectionOptions): FlowCandidate[
     if (a.centrality !== b.centrality) return b.centrality - a.centrality;
     return a.candidate.slug.localeCompare(b.candidate.slug);
   });
+
+  // Round-5 re-eval fix (b): deterministic seed-key overlap cap. Walk the
+  // ranked list in order; a candidate whose seed-key set overlaps an
+  // already-accepted candidate's set above `flowMaxOverlap` (intersection
+  // over the smaller set — the same formula as the topic plan's
+  // pair-overlap rule in topics.ts) is dropped with a recorded skip, so
+  // near-duplicate flows over the same entry evidence never reach stage 5.
+  // Candidates already carrying a K-a/K-b skip never become pages, so they
+  // neither block others nor are blocked themselves. 1 disables the cap.
+  const maxOverlap = opts.flowMaxOverlap ?? CONFIG_DEFAULTS.flowMaxOverlap;
+  if (maxOverlap < 1) {
+    const accepted: FlowCandidate[] = [];
+    for (const { candidate } of ranked) {
+      if (candidate.skip !== undefined) continue;
+      const seed = new Set(candidate.seedKeys);
+      let blocker: FlowCandidate | undefined;
+      let blockerOverlap = 0;
+      for (const other of accepted) {
+        const otherSeed = new Set(other.seedKeys);
+        const denominator = Math.min(seed.size, otherSeed.size);
+        const overlap =
+          denominator === 0
+            ? 0
+            : [...seed].filter((key) => otherSeed.has(key)).length / denominator;
+        if (overlap > maxOverlap && overlap > blockerOverlap) {
+          blocker = other;
+          blockerOverlap = overlap;
+        }
+      }
+      if (blocker !== undefined) {
+        candidate.skip = {
+          code: "seed_key_overlap",
+          message:
+            `seed-key overlap ${(blockerOverlap * 100).toFixed(0)}% with accepted candidate ` +
+            `"${blocker.slug}" exceeds flowMaxOverlap (${(maxOverlap * 100).toFixed(0)}%)`,
+        };
+      } else {
+        accepted.push(candidate);
+      }
+    }
+  }
 
   return ranked.slice(0, maxFlows).map((r) => r.candidate);
 }

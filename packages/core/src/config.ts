@@ -140,6 +140,13 @@ export interface LivewikiConfig {
    */
   flowMaxAnchors?: number;
   /**
+   * Seed-key overlap cap between accepted flow candidates (A/B round-5
+   * re-eval fix (b)): intersection over the smaller set, same formula as
+   * the topic plan's pair-overlap rule. Default 0.75; 1 disables the cap.
+   * Must be a number 0..1.
+   */
+  flowMaxOverlap?: number;
+  /**
    * Per-diagram node budget for flow companion diagrams. Default 12.
    * Must be an integer >= 1.
    */
@@ -277,6 +284,8 @@ export const CONFIG_DEFAULTS = {
   maxFlows: 4,
   /** Closed-list cap for a flow candidate's seed key set. */
   flowMaxAnchors: 25,
+  /** Seed-key overlap cap between accepted flow candidates; 1 disables. */
+  flowMaxOverlap: 0.75,
   /** Flow companion diagram budgets (nodes / edges). */
   flowMaxDiagramNodes: 12,
   flowMaxDiagramEdges: 20,
@@ -389,6 +398,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     timeoutMs: CONFIG_DEFAULTS.timeoutMs,
     maxFlows: CONFIG_DEFAULTS.maxFlows,
     flowMaxAnchors: CONFIG_DEFAULTS.flowMaxAnchors,
+    flowMaxOverlap: CONFIG_DEFAULTS.flowMaxOverlap,
     flowMaxDiagramNodes: CONFIG_DEFAULTS.flowMaxDiagramNodes,
     flowMaxDiagramEdges: CONFIG_DEFAULTS.flowMaxDiagramEdges,
     maxTopics: CONFIG_DEFAULTS.maxTopics,
@@ -608,6 +618,15 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       );
     }
     out.flowMaxAnchors = v;
+  }
+  if (obj["flowMaxOverlap"] !== undefined) {
+    const v = obj["flowMaxOverlap"];
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) {
+      throw new Error(
+        `invalid flowMaxOverlap: must be a number 0..1 (1 disables the overlap cap), got ${JSON.stringify(v)}`,
+      );
+    }
+    out.flowMaxOverlap = v;
   }
   if (obj["maxTopics"] !== undefined) {
     const v = obj["maxTopics"];

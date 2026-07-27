@@ -17,7 +17,7 @@ import {
   normalizeStage4Artifact,
   validateStage4Artifact,
   markDegradedArtifact,
-  DEGRADED_NOTICE,
+  buildDegradedNotice,
 } from "./artifact.js";
 
 describe("artifact.normalizeStage4Artifact — strip + unwrap", () => {
@@ -2151,14 +2151,29 @@ Body.
     const marked = markDegradedArtifact(STRICT_MODULE);
     expect(marked).toContain("quality: degraded\n---");
     const bodyStart = marked.indexOf("\n---\n") + "\n---\n".length;
-    expect(marked.slice(bodyStart).startsWith(`\n${DEGRADED_NOTICE}\n\n# Mod\n`)).toBe(true);
+    expect(marked.slice(bodyStart).startsWith(`\n${buildDegradedNotice("Mod")}\n\n# Mod\n`)).toBe(true);
     // Idempotent: a second marking changes nothing.
     expect(markDegradedArtifact(marked)).toBe(marked);
     // No frontmatter block → unchanged (validation rejects it regardless).
     expect(markDegradedArtifact("# no frontmatter\n")).toBe("# no frontmatter\n");
   });
 
-  it("DEGRADED_NOTICE before the H1 is tolerated under relaxed only", () => {
+  it("parametrizes the degraded notice per page title (round-5 re-eval fix (a))", () => {
+    const other = STRICT_MODULE.replace("# Mod\n", "# Session\n");
+    const markedA = markDegradedArtifact(STRICT_MODULE);
+    const markedB = markDegradedArtifact(other);
+    // Two degraded pages never share a verbatim notice paragraph.
+    expect(markedA).toContain(buildDegradedNotice("Mod"));
+    expect(markedB).toContain(buildDegradedNotice("Session"));
+    expect(buildDegradedNotice("Mod")).not.toBe(buildDegradedNotice("Session"));
+    // Relaxed validation still tolerates each page's own notice line.
+    expect(validateStage4Artifact(markedB, keys, ctx(true)).ok).toBe(true);
+    // Without an H1 the notice falls back to the frontmatter title.
+    const noH1 = STRICT_MODULE.replace("# Mod\n\n", "");
+    expect(markDegradedArtifact(noH1)).toContain(buildDegradedNotice("Mod"));
+  });
+
+  it("the degraded notice before the H1 is tolerated under relaxed only", () => {
     const marked = markDegradedArtifact(STRICT_MODULE);
     const strict = validateStage4Artifact(marked, keys, ctx(false));
     expect(strict.ok).toBe(false);
