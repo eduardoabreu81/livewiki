@@ -967,6 +967,18 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   over-budget modules (60k default threshold). Gate: core 1371 / CLI 93 /
   MCP 31, zero paid calls. Measurement: run #9 + re-eval round 4, separate
   authorization.
+- **Round-4 re-eval + fixes (2026-07-26, uncommitted)**: run #9 (41/41
+  exit 0, 948,637 tokens). Re-eval: navigation codex 6→7 (transition cost
+  collapsed to median 1.5 hops), hedge lines zero — but the verbatim
+  deterministic coverage note became the new largest duplicate block (11
+  pages), and a stale-README inventory claim surfaced in test.md. Fixes,
+  each proven by an individual deterministic test: the note is parametrized
+  per module (`buildModuleCoverageNote` — file count + ~k size; a
+  multi-module fixture proves pairwise-distinct notes, the audit’s exact
+  property), and prompts carry an inventory-authority rule (closed list and
+  prompt inventory authoritative for counts/file lists; README prose may be
+  stale), present in all five builders that share the rule. Gate: core 1372
+  / CLI 93 / MCP 31, zero paid calls.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

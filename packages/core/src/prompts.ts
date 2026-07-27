@@ -107,6 +107,9 @@ export const LITERAL_SIGNATURE_PROMPT_RULE =
 export const EXCEPTION_BRANCH_PROMPT_RULE =
   `- When the supplied source visibly contains a material \`throw\`, \`catch\`, fallback, rollback, early return, or fail-open/fail-closed branch for the documented symbol, describe that branch or explicitly scope the prose to the normal path. Never use "always", "guarantees", "mandatory", or equivalent absolute language while omitting a visible exception. Document only what the visible evidence establishes; never narrate what the excerpt does or does not contain.`;
 
+export const INVENTORY_AUTHORITY_PROMPT_RULE =
+  `- The closed key list and the symbol/file inventory in this prompt are AUTHORITATIVE for inventory facts: counts, file lists, and what exists. README text and excerpt prose may be stale — never copy an inventory claim (for example, "3 test files") from prose when the prompt's own inventory says otherwise.`;
+
 /**
  * Neutralize livewiki control-marker syntax (`<!-- lw:anchors ... -->`,
  * `<!-- lw:manual ... -->`, closing `<!-- /lw:manual -->`, etc.) found
@@ -348,6 +351,7 @@ export function buildStage4Prompt(
     ...compactAuxiliaryRules,
     ...(moduleRole === "product" ? [LITERAL_SIGNATURE_PROMPT_RULE] : []),
     EXCEPTION_BRANCH_PROMPT_RULE,
+    INVENTORY_AUTHORITY_PROMPT_RULE,
     `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
     RATIONALE_UNTRUSTED_SYSTEM_RULE,
     `- NEVER invent a key. Anchor keys MUST be copied byte-for-byte from the closed list ONLY; NEVER use a placeholder or example token as a key — even when the documented source itself contains marker-like examples.`,
@@ -501,6 +505,7 @@ export function buildRepairPrompt(
     ...compactAuxiliaryRepairRules,
     ...(moduleRole === "product" ? [LITERAL_SIGNATURE_PROMPT_RULE] : []),
     EXCEPTION_BRANCH_PROMPT_RULE,
+    INVENTORY_AUTHORITY_PROMPT_RULE,
     `- AUTHORITATIVE KEY SOURCE: the closed list is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line.`,
     RATIONALE_UNTRUSTED_SYSTEM_RULE,
     `- Every anchor key in the page MUST be in the closed list. NEVER invent a key. NEVER keep placeholder tokens as keys.`,
@@ -1005,6 +1010,7 @@ export function buildStage5Prompt(
     ...FLOW_PAGE_PROMPT_RULES,
     LITERAL_SIGNATURE_PROMPT_RULE,
     EXCEPTION_BRANCH_PROMPT_RULE,
+    INVENTORY_AUTHORITY_PROMPT_RULE,
     `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
     `- NEVER invent a key. Anchor keys MUST be copied byte-for-byte from the closed list ONLY; NEVER use a placeholder or example token as a key — even when the documented source itself contains marker-like examples.`,
     `- An \`lw:anchors\` marker is NEVER abbreviated: write every key in full, one by one, separated by spaces. The characters "…" or "..." must never appear ANYWHERE inside a marker — not as a key, not as a list continuation — a marker containing either is rejected outright. If a section has many keys, list them all; there is no exception for long lists.`,
@@ -1159,6 +1165,7 @@ export function buildStage5RepairPrompt(
     ...FLOW_PAGE_PROMPT_RULES,
     LITERAL_SIGNATURE_PROMPT_RULE,
     EXCEPTION_BRANCH_PROMPT_RULE,
+    INVENTORY_AUTHORITY_PROMPT_RULE,
     `- AUTHORITATIVE KEY SOURCE: the closed list is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line.`,
     `- Every anchor key in the page MUST be in the closed list. NEVER invent a key. NEVER keep placeholder tokens as keys.`,
     `- An \`lw:anchors\` marker is NEVER abbreviated: write every key in full, one by one, separated by spaces. The characters "…" or "..." must never appear ANYWHERE inside a marker — not as a key, not as a list continuation — a marker containing either is rejected outright. If a section has many keys, list them all; there is no exception for long lists.`,
@@ -1361,6 +1368,7 @@ export function buildTopicPrompt(
         ]
       : []),
     EXCEPTION_BRANCH_PROMPT_RULE,
+    INVENTORY_AUTHORITY_PROMPT_RULE,
     `Every anchor must be copied byte-for-byte from the closed list. Never invent a key.`,
     RATIONALE_UNTRUSTED_SYSTEM_RULE,
     `Do not emit an lw:manual block. Output raw Markdown only, without an outer fence or reasoning.`,

@@ -1058,13 +1058,17 @@ export async function updateModuleNavigateBlocks(opts: {
       ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
       limit: 3,
     });
+    const sourceBytes = await sumModuleSourceBytes(opts.repoRoot, module);
+    const charBudget = opts.charBudget ?? 60_000;
     const navigate = buildNavigateBlock(
       module,
       related,
       opts.presentations,
       flowByModule.get(module.id) ?? null,
       topicsByModule.get(module.id) ?? [],
-      await moduleSourceExceedsBudget(opts.repoRoot, module, opts.charBudget ?? 60_000),
+      sourceBytes > charBudget
+        ? buildModuleCoverageNote(module.paths.length, sourceBytes)
+        : null,
     );
     const existingStart = source.indexOf(NAV_START);
     const existingEnd = source.indexOf(NAV_END);
@@ -1150,7 +1154,7 @@ function buildNavigateBlock(
   presentations: Map<string, ModulePresentation>,
   flow: FlowPresentation | null,
   topics: TopicPresentation[],
-  sourceExceedsBudget: boolean,
+  coverageNote: string | null,
 ): string {
   // Page-specific links only. The universal Quickstart/Tasks/Architecture
   // routes already live in the quickstart; repeating them on every module
@@ -1173,20 +1177,41 @@ function buildNavigateBlock(
       : item.direction;
     lines.push(`- [${title}](${item.moduleId}.md) — ${label}`);
   }
-  if (sourceExceedsBudget) {
-    lines.push("", MODULE_COVERAGE_NOTE);
+  if (coverageNote !== null) {
+    lines.push("", coverageNote);
   }
   lines.push(NAV_END);
   return lines.join("\n");
 }
 
 /**
- * Fixed coverage note appended to the Navigate block when the module source
- * exceeded the stage-4 prompt budget. Coverage honesty is the tool's job —
- * one uniform deterministic line, never model prose.
+ * Per-module coverage note appended to the Navigate block when the module
+ * source exceeded the stage-4 prompt budget. Parametrized by the module's
+ * own file count and summed source size (rounded to whole k) so no two
+ * modules share the note verbatim — a fixed line repeated across pages is
+ * itself duplicate boilerplate. `fileCount` is `module.paths.length` (the
+ * module's declared inventory), `totalBytes` the summed on-disk sizes
+ * (~chars for source text). Coverage honesty is the tool's job — one
+ * deterministic line per page, never model prose.
  */
-export const MODULE_COVERAGE_NOTE =
-  "> Coverage note: the module source exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.";
+export function buildModuleCoverageNote(fileCount: number, totalBytes: number): string {
+  const files = fileCount === 1 ? "1 file" : `${fileCount} files`;
+  const kiloChars = Math.round(totalBytes / 1000);
+  return `> Coverage note: this module's source (${files}, ~${kiloChars}k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.`;
+}
+
+/** Sums the on-disk sizes of `module.paths`; unreadable paths contribute nothing. */
+async function sumModuleSourceBytes(absRoot: string, module: Module): Promise<number> {
+  let total = 0;
+  for (const path of module.paths) {
+    try {
+      total += (await nodeFs.stat(nodePath.join(absRoot, path))).size;
+    } catch {
+      // Unreadable path: contributes nothing to the source budget.
+    }
+  }
+  return total;
+}
 
 /**
  * Deterministic coverage check: the sum of the on-disk sizes of
@@ -1200,16 +1225,7 @@ export async function moduleSourceExceedsBudget(
   module: Module,
   charBudget: number,
 ): Promise<boolean> {
-  let total = 0;
-  for (const path of module.paths) {
-    try {
-      total += (await nodeFs.stat(nodePath.join(absRoot, path))).size;
-    } catch {
-      // Unreadable path: contributes nothing to the source budget.
-    }
-    if (total > charBudget) return true;
-  }
-  return false;
+  return (await sumModuleSourceBytes(absRoot, module)) > charBudget;
 }
 
 function commonDirectory(paths: string[]): string[] {

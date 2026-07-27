@@ -838,7 +838,12 @@ not the model's: prompts forbid narrating what an excerpt does or does
 not contain, and when a module's source exceeds the stage-4 fair-share
 budget (computed from file sizes against the 60,000-char default — a
 custom `contextCharBudget` does not currently retarget the note), the
-Navigate block gains one fixed coverage-note line.
+Navigate block gains one coverage-note line parametrized per module
+(`<N> file(s), ~<X>k chars`) so no two modules share the same text. Page
+prompts also carry an inventory-authority rule: the closed key list and
+symbol/file inventory are authoritative for inventory facts (counts, file
+lists, what exists); README or excerpt prose may be stale and must not be
+copied when the prompt's inventory disagrees.
 
 
 Stage-4 output budget defaults to `stage4MaxOutputTokens` **8192** (config

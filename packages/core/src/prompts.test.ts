@@ -19,6 +19,7 @@ import {
   FLOW_PAGE_PROMPT_RULES,
   LITERAL_SIGNATURE_PROMPT_RULE,
   EXCEPTION_BRANCH_PROMPT_RULE,
+  INVENTORY_AUTHORITY_PROMPT_RULE,
 } from "./prompts.js";
 import type { ArtifactValidationError } from "./prompts.js";
 import type { Module } from "./modules.js";
@@ -806,6 +807,12 @@ describe("prompts — Lot N page opening and factual precision", () => {
       // tool owns coverage honesty via the deterministic Navigate-block note.
       expect(prompt).toContain("never narrate what the excerpt does or does not contain");
       expect(prompt).not.toContain("does not establish exhaustive behavior");
+      // Inventory authority (round-4 defect): the prompt's own inventory —
+      // not README/excerpt prose, which may be stale — is the only source
+      // for inventory facts like "3 test files".
+      expect(prompt).toContain(INVENTORY_AUTHORITY_PROMPT_RULE);
+      expect(prompt).toContain("AUTHORITATIVE for inventory facts");
+      expect(prompt).toContain("never copy an inventory claim");
     }
   });
 
@@ -1664,6 +1671,8 @@ describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)",
     for (const prompt of [initial.system, repair.system]) {
       expect(prompt).toContain("never narrate what the excerpt does or does not contain");
       expect(prompt).not.toContain("does not establish exhaustive behavior");
+      // Inventory authority is shared with the module prompts (same constant).
+      expect(prompt).toContain(INVENTORY_AUTHORITY_PROMPT_RULE);
     }
   });
 
@@ -2071,6 +2080,8 @@ describe("prompts — rationale evidence block (Etapa 2b)", () => {
     const initial = buildTopicPrompt(sampleTopic, "digest", "sym", "source", "en");
     expect(initial.system).toContain("never narrate what the excerpt does or does not contain");
     expect(initial.system).not.toContain("does not establish exhaustive behavior");
+    // Inventory authority is shared with the module prompts (same constant).
+    expect(initial.system).toContain(INVENTORY_AUTHORITY_PROMPT_RULE);
   });
 
   it("neutralizes lw:* control markers inside rationale text (never copyable anchor syntax)", () => {

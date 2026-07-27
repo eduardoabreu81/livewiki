@@ -7,6 +7,7 @@ import { generateModulesGraph, moduleSlug } from "./diagrams.js";
 import type { Module } from "./modules.js";
 import {
   buildDisplayTitleFallbacks,
+  buildModuleCoverageNote,
   generateAuxiliaryIndex,
   generateFlowsIndex,
   generateQuickstart,
@@ -14,7 +15,6 @@ import {
   loadFlowPresentations,
   loadModuleDigests,
   loadModulePresentations,
-  MODULE_COVERAGE_NOTE,
   moduleSourceExceedsBudget,
   selectRelatedModules,
   syncAuxiliaryIndexHub,
@@ -745,7 +745,7 @@ describe("deterministic navigation", () => {
     expect(tasks).toContain("### [Title worker](worker.md)");
   });
 
-  it("appends the fixed coverage note exactly when the module source exceeds the budget", async () => {
+  it("appends the parametrized coverage note exactly when the module source exceeds the budget", async () => {
     const bigModules: Module[] = [
       { id: "big", paths: ["src/big.ts"], symbolCount: 1 },
       { id: "small", paths: ["src/small.ts"], symbolCount: 1 },
@@ -773,10 +773,13 @@ describe("deterministic navigation", () => {
     const changed = await updateModuleNavigateBlocks(opts);
     expect(changed).toEqual(["livewiki/big.md", "livewiki/small.md"]);
     const big = await safeIo.readText(repoRoot, "livewiki/big.md");
-    expect(big).toContain(MODULE_COVERAGE_NOTE);
+    // The note carries the module's own inventory: 1 file (singular), ~2k chars.
+    const expectedNote = buildModuleCoverageNote(1, 2048);
+    expect(expectedNote).toContain("(1 file, ~2k chars)");
+    expect(big).toContain(expectedNote);
     expect(big.match(/Coverage note/g)).toHaveLength(1);
-    expect(big.indexOf("## Navigate")).toBeLessThan(big.indexOf(MODULE_COVERAGE_NOTE));
-    expect(big.indexOf(MODULE_COVERAGE_NOTE)).toBeLessThan(big.indexOf("<!-- livewiki:navigate:end -->"));
+    expect(big.indexOf("## Navigate")).toBeLessThan(big.indexOf(expectedNote));
+    expect(big.indexOf(expectedNote)).toBeLessThan(big.indexOf("<!-- livewiki:navigate:end -->"));
     const small = await safeIo.readText(repoRoot, "livewiki/small.md");
     expect(small).not.toContain("Coverage note");
 
@@ -785,6 +788,56 @@ describe("deterministic navigation", () => {
     // A larger budget removes the note on the next regen.
     await updateModuleNavigateBlocks({ ...opts, charBudget: 1_000_000 });
     expect(await safeIo.readText(repoRoot, "livewiki/big.md")).not.toContain("Coverage note");
+  });
+
+  it("parametrizes the coverage note so no two over-budget modules share the same text", async () => {
+    // (a) Unit: different file counts and sizes produce different note texts,
+    // with singular/plural handled and sizes rounded to whole k.
+    expect(buildModuleCoverageNote(1, 2048)).not.toBe(buildModuleCoverageNote(3, 61_250));
+    expect(buildModuleCoverageNote(3, 61_250)).toContain("(3 files, ~61k chars)");
+    expect(buildModuleCoverageNote(1, 61_250)).toContain("(1 file, ~61k chars)");
+
+    // (b) The exact property the duplicate-paragraph audit measures: a
+    // multi-module run yields NO two pages with an identical coverage-note
+    // line.
+    const overModules: Module[] = [
+      { id: "mod-a", paths: ["src/a.ts"], symbolCount: 1 },
+      { id: "mod-b", paths: ["src/b1.ts", "src/b2.ts"], symbolCount: 2 },
+      { id: "mod-c", paths: ["src/c.ts"], symbolCount: 1 },
+    ];
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src/a.ts"), "x".repeat(1900));
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src/b1.ts"), "x".repeat(1200));
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src/b2.ts"), "x".repeat(1300));
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src/c.ts"), "x".repeat(2600));
+    for (const module of overModules) {
+      await safeIo.writeText(repoRoot, `livewiki/${module.id}.md`, `---\ntitle: ${module.id}\nowner: generated\n---\n# ${module.id}\n`);
+    }
+    const presentations = await loadModulePresentations(repoRoot, overModules);
+    const changed = await updateModuleNavigateBlocks({
+      repoRoot,
+      modules: overModules,
+      ordered: overModules,
+      edges: [],
+      presentations,
+      charBudget: 1024,
+    });
+    expect(changed).toHaveLength(3);
+    const notes: string[] = [];
+    for (const module of overModules) {
+      const page = await safeIo.readText(repoRoot, `livewiki/${module.id}.md`);
+      const note = page.split("\n").find((line) => line.includes("Coverage note"));
+      expect(note, `${module.id} must carry a coverage note`).toBeDefined();
+      notes.push(note!);
+    }
+    expect(new Set(notes).size).toBe(notes.length);
+    // Sizes picked so the rounded ~k values differ: 1900 → ~2k, 2500 → ~3k
+    // (rounds half-up), 2600 → ~3k; a and c share the file count but differ
+    // in size, a and b share neither.
+    expect(notes[0]).toContain("(1 file, ~2k chars)");
+    expect(notes[1]).toContain("(2 files, ~3k chars)");
+    expect(notes[2]).toContain("(1 file, ~3k chars)");
+    expect(notes[0]).not.toBe(notes[2] as string);
   });
 
   it("loads flow presentations sorted by slug and degrades honestly on missing/unparseable frontmatter", async () => {
