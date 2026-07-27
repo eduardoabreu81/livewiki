@@ -105,7 +105,7 @@ export const LITERAL_SIGNATURE_PROMPT_RULE =
   `- When a section asserts behavior of a named function or method and the symbols table supplies a non-empty signature, copy that signature byte-for-byte from the symbols table into inline code or a fenced code block in the same section before the behavioral explanation. Do not reconstruct, normalize, shorten, or "improve" it. One literal signature covers subsequent claims about that symbol within the section. If the table has no signature, do not invent one; limit the prose to facts visible in the supplied source and identify the symbol by its exact closed-list key.`;
 
 export const EXCEPTION_BRANCH_PROMPT_RULE =
-  `- When the supplied source visibly contains a material \`throw\`, \`catch\`, fallback, rollback, early return, or fail-open/fail-closed branch for the documented symbol, describe that branch or explicitly scope the prose to the normal path. Never use "always", "guarantees", "mandatory", or equivalent absolute language while omitting a visible exception. If the relevant source is truncated, say that the excerpt does not establish exhaustive behavior.`;
+  `- When the supplied source visibly contains a material \`throw\`, \`catch\`, fallback, rollback, early return, or fail-open/fail-closed branch for the documented symbol, describe that branch or explicitly scope the prose to the normal path. Never use "always", "guarantees", "mandatory", or equivalent absolute language while omitting a visible exception. Document only what the visible evidence establishes; never narrate what the excerpt does or does not contain.`;
 
 /**
  * Neutralize livewiki control-marker syntax (`<!-- lw:anchors ... -->`,

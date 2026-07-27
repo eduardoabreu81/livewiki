@@ -14,6 +14,8 @@ import {
   loadFlowPresentations,
   loadModuleDigests,
   loadModulePresentations,
+  MODULE_COVERAGE_NOTE,
+  moduleSourceExceedsBudget,
   selectRelatedModules,
   syncAuxiliaryIndexHub,
   syncFlowsIndexHub,
@@ -567,9 +569,11 @@ describe("deterministic navigation", () => {
     const mixed = await safeIo.readText(repoRoot, "livewiki/core-src-01.md");
     expect(changed).toEqual(["livewiki/core-src-01.md", "livewiki/core-src-02.md"]);
     expect(mixed).toContain(manual);
-    expect(mixed).toContain("[Quickstart](quickstart.md)");
-    expect(mixed).toContain("[Tasks](tasks.md)");
-    expect(mixed).toContain("[Architecture](architecture/overview.md)");
+    // C1: page-specific links only — the universal hub triple lives in the
+    // quickstart and must NOT be repeated on every module page.
+    expect(mixed).not.toContain("[Quickstart](quickstart.md)");
+    expect(mixed).not.toContain("[Tasks](tasks.md)");
+    expect(mixed).not.toContain("[Architecture](architecture/overview.md)");
     expect(mixed).not.toContain("Flow:");
     expect(mixed).toContain("[Core B](core-src-02.md) — dependency");
     expect(mixed).toContain("[CLI](cli-src.md) — dependent");
@@ -626,6 +630,161 @@ describe("deterministic navigation", () => {
 
     // The flow link is derived deterministically: a second pass changes nothing.
     expect(await updateModuleNavigateBlocks(opts)).toEqual([]);
+  });
+
+  it("keeps Flow, Topic, and dependency lines without the universal hub triple", async () => {
+    await safeIo.writeText(repoRoot, "livewiki/core-src-01.md", "---\ntitle: Core A\nowner: generated\n---\n# Core A\n");
+    await safeIo.writeText(repoRoot, "livewiki/core-src-02.md", "---\ntitle: Core B\nowner: generated\n---\n# Core B\n");
+    await safeIo.writeText(repoRoot, "livewiki/flows/a-flow.md", [
+      "---",
+      "title: Alpha flow",
+      "owner: generated",
+      "modules:",
+      "  - core-src-01",
+      "---",
+      "# Alpha flow",
+      "",
+    ].join("\n"));
+    await safeIo.writeText(repoRoot, "livewiki/topics/billing.md", [
+      "---",
+      "title: Billing concept",
+      "owner: generated",
+      "kind: topic",
+      "intent: billing",
+      "order: 1",
+      "modules:",
+      "  - core-src-01",
+      "flows: []",
+      "---",
+      "# Billing concept",
+      "",
+    ].join("\n"));
+    const presentations = await loadModulePresentations(repoRoot, modules);
+    const changed = await updateModuleNavigateBlocks({
+      repoRoot,
+      modules,
+      ordered: modules,
+      edges: [{ from: "core-src-01", to: "core-src-02" }],
+      presentations,
+    });
+    expect(changed).toEqual(["livewiki/core-src-01.md", "livewiki/core-src-02.md"]);
+    const page = await safeIo.readText(repoRoot, "livewiki/core-src-01.md");
+    expect(page).toContain("- Flow: [Alpha flow](flows/a-flow.md)");
+    expect(page).toContain("- Topic: [Billing concept](topics/billing.md)");
+    expect(page).toContain("[Core B](core-src-02.md) — dependency");
+    expect(page).not.toContain("[Quickstart](quickstart.md)");
+    expect(page).not.toContain("[Tasks](tasks.md)");
+    expect(page).not.toContain("[Architecture](architecture/overview.md)");
+  });
+
+  it("groups the tasks Implementation reference by common directory with singleton folding and title-link-only entries", () => {
+    const groupModules: Module[] = [
+      { id: "api-01", paths: ["app/api/routes.ts"], symbolCount: 1 },
+      { id: "api-02", paths: ["app/api/schema.ts"], symbolCount: 1 },
+      { id: "services-01", paths: ["app/services/bgm.py"], symbolCount: 1 },
+      { id: "services-02", paths: ["app/services/video.py"], symbolCount: 1 },
+      { id: "webui", paths: ["webui/src/main.ts"], symbolCount: 1 },
+    ];
+    const presentations = new Map(
+      groupModules.map((module) => [
+        module.id,
+        { moduleId: module.id, displayTitle: `Title ${module.id}`, pageExists: true, owner: "generated" as const },
+      ]),
+    );
+    const tasks = generateTasksPage({
+      modules: groupModules,
+      ordered: groupModules,
+      presentations,
+      flowPresentations: new Map(),
+    });
+    const reordered = generateTasksPage({
+      modules: [...groupModules].reverse(),
+      ordered: groupModules,
+      presentations,
+      flowPresentations: new Map(),
+    });
+    expect(reordered).toBe(tasks);
+
+    // One H3 per directory cluster, prioritization order of first member.
+    expect(tasks.indexOf("### App API")).toBeGreaterThan(-1);
+    expect(tasks.indexOf("### App services")).toBeGreaterThan(tasks.indexOf("### App API"));
+    // The webui singleton shares no directory prefix with any cluster: it
+    // folds into the trailing catch-all bucket instead of fragmenting.
+    expect(tasks.indexOf("### Other modules")).toBeGreaterThan(tasks.indexOf("### App services"));
+    // Entries stay title-link-only bullets (R10 dedup — no copied sentences).
+    expect(tasks).toContain("- [Title api-01](api-01.md)");
+    expect(tasks).toContain("- [Title services-02](services-02.md)");
+    expect(tasks).toContain("- [Title webui](webui.md)");
+    expect(tasks.indexOf("- [Title api-01](api-01.md)")).toBeLessThan(tasks.indexOf("- [Title api-02](api-02.md)"));
+    expect(tasks).not.toContain("### [Title");
+  });
+
+  it("folds a singleton into the prefixed sibling cluster and keeps one flat list when one cluster remains", () => {
+    const groupModules: Module[] = [
+      { id: "api-01", paths: ["app/api/routes.ts"], symbolCount: 1 },
+      { id: "api-02", paths: ["app/api/schema.ts"], symbolCount: 1 },
+      { id: "worker", paths: ["app/worker/jobs.py"], symbolCount: 1 },
+    ];
+    const presentations = new Map(
+      groupModules.map((module) => [
+        module.id,
+        { moduleId: module.id, displayTitle: `Title ${module.id}`, pageExists: true, owner: "generated" as const },
+      ]),
+    );
+    const tasks = generateTasksPage({
+      modules: groupModules,
+      ordered: groupModules,
+      presentations,
+      flowPresentations: new Map(),
+    });
+    // Only one multi-member cluster exists, so the prefixed singleton folds
+    // into it and the single effective cluster renders flat (no umbrella H3).
+    expect(tasks).not.toContain("### App API");
+    expect(tasks).not.toContain("### Other modules");
+    expect(tasks).toContain("### [Title api-01](api-01.md)");
+    expect(tasks).toContain("### [Title worker](worker.md)");
+  });
+
+  it("appends the fixed coverage note exactly when the module source exceeds the budget", async () => {
+    const bigModules: Module[] = [
+      { id: "big", paths: ["src/big.ts"], symbolCount: 1 },
+      { id: "small", paths: ["src/small.ts"], symbolCount: 1 },
+    ];
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src/big.ts"), "x".repeat(2048));
+    await nodeFs.writeFile(nodePath.join(repoRoot, "src/small.ts"), "export const s = 1;\n");
+    await safeIo.writeText(repoRoot, "livewiki/big.md", "---\ntitle: Big\nowner: generated\n---\n# Big\n");
+    await safeIo.writeText(repoRoot, "livewiki/small.md", "---\ntitle: Small\nowner: generated\n---\n# Small\n");
+    const presentations = await loadModulePresentations(repoRoot, bigModules);
+    const opts = {
+      repoRoot,
+      modules: bigModules,
+      ordered: bigModules,
+      edges: [] as Array<{ from: string; to: string }>,
+      presentations,
+      charBudget: 1024,
+    };
+
+    expect(await moduleSourceExceedsBudget(repoRoot, bigModules[0]!, 1024)).toBe(true);
+    expect(await moduleSourceExceedsBudget(repoRoot, bigModules[1]!, 1024)).toBe(false);
+    // A missing file contributes nothing instead of failing the check.
+    expect(await moduleSourceExceedsBudget(repoRoot, { id: "ghost", paths: ["src/ghost.ts"], symbolCount: 0 }, 1)).toBe(false);
+
+    const changed = await updateModuleNavigateBlocks(opts);
+    expect(changed).toEqual(["livewiki/big.md", "livewiki/small.md"]);
+    const big = await safeIo.readText(repoRoot, "livewiki/big.md");
+    expect(big).toContain(MODULE_COVERAGE_NOTE);
+    expect(big.match(/Coverage note/g)).toHaveLength(1);
+    expect(big.indexOf("## Navigate")).toBeLessThan(big.indexOf(MODULE_COVERAGE_NOTE));
+    expect(big.indexOf(MODULE_COVERAGE_NOTE)).toBeLessThan(big.indexOf("<!-- livewiki:navigate:end -->"));
+    const small = await safeIo.readText(repoRoot, "livewiki/small.md");
+    expect(small).not.toContain("Coverage note");
+
+    // Idempotent: the note is part of the regenerated deterministic block.
+    expect(await updateModuleNavigateBlocks(opts)).toEqual([]);
+    // A larger budget removes the note on the next regen.
+    await updateModuleNavigateBlocks({ ...opts, charBudget: 1_000_000 });
+    expect(await safeIo.readText(repoRoot, "livewiki/big.md")).not.toContain("Coverage note");
   });
 
   it("loads flow presentations sorted by slug and degrades honestly on missing/unparseable frontmatter", async () => {

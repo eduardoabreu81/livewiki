@@ -827,6 +827,20 @@ relaxed by either.
   from disk. Degraded tasks are `done`: a degraded-only run is `completed`
   (exit 0). Config: `relaxedRound` (boolean, default `true`).
 
+**Navigation and clarity contract (post-A/B round 3).** Module-page
+`## Navigate` blocks contain only page-specific links (flow, topics,
+dependency lines) — the universal quickstart/tasks/architecture triple
+lives in the quickstart alone (identical footers across pages were a
+duplicate-boilerplate defect). `tasks.md` groups implementation-reference
+entries under deterministic directory/role cluster headings; entries stay
+title-link-only (no copied sentences). Coverage honesty is the tool's,
+not the model's: prompts forbid narrating what an excerpt does or does
+not contain, and when a module's source exceeds the stage-4 fair-share
+budget (computed from file sizes against the 60,000-char default — a
+custom `contextCharBudget` does not currently retarget the note), the
+Navigate block gains one fixed coverage-note line.
+
+
 Stage-4 output budget defaults to `stage4MaxOutputTokens` **8192** (config
 override allowed). Provider presets carry market defaults; **where an API can
 disable thinking/reasoning for documentation, livewiki disables it by default**

@@ -584,21 +584,39 @@ export function generateTasksPage(opts: {
     .sort((a, b) => (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER) || compareModules(a, b));
   if (productModules.length > 0) {
     lines.push("## Implementation reference", "");
-    for (const module of productModules) {
-      const presentation = opts.presentations.get(module.id)!;
-      if (!presentation.pageExists) {
+    const groups = groupTasksModules(productModules);
+    if (groups.length <= 1) {
+      // Flat contract (one effective cluster): one H3 per entry, exactly as
+      // before grouping existed — no artificial umbrella heading.
+      for (const module of productModules) {
+        const presentation = opts.presentations.get(module.id)!;
+        if (!presentation.pageExists) {
+          lines.push(
+            `### ${presentation.displayTitle}`,
+            "",
+            `Page unavailable: \`livewiki/${module.id}.md\` has not been generated yet.`,
+            "",
+          );
+          continue;
+        }
         lines.push(
-          `### ${presentation.displayTitle}`,
-          "",
-          `Page unavailable: \`livewiki/${module.id}.md\` has not been generated yet.`,
+          `### [${presentation.displayTitle}](${module.id}.md)`,
           "",
         );
-        continue;
       }
-      lines.push(
-        `### [${presentation.displayTitle}](${module.id}.md)`,
-        "",
-      );
+    } else {
+      // Grouped contract: one H3 per directory cluster, entries stay
+      // title-link-only bullets (R10 dedup — no copied sentences).
+      for (const group of groups) {
+        lines.push(`### ${group.heading}`, "");
+        for (const module of group.members) {
+          const presentation = opts.presentations.get(module.id)!;
+          lines.push(presentation.pageExists
+            ? `- [${presentation.displayTitle}](${module.id}.md)`
+            : `- ${presentation.displayTitle} — page unavailable: \`livewiki/${module.id}.md\` has not been generated yet.`);
+        }
+        lines.push("");
+      }
     }
   }
 
@@ -611,6 +629,95 @@ export function generateTasksPage(opts: {
     );
   }
   return lines.join("\n");
+}
+
+interface TasksModuleGroup {
+  heading: string;
+  segments: string[];
+  members: Module[];
+}
+
+/** Heading for the trailing bucket that receives singletons with no prefixed sibling. */
+const TASKS_OTHER_GROUP_HEADING = "Other modules";
+
+/**
+ * Deterministic concern grouping for the tasks page `Implementation
+ * reference` section. Rule (fixed, documented here — do not drift):
+ *
+ * 1. Each module's cluster key is its common directory
+ *    (`commonDirectory(module.paths)`, compared case-insensitively).
+ * 2. Cluster order is the prioritization order of each cluster's first
+ *    member; members keep their prioritization order inside the cluster.
+ * 3. Singleton folding: a one-member cluster never gets its own heading.
+ *    It folds into the multi-member cluster sharing the longest common
+ *    directory prefix (at least one segment; ties broken by cluster order).
+ *    With no prefixed sibling it lands in one trailing "Other modules"
+ *    bucket (members in prioritization order).
+ * 4. Headings are `humanizeSegments` of the cluster directory ("Repository
+ *    root" when modules sit at the root); the catch-all bucket is always
+ *    "Other modules". When folding leaves a single effective cluster the
+ *    caller renders the flat list without any group heading.
+ */
+function groupTasksModules(productModules: Module[]): TasksModuleGroup[] {
+  const position = new Map(productModules.map((module, index) => [module.id, index]));
+  const groups: TasksModuleGroup[] = [];
+  const byKey = new Map<string, TasksModuleGroup>();
+  for (const module of productModules) {
+    const segments = commonDirectory(module.paths);
+    const key = segments.join("/").toLowerCase();
+    let group = byKey.get(key);
+    if (group === undefined) {
+      group = {
+        heading: segments.length > 0 ? humanizeSegments(segments) : "Repository root",
+        segments,
+        members: [],
+      };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    group.members.push(module);
+  }
+
+  const sharedPrefixLength = (a: string[], b: string[]): number => {
+    let length = 0;
+    while (
+      length < a.length && length < b.length &&
+      a[length]!.toLowerCase() === b[length]!.toLowerCase()
+    ) length++;
+    return length;
+  };
+
+  // Two passes so a singleton sees every multi-member cluster, regardless of
+  // relative prioritization order (keeps folding input-order independent).
+  const multi = groups.filter((group) => group.members.length > 1);
+  const folded: TasksModuleGroup[] = [...multi];
+  let other: TasksModuleGroup | null = null;
+  for (const group of groups) {
+    if (group.members.length > 1) continue;
+    let target: TasksModuleGroup | null = null;
+    let bestPrefix = 0;
+    for (const candidate of multi) {
+      const prefix = sharedPrefixLength(group.segments, candidate.segments);
+      if (prefix > bestPrefix) {
+        bestPrefix = prefix;
+        target = candidate;
+      }
+    }
+    if (target !== null) {
+      target.members.push(...group.members);
+    } else {
+      if (other === null) {
+        other = { heading: TASKS_OTHER_GROUP_HEADING, segments: [], members: [] };
+      }
+      other.members.push(...group.members);
+    }
+  }
+  if (other !== null) folded.push(other);
+  // Folded members join mid-list; restore prioritization order inside each cluster.
+  for (const group of folded) {
+    group.members.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
+  }
+  return folded;
 }
 
 /**
@@ -910,6 +1017,8 @@ export async function updateModuleNavigateBlocks(opts: {
   presentations: Map<string, ModulePresentation>;
   topicPresentations?: Map<string, TopicPresentation>;
   pathRoleConfig?: PathRoleConfig;
+  /** Stage-4 source budget for the coverage note; mirrors the batch default (60_000). */
+  charBudget?: number;
 }): Promise<string[]> {
   const changed: string[] = [];
   // Flow participation is loaded once: a module links at most one flow page
@@ -955,6 +1064,7 @@ export async function updateModuleNavigateBlocks(opts: {
       opts.presentations,
       flowByModule.get(module.id) ?? null,
       topicsByModule.get(module.id) ?? [],
+      await moduleSourceExceedsBudget(opts.repoRoot, module, opts.charBudget ?? 60_000),
     );
     const existingStart = source.indexOf(NAV_START);
     const existingEnd = source.indexOf(NAV_END);
@@ -1040,14 +1150,15 @@ function buildNavigateBlock(
   presentations: Map<string, ModulePresentation>,
   flow: FlowPresentation | null,
   topics: TopicPresentation[],
+  sourceExceedsBudget: boolean,
 ): string {
+  // Page-specific links only. The universal Quickstart/Tasks/Architecture
+  // routes already live in the quickstart; repeating them on every module
+  // page was the duplicate-boilerplate source flagged by the corpus audit.
   const lines = [
     NAV_START,
     "## Navigate",
     "",
-    "- [Quickstart](quickstart.md)",
-    "- [Tasks](tasks.md)",
-    "- [Architecture](architecture/overview.md)",
   ];
   if (flow !== null) {
     lines.push(`- Flow: [${flow.title ?? flow.slug}](flows/${flow.slug}.md)`);
@@ -1062,8 +1173,43 @@ function buildNavigateBlock(
       : item.direction;
     lines.push(`- [${title}](${item.moduleId}.md) — ${label}`);
   }
+  if (sourceExceedsBudget) {
+    lines.push("", MODULE_COVERAGE_NOTE);
+  }
   lines.push(NAV_END);
   return lines.join("\n");
+}
+
+/**
+ * Fixed coverage note appended to the Navigate block when the module source
+ * exceeded the stage-4 prompt budget. Coverage honesty is the tool's job —
+ * one uniform deterministic line, never model prose.
+ */
+export const MODULE_COVERAGE_NOTE =
+  "> Coverage note: the module source exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.";
+
+/**
+ * Deterministic coverage check: the sum of the on-disk sizes of
+ * `module.paths` exceeds `charBudget` (the stage-4 fair-share source
+ * budget). Unreadable paths contribute nothing, mirroring
+ * `buildFairTruncatedSource`'s skip-on-error behavior. Pure observation of
+ * the repository — no batch-task plumbing required.
+ */
+export async function moduleSourceExceedsBudget(
+  absRoot: string,
+  module: Module,
+  charBudget: number,
+): Promise<boolean> {
+  let total = 0;
+  for (const path of module.paths) {
+    try {
+      total += (await nodeFs.stat(nodePath.join(absRoot, path))).size;
+    } catch {
+      // Unreadable path: contributes nothing to the source budget.
+    }
+    if (total > charBudget) return true;
+  }
+  return false;
 }
 
 function commonDirectory(paths: string[]): string[] {

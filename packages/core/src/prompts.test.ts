@@ -802,7 +802,10 @@ describe("prompts — Lot N page opening and factual precision", () => {
       expect(prompt).toContain("If the table has no signature, do not invent one");
       expect(prompt).toContain(EXCEPTION_BRANCH_PROMPT_RULE);
       expect(prompt).toContain("explicitly scope the prose to the normal path");
-      expect(prompt).toContain("excerpt does not establish exhaustive behavior");
+      // Anti-meta rule (C3): the model never narrates excerpt coverage; the
+      // tool owns coverage honesty via the deterministic Navigate-block note.
+      expect(prompt).toContain("never narrate what the excerpt does or does not contain");
+      expect(prompt).not.toContain("does not establish exhaustive behavior");
     }
   });
 
@@ -1655,6 +1658,15 @@ describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)",
     expect(rules).toContain("entry/boundary/sink key groups");
   });
 
+  it("carries the anti-meta rule and no excerpt hedge in both stage-5 prompts", () => {
+    const initial = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
+    const repair = stage5Repair([]);
+    for (const prompt of [initial.system, repair.system]) {
+      expect(prompt).toContain("never narrate what the excerpt does or does not contain");
+      expect(prompt).not.toContain("does not establish exhaustive behavior");
+    }
+  });
+
   it("buildStage5Prompt renders the semantic key groups when supplied", () => {
     const r = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source", "en", undefined, flowGroups);
     expect(r.user).toContain("# Semantic key groups");
@@ -2053,6 +2065,12 @@ describe("prompts — rationale evidence block (Etapa 2b)", () => {
     );
     expect(repair.user).toContain("# Rationale evidence");
     expect(repair.system).toMatch(/NEVER a source of anchor keys/);
+  });
+
+  it("topic prompts carry the anti-meta rule and no excerpt hedge", () => {
+    const initial = buildTopicPrompt(sampleTopic, "digest", "sym", "source", "en");
+    expect(initial.system).toContain("never narrate what the excerpt does or does not contain");
+    expect(initial.system).not.toContain("does not establish exhaustive behavior");
   });
 
   it("neutralizes lw:* control markers inside rationale text (never copyable anchor syntax)", () => {

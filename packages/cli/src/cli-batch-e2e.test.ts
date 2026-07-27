@@ -283,9 +283,13 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       for (const moduleId of ["auth", "utils"]) {
         const page = await nodeFs.readFile(nodePath.join(repoRoot, `livewiki/${moduleId}.md`), "utf8");
         expect(page).toContain("## Navigate");
-        expect(page).toContain("[Quickstart](quickstart.md)");
-        expect(page).toContain("[Tasks](tasks.md)");
-        expect(page).toContain("[Architecture](architecture/overview.md)");
+        expect(page).toContain("<!-- livewiki:navigate:start -->");
+        expect(page).toContain("<!-- livewiki:navigate:end -->");
+        // C1: page-specific links only — the universal hub triple lives in
+        // the quickstart and must not be repeated on module pages.
+        expect(page).not.toContain("[Quickstart](quickstart.md)");
+        expect(page).not.toContain("[Tasks](tasks.md)");
+        expect(page).not.toContain("[Architecture](architecture/overview.md)");
       }
 
       // Status report

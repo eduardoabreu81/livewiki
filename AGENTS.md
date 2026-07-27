@@ -419,6 +419,11 @@ for closing the lot.
   concern-grouped candidates (deployment, testing) in
   `packages/core/src/topics.ts`; threading in `batch.ts`; config
   `concernTopics`.
+- **Nav+clarity (post-A/B round 3)** → `buildNavigateBlock` (page-
+  specific links only), `generateTasksPage` + `groupTasksModules`
+  (deterministic cluster headings), `moduleSourceExceedsBudget` +
+  `MODULE_COVERAGE_NOTE` in `navigation.ts`; anti-meta prompt rule in
+  `prompts.ts` (`EXCEPTION_BRANCH_PROMPT_RULE`, shared by module/flow/topic).
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -951,6 +956,17 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   family). Run #8: 41/41 exit 0, 897,403 tokens (~6.5% of OpenWiki’s
   13.9M), 46 pages verify 0 issues. Evidence LOCAL-ONLY under
   `/c/tmp/livewiki-e2e/eval-mptp*/` and `docs/tasks/2026-07-25-etapa-3-e2e/`.
+- **Nav+clarity lot (2026-07-26, implemented, uncommitted)**: answers the
+  round-3 residual gaps. Navigate footer is page-specific only (the
+  universal quickstart/tasks/architecture triple — the audit's 3 duplicate-
+  boilerplate groups — is gone); tasks.md groups implementation-reference
+  entries under deterministic directory/role cluster headings (entries still
+  title-link-only, R10 dedup intact); the "excerpt does not establish"
+  hedge leaves the model's prose (anti-meta prompt rule) and coverage
+  honesty becomes ONE deterministic note line appended by the tool on
+  over-budget modules (60k default threshold). Gate: core 1371 / CLI 93 /
+  MCP 31, zero paid calls. Measurement: run #9 + re-eval round 4, separate
+  authorization.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series
