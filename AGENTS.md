@@ -937,6 +937,20 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   `topic_source_link` validation code (topic pages: source symbols as
   inline-code closed-list keys; Markdown links only for wiki artifacts),
   repair-contract directive included. Gate: core 1365 / CLI 93 / MCP 31.
+- **A/B measurement cycle closed (2026-07-26)**: blind dual-eval rounds
+  on the MPTP clone (claude + codex, masked corpora, frozen OpenWiki
+  control stable across rounds). LiveWiki weighted #6 6.50/6.60 → #7
+  6.35/5.90 → #8 **7.55/7.40** vs OpenWiki 7.75/8.65 — gap Δ1.00/Δ1.60
+  down to **Δ0.20/Δ1.25** (codex scored the unchanged control +0.45 in
+  round 3, so part of the residual is evaluator noise). All round-2 gaps
+  closed and evaluator-credited: README purpose (2/2), Docker coverage
+  (0/2 → 2/2, "best-organized task"), 18 unresolvable citations (0;
+  564/564 links resolve). Biggest mover: coverage 6→8/9. Remaining named
+  gaps: navigation (5-6 vs 8-9; tasks.md link farm), 3 Navigate-boilerplate
+  duplicate groups, codex’s 3 false claims (voice/subtitle internals
+  family). Run #8: 41/41 exit 0, 897,403 tokens (~6.5% of OpenWiki’s
+  13.9M), 46 pages verify 0 issues. Evidence LOCAL-ONLY under
+  `/c/tmp/livewiki-e2e/eval-mptp*/` and `docs/tasks/2026-07-25-etapa-3-e2e/`.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series
