@@ -121,6 +121,10 @@
     "./risk": {
       "types": "./dist/risk.d.ts",
       "import": "./dist/risk.js"
+    },
+    "./orientation": {
+      "types": "./dist/orientation.d.ts",
+      "import": "./dist/orientation.js"
     }
   },
   "files": [

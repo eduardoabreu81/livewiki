@@ -12,6 +12,7 @@ import {
   generateQuickstart,
   generateTasksPage,
   loadFlowPresentations,
+  loadModuleDigests,
   loadModulePresentations,
   selectRelatedModules,
   syncAuxiliaryIndexHub,
@@ -110,6 +111,247 @@ describe("deterministic navigation", () => {
     ]);
     expect(withFlows.split("\n").filter((line) => line.trim() !== "").length).toBeLessThanOrEqual(100);
     expect(withFlows.trim().split(/\s+/).length).toBeLessThanOrEqual(700);
+  });
+
+  it("places the product-orientation block first and keeps tool-meta sections after the product sections", () => {
+    const quickstart = generateQuickstart({
+      totalFiles: 8,
+      totalSymbols: 21,
+      moduleCount: 4,
+      flowPresentations: new Map(),
+      hasAuxiliary: false,
+      orientation: {
+        purpose: "MoneyPrinterTurbo-Plus turns a short topic brief into a fully rendered short video.",
+        surfaces: ["Python entry point: `main.py`", "Container build file: `Dockerfile`"],
+        readmePath: "README.md",
+        fastPathSection: "Quick Start",
+      },
+    });
+    const headings = [...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+    expect(headings).toEqual([
+      "What this repository is",
+      "Work by intent",
+      "Document a repo",
+      "Query the wiki from an agent",
+      "Pay documentation debt",
+      "Repository facts",
+    ]);
+    // The block is the FIRST section after the H1.
+    expect(quickstart.indexOf("## What this repository is")).toBeLessThan(
+      quickstart.indexOf("## Work by intent"),
+    );
+    expect(quickstart).toContain(
+      "MoneyPrinterTurbo-Plus turns a short topic brief into a fully rendered short video.",
+    );
+    expect(quickstart).toContain("*(Purpose excerpt from the repository README: `README.md`.)*");
+    expect(quickstart).toContain("- Python entry point: `main.py`");
+    expect(quickstart).toContain("- Container build file: `Dockerfile`");
+    expect(quickstart).toContain('**Fastest local path:** see the "Quick Start" section of `README.md`.');
+    // Tool-meta sections stay after every product section.
+    expect(quickstart.indexOf("## Document a repo")).toBeGreaterThan(quickstart.indexOf("## Work by intent"));
+    expect(quickstart.split("\n").filter((line) => line.trim() !== "").length).toBeLessThanOrEqual(100);
+    expect(quickstart.trim().split(/\s+/).length).toBeLessThanOrEqual(700);
+  });
+
+  it("degrades the orientation block to surfaces only when no README exists", () => {
+    const quickstart = generateQuickstart({
+      totalFiles: 8,
+      totalSymbols: 21,
+      moduleCount: 4,
+      flowPresentations: new Map(),
+      hasAuxiliary: false,
+      orientation: {
+        purpose: null,
+        surfaces: ["Go module definition: `go.mod`"],
+        readmePath: null,
+        fastPathSection: null,
+      },
+    });
+    expect(quickstart).toContain("## What this repository is");
+    expect(quickstart).toContain("- Go module definition: `go.mod`");
+    expect(quickstart).not.toContain("Purpose excerpt");
+    expect(quickstart).not.toContain("Fastest local path");
+  });
+
+  it("omits the orientation block entirely without orientation evidence", () => {
+    const quickstart = generateQuickstart({
+      totalFiles: 8,
+      totalSymbols: 21,
+      moduleCount: 4,
+      flowPresentations: new Map(),
+      hasAuxiliary: false,
+      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null },
+    });
+    expect(quickstart).not.toContain("What this repository is");
+    expect(quickstart).not.toContain("What you'll find in this wiki");
+    expect([...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1])).toEqual([
+      "Work by intent",
+      "Document a repo",
+      "Query the wiki from an agent",
+      "Pay documentation debt",
+      "Repository facts",
+    ]);
+  });
+
+  it("renders the reader digest after the orientation block with responsibility sentences and module links", () => {
+    const quickstart = generateQuickstart({
+      totalFiles: 8,
+      totalSymbols: 21,
+      moduleCount: 4,
+      flowPresentations: new Map(),
+      hasAuxiliary: false,
+      orientation: {
+        purpose: "A pipeline that renders short videos from topic briefs.",
+        surfaces: [],
+        readmePath: "README.md",
+        fastPathSection: null,
+      },
+      moduleDigests: [
+        { id: "api", title: "API handlers", responsibility: "Serves the HTTP endpoints of the product." },
+        { id: "engine", title: "Render engine", responsibility: null },
+      ],
+    });
+    const headings = [...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+    expect(headings).toEqual([
+      "What this repository is",
+      "What you'll find in this wiki",
+      "Work by intent",
+      "Document a repo",
+      "Query the wiki from an agent",
+      "Pay documentation debt",
+      "Repository facts",
+    ]);
+    expect(quickstart).toContain(
+      "- **[API handlers](api.md)** — Serves the HTTP endpoints of the product.",
+    );
+    // A module without a parseable opening contributes a title-link only.
+    expect(quickstart).toContain("- **[Render engine](engine.md)**\n");
+    expect(quickstart).not.toContain("Render engine](engine.md)** —");
+    // With a README purpose, the fallback synthesis is not used.
+    expect(quickstart).toContain("A pipeline that renders short videos from topic briefs.");
+    expect(quickstart).not.toContain("Synthesized from the generated module pages");
+    expect(quickstart.split("\n").filter((line) => line.trim() !== "").length).toBeLessThanOrEqual(100);
+    expect(quickstart.trim().split(/\s+/).length).toBeLessThanOrEqual(700);
+  });
+
+  it("caps the reader digest at six modules", () => {
+    const moduleDigests = Array.from({ length: 8 }, (_, index) => ({
+      id: `mod-${index}`,
+      title: `Module ${index}`,
+      responsibility: `Responsibility ${index}.`,
+    }));
+    const quickstart = generateQuickstart({
+      totalFiles: 8,
+      totalSymbols: 21,
+      moduleCount: 8,
+      flowPresentations: new Map(),
+      hasAuxiliary: false,
+      moduleDigests,
+    });
+    expect(quickstart).toContain("## What you'll find in this wiki");
+    expect(quickstart).toContain("[Module 5](mod-5.md)");
+    expect(quickstart).not.toContain("[Module 6](mod-6.md)");
+    expect(quickstart).not.toContain("[Module 7](mod-7.md)");
+  });
+
+  it("synthesizes the purpose from module digests when the README yields none, with provenance", () => {
+    const quickstart = generateQuickstart({
+      totalFiles: 8,
+      totalSymbols: 21,
+      moduleCount: 4,
+      flowPresentations: new Map(),
+      hasAuxiliary: false,
+      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null },
+      moduleDigests: [
+        { id: "api", title: "API handlers", responsibility: "serves HTTP endpoints" },
+        { id: "engine", title: "Render engine", responsibility: "renders the final video" },
+        { id: "cli", title: "Command line", responsibility: "drives the pipeline" },
+        { id: "extra", title: "Extra tooling", responsibility: "unused fourth entry" },
+      ],
+    });
+    expect(quickstart).toContain("## What this repository is");
+    expect(quickstart).toContain(
+      "This repository is organized around API handlers (serves HTTP endpoints), Render engine (renders the final video), and Command line (drives the pipeline).",
+    );
+    expect(quickstart).toContain("*(Synthesized from the generated module pages.)*");
+    expect(quickstart).not.toContain("Purpose excerpt");
+    // The synthesis uses at most three modules (the fourth still appears as
+    // a reader-digest bullet, capped separately at six).
+    expect(quickstart).not.toContain("Extra tooling (unused fourth entry)");
+  });
+
+  it("synthesizes a two-module purpose with 'and' and degrades honestly with no responsibilities", () => {
+    const two = generateQuickstart({
+      totalFiles: 8,
+      totalSymbols: 21,
+      moduleCount: 2,
+      flowPresentations: new Map(),
+      hasAuxiliary: false,
+      orientation: null,
+      moduleDigests: [
+        { id: "a", title: "Alpha", responsibility: "does alpha work" },
+        { id: "b", title: "Beta", responsibility: "does beta work" },
+      ],
+    });
+    expect(two).toContain(
+      "This repository is organized around Alpha (does alpha work) and Beta (does beta work).",
+    );
+
+    // No README and no usable responsibility: no purpose is invented, the
+    // orientation block collapses and only the reader digest remains.
+    const none = generateQuickstart({
+      totalFiles: 8,
+      totalSymbols: 21,
+      moduleCount: 2,
+      flowPresentations: new Map(),
+      hasAuxiliary: false,
+      orientation: null,
+      moduleDigests: [
+        { id: "a", title: "Alpha", responsibility: null },
+        { id: "b", title: "Beta", responsibility: null },
+      ],
+    });
+    expect(none).not.toContain("What this repository is");
+    expect(none).toContain("## What you'll find in this wiki");
+    expect(none).toContain("- **[Alpha](a.md)**\n");
+  });
+
+  it("loads module digests from accepted pages in prioritization order, skipping absent page files", async () => {
+    await safeIo.writeText(repoRoot, "livewiki/core-src-01.md", [
+      "---",
+      "title: Authentication flow",
+      "owner: generated",
+      "---",
+      "# Authentication flow",
+      "",
+      "Handles credential checks and session issuance for every request.",
+      "",
+      "## How it fits",
+      "",
+      "Sits between the router and the session store.",
+    ].join("\n"));
+    // core-src-02 exists on disk but has no opening paragraph → title-only.
+    await safeIo.writeText(repoRoot, "livewiki/core-src-02.md", [
+      "---",
+      "title: Billing",
+      "owner: generated",
+      "---",
+      "## Details",
+      "",
+      "No H1 and no opening paragraph here.",
+    ].join("\n"));
+    // cli-src has no page file at all → skipped entirely (never a broken link).
+    const ordered: Module[] = [modules[2]!, modules[0]!, modules[1]!];
+    const presentations = await loadModulePresentations(repoRoot, modules);
+    const digests = await loadModuleDigests(repoRoot, ordered, presentations);
+    expect(digests).toEqual([
+      {
+        id: "core-src-01",
+        title: "Authentication flow",
+        responsibility: "Handles credential checks and session issuance for every request.",
+      },
+      { id: "core-src-02", title: "Billing", responsibility: null },
+    ]);
   });
 
   it("assembles role-separated Tasks: compact title-and-link entries for every role, honest unavailable pages", async () => {

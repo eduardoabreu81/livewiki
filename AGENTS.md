@@ -408,6 +408,17 @@ for closing the lot.
   three `repair_exhausted` points in `batch.ts`; degraded plumbing through
   `batch-state.ts`, `status.ts` (`degraded` block, fresh disk walk), and
   `packages/cli/src/commands/batch.ts`; config `relaxedRound`.
+- **Quickstart orientation (post-A/B lot)** → README purpose/surface
+  extraction in `packages/core/src/orientation.ts`; block rendering +
+  reader digest (`## What you'll find in this wiki`, accepted-page
+  responsibility sentences via `loadModuleDigests`) + no-README synthesized
+  fallback in `navigation.ts:generateQuickstart`; call sites in `init.ts`
+  (init + batch-end regen; `extractModuleOpeningDigest` now lives in
+  `navigation.ts`, shared with `batch.ts`).
+- **Topic concept coverage (post-A/B lot)** → spoke-merge fallback +
+  concern-grouped candidates (deployment, testing) in
+  `packages/core/src/topics.ts`; threading in `batch.ts`; config
+  `concernTopics`.
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -892,6 +903,24 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   the batch report/summary and recounted fresh from disk by `status`;
   exit 0 preserved. Config keys `surgicalRepair` / `relaxedRound` (bool,
   default true). Gate: core 1319 / CLI 93 / MCP 31, zero paid calls.
+- **Post-A/B orientation + concept lot (2026-07-26, implemented,
+  uncommitted)**: answers the blind dual eval (OpenWiki 7.50/8.20 vs
+  LiveWiki 6.50/6.60; navigation gap +4 both evaluators, "corpus never
+  states the product's purpose"). D1: the quickstart opens with
+  `## What this repository is` — README purpose paragraph with provenance,
+  entry-point surfaces, fastest-path code-span pointer
+  (`orientation.ts:extractRepoOrientation`; never invents text; omitted
+  without evidence). D1.5 (same lot): batch-end quickstart gains
+  `## What you'll find in this wiki` — top-6 product modules with the
+  accepted page's responsibility sentence (missing pages omitted,
+  idempotency-safe) — and a no-README purpose fallback synthesized from
+  module openings. D2: topic concept coverage — planner spoke-merge
+  fallback (isolated product singletons merge by shared auxiliary
+  neighbors; remainder ≥2 forms one "Product overview" cluster) plus
+  deterministic concern-grouped candidates (`deployment`, `testing`) through
+  the same topic machinery, gated by `concernTopics` (bool, default true).
+  Gate: core 1352 / CLI 93 / MCP 31, zero paid calls. The blind re-eval on
+  the same harness is the scheduled measurement, pending authorization.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

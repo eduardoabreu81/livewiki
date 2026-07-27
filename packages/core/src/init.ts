@@ -68,6 +68,7 @@ import {
   generateTasksPage,
   loadFlowPresentations,
   loadModulePresentations,
+  loadModuleDigests,
   loadTopicPresentations,
   selectRelatedModules,
   syncAuxiliaryIndexHub,
@@ -80,6 +81,7 @@ import {
   type TopicsHubSyncResult,
   type ModulePresentation,
 } from "./navigation.js";
+import { extractRepoOrientation } from "./orientation.js";
 
 export interface InitOptions {
   repoRoot: string;
@@ -257,6 +259,12 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   if (auxiliaryHub.outcome === "skipped-owner") {
     skippedAuxiliaryHub = { path: auxiliaryHub.path!, owner: auxiliaryHub.owner ?? null };
   }
+  // D1.5: the reader digest is computed here too (not only at the batch-end
+  // hook). On a first init no module pages exist, so loadModuleDigests
+  // returns [] and the block is omitted; on a re-init after a batch the
+  // digest is regenerated identically, keeping init idempotent (manifest
+  // snapshotHash byte-stable, anti-loop CI rule).
+  const moduleDigests = await loadModuleDigests(absRoot, ordered, presentations, pathRoleConfig);
   const quickstart = generateQuickstart({
     totalFiles,
     totalSymbols,
@@ -264,6 +272,8 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     flowPresentations,
     topicPresentations,
     hasAuxiliary: modules.some((module) => classifyModuleRole(module, pathRoleConfig) !== "product"),
+    orientation: await extractRepoOrientation(absRoot),
+    moduleDigests,
   });
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", quickstart);
   filesWritten.push("livewiki/quickstart.md");
@@ -687,6 +697,11 @@ export async function regenerateArchitectureOverview(
     presentations,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
+  // D1.5: at the batch-end regeneration the accepted module pages exist, so
+  // the quickstart also carries the reader digest (top product modules with
+  // their opening responsibility sentences) and, when no README purpose was
+  // found, a synthesized purpose from those digests.
+  const moduleDigests = await loadModuleDigests(absRoot, ordered, presentations, pathRoleConfig);
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", generateQuickstart({
     totalFiles,
     totalSymbols,
@@ -694,6 +709,8 @@ export async function regenerateArchitectureOverview(
     flowPresentations,
     topicPresentations,
     hasAuxiliary: modules.some((module) => classifyModuleRole(module, pathRoleConfig) !== "product"),
+    orientation: await extractRepoOrientation(absRoot),
+    moduleDigests,
   }));
   await safeIo.writeText(absRoot, "livewiki/tasks.md", generateTasksPage({
     modules,

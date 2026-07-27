@@ -227,10 +227,22 @@ MCP `livewiki_quickstart` tool. Its deterministic outline is, in this exact
 order:
 
 1. `# Quickstart` plus one orientation paragraph;
-2. optional `## Understand the product`, linking every accepted topic directly
-   plus the topic hub; then `## Work by intent`, linking to product work,
-   architecture, the auxiliary hub when auxiliary modules exist, and each
-   accepted flow page directly;
+2. `## What this repository is` (when evidence exists): a product-purpose
+   paragraph extracted from the repository README with an explicit
+   provenance line, deterministic entry-point surface bullets (entry
+   scripts, package bin, Dockerfile, build manifests), and a code-span
+   pointer to the README's fastest-path section when one is detected. When
+   no README paragraph exists but accepted module pages do, the purpose is
+   synthesized deterministically from up to three module openings (with a
+   synthesized-from-pages provenance line); the block is omitted (never
+   invented) when neither README nor pages offer evidence; then
+   `## What you'll find in this wiki` (batch-end only): up to six top
+   product modules as title-link plus the accepted page's responsibility
+   sentence (pages without an opening render title-link only; absent pages
+   are omitted); then optional `## Understand the product`, linking every
+   accepted topic directly plus the topic hub; then `## Work by intent`,
+   linking to product work, architecture, the auxiliary hub when auxiliary
+   modules exist, and each accepted flow page directly;
 3. `## Document a repo`, covering `livewiki init` and
    `livewiki init --batch`;
 4. `## Query the wiki from an agent`, covering
@@ -241,7 +253,8 @@ order:
    module counts.
 
 Quickstart contains no ranked module list, raw symbol dump, project phase/test
-snapshot, or installation syntax. The deterministic English fixture stays at
+snapshot, or installation syntax — the fastest-path pointer is a code span
+naming the README section, never inline install commands. The deterministic English fixture stays at
 or below 100 nonblank lines and 700 words. It needs no provider configuration
 and constructs no LLM client.
 
@@ -398,6 +411,19 @@ resume and `--only topic:<evidence-hash>`. An inventory with fewer than five
 active anchors, or without either two product modules or one accepted flow
 spanning at least three modules, skips topic planning deterministically without
 creating a failed task or calling the LLM.
+
+Clustering runs over the product-only import graph; isolated product
+singletons are no longer dropped. They merge transitively by shared
+auxiliary import-neighbors (spoke-sharing), and any remainder of two or more
+forms one "Product overview" cluster. In addition, deterministic concern
+groups each yield at most one extra candidate when evidence exists:
+`deployment` (paths matching Dockerfile*, docker-compose*, *.bat, *.ps1,
+scripts/, deploy/) and `testing` (fixture-role modules, pulling in directly
+connected product modules to satisfy the product floor). Concern candidates
+go through the same anchor selection and whole-plan validation — zero or
+insufficient anchors means no candidate, never a stub. Import clusters take
+precedence over concern groups within `maxTopics`. Config: `concernTopics`
+(boolean, default `true`).
 
 Each candidate becomes `livewiki/topics/<title-slug>-<hash>.md`. Topic
 frontmatter declares `kind: topic`, its accepted plan order and intent, exact module/flow sets,

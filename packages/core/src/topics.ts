@@ -16,6 +16,7 @@ import { sha256 } from "./hashes.js";
 import {
   classifyModuleRole,
   classifyPathRole,
+  matchesAnyPathPattern,
   type Module,
   type PathRole,
   type PathRoleConfig,
@@ -76,6 +77,15 @@ export interface TopicPlanningInventory {
 export interface TopicModuleCluster {
   productModuleIds: string[];
   auxiliaryModuleIds: string[];
+  /**
+   * D2: how the cluster was formed when it is NOT a plain import-graph
+   * component — "spoke" (isolated product singletons grouped by shared
+   * auxiliary import-neighbors) or "overview" (the remaining singletons
+   * merged into ONE product-overview cluster). Absent for import-graph
+   * components. Drives the deterministic title in
+   * `proposeTopicPlanDeterministically`.
+   */
+  origin?: "spoke" | "overview";
 }
 
 export interface TopicPlanProposal {
@@ -131,6 +141,12 @@ export interface TopicPlanValidationOptions {
   minimumProductAnchorRatio?: number;
   maximumOverlapRatio?: number;
   maxSourceChars?: number;
+  /**
+   * D2: concern-grouped topic candidates (deployment/testing) merge into
+   * the deterministic plan after the import-graph clusters. Default true;
+   * set false to plan only import-graph cluster topics.
+   */
+  concernTopics?: boolean;
   /**
    * Cap (chars) for the rationale evidence block the generator will append
    * (`rationaleMaxChars` config, default 4,000). The planner's source-budget
@@ -476,13 +492,19 @@ export function validateTopicPlan(
  * ever joins a cluster because it is directly connected to one of that
  * cluster's product modules.
  *
- * Components with fewer than 2 product modules are merged into the
- * neighboring component sharing the most product-adjacency (by raw
- * shared-neighbor count), or dropped if no viable merge target exists — a
- * degenerate single-module cluster is never proposed. A cluster whose
+ * D2 spoke-merge fallback: isolated product singletons (no product-product
+ * edges) are no longer dropped. They are first grouped by shared
+ * AUXILIARY import-neighbors (spoke-sharing): two singletons belong to the
+ * same cluster when they share at least one directly-connected auxiliary
+ * module, transitively (union-find over the sorted ids keeps the grouping
+ * deterministic). Singletons that share no auxiliary neighbor with any
+ * other singleton are merged into ONE "Product overview" cluster — only
+ * when at least two remain; a lone leftover singleton can never satisfy
+ * the 2-product-module floor and is still never proposed. A cluster whose
  * total module count (product + auxiliary) exceeds 6 is trimmed
  * (auxiliary first, then product down to a floor of 2) to fit
- * `topic_plan_module_budget`.
+ * `topic_plan_module_budget`. The caller caps the resulting cluster list
+ * at `maxTopics` in deterministic (sorted first-id) order.
  */
 export function clusterModulesByImportGraph(inventory: TopicPlanningInventory): TopicModuleCluster[] {
   const productModules = inventory.modules.filter((m) => m.role === "product");
@@ -512,37 +534,77 @@ export function clusterModulesByImportGraph(inventory: TopicPlanningInventory): 
   }
 
   const multi = components.filter((c) => c.length >= 2).map((c) => [...c]);
-  const singletons = components.filter((c) => c.length < 2);
-  for (const single of singletons) {
-    const id = single[0];
-    if (id === undefined) continue;
-    const neighbors = productAdjacency.get(id) ?? new Set<string>();
-    let bestIndex = -1;
-    let bestScore = 0;
-    for (const [i, comp] of multi.entries()) {
-      const score = comp.filter((m) => neighbors.has(m)).length;
-      if (score > bestScore) {
-        bestScore = score;
-        bestIndex = i;
+  const singletonIds = components
+    .filter((c) => c.length < 2)
+    .map((c) => c[0])
+    .filter((id): id is string => id !== undefined)
+    .sort();
+
+  // Spoke-sharing: a singleton's relevant neighbors are its directly-
+  // connected AUXILIARY modules (an isolated singleton has no product
+  // neighbors by construction).
+  const moduleById = new Map(inventory.modules.map((m) => [m.id, m]));
+  const auxNeighborsBySingleton = new Map<string, Set<string>>(
+    singletonIds.map((id) => [
+      id,
+      new Set(
+        (moduleById.get(id)?.importNeighbors ?? []).filter(
+          (neighbor) => !productIds.has(neighbor) && moduleById.has(neighbor),
+        ),
+      ),
+    ]),
+  );
+  const parent = new Map<string, string>(singletonIds.map((id) => [id, id]));
+  const findRoot = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    parent.set(id, root);
+    return root;
+  };
+  for (let i = 0; i < singletonIds.length; i++) {
+    for (let j = i + 1; j < singletonIds.length; j++) {
+      const left = auxNeighborsBySingleton.get(singletonIds[i]!)!;
+      const right = auxNeighborsBySingleton.get(singletonIds[j]!)!;
+      if ([...left].some((neighbor) => right.has(neighbor))) {
+        const rootLeft = findRoot(singletonIds[i]!);
+        const rootRight = findRoot(singletonIds[j]!);
+        if (rootLeft !== rootRight) parent.set(rootRight, rootLeft);
       }
     }
-    if (bestIndex !== -1) {
-      multi[bestIndex]!.push(id);
-      multi[bestIndex]!.sort();
-    }
-    // else: an isolated singleton with no viable merge target is dropped —
-    // it can never satisfy the 2-product-module floor on its own.
   }
+  const groupsByRoot = new Map<string, string[]>();
+  for (const id of singletonIds) {
+    const root = findRoot(id);
+    const group = groupsByRoot.get(root) ?? [];
+    group.push(id);
+    groupsByRoot.set(root, group);
+  }
+  const spokeGroups = [...groupsByRoot.values()]
+    .map((members) => members.sort())
+    .sort((a, b) => a[0]!.localeCompare(b[0]!));
+  const spokeClusters = spokeGroups.filter((members) => members.length >= 2);
+  const remainder = spokeGroups
+    .filter((members) => members.length < 2)
+    .flat()
+    .sort();
 
   const auxiliaryModules = inventory.modules.filter((m) => m.role !== "product");
-  const clusters = multi.map((productModuleIds): TopicModuleCluster => {
+  const attachAuxiliary = (productModuleIds: string[], origin?: "spoke" | "overview"): TopicModuleCluster => {
     const productSet = new Set(productModuleIds);
     const auxiliaryModuleIds = auxiliaryModules
       .filter((m) => m.importNeighbors.some((n) => productSet.has(n)))
       .map((m) => m.id)
       .sort();
-    return capClusterSize({ productModuleIds, auxiliaryModuleIds });
-  });
+    return {
+      ...capClusterSize({ productModuleIds, auxiliaryModuleIds }),
+      ...(origin !== undefined ? { origin } : {}),
+    };
+  };
+  const clusters = [
+    ...multi.map((ids) => attachAuxiliary(ids)),
+    ...spokeClusters.map((ids) => attachAuxiliary(ids, "spoke")),
+    ...(remainder.length >= 2 ? [attachAuxiliary(remainder, "overview")] : []),
+  ];
   return clusters.sort((a, b) => a.productModuleIds[0]!.localeCompare(b.productModuleIds[0]!));
 }
 
@@ -556,6 +618,94 @@ function capClusterSize(cluster: TopicModuleCluster): TopicModuleCluster {
     productModuleIds = productModuleIds.slice(0, -1);
   }
   return { productModuleIds, auxiliaryModuleIds };
+}
+
+/**
+ * D2 concern groups: deployment evidence paths. Matched against module
+ * source paths with the same gitignore-style combined matcher the
+ * path-role classifier uses (`matchesAnyPathPattern`).
+ */
+export const DEPLOYMENT_PATH_PATTERNS = [
+  "**/Dockerfile*",
+  "**/docker-compose*",
+  "**/*.bat",
+  "**/*.ps1",
+  "**/scripts/**",
+  "**/deploy/**",
+];
+
+interface ConcernGroupRule {
+  /** Deterministic topic title for the concern. */
+  title: string;
+  /** Wording used in the deterministic intent sentence. */
+  intentSignal: string;
+  matches(module: TopicModuleEvidence): boolean;
+}
+
+/**
+ * D2 concern-group rules, evaluated in this FIXED order (deterministic
+ * precedence after the import clusters): deployment surfaces, then
+ * testing fixtures (modules whose `PathRole` classification is
+ * "fixture").
+ */
+const CONCERN_GROUP_RULES: readonly ConcernGroupRule[] = [
+  {
+    title: "Deployment",
+    intentSignal: "deployment",
+    matches: (module) => module.paths.some((path) => matchesAnyPathPattern(path, DEPLOYMENT_PATH_PATTERNS)),
+  },
+  {
+    title: "Testing",
+    intentSignal: "testing",
+    matches: (module) => module.role === "fixture",
+  },
+];
+
+/**
+ * D2: concern-grouped clusters — at most ONE per concern rule, built from
+ * the same closed inventory and trimmed by the same 6-module budget as
+ * import clusters. A matched product module joins directly; a matched
+ * non-product module joins only when directly connected to a selected
+ * product module (correct-by-construction against
+ * `topic_plan_auxiliary_disconnected`). When no matched module is
+ * product-role (e.g. a fixtures-only testing group), product modules
+ * directly connected to a matched module are pulled in so the group can
+ * satisfy the product floor (`topic_plan_auxiliary_only`); when there are
+ * none, the rule produces no cluster.
+ */
+export function collectConcernTopicClusters(
+  inventory: TopicPlanningInventory,
+): Array<{ cluster: TopicModuleCluster; title: string; intentSignal: string }> {
+  const productIds = new Set(inventory.modules.filter((m) => m.role === "product").map((m) => m.id));
+  const moduleById = new Map(inventory.modules.map((m) => [m.id, m]));
+  const results: Array<{ cluster: TopicModuleCluster; title: string; intentSignal: string }> = [];
+  for (const rule of CONCERN_GROUP_RULES) {
+    const matched = inventory.modules
+      .filter((module) => rule.matches(module))
+      .map((m) => m.id)
+      .sort();
+    if (matched.length === 0) continue;
+    const matchedSet = new Set(matched);
+    let productModuleIds = matched.filter((id) => productIds.has(id));
+    if (productModuleIds.length === 0) {
+      productModuleIds = inventory.modules
+        .filter((m) => m.role === "product" && m.importNeighbors.some((n) => matchedSet.has(n)))
+        .map((m) => m.id)
+        .sort();
+    }
+    if (productModuleIds.length === 0) continue;
+    const productSet = new Set(productModuleIds);
+    const auxiliaryModuleIds = matched
+      .filter((id) => !productSet.has(id))
+      .filter((id) => (moduleById.get(id)?.importNeighbors ?? []).some((n) => productSet.has(n)))
+      .sort();
+    results.push({
+      cluster: capClusterSize({ productModuleIds, auxiliaryModuleIds }),
+      title: rule.title,
+      intentSignal: rule.intentSignal,
+    });
+  }
+  return results;
 }
 
 /** Maps a module's dominant `classifyTopicSignals` tag to the topic evidence group it best fits. */
@@ -734,15 +884,18 @@ export function assignTopicKeySections(candidate: TopicCandidate): TopicKeySecti
 }
 
 /**
- * Workstream B orchestrator: clusters modules (`clusterModulesByImportGraph`),
- * selects anchors per cluster (`selectTopicAnchors`), builds a deterministic
- * title/intent/flows for each surviving cluster, and validates the WHOLE
- * batch through the unchanged `validateTopicPlan` — construction and
- * validation stay decoupled, so a proposal that construction got wrong
- * (e.g. a duplicate title against another cluster) is dropped and the
- * remainder re-validated, rather than surfacing an invalid plan. Returns
- * already-accepted `TopicCandidate`s, ready for the same per-topic
- * prose-generation loop the LLM-proposed path fed before.
+ * Workstream B orchestrator: clusters modules (`clusterModulesByImportGraph`,
+ * including the D2 spoke-merge/overview fallback), selects anchors per
+ * cluster (`selectTopicAnchors`), builds a deterministic title/intent/flows
+ * for each surviving cluster, appends the D2 concern-grouped candidates
+ * (deployment/testing, at most one each, import clusters first), caps the
+ * merged plan at `maxTopics`, and validates the WHOLE batch through the
+ * unchanged `validateTopicPlan` — construction and validation stay
+ * decoupled, so a proposal that construction got wrong (e.g. a duplicate
+ * title against another cluster) is dropped and the remainder re-validated,
+ * rather than surfacing an invalid plan. Returns already-accepted
+ * `TopicCandidate`s, ready for the same per-topic prose-generation loop the
+ * LLM-proposed path fed before.
  */
 export function proposeTopicPlanDeterministically(
   inventory: TopicPlanningInventory,
@@ -751,17 +904,23 @@ export function proposeTopicPlanDeterministically(
 ): TopicCandidate[] {
   const clusters = clusterModulesByImportGraph(inventory);
   const moduleById = new Map(inventory.modules.map((m) => [m.id, m]));
+  const selectOpts = {
+    maxAnchors: opts.maxAnchors,
+    ...(opts.maxSourceChars !== undefined ? { maxSourceChars: opts.maxSourceChars } : {}),
+    ...(opts.minimumProductAnchorRatio !== undefined
+      ? { minimumProductAnchorRatio: opts.minimumProductAnchorRatio }
+      : {}),
+    ...(opts.rationaleMaxChars !== undefined ? { rationaleMaxChars: opts.rationaleMaxChars } : {}),
+  };
+  const flowsWithin = (moduleIds: string[]): string[] =>
+    inventory.flows
+      .filter((f) => f.modules.length > 0 && f.modules.every((m) => moduleIds.includes(m)))
+      .map((f) => f.slug)
+      .sort()
+      .slice(0, 2);
 
   let proposals: TopicPlanProposal[] = [];
   for (const cluster of clusters) {
-    const selectOpts = {
-      maxAnchors: opts.maxAnchors,
-      ...(opts.maxSourceChars !== undefined ? { maxSourceChars: opts.maxSourceChars } : {}),
-      ...(opts.minimumProductAnchorRatio !== undefined
-        ? { minimumProductAnchorRatio: opts.minimumProductAnchorRatio }
-        : {}),
-      ...(opts.rationaleMaxChars !== undefined ? { rationaleMaxChars: opts.rationaleMaxChars } : {}),
-    };
     const groups = selectTopicAnchors(cluster, inventory, centrality, selectOpts);
     if (groups === null) continue;
 
@@ -770,21 +929,42 @@ export function proposeTopicPlanDeterministically(
     const secondId = cluster.productModuleIds[1];
     const primaryTitle = moduleById.get(primaryId)?.title ?? primaryId;
     const secondTitle = secondId !== undefined ? moduleById.get(secondId)?.title ?? secondId : undefined;
-    const rawTitle = secondTitle !== undefined ? `${primaryTitle} and ${secondTitle}` : `${primaryTitle} overview`;
+    const rawTitle =
+      cluster.origin === "overview"
+        ? "Product overview"
+        : secondTitle !== undefined
+          ? `${primaryTitle} and ${secondTitle}`
+          : `${primaryTitle} overview`;
     const title = rawTitle.slice(0, 80);
     const dominantSignal =
       cluster.productModuleIds.map((id) => moduleById.get(id)?.signals[0]).find((s) => s !== undefined) ??
       "cross-module behavior";
     const intent = `Explains how ${moduleIds.length} related modules coordinate ${dominantSignal}.`.slice(0, 160);
 
-    const flows = inventory.flows
-      .filter((f) => f.modules.length > 0 && f.modules.every((m) => moduleIds.includes(m)))
-      .map((f) => f.slug)
-      .sort()
-      .slice(0, 2);
-
-    proposals.push({ title, intent, modules: moduleIds, flows, groups });
+    proposals.push({ title, intent, modules: moduleIds, flows: flowsWithin(moduleIds), groups });
   }
+
+  // D2: concern-grouped candidates (deployment, testing) merge into the
+  // same plan AFTER the import clusters — deterministic precedence — each
+  // concern producing at most one candidate through the same anchor
+  // selection and whole-plan validation. A concern group whose anchor
+  // selection fails (zero or insufficient evidence) yields NO candidate,
+  // never a stub.
+  if (opts.concernTopics !== false) {
+    for (const { cluster, title, intentSignal } of collectConcernTopicClusters(inventory)) {
+      const groups = selectTopicAnchors(cluster, inventory, centrality, selectOpts);
+      if (groups === null) continue;
+      const moduleIds = [...cluster.productModuleIds, ...cluster.auxiliaryModuleIds].sort();
+      const intent = `Explains how ${moduleIds.length} related modules coordinate ${intentSignal}.`.slice(0, 160);
+      proposals.push({ title, intent, modules: moduleIds, flows: flowsWithin(moduleIds), groups });
+    }
+  }
+
+  // D2: maxTopics caps the merged plan (import clusters first, then
+  // concern groups) BEFORE validation — validateTopicPlan rejects a plan
+  // larger than maxTopics outright (with no proposal index), which would
+  // otherwise discard even the valid prefix.
+  proposals = proposals.slice(0, opts.maxTopics);
 
   for (;;) {
     if (proposals.length === 0) return [];

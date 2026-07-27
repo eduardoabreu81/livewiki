@@ -7,6 +7,8 @@ import {
   type Module,
   type PathRoleConfig,
 } from "./modules.js";
+import { clipSentence, type RepoOrientation } from "./orientation.js";
+import { maskCodeSpansPreservingLength } from "./markdown-mask.js";
 
 export interface ModulePresentation {
   moduleId: string;
@@ -233,15 +235,166 @@ export async function loadTopicPresentations(
   return result;
 }
 
-export function generateQuickstart(opts: {
-  totalFiles: number;
+/**
+ * D1.5 reader-digest entry for the quickstart. `responsibility` is the
+ * accepted page's opening responsibility sentence; `null` renders a
+ * title-link-only bullet (never invented prose).
+ */
+export interface ModuleDigest {
+  id: string;
+  title: string;
+  responsibility: string | null;
+}
+
+/** Cap for the quickstart reader digest (top product modules shown). */
+export const MODULE_DIGEST_CAP = 6;
+
+/** Per-module cap (chars) for the accepted-page opening digest. */
+const FLOW_MODULE_OPENING_CAP = 1200;
+
+/** Cap (chars) for a single responsibility sentence in the reader digest. */
+export const RESPONSIBILITY_MAX_CHARS = 240;
+
+/**
+ * Builds the quickstart reader digest from the accepted module pages: the
+ * top product modules in prioritization order, each with its display title
+ * and the opening responsibility sentence of its page. A module whose page
+ * file is absent contributes nothing (it is not "in the wiki" and a link to
+ * it would trip verify); a page that exists but yields no opening paragraph
+ * contributes a title-link-only entry.
+ */
+export async function loadModuleDigests(
+  repoRoot: string,
+  ordered: Module[],
+  presentations: Map<string, ModulePresentation>,
+  pathRoleConfig?: PathRoleConfig,
+  cap: number = MODULE_DIGEST_CAP,
+): Promise<ModuleDigest[]> {
+  const result: ModuleDigest[] = [];
+  for (const module of ordered) {
+    if (result.length >= cap) break;
+    if (classifyModuleRole(module, pathRoleConfig) !== "product") continue;
+    const presentation = presentations.get(module.id);
+    if (presentation === undefined || !presentation.pageExists) continue;
+    let responsibility: string | null = null;
+    try {
+      responsibility = extractModuleResponsibility(
+        await safeIo.readText(repoRoot, `livewiki/${module.id}.md`),
+      );
+    } catch {
+      // Unreadable page: title-link-only entry, never invented prose.
+    }
+    result.push({ id: module.id, title: presentation.displayTitle, responsibility });
+  }
+  return result;
+}
+
+interface ModuleOpeningParts {
+  title: string | null;
+  paragraph: string | null;
+  howItFits: string | null;
+}
+
+/**
+ * Parses the H1 + opening paragraph + `How it fits` block of an accepted
+ * module page. Heading detection runs on the length-preserving masked view
+ * so fenced code cannot fake an H1 or a section boundary; text comes from
+ * the raw page. Shared by extractModuleOpeningDigest (stage-5 flow context)
+ * and extractModuleResponsibility (D1.5 quickstart digest).
+ */
+function parseModuleOpening(pageContent: string): ModuleOpeningParts {
+  let body = pageContent;
+  try {
+    body = parseFrontmatter(pageContent).body;
+  } catch {
+    // Unparseable frontmatter: digest the raw content.
+  }
+  const rawLines = body.split("\n");
+  const maskedLines = maskCodeSpansPreservingLength(body).split("\n");
+
+  let title: string | null = null;
+  let paragraph: string | null = null;
+  let howItFits: string | null = null;
+
+  const h1Index = maskedLines.findIndex((line) => /^#\s+\S/.test(line.trim()));
+  if (h1Index >= 0) {
+    title = rawLines[h1Index]!.trim().replace(/^#\s+/, "");
+    const buffer: string[] = [];
+    for (let i = h1Index + 1; i < maskedLines.length; i++) {
+      const masked = maskedLines[i]!.trim();
+      if (masked === "") {
+        if (buffer.length > 0) break;
+        continue;
+      }
+      if (/^#{1,6}\s/.test(masked)) break;
+      buffer.push(rawLines[i]!.trim());
+    }
+    if (buffer.length > 0) paragraph = buffer.join(" ");
+  }
+
+  const howIndex = maskedLines.findIndex(
+    (line) =>
+      /^##\s+\S/.test(line.trim()) &&
+      line.trim().slice(3).trim().toLocaleLowerCase("en-US") === "how it fits",
+  );
+  if (howIndex >= 0) {
+    const block: string[] = [];
+    for (let i = howIndex + 1; i < maskedLines.length; i++) {
+      const masked = maskedLines[i]!.trim();
+      if (/^#{1,6}\s/.test(masked)) break;
+      if (masked !== "") block.push(rawLines[i]!.trim());
+    }
+    if (block.length > 0) howItFits = block.join(" ");
+  }
+
+  return { title, paragraph, howItFits };
+}
+
+/**
+ * Extracts the H1 + responsibility paragraph + `How it fits` block of an
+ * accepted module page, bounded to FLOW_MODULE_OPENING_CAP chars. Moved here
+ * from batch.ts (D1.5) so both the batch flow-context builder and the
+ * quickstart reader digest share one opening parser.
+ */
+export function extractModuleOpeningDigest(pageContent: string): string {
+  const opening = parseModuleOpening(pageContent);
+  const parts: string[] = [];
+  if (opening.title !== null) parts.push(opening.title);
+  if (opening.paragraph !== null) parts.push(opening.paragraph);
+  if (opening.howItFits !== null) parts.push(`How it fits: ${opening.howItFits}`);
+  let digest = parts.join("\n\n");
+  if (digest.length > FLOW_MODULE_OPENING_CAP) {
+    digest = digest.slice(0, FLOW_MODULE_OPENING_CAP) + "…";
+  }
+  return digest.length > 0 ? digest : "(opening unavailable)";
+}
+
+/**
+ * The single-line opening responsibility sentence of an accepted module
+ * page (the paragraph right after the H1), sentence-clipped to
+ * RESPONSIBILITY_MAX_CHARS. `null` when the page has no usable opening.
+ */
+export function extractModuleResponsibility(pageContent: string): string | null {
+  const { paragraph } = parseModuleOpening(pageContent);
+  if (paragraph === null) return null;
+  const singleLine = paragraph.replace(/\s+/g, " ").trim();
+  if (singleLine === "") return null;
+  return clipSentence(singleLine, RESPONSIBILITY_MAX_CHARS);
+}
+
+export function generateQuickstart(opts: {  totalFiles: number;
   totalSymbols: number;
   moduleCount: number;
   flowPresentations: Map<string, FlowPresentation>;
   topicPresentations?: Map<string, TopicPresentation>;
   hasAuxiliary: boolean;
+  orientation?: RepoOrientation | null;
+  moduleDigests?: ModuleDigest[];
 }): string {
   const topicPresentations = opts.topicPresentations ?? new Map<string, TopicPresentation>();
+  const moduleDigests = opts.moduleDigests ?? [];
+  const orientationBlock = buildOrientationBlock(opts.orientation ?? null, moduleDigests);
+  const digestBlock = buildModuleDigestBlock(moduleDigests);
   const workByIntent = [
     "- **Change product behavior:** start with [Tasks](tasks.md).",
   ];
@@ -264,6 +417,8 @@ export function generateQuickstart(opts: {
   const lines = [
     "# Quickstart",
     "",
+    ...orientationBlock,
+    ...digestBlock,
     "Use this wiki to choose a task, inspect the repository architecture, query focused pages from an agent, and keep documentation debt under control.",
     "",
     ...(topicPresentations.size > 0
@@ -305,6 +460,88 @@ export function generateQuickstart(opts: {
     "",
   ];
   return lines.join("\n");
+}
+
+/**
+ * D1 product-orientation block: the FIRST section after the H1, before any
+ * livewiki tool-meta. Emitted only when there is real evidence — a README
+ * purpose excerpt and/or entry-point surfaces; never invented text. The
+ * purpose is marked with its README provenance, and a detected fast-path
+ * README section is pointed at by name (plain code span, not a link, so a
+ * repo-root README never trips verify's internal-link check).
+ *
+ * D1.5: when the README yields no purpose but accepted module pages exist,
+ * the purpose is synthesized deterministically from the module digests (up
+ * to 3, Oxford comma) and marked with its own provenance line. A README
+ * purpose always wins over the synthesis.
+ */
+function buildOrientationBlock(
+  orientation: RepoOrientation | null,
+  moduleDigests: ModuleDigest[] = [],
+): string[] {
+  const purpose = orientation?.purpose ?? null;
+  const synthesizedPurpose = purpose === null
+    ? synthesizePurposeFromDigests(moduleDigests)
+    : null;
+  const surfaces = orientation?.surfaces ?? [];
+  if (purpose === null && synthesizedPurpose === null && surfaces.length === 0) return [];
+  const block = ["## What this repository is", ""];
+  if (purpose !== null) {
+    block.push(purpose, "");
+    const source = orientation?.readmePath ?? "README";
+    block.push(`*(Purpose excerpt from the repository README: \`${source}\`.)*`, "");
+  } else if (synthesizedPurpose !== null) {
+    block.push(synthesizedPurpose, "");
+    block.push("*(Synthesized from the generated module pages.)*", "");
+  }
+  if (surfaces.length > 0) {
+    block.push("**Entry points and surfaces**", "");
+    for (const surface of surfaces) block.push(`- ${surface}`);
+    block.push("");
+  }
+  if (orientation !== null && orientation.fastPathSection !== null && orientation.readmePath !== null) {
+    block.push(
+      `**Fastest local path:** see the "${orientation.fastPathSection}" section of \`${orientation.readmePath}\`.`,
+      "",
+    );
+  }
+  return block;
+}
+
+/**
+ * D1.5 reader digest: `## What you'll find in this wiki`, placed right after
+ * the orientation block and before the remaining product sections. One
+ * bullet per top product module (prioritization order, capped at
+ * MODULE_DIGEST_CAP by the caller; re-capped here defensively). A module
+ * without a parseable responsibility contributes a title-link only — prose
+ * is never invented.
+ */
+function buildModuleDigestBlock(moduleDigests: ModuleDigest[]): string[] {
+  if (moduleDigests.length === 0) return [];
+  const block = ["## What you'll find in this wiki", ""];
+  for (const digest of moduleDigests.slice(0, MODULE_DIGEST_CAP)) {
+    block.push(
+      digest.responsibility !== null
+        ? `- **[${digest.title}](${digest.id}.md)** — ${digest.responsibility}`
+        : `- **[${digest.title}](${digest.id}.md)**`,
+    );
+  }
+  block.push("");
+  return block;
+}
+
+/** Deterministic no-README purpose: up to 3 digests with a responsibility, Oxford comma. */
+function synthesizePurposeFromDigests(moduleDigests: ModuleDigest[]): string | null {
+  const usable = moduleDigests.filter((digest) => digest.responsibility !== null).slice(0, 3);
+  if (usable.length === 0) return null;
+  const items = usable.map((digest) => `${digest.title} (${digest.responsibility})`);
+  const joined =
+    items.length === 1
+      ? items[0]!
+      : items.length === 2
+        ? `${items[0]} and ${items[1]}`
+        : `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+  return `This repository is organized around ${joined}.`;
 }
 
 export function generateTasksPage(opts: {

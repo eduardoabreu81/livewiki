@@ -204,6 +204,14 @@ export interface LivewikiConfig {
    * failure keeps the original `repair_exhausted`. Set false to disable.
    */
   relaxedRound?: boolean;
+  /**
+   * Concern-grouped topic candidates (D2): at most one extra `deployment`
+   * and one `testing` topic candidate per run, built deterministically
+   * from the same closed inventory and validated by the same topic
+   * machinery. Default true; set false to plan only import-graph cluster
+   * topics.
+   */
+  concernTopics?: boolean;
 }
 
 /** Max safe timeout for Node `setTimeout` (signed 32-bit ms). */
@@ -288,6 +296,8 @@ export const CONFIG_DEFAULTS = {
   surgicalRepair: true,
   /** Relaxed completion round after strict exhaustion (recovery tier, Component 2). */
   relaxedRound: true,
+  /** Concern-grouped topic candidates (D2: deployment/testing). */
+  concernTopics: true,
 } as const;
 
 /**
@@ -390,6 +400,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     riskChurnCommits: CONFIG_DEFAULTS.riskChurnCommits,
     surgicalRepair: CONFIG_DEFAULTS.surgicalRepair,
     relaxedRound: CONFIG_DEFAULTS.relaxedRound,
+    concernTopics: CONFIG_DEFAULTS.concernTopics,
     ...config,
   };
 }
@@ -662,6 +673,13 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error(`invalid relaxedRound: must be a boolean, got ${JSON.stringify(v)}`);
     }
     out.relaxedRound = v;
+  }
+  if (obj["concernTopics"] !== undefined) {
+    const v = obj["concernTopics"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid concernTopics: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.concernTopics = v;
   }
   if (obj["flowMaxDiagramNodes"] !== undefined) {
     const v = obj["flowMaxDiagramNodes"];

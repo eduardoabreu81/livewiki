@@ -714,6 +714,41 @@ describe("config — recovery tier surgicalRepair key", () => {
   });
 });
 
+describe("config — D2 concernTopics key", () => {
+  it("applyDefaults fills concernTopics=true when absent", () => {
+    const cfg = applyDefaults({});
+    expect(cfg.concernTopics).toBe(true);
+  });
+
+  it("applyDefaults does NOT overwrite an explicit value", () => {
+    const cfg = applyDefaults({ concernTopics: false });
+    expect(cfg.concernTopics).toBe(false);
+  });
+
+  it("loadConfig accepts a concernTopics boolean", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ concernTopics: false }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.concernTopics).toBe(false);
+  });
+
+  it.each([
+    ["a string", "yes"],
+    ["a number", 1],
+    ["null", null],
+  ])("rejects concernTopics as %s", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ concernTopics: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/concernTopics/);
+  });
+});
+
 describe("config — recovery tier relaxedRound key", () => {
   it("applyDefaults fills relaxedRound=true when absent", () => {
     const cfg = applyDefaults({});

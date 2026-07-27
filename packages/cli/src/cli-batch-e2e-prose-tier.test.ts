@@ -15,6 +15,10 @@
  *   2. A repo with NO grammar-mapped file at all still completes with a
  *      non-empty wiki — the tool never exits 0 with an empty wiki on an
  *      unsupported language.
+ *   3. D1: a root README feeds the quickstart `## What this repository is`
+ *      block (first section after the H1, provenance marked, tool-meta
+ *      sections after the product sections) while being documented itself
+ *      as a tier-2 prose module.
  *
  * In-process stub (same pattern as cli-batch-e2e-subdirs.test.ts): zero real
  * provider calls. The stub answers the zero-key contract with an unanchored
@@ -245,6 +249,23 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       "src/engine/lib.rs",
       "pub fn render(frame: u32) -> u32 { frame + 1 }\n",
     );
+    // D1: a root README feeds the quickstart orientation block. It is also a
+    // tier-2 prose file, so the batch documents it through the zero-key
+    // contract like any other grammar-less source.
+    await writeCode(
+      "README.md",
+      [
+        "# Media fixture",
+        "",
+        "[![CI](https://img.shields.io/badge/ci-passing-green)](https://ci.example)",
+        "",
+        "This fixture repository renders short media clips by wiring an API handler, a Go server, and a Rust engine into one local pipeline.",
+        "",
+        "## Getting Started",
+        "",
+        "1. Install dependencies.",
+      ].join("\n"),
+    );
 
     stub.setHandler(proseTierHandler);
     await writeOpenAiConfig("gpt-test-mock", stub.url);
@@ -268,20 +289,51 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       const apiBody = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/api.md"), "utf8");
       expect(apiBody).toContain("src/api/handler.ts#handleRequest");
 
+      // D1: the quickstart opens with the product-orientation block sourced
+      // from the fixture README (badges skipped, provenance marked, fast-path
+      // section pointed at by name) before any tool-meta section.
+      const quickstart = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/quickstart.md"), "utf8");
+      const headings = [...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+      expect(headings[0], "orientation block is the first section after the H1").toBe(
+        "What this repository is",
+      );
+      expect(quickstart).toContain(
+        "This fixture repository renders short media clips by wiring an API handler",
+      );
+      expect(quickstart).toContain("*(Purpose excerpt from the repository README: `README.md`.)*");
+      expect(quickstart).toContain(
+        '**Fastest local path:** see the "Getting Started" section of `README.md`.',
+      );
+      expect(quickstart.indexOf("## Document a repo")).toBeGreaterThan(
+        quickstart.indexOf("## Work by intent"),
+      );
+
+      // D1.5: the reader digest follows the orientation block with at least
+      // one responsibility sentence extracted from an accepted module page;
+      // the README purpose wins, so no synthesized purpose is emitted.
+      expect(headings[1], "reader digest follows the orientation block").toBe(
+        "What you'll find in this wiki",
+      );
+      expect(quickstart).toMatch(
+        /- \*\*\[[^\]]+\]\(api\.md\)\*\* — This page documents the indexed responsibilities of api\./,
+      );
+      expect(quickstart).not.toContain("Synthesized from the generated module pages");
+
       // Verify: exit 0 + zero issues of any severity.
       await expectVerifyClean();
 
-      // Batch report: run completed, 3 stage-4 tasks all done.
+      // Batch report: run completed, 4 stage-4 tasks all done (3 code modules
+      // + the prose README module).
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       expect(status.status).toBe(0);
       const report = JSON.parse(status.stdout);
       expect(report.run.status).toBe("completed");
       const stage4Tasks = report.tasks.filter((t: { stage: number }) => t.stage === 4);
-      expect(stage4Tasks.length, "expected 3 stage-4 tasks").toBe(3);
+      expect(stage4Tasks.length, "expected 4 stage-4 tasks").toBe(4);
       expect(
         stage4Tasks.filter((t: { status: string }) => t.status === "done").length,
         "all stage-4 tasks done",
-      ).toBe(3);
+      ).toBe(4);
 
       // Status: every language classified by coverage tier.
       const statusR = await runCli(["--json", "--repo", repoRoot, "status"]);

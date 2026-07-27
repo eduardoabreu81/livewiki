@@ -1864,8 +1864,44 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
         this.topicPageCallCount++;
         return { content: makeTopicPage(req.user), usage };
       }
+      if (req.user.includes("Zero-key contract")) {
+        // Tier-2 prose module: unanchored page, `anchors: []`, no markers.
+        const moduleId = /# Module: ([^\s]+)/.exec(req.user)?.[1] ?? "unknown";
+        return {
+          content: [
+            "---",
+            `title: ${moduleId}`,
+            "owner: generated",
+            "anchors: []",
+            "---",
+            "",
+            `# ${moduleId}`,
+            "",
+            "This page documents the visible responsibilities of the module.",
+            "",
+            "## When to use this page",
+            "",
+            "- Review the module behavior.",
+            "",
+            "## How it fits",
+            "",
+            "This module provides one part of the repository implementation visible in the supplied source.",
+            "",
+            "## Details",
+            "",
+            "Some prose about the module.",
+            "",
+          ].join("\n"),
+          usage,
+        };
+      }
       const closedKeys = parseClosedKeys(req.user);
-      return { content: makeValidPage(closedKeys), usage };
+      return {
+        content: /compact auxiliary contract/i.test(`${req.system}\n${req.user}`)
+          ? makeCompactAuxiliaryPage(closedKeys)
+          : makeValidPage(closedKeys),
+        usage,
+      };
     }
   }
 
@@ -1883,6 +1919,53 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
         "export function query() {}",
         "",
       ].join("\n"),
+      "utf8",
+    );
+  }
+
+  async function writeHubAndSpokeTopicRepo(): Promise<void> {
+    // D2: hub-and-spoke — 3 product sibling services sharing ONE auxiliary
+    // fixture module (no product-product edges, so the spoke-merge fallback
+    // groups them), plus a deployment concern group (deploy/ + root
+    // docker-compose.yml product modules, connected scripts/ tooling
+    // auxiliary). Both layers must yield topic candidates (>= 2) through
+    // the deterministic planner. All service files carry two same-length
+    // 5-letter functions so anchor spans tie and selection order is
+    // governed by the sorted keys alone.
+    for (const dir of ["svc-a", "svc-b", "svc-c", "tests/fixtures", "deploy", "scripts"]) {
+      await nodeFs.mkdir(nodePath.join(repoRoot, dir), { recursive: true });
+    }
+    const service = (first: string, second: string): string =>
+      'import { sharedFixture } from "../tests/fixtures/shared";\n' +
+      `export function ${first}() { return sharedFixture(); }\n` +
+      `export function ${second}() { return sharedFixture(); }\n`;
+    await nodeFs.writeFile(nodePath.join(repoRoot, "svc-a/index.ts"), service("alpha", "bravo"), "utf8");
+    await nodeFs.writeFile(nodePath.join(repoRoot, "svc-b/index.ts"), service("gamma", "delta"), "utf8");
+    await nodeFs.writeFile(nodePath.join(repoRoot, "svc-c/index.ts"), service("theta", "zetta"), "utf8");
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "tests/fixtures/shared.ts"),
+      'export function sharedFixture() { return "fixture"; }\n',
+      "utf8",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "deploy/run.ts"),
+      'import { build } from "../scripts/build";\nexport function deploy() { return build(); }\nexport function revert() { return deploy(); }\n',
+      "utf8",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "deploy/config.ts"),
+      'export function region() { return "us"; }\nexport function bucket() { return "b"; }\n',
+      "utf8",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "scripts/build.ts"),
+      'export function build() { return "ok"; }\n',
+      "utf8",
+    );
+    // Tier-2 prose deployment surface: product-role module, zero anchors.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "docker-compose.yml"),
+      'services:\n  app:\n    build: .\n',
       "utf8",
     );
   }
@@ -1910,6 +1993,31 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     expect(checkpoint!.topicPlan?.length).toBeGreaterThan(0);
 
     expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/topics")).toBe(true);
+  }, 60_000);
+
+  it("hub-and-spoke fixture yields >= 2 topic candidates (D2 spoke-merge + concern groups)", async () => {
+    await writeHubAndSpokeTopicRepo();
+    const topicLlm = new TopicMockLlm();
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: topicLlm,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.failures.some((f) => f.module === "topic-plan")).toBe(false);
+
+    const checkpoint = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
+    expect(checkpoint).not.toBeNull();
+    expect(checkpoint!.status).toBe("done");
+    // One spoke-merge cluster topic (svc-a/b/c sharing the fixture module)
+    // plus exactly one deployment concern topic.
+    expect(checkpoint!.topicPlan?.length).toBeGreaterThanOrEqual(2);
+    expect(checkpoint!.topicPlan!.some((candidate) => candidate.title === "Deployment")).toBe(true);
+
     expect(await fileExists(repoRoot, "livewiki/topics")).toBe(true);
   }, 60_000);
 

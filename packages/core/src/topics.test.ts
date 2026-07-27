@@ -479,9 +479,50 @@ describe("clusterModulesByImportGraph", () => {
     expect(clusters[0]!.productModuleIds).toEqual(["m1", "m2", "m3", "m4", "m5", "m6"]);
   });
 
-  it("returns no clusters when every product module is a disconnected singleton", () => {
+  it("merges disconnected singletons into ONE overview cluster instead of dropping them (D2)", () => {
     const modules = [mod({ id: "solo-a" }), mod({ id: "solo-b" })];
-    expect(clusterModulesByImportGraph(clusterInventory(modules))).toEqual([]);
+    expect(clusterModulesByImportGraph(clusterInventory(modules))).toEqual([
+      { productModuleIds: ["solo-a", "solo-b"], auxiliaryModuleIds: [], origin: "overview" },
+    ]);
+  });
+
+  it("groups isolated singletons sharing one auxiliary module into a spoke cluster (D2)", () => {
+    const modules = [
+      mod({ id: "svc-a", importNeighbors: ["utils"] }),
+      mod({ id: "svc-b", importNeighbors: ["utils"] }),
+      mod({ id: "svc-c", importNeighbors: ["utils"] }),
+      mod({ id: "utils", role: "tooling", importNeighbors: ["svc-a", "svc-b", "svc-c"] }),
+    ];
+    const clusters = clusterModulesByImportGraph(clusterInventory(modules));
+    expect(clusters).toEqual([
+      { productModuleIds: ["svc-a", "svc-b", "svc-c"], auxiliaryModuleIds: ["utils"], origin: "spoke" },
+    ]);
+  });
+
+  it("groups singletons transitively through chained shared auxiliary neighbors (D2)", () => {
+    const modules = [
+      mod({ id: "svc-a", importNeighbors: ["aux-one"] }),
+      mod({ id: "svc-b", importNeighbors: ["aux-one", "aux-two"] }),
+      mod({ id: "svc-c", importNeighbors: ["aux-two"] }),
+      mod({ id: "aux-one", role: "tooling", importNeighbors: ["svc-a", "svc-b"] }),
+      mod({ id: "aux-two", role: "tooling", importNeighbors: ["svc-b", "svc-c"] }),
+    ];
+    const clusters = clusterModulesByImportGraph(clusterInventory(modules));
+    expect(clusters).toEqual([
+      { productModuleIds: ["svc-a", "svc-b", "svc-c"], auxiliaryModuleIds: ["aux-one", "aux-two"], origin: "spoke" },
+    ]);
+  });
+
+  it("still drops a lone leftover singleton that shares nothing with any other (D2)", () => {
+    const modules = [
+      mod({ id: "module-a", importNeighbors: ["module-b"] }),
+      mod({ id: "module-b", importNeighbors: ["module-a"] }),
+      mod({ id: "module-c", importNeighbors: [] }),
+    ];
+    const clusters = clusterModulesByImportGraph(clusterInventory(modules));
+    expect(clusters).toEqual([
+      { productModuleIds: ["module-a", "module-b"], auxiliaryModuleIds: [] },
+    ]);
   });
 });
 
@@ -645,10 +686,201 @@ describe("proposeTopicPlanDeterministically", () => {
     expect(revalidated.ok).toBe(true);
   });
 
-  it("returns an empty array when no cluster can be formed", () => {
+  it("returns an empty array when no cluster has selectable anchors", () => {
     const modules = [mod({ id: "solo-a" }), mod({ id: "solo-b" })];
     const inv = clusterInventory(modules);
     expect(proposeTopicPlanDeterministically(inv, new Map(), proposeOpts)).toEqual([]);
+  });
+});
+
+describe("D2 — spoke-merge fallback and concern-grouped candidates", () => {
+  const proposeOpts = { maxTopics: 4, maxAnchors: 18, maxSourceChars: 40_000 };
+
+  function pairModules(prefix: string, signals: [string[], string[]]): TopicModuleEvidence[] {
+    return [
+      mod({
+        id: `${prefix}1`,
+        importNeighbors: [`${prefix}2`],
+        signals: signals[0],
+        anchors: [`src/${prefix}1.ts#1`, `src/${prefix}1.ts#2`, `src/${prefix}1.ts#3`],
+      }),
+      mod({
+        id: `${prefix}2`,
+        importNeighbors: [`${prefix}1`],
+        signals: signals[1],
+        anchors: [`src/${prefix}2.ts#1`, `src/${prefix}2.ts#2`, `src/${prefix}2.ts#3`],
+      }),
+    ];
+  }
+
+  // A deployment concern group that satisfies the 2-product-module floor:
+  // `compose` (docker-compose.yml) and `deploy` (deploy/) both match the
+  // deployment path patterns; `scripts` (tooling) joins as a directly-
+  // connected auxiliary. `compose` is product-connected to `app`, so the
+  // only fallback cluster it can join is the {app, compose} component —
+  // which shares just one anchor with the concern group (no overlap drop).
+  function deploymentModules(): TopicModuleEvidence[] {
+    return [
+      mod({
+        id: "app",
+        title: "App",
+        importNeighbors: ["compose"],
+        anchors: ["src/app.ts#1", "src/app.ts#2", "src/app.ts#3", "src/app.ts#4"],
+      }),
+      mod({
+        id: "compose",
+        title: "Compose",
+        paths: ["docker-compose.yml"],
+        importNeighbors: ["app"],
+        anchors: ["docker-compose.yml#service"],
+      }),
+      mod({
+        id: "deploy",
+        title: "Deploy",
+        paths: ["deploy/run.ts"],
+        importNeighbors: ["scripts"],
+        anchors: ["deploy/run.ts#deploy", "deploy/run.ts#pack", "deploy/run.ts#revert", "deploy/run.ts#verify"],
+      }),
+      mod({
+        id: "scripts",
+        role: "tooling",
+        paths: ["scripts/build.ts"],
+        importNeighbors: ["deploy"],
+        anchors: ["scripts/build.ts#build"],
+      }),
+    ];
+  }
+
+  it("hub-and-spoke fixture yields a topic instead of dropping the singletons", () => {
+    const modules = [
+      mod({ id: "svc-a", title: "Svc A", importNeighbors: ["utils"], anchors: ["src/a.ts#1", "src/a.ts#2"] }),
+      mod({ id: "svc-b", title: "Svc B", importNeighbors: ["utils"], anchors: ["src/b.ts#1", "src/b.ts#2"] }),
+      mod({ id: "svc-c", title: "Svc C", importNeighbors: ["utils"], anchors: ["src/c.ts#1", "src/c.ts#2"] }),
+      mod({ id: "utils", role: "tooling", importNeighbors: ["svc-a", "svc-b", "svc-c"], anchors: [] }),
+    ];
+    const inv = clusterInventory(modules);
+    const candidates = proposeTopicPlanDeterministically(inv, new Map(), proposeOpts);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.modules).toEqual(["svc-a", "svc-b", "svc-c", "utils"]);
+    expect(candidates[0]!.title).toBe("Svc A and Svc B");
+  });
+
+  it("names the merged remainder cluster 'Product overview'", () => {
+    const modules = [
+      mod({ id: "solo-a", title: "Alpha", anchors: ["src/a.ts#1", "src/a.ts#2", "src/a.ts#3"] }),
+      mod({ id: "solo-b", title: "Beta", anchors: ["src/b.ts#1", "src/b.ts#2", "src/b.ts#3"] }),
+    ];
+    const inv = clusterInventory(modules);
+    const candidates = proposeTopicPlanDeterministically(inv, new Map(), proposeOpts);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.title).toBe("Product overview");
+    expect(candidates[0]!.modules).toEqual(["solo-a", "solo-b"]);
+  });
+
+  it("produces a deployment concern candidate from deployment-path modules", () => {
+    const inv = clusterInventory(deploymentModules());
+    inv.anchorRoles["scripts/build.ts#build"] = "tooling";
+    const candidates = proposeTopicPlanDeterministically(inv, new Map(), proposeOpts);
+    expect(candidates).toHaveLength(2); // the {app, compose} import cluster + the concern
+    const deployment = candidates.find((c) => c.title === "Deployment");
+    expect(deployment).toBeDefined();
+    expect(deployment!.modules).toEqual(["compose", "deploy", "scripts"]);
+  });
+
+  it("produces a testing concern candidate from fixture modules plus their connected product modules", () => {
+    const modules = [
+      mod({
+        id: "module-a",
+        title: "Module A",
+        importNeighbors: ["module-x", "fixtures-a"],
+        anchors: ["src/a.ts#1", "src/a.ts#2", "src/a.ts#3", "src/a.ts#4", "src/a.ts#5"],
+      }),
+      mod({ id: "module-x", title: "Module X", importNeighbors: ["module-a"], anchors: ["src/x.ts#1", "src/x.ts#2", "src/x.ts#3"] }),
+      mod({
+        id: "module-b",
+        title: "Module B",
+        importNeighbors: ["module-y", "fixtures-b"],
+        anchors: ["src/b.ts#1", "src/b.ts#2", "src/b.ts#3"],
+      }),
+      mod({ id: "module-y", title: "Module Y", importNeighbors: ["module-b"], anchors: ["src/y.ts#1", "src/y.ts#2", "src/y.ts#3"] }),
+      mod({
+        id: "fixtures-a",
+        role: "fixture",
+        paths: ["tests/fixtures/a.ts"],
+        importNeighbors: ["module-a"],
+        anchors: ["tests/fixtures/a.ts#1"],
+      }),
+      mod({
+        id: "fixtures-b",
+        role: "fixture",
+        paths: ["tests/fixtures/b.ts"],
+        importNeighbors: ["module-b"],
+        anchors: ["tests/fixtures/b.ts#1"],
+      }),
+    ];
+    const inv = clusterInventory(modules);
+    inv.anchorRoles["tests/fixtures/a.ts#1"] = "fixture";
+    inv.anchorRoles["tests/fixtures/b.ts#1"] = "fixture";
+    const candidates = proposeTopicPlanDeterministically(inv, new Map(), proposeOpts);
+    const testing = candidates.find((c) => c.title === "Testing");
+    expect(testing).toBeDefined();
+    expect(testing!.modules).toEqual(["fixtures-a", "fixtures-b", "module-a", "module-b"]);
+  });
+
+  it("produces no concern candidate when no module matches a concern group", () => {
+    const inv = inventory(); // plain src/ product modules in one import cluster
+    const candidates = proposeTopicPlanDeterministically(inv, new Map(), proposeOpts);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.title).not.toBe("Deployment");
+    expect(candidates[0]!.title).not.toBe("Testing");
+  });
+
+  it("a concern group with zero anchors produces no candidate (never a stub)", () => {
+    const modules = [
+      mod({ id: "compose", paths: ["docker-compose.yml"], importNeighbors: [], anchors: [] }),
+      mod({ id: "deploy", paths: ["deploy/run.ts"], importNeighbors: ["scripts"], anchors: [] }),
+      mod({ id: "scripts", role: "tooling", paths: ["scripts/build.ts"], importNeighbors: ["deploy"], anchors: [] }),
+    ];
+    const inv = clusterInventory(modules);
+    expect(proposeTopicPlanDeterministically(inv, new Map(), proposeOpts)).toEqual([]);
+  });
+
+  it("concernTopics: false suppresses concern candidates", () => {
+    const inv = clusterInventory(deploymentModules());
+    const candidates = proposeTopicPlanDeterministically(inv, new Map(), { ...proposeOpts, concernTopics: false });
+    expect(candidates).toHaveLength(1); // only the {app, compose} import cluster
+    expect(candidates.some((c) => c.title === "Deployment")).toBe(false);
+  });
+
+  it("caps the merged plan at maxTopics with import clusters before concern groups", () => {
+    const inv = clusterInventory([
+      ...pairModules("a", [["entry/boundary"], ["persistence/state"]]),
+      ...pairModules("b", [["output"], ["validation/recovery"]]),
+      ...deploymentModules(),
+    ]);
+    // Import clusters (sorted by first id: a1, app, b1) fill the cap first;
+    // the deployment concern comes last.
+    const capped = proposeTopicPlanDeterministically(inv, new Map(), { ...proposeOpts, maxTopics: 2 });
+    expect(capped).toHaveLength(2);
+    expect(capped.some((c) => c.title === "Deployment")).toBe(false);
+    const full = proposeTopicPlanDeterministically(inv, new Map(), { ...proposeOpts, maxTopics: 4 });
+    expect(full).toHaveLength(4);
+    expect(full[3]!.title).toBe("Deployment");
+  });
+
+  it("is deterministic: the same inventory produces an identical plan twice", () => {
+    const modules = [
+      mod({ id: "svc-a", title: "Svc A", importNeighbors: ["utils"], anchors: ["src/a.ts#1", "src/a.ts#2"] }),
+      mod({ id: "svc-b", title: "Svc B", importNeighbors: ["utils"], anchors: ["src/b.ts#1", "src/b.ts#2"] }),
+      mod({ id: "svc-c", title: "Svc C", importNeighbors: ["utils"], anchors: ["src/c.ts#1", "src/c.ts#2"] }),
+      mod({ id: "utils", role: "tooling", importNeighbors: ["svc-a", "svc-b", "svc-c"], anchors: [] }),
+      ...deploymentModules(),
+    ];
+    const inv = clusterInventory(modules);
+    const first = proposeTopicPlanDeterministically(inv, new Map(), { ...proposeOpts, maxTopics: 8 });
+    const second = proposeTopicPlanDeterministically(inv, new Map(), { ...proposeOpts, maxTopics: 8 });
+    expect(first.length).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
   });
 });
 

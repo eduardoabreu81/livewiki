@@ -21,6 +21,7 @@ export * as llm from "./llm/index.js";
 export * as imports from "./imports.js";
 export * as modules from "./modules.js";
 export * as navigation from "./navigation.js";
+export * as orientation from "./orientation.js";
 export * as diagrams from "./diagrams.js";
 export * as prompts from "./prompts.js";
 export * as artifact from "./artifact.js";

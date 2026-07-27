@@ -272,6 +272,8 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         "utf8",
       );
       expect([...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1])).toEqual([
+        "What this repository is",
+        "What you'll find in this wiki",
         "Work by intent",
         "Document a repo",
         "Query the wiki from an agent",

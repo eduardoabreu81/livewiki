@@ -125,11 +125,10 @@ import {
   resolveImportEdges,
 } from "./import-resolution.js";
 import { validateMermaidSyntax } from "./mermaid-validator.js";
-import { maskCodeSpansPreservingLength } from "./markdown-mask.js";
 import { computeSnapshotHash, writeManifestIfChanged, buildManifest } from "./manifest.js";
 import { sha256 } from "./hashes.js";
 import { regenerateArchitectureOverview, syncClassDiagrams, syncStaleFlowArtifacts, syncStaleTopicArtifacts } from "./init.js";
-import { ensureTopicsIndexScaffold, loadFlowPresentations, syncFlowsIndexHub } from "./navigation.js";
+import { ensureTopicsIndexScaffold, extractModuleOpeningDigest, loadFlowPresentations, syncFlowsIndexHub } from "./navigation.js";
 import { parseFrontmatter, getOwner } from "./frontmatter.js";
 import { generateAuxiliaryModulePage } from "./auxiliary-page.js";
 import { generateFlowDiagram, insertFlowDiagramSection } from "./flow-diagram.js";
@@ -196,6 +195,12 @@ export interface BatchOptions {
    * flagged `quality: degraded`.
    */
   relaxedRound?: boolean;
+  /**
+   * D2: override of `concernTopics` (default = config or true). When on,
+   * the deterministic topic planner may add at most one `deployment` and
+   * one `testing` concern-grouped candidate after the import clusters.
+   */
+  concernTopics?: boolean;
   /** Stage-4 max output tokens (default from config / 8192). */
   stage4MaxOutputTokens?: number;
   /** Override thinking mode for openai-compat (MiniMax-M3 etc.). */
@@ -351,6 +356,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // (opts > config > default true).
     const relaxedRound =
       opts.relaxedRound ?? resolvedConfig.relaxedRound ?? true;
+    // D2: concern-grouped topic candidates toggle (opts > config > default true).
+    const concernTopics =
+      opts.concernTopics ?? resolvedConfig.concernTopics ?? true;
     const stage4MaxOutputTokens =
       opts.stage4MaxOutputTokens ??
       resolvedConfig.stage4MaxOutputTokens ??
@@ -2062,6 +2070,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         maxRepairAttempts,
         surgicalRepair,
         relaxedRound,
+        concernTopics,
         mode: opts.mode,
         onlyIdentity: onlyTopicIdentity,
         noRefine: opts.noRefine ?? false,
@@ -2294,6 +2303,8 @@ async function runSemanticTopicStage(opts: {
   surgicalRepair: boolean;
   /** Recovery tier (Component 2): relaxed completion round toggle for topic exhaustion. */
   relaxedRound: boolean;
+  /** D2: concern-grouped topic candidates (deployment/testing) toggle for the deterministic planner. */
+  concernTopics: boolean;
   mode: "run" | "resume" | "only";
   onlyIdentity: string | null;
   allowedFlowSlugs?: ReadonlySet<string>;
@@ -2373,6 +2384,7 @@ async function runSemanticTopicStage(opts: {
       maxTopics: opts.maxTopics,
       maxAnchors: opts.maxAnchors,
       maxSourceChars: opts.sourceChars,
+      concernTopics: opts.concernTopics,
       // Fix A (2026-07-26): the planner's source-budget estimate must
       // account the same rationale block the generator appends, or an
       // accepted candidate can overflow the hard topicMaxSourceChars throw.
@@ -5075,9 +5087,6 @@ interface FlowDocContext {
   truncatedSource: string;
 }
 
-/** Per-module cap (chars) for the accepted-page opening digest. */
-const FLOW_MODULE_OPENING_CAP = 1200;
-
 /**
  * Stage-5 context builder (mirrors buildModuleDocContext): the closed
  * seed key list (candidate.seedKeys), the seed symbols table, a bounded
@@ -5152,61 +5161,6 @@ async function buildFlowDocContext(
   } finally {
     db.close();
   }
-}
-
-/**
- * Extracts the H1 + responsibility paragraph + `How it fits` block of an
- * accepted module page, bounded to FLOW_MODULE_OPENING_CAP chars. Heading
- * detection runs on the length-preserving masked view so fenced code
- * cannot fake an H1 or a section boundary; text comes from the raw page.
- */
-function extractModuleOpeningDigest(pageContent: string): string {
-  let body = pageContent;
-  try {
-    body = parseFrontmatter(pageContent).body;
-  } catch {
-    // Unparseable frontmatter: digest the raw content.
-  }
-  const rawLines = body.split("\n");
-  const maskedLines = maskCodeSpansPreservingLength(body).split("\n");
-
-  const parts: string[] = [];
-  const h1Index = maskedLines.findIndex((line) => /^#\s+\S/.test(line.trim()));
-  if (h1Index >= 0) {
-    parts.push(rawLines[h1Index]!.trim().replace(/^#\s+/, ""));
-    const paragraph: string[] = [];
-    for (let i = h1Index + 1; i < maskedLines.length; i++) {
-      const masked = maskedLines[i]!.trim();
-      if (masked === "") {
-        if (paragraph.length > 0) break;
-        continue;
-      }
-      if (/^#{1,6}\s/.test(masked)) break;
-      paragraph.push(rawLines[i]!.trim());
-    }
-    if (paragraph.length > 0) parts.push(paragraph.join(" "));
-  }
-
-  const howIndex = maskedLines.findIndex(
-    (line) =>
-      /^##\s+\S/.test(line.trim()) &&
-      line.trim().slice(3).trim().toLocaleLowerCase("en-US") === "how it fits",
-  );
-  if (howIndex >= 0) {
-    const block: string[] = [];
-    for (let i = howIndex + 1; i < maskedLines.length; i++) {
-      const masked = maskedLines[i]!.trim();
-      if (/^#{1,6}\s/.test(masked)) break;
-      if (masked !== "") block.push(rawLines[i]!.trim());
-    }
-    if (block.length > 0) parts.push(`How it fits: ${block.join(" ")}`);
-  }
-
-  let digest = parts.join("\n\n");
-  if (digest.length > FLOW_MODULE_OPENING_CAP) {
-    digest = digest.slice(0, FLOW_MODULE_OPENING_CAP) + "…";
-  }
-  return digest.length > 0 ? digest : "(opening unavailable)";
 }
 
 /**
