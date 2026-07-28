@@ -24,6 +24,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -74,6 +75,16 @@ async function connect(opts: Omit<CreateServerOptions, "repoRoot"> = {}): Promis
 async function teardown(c: Connected): Promise<void> {
   await c.client.close();
   await c.server.close();
+}
+
+/** Runs git in the test repo (same spawn discipline as core's diff-preview tests). */
+function git(args: string[]): void {
+  const r = spawnSync("git", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+  });
+  expect(r.status, `git ${args.join(" ")} failed: ${r.stderr}`).toBe(0);
 }
 
 describe("MCP server — Fase 4", () => {
@@ -202,6 +213,73 @@ describe("MCP server — Fase 4", () => {
       const parsed = JSON.parse(extractText(r));
       expect(parsed.directCallers).toEqual([]);
       expect(parsed.transitiveCallers).toEqual([]);
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  // Backlog #2 (plan docs/plans/2026-07-28-change-impact-and-index-freshness.md,
+  // Item 2): an EMPTY symbolKey returns the repo-wide change-impact package
+  // (the same block `livewiki update` emits) instead of the per-symbol blast
+  // radius. The fixture is a real git repo: the working-tree seed diffs vs HEAD.
+  it("livewiki_impact with an empty symbolKey returns the repo-wide change-impact package", async () => {
+    // Wiki page anchoring login → the impact must name this page.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".gitignore"),
+      ".livewiki/\n",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "livewiki/login.md"),
+      "---\ntitle: login\nowner: generated\nanchors:\n  - src/auth/login.ts#login\n---\n\n# login\n\nDocs.\n",
+    );
+    const { run: runIndexer } = await import("@livewiki/core/indexer");
+    const { run: runLedger } = await import("@livewiki/core/anchor-ledger");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    git(["init", "-q", "-b", "main"]);
+    git(["add", "-A"]);
+    git([
+      "-c",
+      "user.name=livewiki-test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "baseline",
+    ]);
+    // Uncommitted change: the working-tree seed catches it without reindexing.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/auth/login.ts"),
+      "export function login() { return 'changed'; }\n",
+    );
+
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_impact",
+        arguments: { symbolKey: "" },
+      });
+      expect(r.isError).toBeFalsy();
+      const parsed = JSON.parse(extractText(r));
+      expect(parsed.mode).toBe("working-tree");
+      expect(parsed.notGitRepo).toBe(false);
+      expect(parsed.changedFiles).toEqual(["src/auth/login.ts"]);
+      expect(parsed.changedSymbols).toEqual([
+        { symbolKey: "src/auth/login.ts#login", event: "changed" },
+      ]);
+      expect(parsed.pages).toEqual([
+        {
+          wikiPath: "livewiki/login.md",
+          items: [{ symbolKey: "src/auth/login.ts#login", event: "changed" }],
+        },
+      ]);
+      expect(parsed.snippets.length).toBe(1);
+      expect(parsed.snippets[0].snippet).toMatch(/changed/);
+      expect(parsed.truncated).toBe(false);
+      expect(Array.isArray(parsed._hints)).toBe(true);
     } finally {
       await teardown(c);
     }
@@ -475,14 +553,18 @@ describe("MCP server — workflow-adjacency hints (Etapa 2d)", () => {
     }
   });
 
-  it("livewiki_impact suggests read and write_doc", async () => {
+  it("livewiki_impact suggests read, write_doc and debt", async () => {
     const c = await connect();
     try {
       const r = await c.client.callTool({
         name: "livewiki_impact",
         arguments: { symbolKey: "src/auth/login.ts#login" },
       });
-      expect(hintTools(r)).toEqual(["livewiki_read", "livewiki_write_doc"]);
+      expect(hintTools(r)).toEqual([
+        "livewiki_read",
+        "livewiki_write_doc",
+        "livewiki_debt",
+      ]);
       assertWellFormedHints(r);
     } finally {
       await teardown(c);
@@ -540,6 +622,85 @@ Notes.
       await teardown(c);
     }
   });
+});
+
+/**
+ * Backlog #3 (plan 2026-07-28, item 3.2): the real fs.watch on the repo
+ * root keeps index + ledger + search in sync while the server is alive.
+ * Deterministic by polling a bounded window (never fixed sleeps). The
+ * afterEach rm is the EBUSY check — close() must release every watcher
+ * and DB handle for the temp dir to be removable on Windows.
+ */
+describe("MCP server — watcher (backlog #3)", () => {
+  const PROBE_TOKEN = "zephyrWatcherProbeToken";
+
+  /** Poll until `cond` holds or the bounded window expires (no fixed sleeps). */
+  async function pollUntil(cond: () => Promise<boolean>, timeoutMs = 8000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (await cond()) return;
+      if (Date.now() >= deadline) {
+        throw new Error("pollUntil: condition not met within the bounded window");
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  it("picks up working-tree edits: ledger debt + search rebuild within the debounce window", async () => {
+    // Arrange: a wiki page anchoring src/auth/login.ts#login, so a symbol
+    // edit becomes `changed` debt on the next ledger run.
+    const { run: runLedger } = await import("@livewiki/core/anchor-ledger");
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "livewiki/login.md"),
+      "---\ntitle: login\nowner: generated\nanchors:\n  - src/auth/login.ts#login\n---\n\n# login\n\nDocs.\n",
+    );
+    await runLedger(repoRoot, { quiet: true });
+
+    const c = await connect();
+    try {
+      // Baseline: debt before the watcher sees anything new.
+      const before = JSON.parse(
+        extractText(await c.client.callTool({ name: "livewiki_debt", arguments: {} })),
+      ) as { debt: { total: number } };
+
+      // Act: change the anchored symbol AND drop a brand-new wiki page on
+      // disk. Both bypass the MCP tools — only the watcher observes them.
+      await nodeFs.writeFile(
+        nodePath.join(repoRoot, "src/auth/login.ts"),
+        "export function login() { return 'edited'; }\n",
+      );
+      await nodeFs.writeFile(
+        nodePath.join(repoRoot, "livewiki/watch-probe.md"),
+        `# Probe\n\n${PROBE_TOKEN}\n`,
+      );
+
+      // Assert 1: within the bounded window the ledger reports the new debt.
+      await pollUntil(async () => {
+        const r = await c.client.callTool({ name: "livewiki_debt", arguments: {} });
+        const parsed = JSON.parse(extractText(r)) as {
+          debt: { total: number; items: Array<{ symbol_key: string | null }> };
+        };
+        return (
+          parsed.debt.total > before.debt.total &&
+          parsed.debt.items.some((i) => i.symbol_key === "src/auth/login.ts#login")
+        );
+      });
+
+      // Assert 2: the search index reflects the on-disk wiki change.
+      await pollUntil(async () => {
+        const r = await c.client.callTool({
+          name: "livewiki_search",
+          arguments: { query: PROBE_TOKEN },
+        });
+        const parsed = JSON.parse(extractText(r)) as { hits: Array<{ wikiPath: string }> };
+        return parsed.hits.some((h) => h.wikiPath === "livewiki/watch-probe.md");
+      });
+    } finally {
+      await teardown(c);
+    }
+    // teardown → server.close() resolved; the afterEach rm then proves the
+    // temp dir is removable (an unreleased handle would EBUSY on Windows).
+  }, 20000);
 });
 
 interface HintEntry {

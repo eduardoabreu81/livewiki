@@ -39,12 +39,18 @@ import { openIndex } from "./db.js";
 import { run as runStatus, type DebtItem } from "./status.js";
 import { readManifest } from "./manifest.js";
 import { recordUpdateMetric, type UpdateMetric } from "./update-metrics.js";
+// Backlog #2 (plan docs/plans/2026-07-28-change-impact-and-index-freshness.md,
+// Item 2): the work package carries the additive `impact` block. The import
+// edge change-impact.js → update.js (for the hoisted `snippetForSymbol`)
+// forms a cycle with this one; it is safe because every cross-module use is a
+// hoisted function declaration referenced only at call time.
+import { computeChangeImpact, type ChangeImpact } from "./change-impact.js";
 
 /** Estimativa padrão de tokens: ~4 chars/token (code/EN). */
 export const CHARS_PER_TOKEN = 4;
 
 /** Janela de linhas em torno do symbol no snippet (default ±20 linhas). */
-const SNIPPET_WINDOW = 20;
+export const SNIPPET_WINDOW = 20;
 
 export interface WorkPackageOptions {
   /** Idioma dos messages humanos (default: "en"). Hoje não usado, mas reserva. */
@@ -86,6 +92,14 @@ export interface WorkPackage {
   bytes: number;
   /** Idioma dos messages humanos. */
   language: "en" | "pt-BR";
+  /**
+   * Additive bounded change-impact context (backlog #2, Item 2 of
+   * docs/plans/2026-07-28-change-impact-and-index-freshness.md): working-tree
+   * changed symbols, affected pages, direct importers and snippets — the
+   * same payload `livewiki_impact` returns with an empty symbolKey.
+   * Read-only; degrades to `notGitRepo: true` outside a git repository.
+   */
+  impact: ChangeImpact;
 }
 
 /**
@@ -133,7 +147,11 @@ export async function loadWorkPackage(
     new Set(debt.map((d) => d.symbol_key).filter((k): k is string => k !== null)),
   ).sort();
 
-  // 5) Monta o pacote + estima tokens
+  // 5) Change-impact context (backlog #2): bounded working-tree impact,
+  //    read-only. Degrades to `notGitRepo: true` outside git — never throws.
+  const impact = await computeChangeImpact(absRoot);
+
+  // 6) Monta o pacote + estima tokens
   const pkg: WorkPackage = {
     manifest: manifestView,
     debt,
@@ -142,12 +160,13 @@ export async function loadWorkPackage(
     tokensEstimated: 0, // preenchido abaixo
     bytes: 0,
     language,
+    impact,
   };
   const json = JSON.stringify(pkg, null, 2);
   pkg.tokensEstimated = Math.ceil(json.length / CHARS_PER_TOKEN);
   pkg.bytes = json.length;
 
-  // 6) Contabilidade (SPEC §Contabilidade): registra métrica incremental.
+  // 7) Contabilidade (SPEC §Contabilidade): registra métrica incremental.
   //    Side effect em .livewiki/update_metrics.json (não bloqueia o retorno).
   await recordUpdateMetric(absRoot, {
     kind: "package_emitted",
@@ -163,8 +182,11 @@ export async function loadWorkPackage(
 /**
  * Lê o source do arquivo da âncora e retorna a janela em torno do symbol.
  * Retorna null se o arquivo não existe ou o símbolo não tem start/end.
+ *
+ * Exported (hoisted) for the change-impact package (backlog #2) — reused,
+ * never duplicated. Behavior unchanged.
  */
-async function snippetForSymbol(
+export async function snippetForSymbol(
   absRoot: string,
   symbolKey: string,
   window: number,

@@ -32,6 +32,14 @@
  * payloads gain a top-level `_hints` field; plain-text responses
  * (quickstart/read/write_doc) gain a trailing text block with
  * `{"_hints": [...]}`. Error responses carry no hints.
+ *
+ * Index freshness (backlog #3): while the server is alive, a recursive
+ * fs.watch on the repo root (denylisted, 1.5s debounce) re-runs the
+ * incremental indexer → ledger → search rebuild on each batch of working-
+ * tree changes, so tool responses reflect the re-indexed state without a
+ * restart. Watch failures degrade to startup-rebuild semantics with one
+ * log line; `server.close()` stops the watcher and awaits any in-flight
+ * sync (Windows handle discipline).
  */
 
 /** One workflow-adjacency hint: a suggested next tool call and when to use it. */
@@ -64,8 +72,9 @@ const TOOL_HINTS: Record<string, ToolHint[]> = {
     { tool: "livewiki_resolve_debt", when: "to close debt items you have already addressed" },
   ],
   livewiki_impact: [
-    { tool: "livewiki_read", when: "to read the wiki pages that document affected symbols" },
-    { tool: "livewiki_write_doc", when: "to update affected pages after changing the symbol" },
+    { tool: "livewiki_read", when: "to read a wiki page listed among the affected pages" },
+    { tool: "livewiki_write_doc", when: "to update an affected page after changing the code it documents" },
+    { tool: "livewiki_debt", when: "to check open documentation debt for the changed symbols (repo-wide impact mode)" },
   ],
   livewiki_write_doc: [
     { tool: "livewiki_debt", when: "to re-check which debt items remain open after the write" },
@@ -84,12 +93,17 @@ import { run as runStatus } from "@livewiki/core/status";
 import { run as runVerify } from "@livewiki/core/verify";
 import { openIndex } from "@livewiki/core/db";
 import { computeBlastRadius } from "@livewiki/core/blast-radius";
+import { computeChangeImpact } from "@livewiki/core/change-impact";
+import { run as runIndexer } from "@livewiki/core/indexer";
+import { run as runLedger } from "@livewiki/core/anchor-ledger";
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs/promises";
+import { watch, type FSWatcher } from "node:fs";
 import {
   openAndIndex,
   indexPage,
   removePage,
+  reindexAllPages,
   search as doSearch,
   close as closeSearch,
   type SearchIndex,
@@ -100,6 +114,136 @@ export interface CreateServerOptions {
   repoRoot?: string;
   /** Test seam for forcing verifier failures. Production uses core verify. */
   verify?: typeof runVerify;
+}
+
+/**
+ * Watcher denylist (backlog #3) — deliberately tiny and documented.
+ * Directory SEGMENTS: `.git` (VCS internals), `.livewiki` (the derived
+ * cache — indexer/ledger/search writes must never retrigger the sync
+ * loop), `node_modules`, `dist` (build output). Extensions: common
+ * binary/media/font files that never carry symbols or prose. Anything
+ * else flows into the debounce; the indexer itself applies its own
+ * (richer) walk denylist, so a noisy-but-harmless event costs at most
+ * one hash-incremental no-op sync.
+ */
+const WATCH_DENIED_SEGMENTS: ReadonlySet<string> = new Set([
+  ".git",
+  ".livewiki",
+  "node_modules",
+  "dist",
+]);
+const WATCH_DENIED_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".svg",
+  ".pdf", ".zip", ".gz", ".tar",
+  ".mp3", ".mp4", ".mov", ".avi",
+  ".woff", ".woff2", ".ttf", ".eot",
+]);
+
+function isWatchDenied(filename: string): boolean {
+  // Windows emits backslash separators; POSIX forward. Split on both.
+  for (const segment of filename.split(/[\\/]/)) {
+    if (WATCH_DENIED_SEGMENTS.has(segment)) return true;
+  }
+  return WATCH_DENIED_EXTENSIONS.has(nodePath.extname(filename).toLowerCase());
+}
+
+/** Debounce window for watcher-triggered syncs (backlog #3 design). */
+const WATCH_DEBOUNCE_MS = 1500;
+
+interface WatcherHandle {
+  /** Stops the watcher, clears the pending debounce, awaits any in-flight sync. */
+  stop(): Promise<void>;
+}
+
+/**
+ * Backlog #3 (docs/plans/2026-07-28-change-impact-and-index-freshness.md,
+ * item 3.2): recursive fs.watch on the repo root feeding a 1.5s debounce.
+ * Per debounced batch: incremental `runIndexer` (hash-incremental —
+ * unchanged files skip by design) → `runLedger` → full search.db rebuild
+ * (the same sub-second, idempotent pass the startup rebuild uses —
+ * preferred over per-page diffing as the simple correct option).
+ *
+ * Watch creation failures (recursive watch is unsupported on some
+ * platforms/filesystems, e.g. Linux) and runtime errors (EMFILE, torn-
+ * down fs) degrade to "no watcher, startup-rebuild semantics" with ONE
+ * log line — never a crash. `stop()` releases the OS handle and awaits
+ * the in-flight sync so a following search.db close + temp-dir removal
+ * is EBUSY-safe on Windows.
+ */
+function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
+  let watcher: FSWatcher | null = null;
+  let debounce: ReturnType<typeof setTimeout> | null = null;
+  let inFlight: Promise<void> | null = null;
+  let stopped = false;
+
+  async function syncBatch(): Promise<void> {
+    try {
+      await runIndexer(repoRoot, { quiet: true });
+      await runLedger(repoRoot, { quiet: true });
+      await reindexAllPages(searchIdx, repoRoot);
+    } catch (err) {
+      // A failed sync never kills the server; the next event retries.
+      // eslint-disable-next-line no-console
+      console.error(
+        `[livewiki] watcher sync failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  function schedule(): void {
+    if (stopped) return;
+    if (debounce) clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      debounce = null;
+      // Serialize syncs: overlapping indexer/ledger runs on the same DB
+      // are pointless — re-arm and let the in-flight one settle.
+      if (inFlight) {
+        schedule();
+        return;
+      }
+      inFlight = syncBatch().finally(() => {
+        inFlight = null;
+      });
+    }, WATCH_DEBOUNCE_MS);
+  }
+
+  async function stop(): Promise<void> {
+    stopped = true;
+    if (debounce) {
+      clearTimeout(debounce);
+      debounce = null;
+    }
+    if (watcher) {
+      watcher.close();
+      watcher = null;
+    }
+    if (inFlight) await inFlight;
+  }
+
+  try {
+    watcher = watch(repoRoot, { recursive: true }, (_eventType, filename) => {
+      // filename may be null on some platforms — treat as "sync anyway".
+      if (filename !== null && isWatchDenied(filename)) return;
+      schedule();
+    });
+    watcher.on("error", (err) => {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[livewiki] fs.watch failed (${err.message}); ` +
+          "continuing without watcher (startup-rebuild semantics)",
+      );
+      void stop();
+    });
+  } catch (err) {
+    watcher = null;
+    // eslint-disable-next-line no-console
+    console.error(
+      `[livewiki] fs.watch unavailable (${err instanceof Error ? err.message : String(err)}); ` +
+        "continuing without watcher (startup-rebuild semantics)",
+    );
+  }
+
+  return { stop };
 }
 
 /**
@@ -243,14 +387,16 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   // "What breaks if I change this symbol?" — walks the resolved call graph
   // backward (direct + transitive callers, bounded) and cross-references
   // anchors/doc_pages to report which wiki pages document affected code.
+  // Backlog #2: an EMPTY symbolKey ("") returns the repo-wide change-impact
+  // package instead (working-tree changed symbols, affected pages, direct
+  // importers, bounded snippets — the same block `livewiki update` emits).
   server.tool(
     "livewiki_impact",
-    "Blast radius for a symbol key (e.g. 'src/auth.ts#login'): direct and transitive callers found in the indexed call graph, plus which wiki pages document any of them. Only RESOLVED call edges are walked (an edge the indexer couldn't confidently attribute to one symbol is skipped, never guessed) — treat this as a best-effort signal, not exhaustive static analysis. Bounded by maxDepth/maxNodes; `truncated: true` means the walk stopped at a bound, not that it found no more callers.",
+    "Blast radius for a symbol key (e.g. 'src/auth.ts#login'): direct and transitive callers found in the indexed call graph, plus which wiki pages document any of them. Only RESOLVED call edges are walked (an edge the indexer couldn't confidently attribute to one symbol is skipped, never guessed) — treat this as a best-effort signal, not exhaustive static analysis. Bounded by maxDepth/maxNodes; `truncated: true` means the walk stopped at a bound, not that it found no more callers. Pass an EMPTY symbolKey (\"\") for the repo-wide change-impact package instead: working-tree changed symbols, affected wiki pages, direct importers of the changed files, and bounded source snippets (read-only; degrades to `notGitRepo: true` outside a git repository).",
     {
       symbolKey: z
         .string()
-        .min(1)
-        .describe("Symbol key, e.g. 'src/auth.ts#login' or 'src/auth.ts#Session.refresh'"),
+        .describe("Symbol key, e.g. 'src/auth.ts#login' or 'src/auth.ts#Session.refresh'. Pass an empty string (\"\") for the repo-wide change-impact package."),
       maxDepth: z
         .number()
         .int()
@@ -268,6 +414,13 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     },
     async ({ symbolKey, maxDepth, maxNodes }) => {
       try {
+        // Backlog #2: empty symbolKey → repo-wide change-impact package.
+        if (symbolKey === "") {
+          const impact = await computeChangeImpact(repoRoot);
+          return textResult(
+            JSON.stringify({ ...impact, _hints: TOOL_HINTS.livewiki_impact }, null, 2),
+          );
+        }
         const dbPath = await safeIo.resolveAndValidate(repoRoot, ".livewiki/index.db");
         const db = openIndex(dbPath);
         try {
@@ -430,9 +583,19 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     },
   );
 
+  // Watcher (backlog #3): keeps the index/ledger/search in sync with the
+  // working tree while the server is alive. Degrades to no-op when
+  // recursive fs.watch is unavailable.
+  const watcherHandle = startWatcher(repoRoot, searchIdx);
+
   // Cleanup on close
   const origClose = server.close.bind(server);
   server.close = async () => {
+    // Stop the watcher FIRST and await any in-flight sync — otherwise the
+    // in-flight indexer/ledger could hold index.db handles (and the FTS5
+    // reindex could touch a closed search.db) past close(), which is the
+    // EBUSY lesson on Windows when tests rm -rf the temp dir right after.
+    await watcherHandle.stop();
     closeSearch(searchIdx);
     return origClose();
   };

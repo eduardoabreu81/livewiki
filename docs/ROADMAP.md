@@ -143,7 +143,7 @@ snake_case, kebab-case) at index and query time. `search.db` is rebuilt on
 MCP startup, so no schema/migration cost. Acceptance: a search for a
 sub-word of any anchored symbol name returns the page that anchors it.
 
-### 2. Native compact change-impact context
+### 2. Native compact change-impact context ✅ DONE 2026-07-28
 
 Extend the existing `livewiki update` work package and MCP responses with a
 bounded, documentation-focused impact view: changed symbols, affected anchors,
@@ -152,7 +152,7 @@ local livewiki index; do not call or require another graph/MCP product. The same
 structured payload must be available through CLI JSON and MCP so an active agent
 or standalone provider receives equivalent context.
 
-### 3. Index freshness and automatic local synchronization
+### 3. Index freshness and automatic local synchronization ✅ DONE 2026-07-28
 
 Make index freshness explicit and cheap. Long-running livewiki surfaces should
 detect repository changes, debounce local re-indexing, and expose snapshot age

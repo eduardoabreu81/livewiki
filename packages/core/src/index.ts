@@ -41,3 +41,4 @@ export * as importResolution from "./import-resolution.js";
 export * as risk from "./risk.js";
 export * as view from "./view.js";
 export * as diffPreview from "./diff-preview.js";
+export * as changeImpact from "./change-impact.js";

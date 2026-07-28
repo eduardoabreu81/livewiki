@@ -434,6 +434,20 @@ for closing the lot.
   from changed files on disk → compare anchors’ `symbol_hash_at_doc`
   (ledger-identical hashes) → changed/deleted pages. Read-only, exit 0
   (exit 1 only outside git); `moved` out of scope v1.
+- **Change-impact context (backlog 2)** →
+  `packages/core/src/change-impact.ts:computeChangeImpact` composes the
+  working-tree/debt seed → affected anchors/pages, direct importers
+  (`resolveImportEdges`), bounded snippets (budgets constant,
+  `truncated` when capped). Consumed by `update.ts` work package
+  (additive `impact` block), the update CLI human output, and
+  `livewiki_impact` with an EMPTY `symbolKey` (per-symbol blast radius
+  unchanged).
+- **Index freshness (backlog 3)** → `status.ts` meta:
+  `snapshotAgeMs`/`stale`/`staleChangedFiles` (stale = indexed file missing
+  or disk-mtime > `last_indexed_at`, bounded stat scan) + human line; MCP
+  server `fs.watch` (denylisted, 1.5s debounce → indexer → ledger →
+  `reindexAllPages`, serialized, graceful no-watch degrade; `server.close()`
+  stops watcher before closing search.db — Windows EBUSY discipline).
 - **Viewer (Phase 7)** → site builder `packages/core/src/view.ts`
   (build-time `marked` MD→HTML, `search-index.js` offline index, vendored
   mermaid, tasks.md-mirrored sidebar groups); CLI wrapper

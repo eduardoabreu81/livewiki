@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatHuman } from "./status.js";
@@ -340,5 +340,95 @@ describe("status degraded pages (recovery tier, Component 2)", () => {
     const report = await runStatus(repoRoot);
     expect(report.degraded).toEqual({ total: 0, pages: [] });
     expect(formatHuman(report)).not.toContain("Degraded pages");
+  });
+});
+
+/**
+ * Backlog #3 (plan 2026-07-28, item 3.1): index freshness in status.
+ * `meta.snapshotAgeMs` + `meta.stale`, computed by stat-ing the indexed
+ * files only (no repo walk). The human output prints the stale line only
+ * when the snapshot is actually stale.
+ */
+describe("status index freshness (backlog #3)", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), "livewiki-status-fresh-"));
+    await mkdir(join(repoRoot, ".livewiki"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("fresh snapshot: stale false, snapshotAgeMs present, no human line", async () => {
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(join(repoRoot, "src/a.ts"), "export function alpha() { return 1; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+
+    const report = await runStatus(repoRoot);
+    expect(report.meta.stale).toBe(false);
+    expect(report.meta.staleChangedFiles).toBe(0);
+    expect(typeof report.meta.snapshotAgeMs).toBe("number");
+    expect(report.meta.snapshotAgeMs).toBeGreaterThanOrEqual(0);
+    expect(formatHuman(report)).not.toContain("index is stale");
+  });
+
+  it("touched file: stale true with count, human line printed", async () => {
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    const abs = join(repoRoot, "src/a.ts");
+    await writeFile(abs, "export function alpha() { return 1; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+
+    // Deterministic touch: bump the on-disk mtime past last_indexed_at
+    // regardless of filesystem mtime granularity.
+    const future = new Date(Date.now() + 10_000);
+    await utimes(abs, future, future);
+
+    const report = await runStatus(repoRoot);
+    expect(report.meta.stale).toBe(true);
+    expect(report.meta.staleChangedFiles).toBe(1);
+    const human = formatHuman(report);
+    expect(human).toMatch(/index is stale \(snapshot \S+; 1 changed files detected\)/);
+  });
+
+  it("missing file: stale true, human line printed", async () => {
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    const abs = join(repoRoot, "src/a.ts");
+    await writeFile(abs, "export function alpha() { return 1; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+    await rm(abs);
+
+    const report = await runStatus(repoRoot);
+    expect(report.meta.stale).toBe(true);
+    expect(report.meta.staleChangedFiles).toBe(1);
+    expect(formatHuman(report)).toContain("index is stale");
+  });
+
+  it("re-index after the touch clears the stale flag", async () => {
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    const abs = join(repoRoot, "src/a.ts");
+    await writeFile(abs, "export function alpha() { return 1; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+    const future = new Date(Date.now() + 10_000);
+    await utimes(abs, future, future);
+    expect((await runStatus(repoRoot)).meta.stale).toBe(true);
+
+    // Content changed → the indexer refreshes the row and the snapshot is
+    // fresh again (last_indexed_at > on-disk mtime).
+    await writeFile(abs, "export function alpha() { return 2; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+    expect((await runStatus(repoRoot)).meta.stale).toBe(false);
+  });
+
+  it("never indexed: snapshotAgeMs null, stale false", async () => {
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(join(repoRoot, "src/a.ts"), "export function alpha() { return 1; }\n");
+
+    const report = await runStatus(repoRoot);
+    expect(report.meta.lastIndexedAt).toBeNull();
+    expect(report.meta.snapshotAgeMs).toBeNull();
+    expect(report.meta.stale).toBe(false);
+    expect(formatHuman(report)).not.toContain("index is stale");
   });
 });

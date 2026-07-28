@@ -135,7 +135,8 @@ export function registerUpdate(program: Command): void {
     });
 }
 
-function formatHuman(pkg: Awaited<ReturnType<typeof loadWorkPackage>>): string {
+/** Exported for tests (same pattern as commands/batch.ts formatters). */
+export function formatHuman(pkg: Awaited<ReturnType<typeof loadWorkPackage>>): string {
   const lines: string[] = [];
   lines.push("livewiki update — work package:");
   if (!pkg.manifest) {
@@ -162,6 +163,23 @@ function formatHuman(pkg: Awaited<ReturnType<typeof loadWorkPackage>>): string {
   if (pkg.debt.length > 5) lines.push(`    ... +${pkg.debt.length - 5} more`);
   lines.push(`  snippets: ${pkg.snippets.length} (window per anchor)`);
   lines.push(`  validAnchors: ${pkg.validAnchors.length}`);
+  // Backlog #2: bounded change-impact context (top affected pages).
+  if (pkg.impact.notGitRepo) {
+    lines.push("  impact: unavailable (not a git repository)");
+  } else {
+    lines.push(
+      `  impact: ${pkg.impact.changedSymbols.length} changed symbol(s), ` +
+        `${pkg.impact.pages.length} affected page(s), ` +
+        `${pkg.impact.importers.length} importer(s)` +
+        (pkg.impact.truncated ? " (truncated — see JSON totals)" : ""),
+    );
+    for (const page of pkg.impact.pages.slice(0, 5)) {
+      lines.push(`    ${page.wikiPath}`);
+    }
+    if (pkg.impact.pages.length > 5) {
+      lines.push(`    ... +${pkg.impact.pages.length - 5} more`);
+    }
+  }
   lines.push("");
   lines.push(`Estimated tokens: ${pkg.tokensEstimated} (~${pkg.bytes} bytes)`);
   lines.push("Thesis: focused package vs re-reading repo (~12500 tokens) = economy.");

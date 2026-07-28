@@ -178,6 +178,16 @@ async function collectMarkdownFiles(dir: string): Promise<string[]> {
 }
 
 /**
+ * Full rebuild of the FTS5 index from the wiki on disk — the same
+ * idempotent, sub-second pass the startup rebuild uses. Exposed for the
+ * server watcher (backlog #3): after each debounced sync batch the search
+ * index is rebuilt wholesale instead of tracking per-page diffs.
+ */
+export async function reindexAllPages(idx: SearchIndex, repoRoot: string): Promise<void> {
+  await reindexAll(idx.db, nodePath.resolve(repoRoot));
+}
+
+/**
  * Indexa (ou atualiza) uma página individual. Chamado por write_doc.
  *
  * Both tables are updated in a single transaction: original text into

@@ -23,6 +23,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile, mkdir, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -386,3 +387,72 @@ describe("update — files persistidos", () => {
     expect(parsed.entries[0].kind).toBe("package_emitted");
   });
 });
+
+/**
+ * Backlog #2 (plan docs/plans/2026-07-28-change-impact-and-index-freshness.md,
+ * Item 2): the work package carries the additive `impact` block — the same
+ * bounded change-impact payload `livewiki_impact` returns with an empty
+ * symbolKey. Read-only; degrades outside git.
+ */
+describe("update — impact block (backlog #2)", () => {
+  it("work package carries an impact block, degraded outside git", async () => {
+    await setupWithAnchor();
+    const pkg = await loadWorkPackage(repoRoot);
+    // No `git init` in this fixture — the impact degrades, never throws.
+    expect(pkg.impact).toBeDefined();
+    expect(pkg.impact.mode).toBe("working-tree");
+    expect(pkg.impact.notGitRepo).toBe(true);
+    expect(pkg.impact.pages).toEqual([]);
+    expect(pkg.impact.changedSymbols).toEqual([]);
+  });
+
+  it("impact block lists the affected page for working-tree changes", async () => {
+    await setupWithAnchor();
+    // Commit the indexed baseline so the working-tree diff sees exactly one
+    // source change (`.livewiki/` is the derived cache — never in git).
+    await writeFile(join(repoRoot, ".gitignore"), ".livewiki/\n");
+    git(["init", "-q", "-b", "main"]);
+    gitCommitAll("baseline");
+    // Uncommitted change: the preview seed catches it without reindexing.
+    await writeCode("src/foo.ts", "export function bar() { return 2; }\n");
+
+    const pkg = await loadWorkPackage(repoRoot);
+    expect(pkg.impact.notGitRepo).toBe(false);
+    expect(pkg.impact.changedFiles).toEqual(["src/foo.ts"]);
+    expect(pkg.impact.changedSymbols).toEqual([
+      { symbolKey: "src/foo.ts#bar", event: "changed" },
+    ]);
+    expect(pkg.impact.pages).toEqual([
+      {
+        wikiPath: "livewiki/foo.md",
+        items: [{ symbolKey: "src/foo.ts#bar", event: "changed" }],
+      },
+    ]);
+    expect(pkg.impact.truncated).toBe(false);
+  });
+});
+
+function git(args: string[]): void {
+  const r = spawnSync("git", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+  });
+  expect(r.status, `git ${args.join(" ")} failed: ${r.stderr}`).toBe(0);
+}
+
+function gitCommitAll(message: string): void {
+  git(["add", "-A"]);
+  git([
+    "-c",
+    "user.name=livewiki-test",
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "-m",
+    message,
+  ]);
+}

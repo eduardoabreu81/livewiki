@@ -109,6 +109,19 @@ export interface StatusReport {
     schemaVersion: number;
     lastIndexedAt: number | null;
     lastLedgerAt: number | null;
+    /**
+     * Index freshness (backlog #3, plan 2026-07-28 item 3.1). Additive and
+     * optional — consumers and report literals built before these fields
+     * keep working.
+     *
+     * `snapshotAgeMs`: now − `lastIndexedAt`; null when never indexed.
+     * `stale`: any indexed file changed on disk or went missing since the
+     * snapshot (see `applyFreshness` for the exact rule).
+     * `staleChangedFiles`: how many indexed files triggered `stale`.
+     */
+    snapshotAgeMs?: number | null;
+    stale?: boolean;
+    staleChangedFiles?: number;
   };
 }
 
@@ -122,6 +135,9 @@ export async function run(
   const db = openIndex(dbPath);
   try {
     const report = collect(db, opts.topN ?? 10);
+    // Backlog #3: index freshness, bounded by the index itself (stat the
+    // indexed files only — never a repo walk).
+    await applyFreshness(db, absRoot, report);
     // Etapa 2c: risk-weighted debt ordering (presentation order + additive
     // metadata only). Runs only when open debt exists; recomputes imports
     // on demand, so status on a clean repo never parses files.
@@ -325,6 +341,58 @@ async function applyRiskRanking(
 }
 
 /**
+ * Backlog #3 (docs/plans/2026-07-28-change-impact-and-index-freshness.md,
+ * item 3.1): index freshness computed WITHOUT a repo walk — stat the
+ * indexed files only, which is bounded by the index itself.
+ *
+ * Stale rule: the snapshot is stale when any active indexed file is
+ * (a) missing on disk, or (b) newer on disk than `last_indexed_at` (i.e.
+ * touched after the snapshot was taken). Rule (b) compares against
+ * `last_indexed_at` rather than the per-row indexed mtime on purpose: the
+ * indexer skips hash-unchanged files without refreshing their row mtime,
+ * so a touch-then-reindex cycle would otherwise stay "stale" forever.
+ * Files created but never indexed are out of reach of this check by
+ * design (detecting them requires a full walk; the MCP watcher covers
+ * them via fs events). A repo that was never indexed has no snapshot to
+ * be stale: `snapshotAgeMs` is null and `stale` is false.
+ */
+async function applyFreshness(
+  db: import("better-sqlite3").Database,
+  absRoot: string,
+  report: StatusReport,
+): Promise<void> {
+  const lastIndexedAt = report.meta.lastIndexedAt;
+  report.meta.snapshotAgeMs =
+    lastIndexedAt === null ? null : Math.max(0, Date.now() - lastIndexedAt);
+  if (lastIndexedAt === null) {
+    report.meta.stale = false;
+    report.meta.staleChangedFiles = 0;
+    return;
+  }
+  const rows = db
+    .prepare("SELECT path FROM files WHERE status = 'active'")
+    .all() as Array<{ path: string }>;
+  let changed = 0;
+  for (const row of rows) {
+    const stat = await nodeFs.stat(nodePath.join(absRoot, row.path)).catch(() => null);
+    if (stat === null || stat.mtimeMs > lastIndexedAt) changed++;
+  }
+  report.meta.stale = changed > 0;
+  report.meta.staleChangedFiles = changed;
+}
+
+/** Compact age for the human stale line: "12s", "5m", "3h", "4d". */
+function formatSnapshotAge(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+/**
  * Recovery tier (Component 2): walk the `livewiki/` tree fresh from disk
  * and collect Markdown pages whose frontmatter declares `quality: degraded`.
  * Same walk discipline as verify.ts: hidden DIRECTORIES are never
@@ -421,6 +489,13 @@ export function formatHuman(report: StatusReport): string {
     for (const page of report.degraded.pages) {
       lines.push(`  ${page}`);
     }
+    lines.push("");
+  }
+  if (report.meta.stale === true) {
+    lines.push(
+      `index is stale (snapshot ${formatSnapshotAge(report.meta.snapshotAgeMs ?? 0)}; ` +
+        `${report.meta.staleChangedFiles ?? 0} changed files detected)`,
+    );
     lines.push("");
   }
   lines.push(

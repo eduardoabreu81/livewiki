@@ -133,6 +133,10 @@
     "./diff-preview": {
       "types": "./dist/diff-preview.d.ts",
       "import": "./dist/diff-preview.js"
+    },
+    "./change-impact": {
+      "types": "./dist/change-impact.d.ts",
+      "import": "./dist/change-impact.js"
     }
   },
   "files": [
