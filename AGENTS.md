@@ -442,6 +442,14 @@ for closing the lot.
   (additive `impact` block), the update CLI human output, and
   `livewiki_impact` with an EMPTY `symbolKey` (per-symbol blast radius
   unchanged).
+- **`livewiki install` (backlog 4)** → `packages/core/src/install.ts`:
+  `AGENT_REGISTRY` (claude-code/codex/cursor/kimi/gemini: config probes,
+  PATH binaries incl. Windows variants, config shape, skill target);
+  detection with per-agent evidence; merge adapters (JSON `mcpServers`
+  preserve/update/refuse, TOML managed block for Codex, claude-code Stop
+  hook merge, shared skill copy with refuse-on-foreign-content, git
+  post-commit never overwrites); pointer stays opt-in (rule #2);
+  `--print` dry-run / `--yes` / `--agents`; plan/apply share one code path.
 - **Index freshness (backlog 3)** → `status.ts` meta:
   `snapshotAgeMs`/`stale`/`staleChangedFiles` (stale = indexed file missing
   or disk-mtime > `last_indexed_at`, bounded stat scan) + human line; MCP

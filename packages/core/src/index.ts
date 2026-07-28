@@ -42,3 +42,4 @@ export * as risk from "./risk.js";
 export * as view from "./view.js";
 export * as diffPreview from "./diff-preview.js";
 export * as changeImpact from "./change-impact.js";
+export * as install from "./install.js";

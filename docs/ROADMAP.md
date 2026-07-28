@@ -160,7 +160,7 @@ and stale/ready state. Startup and recovery remain rebuildable from the repo and
 wiki. No daemon, cloud service, or external watcher may be required for normal
 CLI use.
 
-### 4. `livewiki install` — agent auto-detection
+### 4. `livewiki install` — agent auto-detection ✅ DONE 2026-07-28
 
 One command that detects installed coding agents (Claude Code, Codex,
 Cursor, Zed, ... — start with the agents already covered by the Phase 5
