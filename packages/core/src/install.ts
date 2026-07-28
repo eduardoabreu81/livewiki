@@ -33,9 +33,30 @@ import { insertPointer, readPointerStatus, buildPointerBlock } from "./pointer.j
 
 // ── Registry (pure data) ────────────────────────────────────────────────────
 
-export type AgentId = "claude-code" | "codex" | "cursor" | "kimi" | "gemini";
+export type AgentId =
+  | "claude-code"
+  | "codex"
+  | "cursor"
+  | "kimi"
+  | "gemini"
+  | "opencode"
+  | "openclaw"
+  | "cline"
+  | "kiro"
+  | "qwen"
+  | "warp"
+  | "zed"
+  | "hermes";
 
-export type McpConfigShape = "json-mcpServers" | "toml-managed-block";
+export type McpConfigShape =
+  /** `{"<jsonKey>": {"livewiki": {command, args}}}` — jsonKey defaults to "mcpServers" (zed uses "context_servers"). */
+  | "json-mcpServers"
+  /** opencode: `{"mcp": {"livewiki": {type: "local", command: [...], enabled: true}}}`. */
+  | "json-local-command"
+  /** Codex config.toml: delimited block, no TOML parser. */
+  | "toml-managed-block"
+  /** Hermes config.yaml: delimited block with YAML lines, no YAML parser. */
+  | "yaml-managed-block";
 
 export interface AgentDefinition {
   id: AgentId;
@@ -45,13 +66,18 @@ export interface AgentDefinition {
   /** Binary names probed on PATH (Windows variants .cmd/.exe/.ps1 included). */
   binProbes: readonly string[];
   /** Where the MCP server entry lives for this agent. */
-  mcpConfig: { path: string; shape: McpConfigShape };
+  mcpConfig: { path: string; shape: McpConfigShape; jsonKey?: string };
   /** claude-code only: merge the shipped Stop-hook settings template. */
   hasStopHookTemplate?: boolean;
   /** Agents that scan the shared ~/.agents/skills/ directory. */
   usesSharedSkills?: boolean;
 }
 
+// NOTE — agents deliberately NOT in this registry:
+//   minimax/mmx CLI has NO MCP-server config convention (verified
+//   2026-07-28: ~/.mmx/config.json holds only oauth + region). It is an
+//   LLM provider (see presets.ts), not an MCP host — there is nothing for
+//   `livewiki install` to configure.
 export const AGENT_REGISTRY: readonly AgentDefinition[] = [
   {
     id: "claude-code",
@@ -91,6 +117,64 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     configProbes: [".gemini/settings.json"],
     binProbes: ["gemini"],
     mcpConfig: { path: ".gemini/settings.json", shape: "json-mcpServers" },
+  },
+  {
+    id: "opencode",
+    displayName: "opencode",
+    // JSONC: comments are stripped (string-aware) before parsing; a rewrite
+    // re-emits plain JSON (comments are lost — surfaced in the action reason).
+    configProbes: [".config/opencode/opencode.jsonc"],
+    binProbes: ["opencode"],
+    mcpConfig: { path: ".config/opencode/opencode.jsonc", shape: "json-local-command", jsonKey: "mcp" },
+  },
+  {
+    id: "openclaw",
+    displayName: "OpenClaw",
+    configProbes: [".openclaw/openclaw.json"],
+    binProbes: ["openclaw"],
+    mcpConfig: { path: ".openclaw/openclaw.json", shape: "json-mcpServers" },
+  },
+  {
+    id: "cline",
+    displayName: "Cline",
+    configProbes: [".cline/mcp.json"],
+    binProbes: ["cline"],
+    mcpConfig: { path: ".cline/mcp.json", shape: "json-mcpServers" },
+  },
+  {
+    id: "kiro",
+    displayName: "Kiro",
+    configProbes: [".kiro/settings/mcp.json"],
+    binProbes: ["kiro"],
+    mcpConfig: { path: ".kiro/settings/mcp.json", shape: "json-mcpServers" },
+  },
+  {
+    id: "qwen",
+    displayName: "Qwen Code",
+    configProbes: [".qwen/settings.json"],
+    binProbes: ["qwen"],
+    mcpConfig: { path: ".qwen/settings.json", shape: "json-mcpServers" },
+  },
+  {
+    id: "warp",
+    displayName: "Warp",
+    configProbes: [".warp/.mcp.json"],
+    binProbes: ["warp"],
+    mcpConfig: { path: ".warp/.mcp.json", shape: "json-mcpServers" },
+  },
+  {
+    id: "zed",
+    displayName: "Zed",
+    configProbes: [".config/zed/settings.json"],
+    binProbes: ["zed"],
+    mcpConfig: { path: ".config/zed/settings.json", shape: "json-mcpServers", jsonKey: "context_servers" },
+  },
+  {
+    id: "hermes",
+    displayName: "Hermes",
+    configProbes: [".hermes", ".hermes/config.yaml"],
+    binProbes: ["hermes"],
+    mcpConfig: { path: ".hermes/config.yaml", shape: "yaml-managed-block" },
   },
 ];
 
@@ -192,6 +276,21 @@ export function buildMcpEntry(repoRoot: string): McpEntry {
   };
 }
 
+/** opencode entry form: local server, command as a single argv array. */
+export interface LocalCommandMcpEntry {
+  type: "local";
+  command: string[];
+  enabled: boolean;
+}
+
+export function buildLocalCommandEntry(repoRoot: string): LocalCommandMcpEntry {
+  return {
+    type: "local",
+    command: ["npx", "-y", "@livewiki/mcp", "--repo", nodePath.resolve(repoRoot)],
+    enabled: true,
+  };
+}
+
 export type MergeStatus = "write" | "skip" | "refuse";
 
 export interface MergeResult {
@@ -205,22 +304,79 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function mcpEntryEquals(a: unknown, b: McpEntry): boolean {
-  if (!isPlainObject(a)) return false;
-  if (a.command !== b.command) return false;
-  if (!Array.isArray(a.args)) return false;
-  return JSON.stringify(a.args) === JSON.stringify(b.args);
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const ka = Object.keys(a);
+    const kb = Object.keys(b);
+    return ka.length === kb.length && ka.every((k) => deepEqual(a[k], b[k]));
+  }
+  return false;
 }
 
 /**
- * Merges the livewiki entry into a `{"mcpServers": {...}}` JSON config.
- * Preserves existing servers and unrelated keys. No-op when the entry is
- * already identical; update-in-place when it changed; REFUSES on
+ * Strips JSONC comments (`//` line and `/* *​/` block) OUTSIDE string
+ * literals — a `//` inside a quoted string is data, not a comment.
+ * Newlines inside block comments are preserved so line numbers survive.
+ */
+export function stripJsoncComments(text: string): string {
+  let out = "";
+  let i = 0;
+  let inString = false;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (inString) {
+      out += ch;
+      if (ch === "\\") {
+        out += text[i + 1] ?? "";
+        i += 2;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) {
+        if (text[i] === "\n") out += "\n";
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Merges the livewiki entry into a `{"<jsonKey>": {...}}` JSON config
+ * (jsonKey defaults to "mcpServers"; zed uses "context_servers", opencode
+ * uses "mcp"). The entry shape is caller-provided (command/args object or
+ * opencode local-command object). Preserves existing servers and unrelated
+ * keys. No-op when the entry is already identical (deep equality, key
+ * order irrelevant); update-in-place when it changed; REFUSES on
  * unparseable or non-object JSON (never clobbers user config).
  */
 export function mergeMcpServersJson(
   existing: string | null,
-  entry: McpEntry,
+  entry: unknown,
+  jsonKey: string = "mcpServers",
 ): MergeResult {
   let obj: Record<string, unknown> = {};
   if (existing !== null && existing.trim() !== "") {
@@ -243,27 +399,27 @@ export function mergeMcpServersJson(
     }
   }
 
-  const currentServers = obj.mcpServers;
+  const currentServers = obj[jsonKey];
   if (currentServers !== undefined && !isPlainObject(currentServers)) {
     return {
       status: "refuse",
       content: null,
-      reason: 'existing "mcpServers" is not an object; not overwriting',
+      reason: `existing "${jsonKey}" is not an object; not overwriting`,
     };
   }
   const servers: Record<string, unknown> = currentServers ?? {};
 
   if ("livewiki" in servers) {
-    if (mcpEntryEquals(servers.livewiki, entry)) {
+    if (deepEqual(servers.livewiki, entry)) {
       return {
         status: "skip",
         content: null,
-        reason: "mcpServers.livewiki already up to date",
+        reason: `${jsonKey}.livewiki already up to date`,
       };
     }
   }
-  servers.livewiki = { command: entry.command, args: entry.args };
-  obj.mcpServers = servers;
+  servers.livewiki = entry;
+  obj[jsonKey] = servers;
   return { status: "write", content: JSON.stringify(obj, null, 2) + "\n" };
 }
 
@@ -287,7 +443,28 @@ export function renderTomlManagedBlock(repoRoot: string): string {
 }
 
 /**
- * Merges the managed block into a TOML config. No TOML parser by design:
+ * Renders the Hermes `config.yaml` managed block. No YAML parser by
+ * design — the block is plain text between the markers. YAML single-quoted
+ * scalars keep Windows paths literal (no escape processing).
+ */
+export function renderYamlManagedBlock(repoRoot: string): string {
+  const root = nodePath.resolve(repoRoot);
+  return [
+    TOML_BLOCK_START,
+    "mcp_servers:",
+    "  livewiki:",
+    "    command: npx",
+    "    args:",
+    "      - '-y'",
+    "      - '@livewiki/mcp'",
+    "      - '--repo'",
+    `      - '${root}'`,
+    TOML_BLOCK_END,
+  ].join("\n");
+}
+
+/**
+ * Merges the managed block into a TOML/YAML config. No parser by design:
  * only the delimited block is touched, everything else is preserved
  * byte-for-byte. Idempotent — identical block is a no-op.
  */
@@ -452,10 +629,36 @@ async function planMcpConfig(
 ): Promise<InstallAction> {
   const targetPath = nodePath.join(home, agent.mcpConfig.path);
   const existing = await readIfExists(targetPath);
-  const merged =
-    agent.mcpConfig.shape === "json-mcpServers"
-      ? mergeMcpServersJson(existing, buildMcpEntry(repoRoot))
-      : mergeTomlManagedBlock(existing, renderTomlManagedBlock(repoRoot));
+  const shape = agent.mcpConfig.shape;
+  let merged: MergeResult;
+  if (shape === "json-mcpServers" || shape === "json-local-command") {
+    const jsonKey = agent.mcpConfig.jsonKey ?? "mcpServers";
+    const isJsonc = targetPath.endsWith(".jsonc");
+    const parseInput =
+      existing !== null && isJsonc ? stripJsoncComments(existing) : existing;
+    const entry =
+      shape === "json-local-command"
+        ? buildLocalCommandEntry(repoRoot)
+        : buildMcpEntry(repoRoot);
+    merged = mergeMcpServersJson(parseInput, entry, jsonKey);
+    if (
+      merged.status === "write" &&
+      isJsonc &&
+      existing !== null &&
+      existing.trim() !== ""
+    ) {
+      merged = {
+        ...merged,
+        reason: "re-emitted as plain JSON (JSONC comments are not preserved)",
+      };
+    }
+  } else {
+    const block =
+      shape === "toml-managed-block"
+        ? renderTomlManagedBlock(repoRoot)
+        : renderYamlManagedBlock(repoRoot);
+    merged = mergeTomlManagedBlock(existing, block);
+  }
   return {
     kind: "mcp-config",
     agentId: agent.id,

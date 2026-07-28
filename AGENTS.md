@@ -450,6 +450,11 @@ for closing the lot.
   hook merge, shared skill copy with refuse-on-foreign-content, git
   post-commit never overwrites); pointer stays opt-in (rule #2);
   `--print` dry-run / `--yes` / `--agents`; plan/apply share one code path.
+  Registry v2: 13 agents — +opencode (JSONC `mcp` local-command shape,
+  string-aware comment stripping), openclaw, cline, kiro, qwen, warp
+  (JSON `mcpServers` merge), zed (`context_servers` via `jsonKey`),
+  hermes (YAML managed block, no parser). minimax/mmx documented as
+  provider-only (no MCP-server config convention).
 - **Index freshness (backlog 3)** → `status.ts` meta:
   `snapshotAgeMs`/`stale`/`staleChangedFiles` (stale = indexed file missing
   or disk-mtime > `last_indexed_at`, bounded stat scan) + human line; MCP

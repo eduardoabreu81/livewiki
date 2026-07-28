@@ -5,14 +5,18 @@ import * as nodeFs from "node:fs/promises";
 import {
   AGENT_REGISTRY,
   buildMcpEntry,
+  buildLocalCommandEntry,
   detectAgents,
   mergeMcpServersJson,
   mergeTomlManagedBlock,
   renderTomlManagedBlock,
+  renderYamlManagedBlock,
+  stripJsoncComments,
   mergeClaudeCodeSettings,
   planInstall,
   applyInstall,
   SHARED_SKILL_TARGET,
+  type AgentId,
   type InstallSources,
 } from "./install.js";
 
@@ -54,14 +58,26 @@ async function writeHome(rel: string, content: string): Promise<void> {
 }
 
 describe("install.AGENT_REGISTRY", () => {
-  it("contains exactly the v1 five agents", () => {
+  it("contains exactly the 13 registered agents", () => {
     expect(AGENT_REGISTRY.map((a) => a.id)).toEqual([
       "claude-code",
       "codex",
       "cursor",
       "kimi",
       "gemini",
+      "opencode",
+      "openclaw",
+      "cline",
+      "kiro",
+      "qwen",
+      "warp",
+      "zed",
+      "hermes",
     ]);
+  });
+
+  it("does NOT register minimax/mmx (provider, not an MCP host)", () => {
+    expect(AGENT_REGISTRY.some((a) => a.id.includes("mmx") || a.id.includes("minimax"))).toBe(false);
   });
 });
 
@@ -368,5 +384,292 @@ describe("install.planInstall + applyInstall", () => {
     // agent hook target is the claude settings.local.json
     const hook = plan.find((a) => a.kind === "agent-hook")!;
     expect(hook.targetPath).toBe(nodePath.join(home, ".claude", "settings.local.json"));
+  });
+});
+
+// ── Broader agent coverage (maintainer follow-up, 2026-07-28) ───────────────
+
+describe("install.stripJsoncComments", () => {
+  it("strips // line comments outside strings", () => {
+    const input = '{\n  // a comment\n  "a": 1 // trailing\n}\n';
+    expect(JSON.parse(stripJsoncComments(input))).toEqual({ a: 1 });
+  });
+
+  it("strips /* */ block comments outside strings", () => {
+    const input = '{ /* multi\nline\ncomment */ "a": 1 }';
+    expect(JSON.parse(stripJsoncComments(input))).toEqual({ a: 1 });
+  });
+
+  it("does NOT strip // inside quoted strings", () => {
+    const input = '{"url": "https://example.com//path", "b": "/* not a comment */"}';
+    const parsed = JSON.parse(stripJsoncComments(input));
+    expect(parsed.url).toBe("https://example.com//path");
+    expect(parsed.b).toBe("/* not a comment */");
+  });
+
+  it("handles escaped quotes inside strings", () => {
+    const input = '{"a": "quote \\" // not comment", "b": 1}';
+    const parsed = JSON.parse(stripJsoncComments(input));
+    expect(parsed.a).toBe('quote " // not comment');
+  });
+
+  it("plain JSON passes through unchanged semantically", () => {
+    const input = '{"mcp": {"x": [1, 2]}}';
+    expect(JSON.parse(stripJsoncComments(input))).toEqual({ mcp: { x: [1, 2] } });
+  });
+});
+
+describe("install.mergeMcpServersJson — jsonKey variant (zed)", () => {
+  const entry = buildMcpEntry("fake-repo-root");
+
+  it("writes under context_servers, not mcpServers", () => {
+    const r = mergeMcpServersJson(null, entry, "context_servers");
+    expect(r.status).toBe("write");
+    const parsed = JSON.parse(r.content!);
+    expect(parsed.context_servers.livewiki).toEqual(entry);
+    expect(parsed.mcpServers).toBeUndefined();
+  });
+
+  it("preserves existing context_servers entries, skips when identical", () => {
+    const existing = JSON.stringify({
+      context_servers: { other: { command: "x", args: [] } },
+    });
+    const first = mergeMcpServersJson(existing, entry, "context_servers");
+    expect(first.status).toBe("write");
+    const parsed = JSON.parse(first.content!);
+    expect(parsed.context_servers.other).toEqual({ command: "x", args: [] });
+
+    const second = mergeMcpServersJson(first.content, entry, "context_servers");
+    expect(second.status).toBe("skip");
+  });
+
+  it("refuses when context_servers is not an object", () => {
+    const r = mergeMcpServersJson(
+      JSON.stringify({ context_servers: [1, 2] }),
+      entry,
+      "context_servers",
+    );
+    expect(r.status).toBe("refuse");
+    expect(r.reason).toContain("context_servers");
+  });
+});
+
+describe("install — opencode (json-local-command + JSONC)", () => {
+  it("entry form is exact: type local, command argv array, enabled", () => {
+    const entry = buildLocalCommandEntry(repoRoot);
+    expect(entry).toEqual({
+      type: "local",
+      command: ["npx", "-y", "@livewiki/mcp", "--repo", nodePath.resolve(repoRoot)],
+      enabled: true,
+    });
+  });
+
+  it("plan writes the mcp.livewiki entry under the mcp key", async () => {
+    const plan = await planInstall({ repoRoot, home, agents: ["opencode"], sources: SOURCES });
+    const action = plan.find((a) => a.kind === "mcp-config")!;
+    expect(action.targetPath).toBe(
+      nodePath.join(home, ".config", "opencode", "opencode.jsonc"),
+    );
+    expect(action.status).toBe("write");
+    const parsed = JSON.parse(action.content!);
+    expect(parsed.mcp.livewiki).toEqual(buildLocalCommandEntry(repoRoot));
+  });
+
+  it("parses an existing JSONC file with comments and preserves other keys", async () => {
+    const existing = [
+      "{",
+      '  "$schema": "https://opencode.ai/config.json",',
+      "  // user comment",
+      '  "model": "anthropic/claude-sonnet-4",',
+      '  "mcp": { /* inline */ "other": { "type": "local", "command": ["x"], "enabled": true } }',
+      "}",
+    ].join("\n");
+    await writeHome(".config/opencode/opencode.jsonc", existing);
+
+    const plan = await planInstall({ repoRoot, home, agents: ["opencode"], sources: SOURCES });
+    const action = plan.find((a) => a.kind === "mcp-config")!;
+    expect(action.status).toBe("write");
+    expect(action.reason).toMatch(/comments are not preserved/);
+    const parsed = JSON.parse(action.content!);
+    expect(parsed.$schema).toBe("https://opencode.ai/config.json");
+    expect(parsed.model).toBe("anthropic/claude-sonnet-4");
+    expect(parsed.mcp.other).toEqual({ type: "local", command: ["x"], enabled: true });
+    expect(parsed.mcp.livewiki).toEqual(buildLocalCommandEntry(repoRoot));
+  });
+
+  it("skip when the entry is already installed (comments preserved, no rewrite)", async () => {
+    const installed = JSON.stringify({ mcp: { livewiki: buildLocalCommandEntry(repoRoot) } }, null, 2);
+    await writeHome(".config/opencode/opencode.jsonc", `// keep me\n${installed}\n`);
+    const plan = await planInstall({ repoRoot, home, agents: ["opencode"], sources: SOURCES });
+    const action = plan.find((a) => a.kind === "mcp-config")!;
+    expect(action.status).toBe("skip");
+    await applyInstall(plan, repoRoot);
+    const onDisk = await nodeFs.readFile(
+      nodePath.join(home, ".config", "opencode", "opencode.jsonc"),
+      "utf8",
+    );
+    expect(onDisk).toContain("// keep me");
+  });
+
+  it("refuses on unparseable JSONC", async () => {
+    await writeHome(".config/opencode/opencode.jsonc", "{ not jsonc at all");
+    const plan = await planInstall({ repoRoot, home, agents: ["opencode"], sources: SOURCES });
+    expect(plan.find((a) => a.kind === "mcp-config")!.status).toBe("refuse");
+  });
+});
+
+describe("install — standard mcpServers agents (openclaw, cline, kiro, qwen, warp)", () => {
+  const cases: Array<[string, string]> = [
+    ["openclaw", ".openclaw/openclaw.json"],
+    ["cline", ".cline/mcp.json"],
+    ["kiro", ".kiro/settings/mcp.json"],
+    ["qwen", ".qwen/settings.json"],
+    ["warp", ".warp/.mcp.json"],
+  ];
+
+  it("per-agent target paths and exact entry content", async () => {
+    for (const [agentId, rel] of cases) {
+      const plan = await planInstall({
+        repoRoot,
+        home,
+        agents: [agentId as AgentId],
+        sources: SOURCES,
+      });
+      const action = plan.find((a) => a.kind === "mcp-config")!;
+      expect(action.targetPath, agentId).toBe(nodePath.join(home, ...rel.split("/")));
+      expect(action.status, agentId).toBe("write");
+      const parsed = JSON.parse(action.content!);
+      expect(parsed.mcpServers.livewiki, agentId).toEqual(buildMcpEntry(repoRoot));
+    }
+  });
+
+  it("refuse-on-foreign (invalid JSON) for each", async () => {
+    for (const [agentId, rel] of cases) {
+      await writeHome(rel, "{ broken");
+      const plan = await planInstall({
+        repoRoot,
+        home,
+        agents: [agentId as AgentId],
+        sources: SOURCES,
+      });
+      expect(plan.find((a) => a.kind === "mcp-config")!.status, agentId).toBe("refuse");
+    }
+  });
+});
+
+describe("install — zed (context_servers) end to end", () => {
+  it("writes context_servers.livewiki and is idempotent", async () => {
+    await writeHome(
+      ".config/zed/settings.json",
+      JSON.stringify({ theme: "One Dark", context_servers: {} }),
+    );
+    let plan = await planInstall({ repoRoot, home, agents: ["zed"], sources: SOURCES });
+    const action = plan.find((a) => a.kind === "mcp-config")!;
+    expect(action.status).toBe("write");
+    const parsed = JSON.parse(action.content!);
+    expect(parsed.theme).toBe("One Dark");
+    expect(parsed.context_servers.livewiki).toEqual(buildMcpEntry(repoRoot));
+
+    await applyInstall(plan, repoRoot);
+    plan = await planInstall({ repoRoot, home, agents: ["zed"], sources: SOURCES });
+    expect(plan.find((a) => a.kind === "mcp-config")!.status).toBe("skip");
+  });
+});
+
+describe("install — hermes (yaml-managed-block)", () => {
+  it("block body is exact YAML lines between the markers", () => {
+    const block = renderYamlManagedBlock(repoRoot);
+    const expected = [
+      "# livewiki:start",
+      "mcp_servers:",
+      "  livewiki:",
+      "    command: npx",
+      "    args:",
+      "      - '-y'",
+      "      - '@livewiki/mcp'",
+      "      - '--repo'",
+      `      - '${nodePath.resolve(repoRoot)}'`,
+      "# livewiki:end",
+    ].join("\n");
+    expect(block).toBe(expected);
+  });
+
+  it("plan targets ~/.hermes/config.yaml, merges idempotently", async () => {
+    await writeHome(".hermes/config.yaml", "other_key: true\n");
+    let plan = await planInstall({ repoRoot, home, agents: ["hermes"], sources: SOURCES });
+    const action = plan.find((a) => a.kind === "mcp-config")!;
+    expect(action.targetPath).toBe(nodePath.join(home, ".hermes", "config.yaml"));
+    expect(action.status).toBe("write");
+    expect(action.content!.startsWith("other_key: true\n")).toBe(true);
+    expect(action.content).toContain(renderYamlManagedBlock(repoRoot));
+
+    await applyInstall(plan, repoRoot);
+    plan = await planInstall({ repoRoot, home, agents: ["hermes"], sources: SOURCES });
+    expect(plan.find((a) => a.kind === "mcp-config")!.status).toBe("skip");
+  });
+});
+
+describe("install — new agents share v1 semantics", () => {
+  it("detection: config probe hit and miss evidence for new agents", async () => {
+    await nodeFs.mkdir(nodePath.join(home, ".hermes"), { recursive: true });
+    const result = await detectAgents({ home, pathEnv: "" });
+    expect(result.hermes.detected).toBe(true);
+    expect(result.hermes.evidence).toContain("config found: ~/.hermes");
+    expect(result.opencode.detected).toBe(false);
+    expect(result.opencode.evidence).toContain(
+      "config missing: ~/.config/opencode/opencode.jsonc",
+    );
+    expect(result.opencode.evidence).toContain("bin not found on PATH: opencode");
+  });
+
+  it("detection: Windows bin variant (.ps1) for a new agent", async () => {
+    const binDir = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-install-bin2-"));
+    try {
+      await nodeFs.writeFile(nodePath.join(binDir, "zed.ps1"), "echo hi\r\n", "utf8");
+      const result = await detectAgents({ home, pathEnv: binDir });
+      expect(result.zed.detected).toBe(true);
+      expect(result.zed.evidence.find((e) => e.startsWith("bin found on PATH"))).toContain(
+        "zed.ps1",
+      );
+    } finally {
+      await nodeFs.rm(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it("dry-run byte-equality + idempotent re-run for all 8 new agents", async () => {
+    const agents = [
+      "opencode",
+      "openclaw",
+      "cline",
+      "kiro",
+      "qwen",
+      "warp",
+      "zed",
+      "hermes",
+    ] as const;
+    // Seed opencode with a JSONC file containing comments (exercises the
+    // strip path inside plan/apply, not just the pure function).
+    await writeHome(
+      ".config/opencode/opencode.jsonc",
+      '{\n  // seeded\n  "$schema": "https://opencode.ai/config.json"\n}\n',
+    );
+
+    const plan = await planInstall({ repoRoot, home, agents: [...agents], sources: SOURCES });
+    const writable = plan.filter((a) => a.status === "write" && a.kind !== "pointer");
+    // 8 mcp-config actions, one per agent
+    expect(writable.filter((a) => a.kind === "mcp-config")).toHaveLength(8);
+
+    await applyInstall(plan, repoRoot);
+    for (const action of writable) {
+      const onDisk = await nodeFs.readFile(action.targetPath, "utf8");
+      expect(onDisk, `bytes differ for ${action.agentId} ${action.targetPath}`).toBe(
+        action.content,
+      );
+    }
+
+    const second = await planInstall({ repoRoot, home, agents: [...agents], sources: SOURCES });
+    for (const a of second) {
+      expect(a.status, `second run should not rewrite ${a.agentId} ${a.kind}`).not.toBe("write");
+    }
   });
 });
