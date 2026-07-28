@@ -1,17 +1,24 @@
 /**
  * Phase 7 — unit tests for the deterministic static-site builder
  * (`view.ts`). Fixture wiki on a tmp repo; covers every behavior named in
- * the plan (docs/plans/2026-07-26-phase7-viewer.md):
+ * the plan (docs/plans/2026-07-26-phase7-viewer.md) plus the six
+ * presentation fixes from the maintainer's browser review:
  *   - site builds: index.html + per-page .html exist;
  *   - internal links rewritten to .html and resolvable within the site
  *     (section fragments land on real heading ids);
  *   - livewiki control markers stripped, `lw:manual` CONTENT kept;
  *   - mermaid asset vendored from node_modules (offline by construction);
  *   - `.mmd` sources render as mermaid code-block pages;
+ *   - `%% livewiki/<path>.mmd` placeholders embed the diagram INLINE;
  *   - search index contains every wiki artifact;
  *   - template switch = identical content fragments, different CSS;
  *   - dot-prefixed pages render;
  *   - sidebar mirrors the canonical tasks.md grouping;
+ *   - active page marked (class + aria-current) in the sidebar;
+ *   - brand/title carry the repository name + " — livewiki docs";
+ *   - light/dark palettes via CSS custom properties + persisted toggle;
+ *   - multi-item groups collapsible (<details>), open when active;
+ *   - diagrams render at natural size with horizontal scroll;
  *   - default output under `.livewiki/site/` (safe-io allowlist);
  *   - missing wiki / invalid --out → ViewError.
  */
@@ -20,7 +27,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
-import { buildSite, ViewError, type BuildSiteResult } from "./view.js";
+import { buildSite, ViewError, THEME_STORAGE_KEY, type BuildSiteResult } from "./view.js";
 
 let repoRoot: string;
 
@@ -124,6 +131,12 @@ async function writeFixtureWiki(): Promise<void> {
       "",
       "It works.",
       "",
+      "## Diagram",
+      "",
+      "```mermaid",
+      "%% livewiki/diagrams/flow-cli-auth.mmd",
+      "```",
+      "",
     ].join("\n"),
   );
   await writeWiki("livewiki/flows/index.md", "# Flows\n\n- [CLI auth flow](cli-auth.md)\n");
@@ -172,7 +185,6 @@ describe("view.buildSite", () => {
 
     expect(result.ok).toBe(true);
     expect(result.template).toBe("agent");
-    // 12 wiki artifacts (11 .md + 2 .mmd = 13 minus… enumerated below).
     const expectedPages = [
       "index.html", // quickstart.md
       "pages/auth.html",
@@ -271,6 +283,22 @@ describe("view.buildSite", () => {
     expect(auth).toContain('src="../assets/mermaid.min.js"');
   });
 
+  it("embeds %% livewiki/<path>.mmd placeholders INLINE with a source note", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+
+    const flow = (await readSite(outDir, "pages/flows/cli-auth.html"))!;
+    // The diagram source is embedded as a mermaid block — not a
+    // link-only "View diagram" presentation, not the raw placeholder.
+    expect(flow).toContain('class="language-mermaid"');
+    expect(flow).toContain("sequenceDiagram");
+    expect(flow).toContain("CLI-&gt;&gt;Core: run");
+    expect(flow).toContain("Source:");
+    expect(flow).toContain("livewiki/diagrams/flow-cli-auth.mmd");
+    expect(flow).not.toContain("%% livewiki/");
+  });
+
   it("search index contains every wiki artifact with title/group/url/headings/text", async () => {
     await writeFixtureWiki();
     const outDir = nodePath.join(repoRoot, "site-out");
@@ -314,6 +342,89 @@ describe("view.buildSite", () => {
     );
   });
 
+  it("marks the current page's sidebar link active (class + aria-current), others not", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+
+    const auth = (await readSite(outDir, "pages/auth.html"))!;
+    expect(auth).toContain('<a class="active" aria-current="page" href="auth.html">');
+    // Exactly one active item per page.
+    expect(auth.match(/aria-current="page"/g)!.length).toBe(1);
+
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).toContain('<a class="active" aria-current="page" href="index.html">');
+    expect(index.match(/aria-current="page"/g)!.length).toBe(1);
+
+    // The runtime JS re-asserts the marking from location.pathname and
+    // scrolls the active item into view.
+    const appJs = (await readSite(outDir, "assets/view-app.js"))!;
+    expect(appJs).toContain("location.pathname");
+    expect(appJs).toContain('scrollIntoView({ block: "nearest" })');
+  });
+
+  it("brands the site with the repository name + ' — livewiki docs'", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+    const repoName = nodePath.basename(repoRoot);
+    const siteTitle = `${repoName} — livewiki docs`;
+
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).toContain(`<title>Quickstart — ${siteTitle}</title>`);
+    // The home page carries the site title as the chrome H1…
+    expect(index).toContain(`<h1 class="brand"><a class="brand-link" href="index.html">${siteTitle}</a></h1>`);
+
+    const auth = (await readSite(outDir, "pages/auth.html"))!;
+    expect(auth).toContain(`<title>Authentication — ${siteTitle}</title>`);
+    // …other pages keep it as a plain brand header (content owns the H1).
+    expect(auth).toContain(`<div class="brand"><a class="brand-link" href="../index.html">${siteTitle}</a></div>`);
+  });
+
+  it("ships light/dark palettes as CSS custom properties with a persisted toggle", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+
+    for (const css of ["assets/view-agent.css", "assets/view-docs.css"]) {
+      const content = (await readSite(outDir, css))!;
+      expect(content, css).toContain(':root[data-theme="light"]');
+      expect(content, css).toContain(':root[data-theme="dark"]');
+      expect(content, css).toContain("--lw-bg:");
+      expect(content, css).toContain("background: var(--lw-bg);");
+    }
+
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).toContain('id="theme-toggle"');
+    // Default follows prefers-color-scheme; the choice persists.
+    expect(index).toContain("prefers-color-scheme");
+    expect(index).toContain(THEME_STORAGE_KEY);
+    const appJs = (await readSite(outDir, "assets/view-app.js"))!;
+    expect(appJs).toContain("localStorage.setItem");
+    expect(appJs).toContain("data-theme");
+  });
+
+  it("renders multi-item groups as <details>, open only when containing the active page", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+
+    // On the home page no multi-item group contains the active page:
+    // every <details> starts collapsed.
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).toContain('<details class="nav-group"><summary><h2>Implementation reference</h2></summary>');
+    expect(index).not.toContain("<details open");
+    expect(index).not.toContain('class="nav-group" open');
+    // Single-item groups are always open and NOT collapsible.
+    expect(index).toContain('<div class="nav-group nav-group-static"><h2>Flows</h2><ul>');
+
+    // On auth.html the Implementation reference group contains the active
+    // page and starts open; other multi-item groups stay collapsed.
+    const auth = (await readSite(outDir, "pages/auth.html"))!;
+    expect(auth).toContain('<details class="nav-group" open><summary><h2>Implementation reference</h2></summary>');
+    expect(auth).toContain('<details class="nav-group"><summary><h2>Diagrams</h2></summary>');
+  });
+
   it("mirrors the canonical tasks.md grouping in the sidebar", async () => {
     await writeFixtureWiki();
     const outDir = nodePath.join(repoRoot, "site-out");
@@ -328,6 +439,18 @@ describe("view.buildSite", () => {
     expect(html).toContain("Flows");
     expect(html).toContain("Auxiliary");
     expect(html).toContain("Diagrams");
+  });
+
+  it("diagrams render at natural size with horizontal scroll (no shrink-to-fit)", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+
+    for (const css of ["assets/view-agent.css", "assets/view-docs.css"]) {
+      const content = (await readSite(outDir, css))!;
+      expect(content, css).toContain(".mermaid { overflow-x: auto; }");
+      expect(content, css).toContain(".mermaid svg { max-width: none !important; height: auto; }");
+    }
   });
 
   it("default output goes to .livewiki/site/ through the safe-io allowlist", async () => {

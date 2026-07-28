@@ -98,6 +98,8 @@ describe("CLI E2E — livewiki view", () => {
     // Links were rewritten to .html by the real pipeline.
     const index = await nodeFs.readFile(nodePath.join(outDir, "index.html"), "utf8");
     expect(index).toContain('href="pages/auth.html"');
+    // The site is branded with the repository name.
+    expect(index).toContain(`${nodePath.basename(repoRoot)} — livewiki docs`);
   });
 
   it("--template docs switches the theme shell", async () => {

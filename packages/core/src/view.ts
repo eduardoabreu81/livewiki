@@ -5,7 +5,8 @@
  * Contract (docs/plans/2026-07-26-phase7-viewer.md; SPEC §"CLI commands"):
  *
  *   - Markdown → HTML at BUILD time via `marked` (GFM). Runtime JS is only
- *     search + Mermaid + theme — no executable template code anywhere.
+ *     search + Mermaid + theme + sidebar state — no executable template
+ *     code anywhere.
  *   - Offline by construction: the search index is emitted as
  *     `assets/search-index.js` (`window.SEARCH_INDEX = [...]`, never
  *     fetched — `file://` must work), and `mermaid.min.js` is vendored
@@ -15,17 +16,26 @@
  *   - Templates are DATA: `agent` (dense technical) and `docs` (clean)
  *     are CSS + chrome only, sharing byte-identical rendered content
  *     fragments. `--template` re-emits the shell/CSS selection without
- *     re-rendering content.
+ *     re-rendering content. Light/dark mode is ORTHOGONAL to the
+ *     template: CSS custom properties per palette, a toggle button in
+ *     the chrome, the choice persisted in localStorage, default =
+ *     prefers-color-scheme.
  *   - The sidebar mirrors the canonical structure: quickstart first, then
  *     Concept topics, Flows, Implementation reference (grouped like
  *     tasks.md — the grouping is read back from the canonical
  *     `livewiki/tasks.md`, not re-derived), Auxiliary, Diagrams.
+ *     Multi-item groups are collapsible (<details>/<summary>); the group
+ *     containing the active page starts open. The current page's link is
+ *     marked active (class + aria-current) and scrolled into view on
+ *     load, so the sidebar never jumps away from what you are reading.
  *   - Internal links `*.md`/`*.mmd` are rewritten to `*.html` with the
  *     same relative resolution as verify's `resolveWikiLink` (reused,
  *     not re-implemented). livewiki control markers (frontmatter,
  *     `<!-- livewiki:... -->` nav markers, `<!-- lw:anchors ... -->`) are
  *     stripped from the rendered output; `lw:manual` block CONTENT is
- *     kept (rule #6: human content is never dropped).
+ *     kept (rule #6: human content is never dropped). `%% livewiki/<path>.mmd`
+ *     placeholders are resolved and the diagram source is embedded
+ *     INLINE as a mermaid block (with a small source note).
  *   - Output: `.livewiki/site/` by default (safe-io allowlist — the site
  *     is derived cache, rebuilt on every run) or `--out <dir>` (validated:
  *     must NOT be inside `livewiki/`, must not contain `livewiki/`, never
@@ -120,6 +130,9 @@ const GROUP_ORDER: readonly SiteGroup[] = [
 
 const SEARCH_EXCERPT_CAP = 400;
 
+/** localStorage key for the light/dark choice (read by the inline bootstrap + view-app.js). */
+export const THEME_STORAGE_KEY = "livewiki-theme";
+
 // ── Public entry point ──────────────────────────────────────────────────────
 
 export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult> {
@@ -153,6 +166,10 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
     );
   }
 
+  // Site identity: the repository name is the repoRoot basename
+  // (deterministic — no git/config probing).
+  const repoName = nodePath.basename(absRoot);
+
   // Implementation-reference grouping: read the canonical tasks.md back
   // instead of re-deriving clusters (no second information architecture).
   const tasksSource = artifactPaths.has("livewiki/tasks.md")
@@ -160,11 +177,23 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
     : null;
   const tasksGrouping = parseTasksGrouping(tasksSource);
 
+  // `.mmd` sources are needed twice: as pages of their own AND inline into
+  // pages that embed a `%% livewiki/<path>.mmd` placeholder. Read them ALL
+  // first — a page can sort before the diagram it references
+  // (architecture/overview.md < architecture/structure.mmd).
+  const mmdSources = new Map<string, string>();
+  for (const wikiPath of wikiPaths) {
+    if (wikiPath.endsWith(".mmd")) {
+      mmdSources.set(wikiPath, await safeIo.readText(absRoot, wikiPath));
+    }
+  }
   const md = createMarkdownRenderer();
   const pages: PageRecord[] = [];
   for (const wikiPath of wikiPaths) {
-    const source = await safeIo.readText(absRoot, wikiPath);
-    pages.push(await renderPage(md, wikiPath, source, artifactPaths, tasksGrouping));
+    const source = wikiPath.endsWith(".mmd")
+      ? mmdSources.get(wikiPath)!
+      : await safeIo.readText(absRoot, wikiPath);
+    pages.push(await renderPage(md, wikiPath, source, artifactPaths, tasksGrouping, mmdSources));
   }
 
   // Rebuilt on every run: wipe the previous site before writing.
@@ -197,6 +226,7 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
       page,
       sidebarHtml: buildSidebar(pages, page.outRel),
       rootPrefix: rootPrefixFor(page.outRel),
+      repoName,
     });
     await write(page.outRel, shell);
   }
@@ -278,6 +308,7 @@ async function renderPage(
   source: string,
   artifactPaths: Set<string>,
   tasksGrouping: TasksGrouping,
+  mmdSources: Map<string, string>,
 ): Promise<PageRecord> {
   const outRel = outRelFor(wikiPath);
   const group = classifyGroup(wikiPath);
@@ -313,7 +344,10 @@ async function renderPage(
   }
 
   const title = deriveTitle(fm, body, wikiPath);
-  const cleaned = rewriteLinks(stripControlMarkers(body), wikiPath, artifactPaths);
+  const cleaned = inlineMermaidPlaceholders(
+    rewriteLinks(stripControlMarkers(body), wikiPath, artifactPaths),
+    mmdSources,
+  );
   const contentHtml = await md.parse(cleaned);
   const grouping = tasksGrouping.byPage.get(wikiPath);
 
@@ -419,6 +453,29 @@ function rewriteLinks(body: string, fromWikiPath: string, artifactPaths: Set<str
   return out + body.slice(last);
 }
 
+/**
+ * Resolve `%% livewiki/<path>.mmd` placeholders — a fenced ```mermaid
+ * block whose body is ONLY the placeholder line (the stage-5 flow-page
+ * contract and the architecture overview use it) — and embed the diagram
+ * source INLINE, keeping a small source note above the block. Applies
+ * anywhere such a placeholder appears. A placeholder referencing a
+ * missing `.mmd` is left untouched (verify owns that error surface).
+ */
+function inlineMermaidPlaceholders(body: string, mmdSources: Map<string, string>): string {
+  const re = /```mermaid\s*\r?\n([\s\S]*?)\r?\n```/g;
+  return body.replace(re, (match, inner: string) => {
+    const placeholder = inner.trim().match(/^%%\s*livewiki\/(.+?\.mmd)\s*$/);
+    if (!placeholder) return match;
+    const mmdRel = `livewiki/${placeholder[1]}`;
+    const source = mmdSources.get(mmdRel);
+    if (source === undefined) return match;
+    return (
+      `_Source: \`${mmdRel}\`_\n\n` +
+      `\`\`\`mermaid\n${source.replace(/\s+$/, "")}\n\`\`\``
+    );
+  });
+}
+
 // ── tasks.md grouping (Implementation reference) ────────────────────────────
 
 interface TasksGrouping {
@@ -486,22 +543,34 @@ function renderShell(opts: {
   page: PageRecord;
   sidebarHtml: string;
   rootPrefix: string;
+  repoName: string;
 }): string {
-  const { template, page, sidebarHtml, rootPrefix } = opts;
+  const { template, page, sidebarHtml, rootPrefix, repoName } = opts;
+  const siteTitle = `${repoName} — livewiki docs`;
+  const brandLink = `<a class="brand-link" href="${rootPrefix}index.html">${escapeHtml(siteTitle)}</a>`;
+  // The home page carries the site title as the chrome H1; other pages
+  // keep it as a plain brand header (their content owns the H1).
+  const brand = page.outRel === "index.html"
+    ? `<h1 class="brand">${brandLink}</h1>`
+    : `<div class="brand">${brandLink}</div>`;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(page.title)} — livewiki</title>
+<title>${escapeHtml(page.title)} — ${escapeHtml(siteTitle)}</title>
+<script>(function(){var t=null;try{t=window.localStorage.getItem("${THEME_STORAGE_KEY}")}catch(e){}if(t!=="light"&&t!=="dark"){t=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}document.documentElement.setAttribute("data-theme",t)})();</script>
 <link rel="stylesheet" href="${rootPrefix}assets/view-${template}.css">
 </head>
 <body class="template-${template}">
 <div class="layout">
 <nav class="sidebar">
 <div class="sidebar-header">
-<a class="brand" href="${rootPrefix}index.html">livewiki</a>
+${brand}
+<div class="sidebar-tools">
 <input id="search-input" type="search" placeholder="Search…" aria-label="Search the wiki">
+<button id="theme-toggle" type="button" aria-label="Toggle light/dark mode" aria-pressed="false">Theme</button>
+</div>
 </div>
 <div id="sidebar-groups">
 ${sidebarHtml}
@@ -531,8 +600,9 @@ function buildSidebar(pages: PageRecord[], currentOutRel: string): string {
 
   const linkFor = (page: PageRecord): string => {
     const href = relativeHref(currentOutRel, page.outRel);
-    const active = page.outRel === currentOutRel ? ` class="active"` : "";
-    return `<li><a${active} href="${href}">${escapeHtml(page.title)}</a></li>`;
+    const active = page.outRel === currentOutRel;
+    const attrs = active ? ` class="active" aria-current="page"` : "";
+    return `<li><a${attrs} href="${href}">${escapeHtml(page.title)}</a></li>`;
   };
   const byTitle = (a: PageRecord, b: PageRecord): number =>
     a.title.localeCompare(b.title) || a.wikiPath.localeCompare(b.wikiPath);
@@ -566,9 +636,19 @@ function buildSidebar(pages: PageRecord[], currentOutRel: string): string {
     } else {
       for (const page of [...members].sort(byTitle)) items.push(linkFor(page));
     }
-    sections.push(
-      `<div class="nav-group"><h2>${escapeHtml(group)}</h2><ul>${items.join("")}</ul></div>`,
-    );
+    const heading = `<h2>${escapeHtml(group)}</h2>`;
+    const list = `<ul>${items.join("")}</ul>`;
+    if (members.length === 1) {
+      // Single-item groups are always open and not collapsible.
+      sections.push(`<div class="nav-group nav-group-static">${heading}${list}</div>`);
+    } else {
+      // Collapsible groups: open when they contain the active page,
+      // collapsed otherwise (view-app.js re-asserts this at runtime).
+      const containsActive = members.some((p) => p.outRel === currentOutRel);
+      sections.push(
+        `<details class="nav-group"${containsActive ? " open" : ""}><summary>${heading}</summary>${list}</details>`,
+      );
+    }
   }
   return sections.join("\n");
 }
@@ -653,88 +733,158 @@ function plainTextExcerpt(body: string, cap: number): string {
 
 // ── Static assets (data only — no executable template code) ────────────────
 
+/**
+ * Shared layout: structure + every color read through CSS custom
+ * properties (`--lw-*`). Each template stylesheet defines both palettes
+ * (`:root[data-theme="light"]` / `:root[data-theme="dark"]`); the inline
+ * bootstrap in the shell picks one from localStorage or
+ * prefers-color-scheme before first paint.
+ */
 const LAYOUT_CSS = `
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
-body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--lw-bg);
+  color: var(--lw-fg);
+}
 .layout { display: flex; min-height: 100vh; }
-.sidebar { width: 280px; flex: 0 0 280px; padding: 1rem; overflow-y: auto; height: 100vh; position: sticky; top: 0; }
+.sidebar {
+  width: 280px; flex: 0 0 280px; padding: 1rem; overflow-y: auto;
+  height: 100vh; position: sticky; top: 0;
+  background: var(--lw-sidebar-bg);
+  border-right: 1px solid var(--lw-border);
+}
 .sidebar-header { margin-bottom: 1rem; }
-.brand { display: block; font-weight: 700; font-size: 1.1rem; text-decoration: none; margin-bottom: 0.5rem; }
-#search-input { width: 100%; padding: 0.35rem 0.5rem; }
-.nav-group h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 1rem 0 0.25rem; }
+.brand { margin: 0 0 0.5rem; font-size: 1.05rem; font-weight: 700; line-height: 1.3; }
+.brand-link { color: var(--lw-heading); text-decoration: none; }
+.sidebar-tools { display: flex; gap: 0.4rem; }
+#search-input {
+  flex: 1 1 auto; min-width: 0; padding: 0.35rem 0.5rem;
+  background: var(--lw-bg); color: var(--lw-fg);
+  border: 1px solid var(--lw-border-strong); border-radius: 4px;
+}
+#theme-toggle {
+  flex: 0 0 auto; padding: 0.35rem 0.55rem; cursor: pointer;
+  background: var(--lw-bg); color: var(--lw-fg);
+  border: 1px solid var(--lw-border-strong); border-radius: 4px;
+}
+.nav-group h2 {
+  display: inline; font-size: 0.75rem; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--lw-muted);
+}
+.nav-group-static > h2 { display: block; margin: 1rem 0 0.25rem; }
+.nav-group > summary { margin: 1rem 0 0.25rem; cursor: pointer; }
+.nav-group > summary::marker { color: var(--lw-muted); }
 .nav-group ul { list-style: none; margin: 0; padding: 0; }
 .nav-group li { margin: 0; }
-.nav-group a { display: block; text-decoration: none; padding: 0.15rem 0.4rem; border-radius: 4px; }
-.nav-subgroup > span { display: block; font-weight: 600; padding: 0.35rem 0.4rem 0.1rem; }
+.nav-group a {
+  display: block; text-decoration: none; padding: 0.15rem 0.4rem;
+  border-radius: 4px; color: var(--lw-sidebar-fg);
+}
+.nav-group a:hover { background: var(--lw-hover-bg); color: var(--lw-heading); }
+.nav-group a.active, .nav-group a[aria-current="page"] {
+  background: var(--lw-active-bg); color: var(--lw-active-fg); font-weight: 600;
+}
+.nav-subgroup > span {
+  display: block; font-weight: 600; padding: 0.35rem 0.4rem 0.1rem;
+  color: var(--lw-muted);
+}
 .nav-subgroup ul { list-style: none; margin: 0; padding-left: 0.75rem; }
 #search-results { list-style: none; margin: 0; padding: 0; }
-#search-results a { text-decoration: none; }
+#search-results a { color: var(--lw-link); text-decoration: none; }
 .result-group { font-size: 0.75rem; opacity: 0.65; margin-left: 0.35rem; }
 .no-results { padding: 0.4rem; opacity: 0.7; }
 .content { flex: 1 1 auto; min-width: 0; padding: 1.5rem 2rem; }
+.content a { color: var(--lw-link); }
+.content h1, .content h2, .content h3, .content h4 { color: var(--lw-heading); }
 .content img { max-width: 100%; }
-.content pre { overflow-x: auto; padding: 0.75rem; border-radius: 6px; }
+.content pre {
+  overflow-x: auto; padding: 0.75rem; border-radius: 6px;
+  background: var(--lw-code-bg); border: 1px solid var(--lw-border);
+}
 .content code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.content :not(pre) > code {
+  background: var(--lw-code-bg); padding: 0.12em 0.32em; border-radius: 3px;
+}
 .content table { border-collapse: collapse; }
-.content th, .content td { padding: 0.3rem 0.6rem; }
-.mermaid { text-align: center; }
+.content th, .content td { padding: 0.3rem 0.6rem; border: 1px solid var(--lw-border-strong); }
+.content blockquote {
+  margin: 0.6em 0; padding: 0 0.9em;
+  border-left: 3px solid var(--lw-border-strong); color: var(--lw-muted);
+}
+.content hr { border: none; border-top: 1px solid var(--lw-border); }
+/* Diagrams render at natural readable size; the container scrolls
+   horizontally instead of shrinking a wide chart into illegibility.
+   max-width: none needs !important to beat Mermaid's own inline
+   max-width style on the svg. */
+.mermaid { overflow-x: auto; }
+.mermaid svg { max-width: none !important; height: auto; }
 `;
 
 const AGENT_CSS = `${LAYOUT_CSS}
-/* agent — dense technical theme */
-body { background: #0f1419; color: #c9d1d9; font-size: 13px; line-height: 1.45; }
-.sidebar { background: #11181f; border-right: 1px solid #21262d; }
-.brand { color: #e6edf3; }
-#search-input { background: #0f1419; border: 1px solid #30363d; color: #c9d1d9; border-radius: 4px; }
-.nav-group h2 { color: #7d8590; }
-.nav-group a { color: #9da7b3; }
-.nav-group a:hover { background: #1c232c; color: #e6edf3; }
-.nav-group a.active { background: #1f6feb33; color: #58a6ff; }
-.nav-subgroup > span { color: #7d8590; }
-#search-results a { color: #58a6ff; }
-.content a { color: #58a6ff; }
-.content h1, .content h2, .content h3, .content h4 { color: #e6edf3; margin: 1em 0 0.4em; }
+/* agent — dense technical theme. Both palettes as data; [data-theme] is
+   set by the inline bootstrap (localStorage, else prefers-color-scheme). */
+body { font-size: 13px; line-height: 1.45; }
+.content h1, .content h2, .content h3, .content h4 { margin: 1em 0 0.4em; }
 .content p, .content li { margin: 0.3em 0; }
-.content pre { background: #161b22; border: 1px solid #21262d; }
 .content code { font-size: 12px; }
-.content :not(pre) > code { background: #161b22; padding: 0.1em 0.3em; border-radius: 3px; }
-.content th, .content td { border: 1px solid #30363d; }
-.content blockquote { margin: 0.5em 0; padding: 0 0.8em; border-left: 3px solid #30363d; color: #7d8590; }
-.content hr { border: none; border-top: 1px solid #21262d; }
+
+:root[data-theme="dark"] {
+  --lw-bg: #0f1419; --lw-fg: #c9d1d9; --lw-heading: #e6edf3;
+  --lw-sidebar-bg: #11181f; --lw-sidebar-fg: #9da7b3;
+  --lw-border: #21262d; --lw-border-strong: #30363d;
+  --lw-muted: #7d8590; --lw-link: #58a6ff;
+  --lw-hover-bg: #1c232c; --lw-active-bg: #1f6feb33; --lw-active-fg: #58a6ff;
+  --lw-code-bg: #161b22;
+}
+:root[data-theme="light"] {
+  --lw-bg: #ffffff; --lw-fg: #1f2328; --lw-heading: #1f2328;
+  --lw-sidebar-bg: #f6f8fa; --lw-sidebar-fg: #3a414a;
+  --lw-border: #d1d9e0; --lw-border-strong: #c3ccd6;
+  --lw-muted: #59636e; --lw-link: #0969da;
+  --lw-hover-bg: #e9ecf0; --lw-active-bg: #ddf4ff; --lw-active-fg: #0969da;
+  --lw-code-bg: #f6f8fa;
+}
 `;
 
 const DOCS_CSS = `${LAYOUT_CSS}
-/* docs — clean reading theme */
-body { background: #ffffff; color: #1f2328; font-size: 16px; line-height: 1.65; }
-.sidebar { background: #f6f8fa; border-right: 1px solid #d1d9e0; }
-.brand { color: #1f2328; }
-#search-input { background: #ffffff; border: 1px solid #d1d9e0; color: #1f2328; border-radius: 6px; padding: 0.45rem 0.6rem; }
-.nav-group h2 { color: #59636e; }
-.nav-group a { color: #1f2328; }
-.nav-group a:hover { background: #e9ecf0; }
-.nav-group a.active { background: #ddf4ff; color: #0969da; }
-.nav-subgroup > span { color: #59636e; }
-#search-results a { color: #0969da; }
+/* docs — clean reading theme. Both palettes as data; [data-theme] is
+   set by the inline bootstrap (localStorage, else prefers-color-scheme). */
+body { font-size: 16px; line-height: 1.65; }
 .content { max-width: 860px; }
-.content a { color: #0969da; }
 .content h1, .content h2, .content h3, .content h4 { margin: 1.4em 0 0.5em; }
-.content pre { background: #f6f8fa; border: 1px solid #d1d9e0; }
-.content :not(pre) > code { background: #eff1f3; padding: 0.15em 0.35em; border-radius: 4px; }
-.content th, .content td { border: 1px solid #d1d9e0; }
-.content blockquote { margin: 0.8em 0; padding: 0 1em; border-left: 4px solid #d1d9e0; color: #59636e; }
-.content hr { border: none; border-top: 1px solid #d1d9e0; }
+
+:root[data-theme="light"] {
+  --lw-bg: #ffffff; --lw-fg: #1f2328; --lw-heading: #1f2328;
+  --lw-sidebar-bg: #f6f8fa; --lw-sidebar-fg: #3a414a;
+  --lw-border: #d1d9e0; --lw-border-strong: #c3ccd6;
+  --lw-muted: #59636e; --lw-link: #0969da;
+  --lw-hover-bg: #e9ecf0; --lw-active-bg: #ddf4ff; --lw-active-fg: #0969da;
+  --lw-code-bg: #f6f8fa;
+}
+:root[data-theme="dark"] {
+  --lw-bg: #0f1419; --lw-fg: #c9d1d9; --lw-heading: #e6edf3;
+  --lw-sidebar-bg: #11181f; --lw-sidebar-fg: #9da7b3;
+  --lw-border: #21262d; --lw-border-strong: #30363d;
+  --lw-muted: #7d8590; --lw-link: #58a6ff;
+  --lw-hover-bg: #1c232c; --lw-active-bg: #1f6feb33; --lw-active-fg: #58a6ff;
+  --lw-code-bg: #161b22;
+}
 `;
 
 /**
- * Runtime JS: offline search (over `window.SEARCH_INDEX`, never fetched)
- * + Mermaid rendering with plain-code-block degradation. ES2019, no
- * dependencies beyond the vendored mermaid.
+ * Runtime JS: offline search (over `window.SEARCH_INDEX`, never fetched),
+ * Mermaid rendering with plain-code-block degradation, light/dark toggle
+ * (persisted in localStorage), and sidebar state (active item marked from
+ * location + scrolled into view). ES2019, no dependencies beyond the
+ * vendored mermaid.
  */
 const VIEW_APP_JS = `(function () {
   "use strict";
 
   var ROOT = typeof window.LIVEWIKI_ROOT === "string" ? window.LIVEWIKI_ROOT : "";
+  var THEME_KEY = "${THEME_STORAGE_KEY}";
 
   function escapeHtml(text) {
     return String(text)
@@ -742,6 +892,67 @@ const VIEW_APP_JS = `(function () {
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  // ── Light/dark toggle ────────────────────────────────────────────────
+  // Orthogonal to the agent/docs template. The initial theme was already
+  // applied by the inline bootstrap (localStorage, else
+  // prefers-color-scheme); here we only wire the button and persist
+  // explicit choices.
+  function initTheme() {
+    var button = document.getElementById("theme-toggle");
+    if (!button) return;
+    function current() {
+      return document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+    }
+    function sync() {
+      var theme = current();
+      button.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+      button.textContent = theme === "dark" ? "Light" : "Dark";
+    }
+    button.addEventListener("click", function () {
+      var next = current() === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      try { window.localStorage.setItem(THEME_KEY, next); } catch (e) {}
+      sync();
+    });
+    sync();
+  }
+
+  // ── Sidebar state ────────────────────────────────────────────────────
+  // Mark the current page's link active (from location.pathname vs link
+  // hrefs — build-time marking is the SSR baseline, this re-asserts it),
+  // make sure its collapsible group is open, and scroll it into view so
+  // the sidebar never jumps away from what you are reading.
+  function initSidebarState() {
+    var groups = document.getElementById("sidebar-groups");
+    if (!groups) return;
+    var here = normalizePath(window.location.pathname);
+    var links = groups.querySelectorAll("a[href]");
+    var active = null;
+    for (var i = 0; i < links.length; i++) {
+      var link = links[i];
+      var target;
+      try {
+        target = normalizePath(new URL(link.getAttribute("href"), window.location.href).pathname);
+      } catch (e) { continue; }
+      if (target === here) {
+        link.classList.add("active");
+        link.setAttribute("aria-current", "page");
+        active = link;
+      }
+    }
+    if (active) {
+      var details = active.closest("details");
+      if (details) details.open = true;
+      active.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function normalizePath(pathname) {
+    // file:// on Windows yields "/C:/..." on both sides of the
+    // comparison, so the forms match; decodeURI covers spaces/Unicode.
+    try { return decodeURI(pathname).replace(/\\\\/g, "/"); } catch (e) { return pathname; }
   }
 
   // ── Mermaid ──────────────────────────────────────────────────────────
@@ -831,14 +1042,17 @@ const VIEW_APP_JS = `(function () {
     });
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", function () {
-      initSearch();
-      initMermaid();
-    });
-  } else {
+  function init() {
+    initTheme();
+    initSidebarState();
     initSearch();
     initMermaid();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
   }
 })();
 `;
