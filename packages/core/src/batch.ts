@@ -2400,10 +2400,22 @@ async function runSemanticTopicStage(opts: {
     const centrality = computeCallerCentrality(opts.db);
     let candidates = proposeTopicPlanDeterministically(inventory, centrality, planValidationOpts);
 
-    if (candidates.length > 0 && !opts.noRefine) {
+    // D2 pin (run #11 blind re-eval): concern-grouped candidates NEVER go
+    // through the LLM refine pass — the LLM re-scoped the deterministic
+    // deployment topic back to CLI-only in two separate paid runs (#7 and
+    // #11), dropping Docker both times. Only non-concern candidates are
+    // shown to the LLM; pinned concerns keep their deterministic
+    // title/intent (surface basenames included) and are re-merged into the
+    // refined plan afterward. Their evidence identity cannot change: the
+    // evidence hash covers only {modules, flows, groups}, never
+    // title/intent, and those stay byte-identical for pinned candidates.
+    const pinnedConcernCandidates = candidates.filter((c) => c.origin === "concern");
+    const refinePool = candidates.filter((c) => c.origin !== "concern");
+
+    if (refinePool.length > 0 && !opts.noRefine) {
       attempt++;
       try {
-        const proposals: TopicPlanProposal[] = candidates.map((c) => ({
+        const proposals: TopicPlanProposal[] = refinePool.map((c) => ({
           title: c.title,
           intent: c.intent,
           modules: c.modules,
@@ -2444,11 +2456,42 @@ async function runSemanticTopicStage(opts: {
           // degrades silently — keep the already-valid deterministic plan.
         } else {
           const refined = validateTopicPlan(generated.content, inventory, planValidationOpts);
-          if (refined.ok) {
+          if (refined.ok && pinnedConcernCandidates.length === 0) {
             candidates = refined.candidates;
             diagnosticHistory.push(topicPlanDiagnostic(
               attempt, "initial", "success", generated.content, [], generated.stopReason, generated.rawStopReason,
             ));
+          } else if (refined.ok) {
+            // Re-merge the pinned concerns (refined pool first, preserving
+            // the deterministic import-clusters-before-concerns precedence)
+            // and re-validate the WHOLE merged plan, so a refined pool
+            // title/intent duplicating a pinned concern degrades to the
+            // deterministic plan instead of producing a collision.
+            const mergedRaw = JSON.stringify({
+              topics: [...refined.candidates, ...pinnedConcernCandidates].map((c) => ({
+                title: c.title,
+                intent: c.intent,
+                modules: c.modules,
+                flows: c.flows,
+                groups: c.groups,
+              })),
+            });
+            const merged = validateTopicPlan(mergedRaw, inventory, planValidationOpts);
+            if (merged.ok) {
+              const pinnedHashes = new Set(pinnedConcernCandidates.map((c) => c.evidenceHash));
+              candidates = merged.candidates.map((c) =>
+                pinnedHashes.has(c.evidenceHash) ? { ...c, origin: "concern" as const } : c,
+              );
+              diagnosticHistory.push(topicPlanDiagnostic(
+                attempt, "initial", "success", generated.content, [], generated.stopReason, generated.rawStopReason,
+              ));
+            } else {
+              diagnosticHistory.push(topicPlanDiagnostic(
+                attempt, "initial", "artifact_validation_failed", generated.content, merged.errors,
+                generated.stopReason, generated.rawStopReason,
+              ));
+              // degrades silently — keep the already-valid deterministic plan.
+            }
           } else {
             diagnosticHistory.push(topicPlanDiagnostic(
               attempt, "initial", "artifact_validation_failed", generated.content, refined.errors,

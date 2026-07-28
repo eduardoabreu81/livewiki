@@ -281,6 +281,28 @@ async function readTaskCheckpoint(
   }
 }
 
+/** Same as readTaskCheckpoint but scoped to the LATEST run (tests that run the batch twice in one repo). */
+async function readLatestRunTaskCheckpoint(
+  root: string,
+  stage: number,
+  target: string,
+): Promise<TaskCheckpoint | null> {
+  const Database = (await import("better-sqlite3")).default;
+  const db = new Database(nodePath.join(root, ".livewiki/index.db"), {
+    readonly: true,
+  });
+  try {
+    const row = db
+      .prepare(
+        "SELECT checkpoint_json FROM batch_tasks WHERE stage = ? AND target = ? ORDER BY run_id DESC, id DESC LIMIT 1",
+      )
+      .get(stage, target) as { checkpoint_json: string | null } | undefined;
+    return row?.checkpoint_json ? (JSON.parse(row.checkpoint_json) as TaskCheckpoint) : null;
+  } finally {
+    db.close();
+  }
+}
+
 async function countStage5Tasks(root: string): Promise<number> {
   const Database = (await import("better-sqlite3")).default;
   const db = new Database(nodePath.join(root, ".livewiki/index.db"), {
@@ -1846,6 +1868,10 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     public refineBehavior: "reject" | "accept" = "accept";
     /** Captured (title, user) of every topic-page generation prompt. */
     public topicPrompts: Array<{ title: string; user: string }> = [];
+    /** Captured user prompt of every topic-refine call. */
+    public topicRefinePrompts: string[] = [];
+    /** Optional mutator applied to the deterministic plan before it is "returned" as the refinement. */
+    public refineTransform: ((plan: { topics: Array<Record<string, unknown>> }) => void) | null = null;
 
     async generate(req: GenerateRequest): Promise<GenerateResult> {
       const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
@@ -1854,13 +1880,24 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
       }
       if (isTopicRefineRequest(req)) {
         this.topicRefineCallCount++;
+        this.topicRefinePrompts.push(req.user);
         if (this.refineBehavior === "reject") {
           return { content: "not valid json at all", usage };
         }
         // Echo the deterministic plan back unchanged — a legitimate,
         // trivial "refinement."
         const match = /# Deterministically proposed, already-valid topic plan.*?:\s*([\s\S]*?)\n\n# Output/.exec(req.user);
-        return { content: match?.[1] ?? "{}", usage };
+        const planText = match?.[1] ?? "{}";
+        if (this.refineTransform !== null) {
+          try {
+            const parsed = JSON.parse(planText) as { topics: Array<Record<string, unknown>> };
+            this.refineTransform(parsed);
+            return { content: JSON.stringify(parsed), usage };
+          } catch {
+            return { content: planText, usage };
+          }
+        }
+        return { content: planText, usage };
       }
       if (req.user.includes("# Accepted title:")) {
         this.topicPageCallCount++;
@@ -2045,6 +2082,61 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     expect(spokePrompt!.user).not.toContain("# Prose source evidence");
     expect(spokePrompt!.user).not.toContain("DOCKER_PROSE_MARKER");
   }, 60_000);
+
+  it("D2 pin: concern candidates skip the LLM refine pass (title/intent/hash byte-stable)", async () => {
+    // Run A (baseline): deterministic plan only, no refine.
+    await writeHubAndSpokeTopicRepo();
+    const baseline = await runBatch({
+      repoRoot,
+      llmClient: new TopicMockLlm(),
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+    expect(baseline.status).toBe("completed");
+    const checkpointA = await readTaskCheckpoint(repoRoot, 5, "topic-plan");
+    const deploymentA = checkpointA!.topicPlan!.find((c) => c.title === "Deployment");
+    expect(deploymentA).toBeDefined();
+
+    // Run B: refine ENABLED, and the LLM renames every topic it is shown
+    // (the run #7/#11 hijack shape — the concern candidate must be immune
+    // because it is never shown).
+    const topicLlm = new TopicMockLlm();
+    topicLlm.refineTransform = (plan) => {
+      for (const topic of plan.topics) {
+        topic["title"] = "Renamed services topic";
+        topic["intent"] = "Renamed by the refine pass.";
+      }
+    };
+    const result = await runBatch({
+      repoRoot,
+      llmClient: topicLlm,
+      skipManifestWrite: true,
+    });
+    expect(result.status).toBe("completed");
+
+    // Exactly one refine call, and the concern candidate was never shown
+    // to the LLM — neither its title, its intent surfaces, nor its closed
+    // keys appear in the refine prompt.
+    expect(topicLlm.topicRefineCallCount).toBe(1);
+    const refinePrompt = topicLlm.topicRefinePrompts[0]!;
+    expect(refinePrompt).not.toContain("Deployment");
+    expect(refinePrompt).not.toContain("docker-compose.yml");
+    expect(refinePrompt).not.toContain("scripts/build.ts#build");
+
+    const checkpointB = await readLatestRunTaskCheckpoint(repoRoot, 5, "topic-plan");
+    const planB = checkpointB!.topicPlan!;
+    // The non-concern pool candidate WAS renamed — the refine pass ran and
+    // its result was applied where allowed.
+    expect(planB.some((c) => c.title === "Renamed services topic")).toBe(true);
+    // The concern candidate is byte-identical to the no-refine baseline:
+    // title, intent (surface basenames included), evidence hash, and slug.
+    const deploymentB = planB.find((c) => c.title === "Deployment");
+    expect(deploymentB).toBeDefined();
+    expect(deploymentB!.origin).toBe("concern");
+    expect(deploymentB!.intent).toBe(deploymentA!.intent);
+    expect(deploymentB!.evidenceHash).toBe(deploymentA!.evidenceHash);
+    expect(deploymentB!.slug).toBe(deploymentA!.slug);
+  }, 120_000);
 
   it("a topic whose evidence exceeds topicMaxSourceChars fails the task without killing the run (Etapa 3 E2E)", async () => {
     // Real acceptance-run defect (2026-07-25, MoneyPrinterTurbo-Plus):

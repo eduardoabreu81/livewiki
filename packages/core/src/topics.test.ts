@@ -790,6 +790,10 @@ describe("D2 — spoke-merge fallback and concern-grouped candidates", () => {
     // files contribute no anchors (MPTP defect, 2026-07-27).
     expect(deployment!.intent).toContain("deployment");
     expect(deployment!.intent).toContain("docker-compose.yml");
+    // D2 pin: the concern candidate is tagged so batch keeps it OUT of the
+    // LLM refine pass; import-cluster candidates carry no tag.
+    expect(deployment!.origin).toBe("concern");
+    expect(candidates.find((c) => c.title === "App and Compose")!.origin).toBeUndefined();
   });
 
   it("produces a testing concern candidate from fixture modules plus their connected product modules", () => {

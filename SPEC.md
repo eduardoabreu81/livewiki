@@ -369,7 +369,10 @@ slugs, hub, and links are deterministic under input reordering. The set is
 capped by `maxFlows` (default 4; 0 disables). A ranked candidate whose
 seed-key set overlaps an already-accepted candidate above `flowMaxOverlap`
 (default 0.75; 1 disables) is dropped and reported via
-`skippedFlowCandidates`. Synthesis is an ordinary gated
+`skippedFlowCandidates`. Concern-grouped topic candidates skip the LLM
+refine pass: their title and intent stay exactly what the deterministic
+planner produced (the refine prompt never sees their proposals; the
+merged plan is re-validated as a whole). Synthesis is an ordinary gated
 batch task kind (stage 5, target `flow:<slug>`): closed key list (≤
 `flowMaxAnchors`, default 25) as an **upper bound, not an assignment** —
 the page cites only the keys it uses, each exactly once in frontmatter and

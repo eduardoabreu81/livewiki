@@ -1002,6 +1002,14 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   enforced and which input shapes a check covers; never generalize
   one-sided into two-sided). Gate: core 1381 / CLI 93 / MCP 31, zero paid
   calls. Next: final measurement round #11 + re-eval round 6.
+- **Concern-topic refine pin (2026-07-26)**: run #11 re-eval showed the
+  LLM refine pass re-scoping the deterministic deployment topic back to
+  CLI-only (Docker gap reopened — LLM variance, not the tuning lot).
+  Concern-grouped candidates (`origin: "concern"`) now skip the refine
+  pass entirely: title/intent pinned by the planner, refine prompt never
+  sees their proposals, merged plan re-validated whole, evidence hashes
+  stable (proven: byte-identical intent/hash/slug with refine on vs off).
+  Gate: core 1382 / CLI 93 / MCP 31, zero paid calls.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

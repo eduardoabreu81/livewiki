@@ -80,12 +80,14 @@ export interface TopicModuleCluster {
   /**
    * D2: how the cluster was formed when it is NOT a plain import-graph
    * component — "spoke" (isolated product singletons grouped by shared
-   * auxiliary import-neighbors) or "overview" (the remaining singletons
-   * merged into ONE product-overview cluster). Absent for import-graph
+   * auxiliary import-neighbors), "overview" (the remaining singletons
+   * merged into ONE product-overview cluster), or "concern" (a D2
+   * concern-grouped cluster: deployment/testing). Absent for import-graph
    * components. Drives the deterministic title in
-   * `proposeTopicPlanDeterministically`.
+   * `proposeTopicPlanDeterministically` and pins concern candidates out of
+   * the LLM refine pass in batch.
    */
-  origin?: "spoke" | "overview";
+  origin?: "spoke" | "overview" | "concern";
 }
 
 export interface TopicPlanProposal {
@@ -101,6 +103,12 @@ export interface TopicCandidate extends TopicPlanProposal {
   evidenceHash: string;
   slug: string;
   seedKeys: string[];
+  /**
+   * D2 pin (run #11 blind re-eval): concern-grouped candidates skip the
+   * optional LLM refine pass — their title and intent stay byte-identical
+   * to the deterministic planner output. Absent for every other candidate.
+   */
+  origin?: "concern";
 }
 
 export type TopicPlanValidationCode =
@@ -711,7 +719,7 @@ export function collectConcernTopicClusters(
       ),
     ).slice(0, 4);
     results.push({
-      cluster: capClusterSize({ productModuleIds, auxiliaryModuleIds }),
+      cluster: { ...capClusterSize({ productModuleIds, auxiliaryModuleIds }), origin: "concern" },
       title: rule.title,
       intentSignal: rule.intentSignal,
       surfaces,
@@ -962,6 +970,7 @@ export function proposeTopicPlanDeterministically(
   // selection and whole-plan validation. A concern group whose anchor
   // selection fails (zero or insufficient evidence) yields NO candidate,
   // never a stub.
+  const concernProposalSet = new Set<TopicPlanProposal>();
   if (opts.concernTopics !== false) {
     for (const { cluster, title, intentSignal, surfaces } of collectConcernTopicClusters(inventory)) {
       const groups = selectTopicAnchors(cluster, inventory, centrality, selectOpts);
@@ -969,7 +978,9 @@ export function proposeTopicPlanDeterministically(
       const moduleIds = [...cluster.productModuleIds, ...cluster.auxiliaryModuleIds].sort();
       const surfaceSuffix = surfaces.length > 0 ? ` (${surfaces.join(", ")})` : "";
       const intent = `Explains how ${moduleIds.length} related modules coordinate ${intentSignal}${surfaceSuffix}.`.slice(0, 160);
-      proposals.push({ title, intent, modules: moduleIds, flows: flowsWithin(moduleIds), groups });
+      const proposal: TopicPlanProposal = { title, intent, modules: moduleIds, flows: flowsWithin(moduleIds), groups };
+      proposals.push(proposal);
+      concernProposalSet.add(proposal);
     }
   }
 
@@ -983,7 +994,16 @@ export function proposeTopicPlanDeterministically(
     if (proposals.length === 0) return [];
     const raw = JSON.stringify({ topics: proposals });
     const result = validateTopicPlan(raw, inventory, opts);
-    if (result.ok) return result.candidates;
+    if (result.ok) {
+      // D2 pin: re-tag concern candidates (validation strips construction
+      // metadata). `planOrder` is the candidate's index in the validated
+      // proposals array, so it resolves the exact source proposal.
+      return result.candidates.map((candidate) =>
+        concernProposalSet.has(proposals[candidate.planOrder]!)
+          ? { ...candidate, origin: "concern" as const }
+          : candidate,
+      );
+    }
     const badIndexes = new Set(
       result.errors.map((e) => e.proposalIndex).filter((i): i is number => i !== undefined),
     );
