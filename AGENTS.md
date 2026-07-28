@@ -1007,7 +1007,7 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   enforced and which input shapes a check covers; never generalize
   one-sided into two-sided). Gate: core 1381 / CLI 93 / MCP 31, zero paid
   calls. Next: final measurement round #11 + re-eval round 6.
-- **Phase 7 viewer (2026-07-26, implemented, uncommitted)**: `livewiki
+- **Phase 7 viewer + UX/design pass (2026-07-26/28)**: `livewiki
   view` builds a self-contained static site (`.livewiki/site/` or `--out`)
   from the canonical wiki: build-time MD→HTML (`marked`, the one added
   dependency), offline-by-construction (`search-index.js` assigned to
@@ -1017,7 +1017,19 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   topics, flows, implementation reference, auxiliary, diagrams). Manual
   smoke on the MPTP corpus: grouped sidebar + offline search (`docker`
   filters live) + offline Mermaid render verified in a real browser via
-  `file://`. Gate: core 1395 / CLI 98 / MCP 31.
+  `file://`. UX pass (maintainer-ordered): active sidebar item marked and
+  scrolled into view, `<repo> — livewiki docs` brand, light/dark toggle
+  (localStorage, prefers-color-scheme default), collapsible nav groups
+  (auto-open only the active one), natural-size diagrams with overflow-x
+  scroll, and flow pages rendering their diagram INLINE (placeholder
+  resolved at build time). Design pass: thick side-border removed (soft
+  tint blockquotes), distinctive system font stacks per template (docs:
+  serif display + sans body; agent: mono accents — no webfonts, offline),
+  a real type scale (>=1.25 ratio steps), and class diagrams verticalized:
+  mermaid ignores `direction TB` with zero edges, so edge-less inventories
+  chain consecutive classes with transparent-stroke links
+  (`%%{init: {themeCSS}}%%` directive only on zero-edge diagrams).
+  Gate: core 1407 / CLI 98 / MCP 31.
 - **Concern-topic refine pin (2026-07-26)**: run #11 re-eval showed the
   LLM refine pass re-scoping the deterministic deployment topic back to
   CLI-only (Docker gap reopened — LLM variance, not the tuning lot).

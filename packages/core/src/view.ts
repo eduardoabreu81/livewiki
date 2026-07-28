@@ -743,8 +743,23 @@ function plainTextExcerpt(body: string, cap: number): string {
 const LAYOUT_CSS = `
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+
+/* Shared type scale — the named steps (small → base → H2 → H1) keep a
+   ratio ≥ 1.25 (12.5 → 16 → 22 → 28). H3/H4 are intermediate steps.
+   Both templates use the same scale; they differ in font personality
+   (--lw-font-* below) and spacing. */
+:root {
+  --lw-text-sm: 12.5px;
+  --lw-text-base: 16px;
+  --lw-text-h4: 18px;
+  --lw-text-h3: 20px;
+  --lw-text-h2: 22px;
+  --lw-text-h1: 28px;
+}
+
 body {
-  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--lw-font-body);
+  font-size: var(--lw-text-base);
   background: var(--lw-bg);
   color: var(--lw-fg);
 }
@@ -756,7 +771,10 @@ body {
   border-right: 1px solid var(--lw-border);
 }
 .sidebar-header { margin-bottom: 1rem; }
-.brand { margin: 0 0 0.5rem; font-size: 1.05rem; font-weight: 700; line-height: 1.3; }
+.brand {
+  margin: 0 0 0.5rem; font-family: var(--lw-font-display);
+  font-size: var(--lw-text-h3); font-weight: 700; line-height: 1.3;
+}
 .brand-link { color: var(--lw-heading); text-decoration: none; }
 .sidebar-tools { display: flex; gap: 0.4rem; }
 #search-input {
@@ -770,7 +788,8 @@ body {
   border: 1px solid var(--lw-border-strong); border-radius: 4px;
 }
 .nav-group h2 {
-  display: inline; font-size: 0.75rem; text-transform: uppercase;
+  display: inline; font-family: var(--lw-font-accent);
+  font-size: var(--lw-text-sm); text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--lw-muted);
 }
 .nav-group-static > h2 { display: block; margin: 1rem 0 0.25rem; }
@@ -793,25 +812,32 @@ body {
 .nav-subgroup ul { list-style: none; margin: 0; padding-left: 0.75rem; }
 #search-results { list-style: none; margin: 0; padding: 0; }
 #search-results a { color: var(--lw-link); text-decoration: none; }
-.result-group { font-size: 0.75rem; opacity: 0.65; margin-left: 0.35rem; }
+.result-group { font-size: var(--lw-text-sm); opacity: 0.65; margin-left: 0.35rem; }
 .no-results { padding: 0.4rem; opacity: 0.7; }
 .content { flex: 1 1 auto; min-width: 0; padding: 1.5rem 2rem; }
 .content a { color: var(--lw-link); }
-.content h1, .content h2, .content h3, .content h4 { color: var(--lw-heading); }
+.content h1, .content h2, .content h3, .content h4 {
+  font-family: var(--lw-font-display); color: var(--lw-heading);
+}
+.content h1 { font-size: var(--lw-text-h1); }
+.content h2 { font-size: var(--lw-text-h2); }
+.content h3 { font-size: var(--lw-text-h3); }
+.content h4 { font-size: var(--lw-text-h4); }
 .content img { max-width: 100%; }
 .content pre {
   overflow-x: auto; padding: 0.75rem; border-radius: 6px;
   background: var(--lw-code-bg); border: 1px solid var(--lw-border);
 }
-.content code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.content code { font-family: var(--lw-font-mono); }
 .content :not(pre) > code {
   background: var(--lw-code-bg); padding: 0.12em 0.32em; border-radius: 3px;
 }
 .content table { border-collapse: collapse; }
 .content th, .content td { padding: 0.3rem 0.6rem; border: 1px solid var(--lw-border-strong); }
+/* Soft background tint instead of a thick side border. */
 .content blockquote {
-  margin: 0.6em 0; padding: 0 0.9em;
-  border-left: 3px solid var(--lw-border-strong); color: var(--lw-muted);
+  margin: 0.6em 0; padding: 0.4em 0.9em;
+  background: var(--lw-code-bg); border-radius: 4px; color: var(--lw-muted);
 }
 .content hr { border: none; border-top: 1px solid var(--lw-border); }
 /* Diagrams render at natural readable size; the container scrolls
@@ -823,12 +849,19 @@ body {
 `;
 
 const AGENT_CSS = `${LAYOUT_CSS}
-/* agent — dense technical theme. Both palettes as data; [data-theme] is
-   set by the inline bootstrap (localStorage, else prefers-color-scheme). */
-body { font-size: 13px; line-height: 1.45; }
+/* agent — dense technical theme: neutral sans body with monospace
+   accents for code and nav labels. System stacks only (offline-safe —
+   no webfont/CDN). Both palettes as data; [data-theme] is set by the
+   inline bootstrap (localStorage, else prefers-color-scheme). */
+:root {
+  --lw-font-body: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --lw-font-display: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --lw-font-accent: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  --lw-font-mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+}
+body { line-height: 1.45; }
 .content h1, .content h2, .content h3, .content h4 { margin: 1em 0 0.4em; }
 .content p, .content li { margin: 0.3em 0; }
-.content code { font-size: 12px; }
 
 :root[data-theme="dark"] {
   --lw-bg: #0f1419; --lw-fg: #c9d1d9; --lw-heading: #e6edf3;
@@ -849,9 +882,17 @@ body { font-size: 13px; line-height: 1.45; }
 `;
 
 const DOCS_CSS = `${LAYOUT_CSS}
-/* docs — clean reading theme. Both palettes as data; [data-theme] is
-   set by the inline bootstrap (localStorage, else prefers-color-scheme). */
-body { font-size: 16px; line-height: 1.65; }
+/* docs — clean reading theme: serif display stack for headings/brand
+   with a readable sans body. System stacks only (offline-safe — no
+   webfont/CDN). Both palettes as data; [data-theme] is set by the
+   inline bootstrap (localStorage, else prefers-color-scheme). */
+:root {
+  --lw-font-body: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --lw-font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --lw-font-accent: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --lw-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+body { line-height: 1.65; }
 .content { max-width: 860px; }
 .content h1, .content h2, .content h3, .content h4 { margin: 1.4em 0 0.5em; }
 

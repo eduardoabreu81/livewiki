@@ -453,6 +453,64 @@ describe("view.buildSite", () => {
     }
   });
 
+  it("template typography: distinctive system font stacks + ≥1.25 type scale, no webfonts", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+
+    const agent = (await readSite(outDir, "assets/view-agent.css"))!;
+    const docs = (await readSite(outDir, "assets/view-docs.css"))!;
+
+    // Offline-safe: system stacks only — no webfont/CDN anywhere.
+    for (const [name, css] of [["agent", agent], ["docs", docs]] as const) {
+      expect(css, name).not.toContain("@import");
+      expect(css, name).not.toMatch(/url\(/);
+      expect(css, name).not.toContain("Roboto");
+      expect(css, name).not.toContain("Inter");
+    }
+
+    // Font personality per template, defined as CSS variables.
+    expect(agent).toContain('--lw-font-body: "Segoe UI", system-ui, -apple-system, sans-serif;');
+    expect(agent).toContain('--lw-font-accent: "Cascadia Code", "JetBrains Mono", Consolas, monospace;');
+    expect(agent).toContain('--lw-font-mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;');
+    expect(docs).toContain('--lw-font-body: "Segoe UI", system-ui, -apple-system, sans-serif;');
+    expect(docs).toContain('--lw-font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;');
+
+    // One shared type scale; the named steps keep a ratio ≥ 1.25.
+    for (const [name, css] of [["agent", agent], ["docs", docs]] as const) {
+      const step = (stepName: string): number => {
+        const m = css.match(new RegExp(`--lw-text-${stepName}: ([0-9.]+)px;`));
+        expect(m, `${name}: --lw-text-${stepName} defined`).not.toBeNull();
+        return Number(m![1]);
+      };
+      const sm = step("sm");
+      const base = step("base");
+      const h2 = step("h2");
+      const h1 = step("h1");
+      expect(base / sm, `${name}: base/sm`).toBeGreaterThanOrEqual(1.25);
+      expect(h2 / base, `${name}: h2/base`).toBeGreaterThanOrEqual(1.25);
+      expect(h1 / h2, `${name}: h1/h2`).toBeGreaterThanOrEqual(1.25);
+      // And the scale is actually applied to the content headings.
+      expect(css, name).toContain(".content h1 { font-size: var(--lw-text-h1); }");
+      expect(css, name).toContain(".content h2 { font-size: var(--lw-text-h2); }");
+    }
+  });
+
+  it("blockquote uses a soft background tint — no thick side border", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+
+    for (const css of ["assets/view-agent.css", "assets/view-docs.css"]) {
+      const content = (await readSite(outDir, css))!;
+      expect(content, css).not.toContain("border-left: 3px");
+      const rule = content.match(/\.content blockquote \{([^}]*)\}/s);
+      expect(rule, `${css}: blockquote rule`).not.toBeNull();
+      expect(rule![1]).toContain("background: var(--lw-code-bg);");
+      expect(rule![1]).not.toContain("border-left");
+    }
+  });
+
   it("default output goes to .livewiki/site/ through the safe-io allowlist", async () => {
     await writeFixtureWiki();
     const result: BuildSiteResult = await buildSite({ repoRoot });

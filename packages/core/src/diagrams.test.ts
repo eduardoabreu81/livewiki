@@ -159,6 +159,91 @@ describe("diagrams.generateClassDiagram", () => {
     expect(out).toContain("+login()");
   });
 
+  it("class diagrams emit `direction TB`; the other deterministic graphs do not", () => {
+    const module: Module = { id: "auth", paths: ["src/auth/foo.ts"], symbolCount: 1 };
+    const symbols: SymbolRow[] = [
+      {
+        id: 1,
+        file_id: 1,
+        key: "src/auth/foo.ts#AuthService",
+        name: "AuthService",
+        kind: "class",
+        signature: null,
+        start_line: 1,
+        end_line: 10,
+        content_hash: "h",
+        status: "active",
+      },
+    ];
+    const classDiagram = generateClassDiagram(module, symbols);
+    // Sparse inventories (few/zero edges) render as a tiny horizontal row
+    // without an explicit direction.
+    expect(classDiagram).toContain("classDiagram\n  direction TB\n");
+
+    // Flow-style graphs keep their own direction — no `direction TB`.
+    expect(generateStructure(["src/auth/foo.ts", "src/auth/bar.ts"])).not.toContain("direction TB");
+    expect(generateModulesGraph([{ from: "auth", to: "session" }])).not.toContain("direction TB");
+  });
+
+  it("edge-less class diagrams chain classes with themeCSS-hidden links (vertical stacking)", () => {
+    const module: Module = { id: "auth", paths: ["src/auth/foo.ts"], symbolCount: 3 };
+    const classSymbol = (id: number, name: string): SymbolRow => ({
+      id,
+      file_id: 1,
+      key: `src/auth/foo.ts#${name}`,
+      name,
+      kind: "class",
+      signature: null,
+      start_line: 1,
+      end_line: 10,
+      content_hash: "h",
+      status: "active",
+    });
+    const out = generateClassDiagram(module, [
+      classSymbol(1, "Alpha"),
+      classSymbol(2, "Beta"),
+      classSymbol(3, "Gamma"),
+    ]);
+
+    // Mermaid ignores `direction TB` with zero edges (probed on 11.16:
+    // 524x142 horizontal viewBox). The chain forces vertical stacking;
+    // the themeCSS directive hides the connectors (probed: 124x628
+    // viewBox, stroke transparent, under strict AND loose securityLevel).
+    // `~~~` is a flowchart-only idiom and linkStyle is ignored by the
+    // class renderer — themeCSS is the only mechanism that works.
+    expect(out).toContain("direction TB");
+    expect(out).toContain("class_1 -- class_2");
+    expect(out).toContain("class_2 -- class_3");
+    expect(out).toContain('.relation { stroke: transparent !important; }');
+    // The init directive must precede the diagram type line.
+    expect(out.indexOf("%%{init:")).toBeLessThan(out.indexOf("classDiagram"));
+    // The chain links come after the class declarations.
+    expect(out.indexOf("class_1 -- class_2")).toBeGreaterThan(out.indexOf('class class_3["Gamma"]'));
+  });
+
+  it("a single-class diagram gets no chain and no directive", () => {
+    const module: Module = { id: "auth", paths: ["src/auth/foo.ts"], symbolCount: 1 };
+    const symbols: SymbolRow[] = [
+      {
+        id: 1,
+        file_id: 1,
+        key: "src/auth/foo.ts#AuthService",
+        name: "AuthService",
+        kind: "class",
+        signature: null,
+        start_line: 1,
+        end_line: 10,
+        content_hash: "h",
+        status: "active",
+      },
+    ];
+    const out = generateClassDiagram(module, symbols);
+    expect(out).toContain("direction TB");
+    expect(out).not.toContain("%%{init:");
+    expect(out).not.toContain("-- class_");
+    expect(out).not.toContain("~~~");
+  });
+
   it("ignora classes de outros módulos", () => {
     const module: Module = { id: "auth", paths: ["src/auth/foo.ts"], symbolCount: 1 };
     const symbols: SymbolRow[] = [
@@ -266,6 +351,23 @@ describe("diagrams — generated output is valid Mermaid (real parser, devDepend
       },
     ];
     const out = generateClassDiagram(module, symbols);
+    await expect(mermaidParse(out)).resolves.toBeTruthy();
+  });
+
+  it("edge-less multi-class output (themeCSS directive + chain) parses as valid Mermaid", async () => {
+    const module: Module = { id: "auth", paths: ["src/auth/foo.ts"], symbolCount: 2 };
+    const symbols: SymbolRow[] = [
+      {
+        id: 1, file_id: 1, key: "src/auth/foo.ts#Alpha", name: "Alpha", kind: "class",
+        signature: null, start_line: 1, end_line: 10, content_hash: "h", status: "active",
+      },
+      {
+        id: 2, file_id: 1, key: "src/auth/foo.ts#Beta", name: "Beta", kind: "class",
+        signature: null, start_line: 11, end_line: 20, content_hash: "h", status: "active",
+      },
+    ];
+    const out = generateClassDiagram(module, symbols);
+    expect(out).toContain("%%{init:"); // sanity: this test covers the chained shape
     await expect(mermaidParse(out)).resolves.toBeTruthy();
   });
 

@@ -80,6 +80,11 @@ export function generateModulesGraph(edges: ModuleGraphEdge[]): string {
  * Generates a class diagram for one module. Classes with the same display
  * name in different files receive distinct Mermaid IDs, and methods are
  * grouped by the full `(path, className)` identity.
+ *
+ * `direction TB`: sparse inventories (few/zero edges — e.g. a plain Python
+ * class list) render as a tiny horizontal row without it. Verified against
+ * the real Mermaid 11 parser (`validateMermaidSyntax` accepts the direction
+ * statement). Flow diagrams keep their own direction (LR).
  */
 export function generateClassDiagram(module: Module, symbols: SymbolRow[]): string {
   const modulePaths = new Set(module.paths);
@@ -105,23 +110,63 @@ export function generateClassDiagram(module: Module, symbols: SymbolRow[]): stri
     methodsByClass.set(identity, methods);
   }
 
-  const lines: string[] = ["classDiagram"];
+  const classIds: string[] = [];
+  const declarations: string[] = [];
   for (const [index, classSymbol] of classSymbols.entries()) {
     const [path, className = "Unknown"] = classSymbol.key.split("#");
     const classId = `class_${index + 1}`;
-    lines.push(`  class ${classId}["${escapeLabel(className)}"] {`);
+    classIds.push(classId);
+    declarations.push(`  class ${classId}["${escapeLabel(className)}"] {`);
     const methods = (methodsByClass.get(classIdentity(path ?? "", className)) ?? [])
       .sort((a, b) => a.key.localeCompare(b.key));
     for (const method of methods) {
       const qualifiedName = method.key.split("#")[1] ?? "method";
       const methodName = qualifiedName.split(".").slice(1).join(".") || "method";
-      lines.push(`    +${mermaidMemberName(methodName)}()`);
+      declarations.push(`    +${mermaidMemberName(methodName)}()`);
     }
-    lines.push("  }");
+    declarations.push("  }");
+  }
+
+  // Real structure edges (inheritance/associations) are not emitted
+  // today; when they are, they drive the layout and the sparse chain
+  // below must stay off (real structure wins).
+  const realEdgeLines: string[] = [];
+
+  // Sparse-inventory layout: mermaid honors `direction TB` only when the
+  // graph HAS edges — with zero edges it packs disconnected class nodes
+  // in a horizontal row (probed: 524×142 viewBox instead of vertical).
+  // With no real edges and ≥2 classes, chain consecutive classes with
+  // solid links and hide the connectors via the diagram's own themeCSS
+  // directive, so the inventory stacks vertically with no visible
+  // connectors (probed: 124×628 viewBox, stroke rgba(0,0,0,0), under
+  // BOTH securityLevel strict and loose). `~~~` is a flowchart-only
+  // idiom (parse error in classDiagram) and linkStyle is parsed but
+  // ignored by the class renderer — themeCSS is the only mechanism that
+  // works in mermaid 11.16. A renderer that drops the directive still
+  // stacks vertically, just with visible connectors.
+  const sparseChain = realEdgeLines.length === 0 && classIds.length >= 2;
+
+  const lines: string[] = [];
+  if (sparseChain) {
+    lines.push(SPARSE_CLASS_DIAGRAM_DIRECTIVE);
+  }
+  lines.push("classDiagram", "  direction TB", ...declarations, ...realEdgeLines);
+  if (sparseChain) {
+    for (let index = 0; index < classIds.length - 1; index++) {
+      lines.push(`  ${classIds[index]} -- ${classIds[index + 1]}`);
+    }
   }
 
   return lines.join("\n") + "\n";
 }
+
+/**
+ * Mermaid init directive that hides relation connectors — emitted only
+ * on edge-less class diagrams, where every relation is a layout chain
+ * link (see `generateClassDiagram`).
+ */
+const SPARSE_CLASS_DIAGRAM_DIRECTIVE =
+  '%%{init: {"themeCSS": ".relation { stroke: transparent !important; }"}}%%';
 
 function classIdentity(path: string, className: string): string {
   return JSON.stringify([path, className]);
