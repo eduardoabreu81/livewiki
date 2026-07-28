@@ -6,6 +6,71 @@
 
 ---
 
+### 2026-07-25/28 — Etapa 3 acceptance, A/B parity drive, Phase 7 viewer, and the onboarding backlog
+
+**Scope (4 days, 31 commits, all pushed):**
+
+- **Etapa 3 acceptance E2E** (MoneyPrinterTurbo-Plus clone, MiniMax-M3 via
+  openai-compat + token proxy, OpenWiki-identical shape): run #1 aborted on a
+  fatal topic-budget throw and run #2 completed_with_failures — the maintainer
+  ruled `completed_with_failures` NOT acceptable, starting a fix-and-measure
+  discipline: each run surfaces one failure class, each class gets one
+  deterministic fix with individual tests. Run #5 passed: **40/40, exit 0,
+  verify 45 pages zero issues**.
+- **Fixes from the E2E loop**: context-build exception as task failure,
+  dot-prefixed wiki pages visible to all three walkers, exact topic
+  source-budget estimate (shared span helper), coverage-preserving flow dedup,
+  section-level prose repair directive, TODO/TBD ban narrowed to the model's
+  own placeholder forms.
+- **Recovery tier** (maintainer directive "never fail to document; palliative
+  beats hole"): surgical section-scoped repair with an anti-cascade splice
+  guard, and one relaxed completion round (reduced presentation contract,
+  anchors/verify strict) marking pages `quality: degraded` and keeping
+  exit 0. Validated live in run #6 (root-02 degraded instead of failed).
+- **A/B measurement cycle** (6 blind dual-eval rounds vs frozen OpenWiki,
+  claude+codex, masked corpora, stable control): weighted gap
+  Δ1.00/1.60 → **Δ0.40/0.45** at ~6–8% of OpenWiki's token cost (13.9M vs
+  0.85–1.1M per run). Delivered in that loop: product-first quickstart
+  (README orientation + reader digest), concept-topic coverage (spoke-merge,
+  concern topics, prose evidence), nav+clarity hardening (page-specific
+  footers, grouped tasks.md, deterministic coverage note), inventory-authority
+  prompt rule, flow-candidate overlap cap, branch-precision rule, page-named
+  degraded notices, and the concern-topic refine pin. Local-evidence rule
+  recorded: internal test artifacts never travel to the remote.
+- **Phase 6**: all three export targets validated on a real corpus
+  (generic/github-wiki/gitlab-wiki — flat links, mermaid export, idempotent).
+- **Phase 7 viewer** shipped and polished: self-contained static site
+  (build-time marked, offline search-index.js, vendored mermaid), two
+  data-only templates, then the maintainer-ordered UX pass (active sidebar,
+  repo brand, light/dark, collapsible groups, natural diagram sizing, inline
+  flow mermaid) and a design pass (offline font pairing, real type scale,
+  tint blockquotes, verticalized edge-less class diagrams via transparent-stroke
+  chains).
+- **Onboarding backlog delivered**: identifier-aware FTS5 search (two-table),
+  `status --diff` pre-commit preview (read-only), change-impact context
+  (CLI+MCP), index freshness (`status` stale line) + MCP fs.watch debounce
+  sync, and `livewiki install` — agent auto-detection with merge adapters for
+  **13 agents** (registry v2), pointer still opt-in.
+
+**Sensitive points for future agents:**
+
+- The `git add -A -- docs/` incident (2026-07-28): it staged the LOCAL
+  benchmark evidence into a commit; caught before push, fixed with
+  reset --soft + staged-restore. NEVER use `-A` on evidence-bearing paths —
+  `docs/benchmarks/*rerun*`, `docs/tasks/2026-07-25-etapa-3-e2e/`,
+  `docs/handoffs/2026-07-23-*` stay untracked forever.
+- minimax/mmx CLI is a provider, not an MCP host (verified: its config holds
+  oauth+region only).
+- impeccable is a developer-side review tool only — never part of the
+  livewiki flow/gate (zero tool dependencies rule).
+- Remaining model-precision frontier: voice/subtitle false claims in
+  app-services-03 pages (2-4 per eval round, mutating).
+
+**Validation:** full gate green at every commit (final: core 1484, CLI 111,
+MCP 54); all E2E acceptance runs and blind evals preserved LOCAL-ONLY.
+
+---
+
 ### 2026-07-20 — R11-NAV intent-first deterministic navigation
 
 **Decision and scope:**
@@ -149,29 +214,38 @@
 
 ## Next steps
 
-1. Review the combined uncommitted R10/R10.1 + R11-NAV body.
-2. Decide whether to authorize one fresh, full paid acceptance E2E. If
-   authorized, it is one attempt with no `--only` recovery and no rerun-to-green
-   loop; a failure is recorded as a reliability result.
-3. Decide whether the implementation may be committed after strict
-   acceptance, or with an explicit maintainer waiver that records the known
-   autonomous-run gap.
-4. Launch the beta after the accepted local gate; use real navigation feedback
-   to decide whether the deferred R11-A topic layer is warranted.
-5. Only after local product flows close: return to cross-platform CI and then
-   Phase 7.
+1. Cross-platform CI block (deferred by the maintainer to last): macOS
+   realpath canonicalization and the workflow smoke step (`livewiki` bin not
+   found); the matrix must be green on ubuntu/windows/macos before any
+   "cross-platform validated" claim.
+2. Backlog #6 — GitHub Actions "docs-debt on merge" template (depends on the
+   CI block; same-repo variant can ship first).
+3. Beta launch: packaging (npm publish), then real-user feedback decides the
+   remaining items (watch-list: CALLS edges, community detection, tier-1
+   language expansion by usage).
+4. Optional hardening recorded: batch-review 5s-timeout and CLI E2E load
+   flakes (pre-existing, pass isolated); voice/subtitle precision frontier in
+   app-services-03 pages.
 
 ## Backlog
 
-- [ ] Maintainer review of the R10.1 evidence reconciliation
-- [ ] R10.1 autonomous paid-E2E acceptance, or explicit recorded waiver
-- [ ] Post-launch decision on the deferred R11-A concept-topic proposal
+- [ ] Cross-platform CI green (macOS realpath + smoke step) — deferred to last
+- [ ] #6 GitHub Actions "docs-debt on merge" template
+- [ ] Beta: npm packaging/publish + launch
+- [ ] Watch-list: CALLS-edge confidence tiers, community detection cross-check,
+      tier-1 language expansion (usage-driven), git-pinned evidence verification
+- [ ] Optional: batch-review/CLI-E2E load-flake hardening
+- [ ] Optional: voice/subtitle false-claim frontier (app-services-03 hotspot)
+- [x] `livewiki install` — 13-agent registry + merge adapters
+- [x] Index freshness (status stale) + MCP watcher debounce sync
+- [x] Change-impact context (CLI + MCP)
+- [x] `status --diff` pre-commit preview
+- [x] Identifier-aware FTS5 search
+- [x] Phase 7 viewer + UX/design pass
+- [x] Phase 6 export targets validated (3/3)
+- [x] A/B cycle vs OpenWiki — weighted gap Δ1.0/1.6 → Δ0.40/0.45 at ~6% cost
+- [x] Recovery tier (surgical repair + relaxed completion round)
+- [x] Etapa 3 acceptance E2E — run #5 exit 0, verify zero issues
+- [x] Etapas 1/2a/2b/2c/2d (tier-2 floor, repair contract, rationale, risk, hints)
+- [x] R11-A concept-topic layer validated (decision: keep)
 - [x] R11-NAV intent-first routes and auxiliary-content de-emphasis
-- [ ] Repeated/mechanical blind-evaluation instrument
-- [ ] Commit/push of the R10/R10.1 body after review
-- [ ] Cross-platform matrix green after local product flows
-- [ ] Phase 7 local viewer and templates
-- [x] Semantic product-flow layer S1–S5 implemented
-- [x] R10.1 deterministic acceptance fixes implemented
-- [x] Complete R10 and R10.1 comparison corpora produced
-- [x] Structural gap identified: concept-level navigation and auxiliary noise
