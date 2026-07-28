@@ -424,6 +424,11 @@ for closing the lot.
   (deterministic cluster headings), `moduleSourceExceedsBudget` +
   `MODULE_COVERAGE_NOTE` in `navigation.ts`; anti-meta prompt rule in
   `prompts.ts` (`EXCEPTION_BRANCH_PROMPT_RULE`, shared by module/flow/topic).
+- **Viewer (Phase 7)** → site builder `packages/core/src/view.ts`
+  (build-time `marked` MD→HTML, `search-index.js` offline index, vendored
+  mermaid, tasks.md-mirrored sidebar groups); CLI wrapper
+  `packages/cli/src/commands/view.ts` (`--template/--out/--no-open`,
+  cross-platform browser open via spawn `shell: false`).
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -1002,6 +1007,17 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   enforced and which input shapes a check covers; never generalize
   one-sided into two-sided). Gate: core 1381 / CLI 93 / MCP 31, zero paid
   calls. Next: final measurement round #11 + re-eval round 6.
+- **Phase 7 viewer (2026-07-26, implemented, uncommitted)**: `livewiki
+  view` builds a self-contained static site (`.livewiki/site/` or `--out`)
+  from the canonical wiki: build-time MD→HTML (`marked`, the one added
+  dependency), offline-by-construction (`search-index.js` assigned to
+  `window.SEARCH_INDEX`, never fetched; `mermaid.min.js` vendored from
+  node_modules — no CDN), two data-only templates (`agent`/`docs`) sharing
+  rendered content, sidebar mirroring the canonical groups (quickstart,
+  topics, flows, implementation reference, auxiliary, diagrams). Manual
+  smoke on the MPTP corpus: grouped sidebar + offline search (`docker`
+  filters live) + offline Mermaid render verified in a real browser via
+  `file://`. Gate: core 1395 / CLI 98 / MCP 31.
 - **Concern-topic refine pin (2026-07-26)**: run #11 re-eval showed the
   LLM refine pass re-scoping the deterministic deployment topic back to
   CLI-only (Docker gap reopened — LLM variance, not the tuning lot).
@@ -1048,7 +1064,7 @@ Next planned steps:
 2. R11-A topic layer: DECIDED 2026-07-26 — keep on main (validated by
    Etapa 3 run #5).
 3. Push authorization for the accumulated main (Etapa 2c/2d + Etapa 3
-   fixes), then beta launch decisions.
+   fixes), then beta launch decisions. DONE (push 2cca5a4, 2026-07-26).
 4. Only after local product flows pass, return to GitHub/cross-platform CI.
 5. Phase 7: local viewer + templates rendering the same canonical artifacts.
 

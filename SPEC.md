@@ -1060,6 +1060,23 @@ One-way, lossy transformation, `livewiki/` → repo-wiki format:
   repo is a normal git clone); no proprietary API calls
 
 ### Phase 7 — Local viewer + templates ✅ criterion: `livewiki view` opens a navigable site in the browser with search working offline; switching `--template` changes the look without regenerating content
+
+Implementation contract (2026-07-26): markdown is rendered to HTML at
+build time with `marked` (the one added dependency). The site is offline
+by construction: the search index is a `search-index.js` file assigning
+`window.SEARCH_INDEX` (never fetched, so `file://` works) and
+`mermaid.min.js` is vendored from `node_modules/mermaid/dist` — no CDN,
+no runtime install, Mermaid failure degrades to the plain code block.
+Templates (`agent` dense, `docs` clean) are data-only theme shells
+sharing the same rendered content; `--template` re-emits the shell
+without re-rendering. Pages are full HTML documents (chrome inline);
+the sidebar mirrors the canonical structure (quickstart, concept
+topics, flows, implementation reference grouped like tasks.md,
+auxiliary, diagrams). Internal links rewrite `.md` → `.html` with
+verify’s relative resolution; livewiki control markers are stripped and
+`lw:manual` content kept. Output defaults to `.livewiki/site/` (derived
+cache, rebuilt every run); `--out <dir>` must not resolve inside the
+wiki; the browser opens cross-platform unless `--no-open`.
 Self-contained static site generated in `.livewiki/site/` (gitignored; `--out` to
 publish wherever, e.g. GitHub Pages):
 - **Zero build step, zero server**: static HTML+CSS+JS, works via `file://`

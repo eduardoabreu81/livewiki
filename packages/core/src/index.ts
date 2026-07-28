@@ -39,3 +39,4 @@ export * as flows from "./flows.js";
 export * as topics from "./topics.js";
 export * as importResolution from "./import-resolution.js";
 export * as risk from "./risk.js";
+export * as view from "./view.js";

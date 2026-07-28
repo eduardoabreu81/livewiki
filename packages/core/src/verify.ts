@@ -313,8 +313,12 @@ async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
  * able to see a broken link to a deterministic diagram the same way it
  * sees a broken link to a page). Extension-driven, not path-driven — a
  * future third artifact type only needs one more suffix here.
+ *
+ * Exported for the Phase 7 viewer (`view.ts`), which enumerates the same
+ * canonical artifact set instead of re-inventing the walker rules
+ * (dot-directories skipped, dot-prefixed pages included).
  */
-async function collectWikiArtifactPaths(absRoot: string): Promise<Set<string>> {
+export async function collectWikiArtifactPaths(absRoot: string): Promise<Set<string>> {
   const out = new Set<string>();
   const stack = [nodePath.join(absRoot, "livewiki")];
   while (stack.length > 0) {
@@ -367,8 +371,11 @@ async function collectSectionSlugs(
  * Não valida se o alvo existe — só resolve o path. Use `isInsideWiki()`
  * pra checar se ficou dentro do namespace `livewiki/` (segurança contra
  * `..` malicioso que escapa da wiki).
+ *
+ * Exported for the Phase 7 viewer (`view.ts`), which rewrites internal
+ * links with exactly the same resolution rules.
  */
-function resolveWikiLink(fromRelPath: string, linkRaw: string): string | null {
+export function resolveWikiLink(fromRelPath: string, linkRaw: string): string | null {
   // Strip do prefixo "./" (equivalente a nome puro no mesmo dir)
   const cleaned = linkRaw.replace(/^\.\//, "");
   if (cleaned.length === 0) return null;
@@ -393,8 +400,10 @@ function resolveWikiLink(fromRelPath: string, linkRaw: string): string | null {
  * é exatamente `livewiki` (sem trailing). Usado como barreira de segurança
  * após resolver links relativos — evita que `../../etc/passwd` (ou
  * similar) seja interpretado como link válido pra fora.
+ *
+ * Exported together with `resolveWikiLink` for the Phase 7 viewer.
  */
-function isInsideWiki(wikiPath: string): boolean {
+export function isInsideWiki(wikiPath: string): boolean {
   return wikiPath === "livewiki" || wikiPath.startsWith("livewiki/");
 }
 
