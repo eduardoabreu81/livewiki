@@ -7,6 +7,20 @@
 
 ## Current execution order (see AGENTS.md)
 
+> **Reconciled 2026-07-26** (after the Etapa 3 + A/B measurement cycle):
+> items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
+> dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
+> ~6% of its token cost; R11-A validated and kept; commit/push done).
+> The active queue is now: **Phase 6 export-target validation (DONE
+> 2026-07-26: generic/github-wiki/gitlab-wiki on a real corpus) → Phase 7
+> local viewer → cross-platform CI (last) → post-Phase-7 backlog below.**
+> Also delivered beyond this plan: tier-2 universal prose floor, closed
+> repair contract, rationale evidence, risk-weighted debt ordering, MCP
+> workflow hints, the recovery tier (surgical repair + relaxed completion
+> round), product-first quickstart orientation, concept-topic coverage,
+> nav/clarity hardening, and the concern-topic refine pin.
+
+
 1. Review the uncommitted R10/R10.1 + R11-NAV body. R11-NAV's deterministic
    intent routes and auxiliary de-emphasis are implemented and green; strict
    autonomous paid-E2E acceptance remains open.
