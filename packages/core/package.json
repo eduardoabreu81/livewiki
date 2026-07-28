@@ -129,6 +129,10 @@
     "./view": {
       "types": "./dist/view.d.ts",
       "import": "./dist/view.js"
+    },
+    "./diff-preview": {
+      "types": "./dist/diff-preview.d.ts",
+      "import": "./dist/diff-preview.js"
     }
   },
   "files": [

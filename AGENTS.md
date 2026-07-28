@@ -429,6 +429,11 @@ for closing the lot.
   `wiki_search_tokens` identifier-split for matching); `splitIdentifiers`
   camelCase/PascalCase/acronym/snake; query split-expanded on both tables,
   merged + deduped. Tests in `search.test.ts`.
+- **`status --diff` (backlog 5)** → `packages/core/src/diff-preview.ts`:
+  `git diff --name-only HEAD` (spawn `shell: false`) → re-extract symbols
+  from changed files on disk → compare anchors’ `symbol_hash_at_doc`
+  (ledger-identical hashes) → changed/deleted pages. Read-only, exit 0
+  (exit 1 only outside git); `moved` out of scope v1.
 - **Viewer (Phase 7)** → site builder `packages/core/src/view.ts`
   (build-time `marked` MD→HTML, `search-index.js` offline index, vendored
   mermaid, tasks.md-mirrored sidebar groups); CLI wrapper

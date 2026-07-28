@@ -438,3 +438,134 @@ describe("CLI E2E — livewiki index respects config.ignores and adds --ignore",
     expect(added).toBe(2);
   });
 });
+
+/**
+ * CLI E2E — `livewiki status --diff` (ROADMAP backlog #5, pre-commit anchor
+ * preview). Real temp git repos: the preview's changed-file set comes from a
+ * real `git diff --name-only HEAD`. Covers the flag wiring end to end:
+ * human + --json shapes, exit 0 on the preview path (with zero debt created
+ * — read-only), and the not-a-git-repo degrade (exit 1, no stack trace).
+ */
+describe("CLI E2E — livewiki status --diff (pre-commit anchor preview)", () => {
+  function git(args: string[]): void {
+    const r = spawnSync("git", args, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+    });
+    expect(r.status, `git ${args.join(" ")} failed: ${r.stderr}`).toBe(0);
+  }
+
+  function gitInitCommit(): void {
+    git(["init", "-q", "-b", "main"]);
+    git(["add", "-A"]);
+    git([
+      "-c",
+      "user.name=livewiki-test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "baseline",
+    ]);
+  }
+
+  async function setupAnchoredRepo(): Promise<void> {
+    // `.livewiki/` is the derived cache — never in git (rule #3).
+    await writeCode(".gitignore", ".livewiki/\n");
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki(
+      "livewiki/foo.md",
+      `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+`,
+    );
+    gitInitCommit();
+    const r = runCli(["--json", "--repo", repoRoot, "index"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+  }
+
+  it("--json lists the page whose anchored symbol changed, exit 0, zero debt created", async () => {
+    await setupAnchoredRepo();
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+
+    const r = runCli(["--json", "--repo", repoRoot, "status", "--diff"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+    const j = JSON.parse(r.stdout) as {
+      ok: boolean;
+      diffPreview: {
+        notGitRepo: boolean;
+        changedFiles: string[];
+        pages: Array<{ wikiPath: string; items: Array<{ symbolKey: string; event: string }> }>;
+      };
+    };
+    expect(j.ok).toBe(true);
+    expect(j.diffPreview.notGitRepo).toBe(false);
+    expect(j.diffPreview.changedFiles).toEqual(["src/foo.ts"]);
+    expect(j.diffPreview.pages).toEqual([
+      {
+        wikiPath: "livewiki/foo.md",
+        items: [{ symbolKey: "src/foo.ts#bar", event: "changed" }],
+      },
+    ]);
+
+    // Read-only: the preview must not create debt (ledger did not run).
+    const statusR = runCli(["--json", "--repo", repoRoot, "status"]);
+    expect(statusR.status).toBe(0);
+    const statusJ = JSON.parse(statusR.stdout) as {
+      debt: { byEvent: { changed: number; deleted: number } };
+    };
+    expect(statusJ.debt.byEvent.changed).toBe(0);
+    expect(statusJ.debt.byEvent.deleted).toBe(0);
+  });
+
+  it("human output names the page and the moved scope note; clean tree says clean", async () => {
+    await setupAnchoredRepo();
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+
+    const dirty = runCli(["--repo", repoRoot, "status", "--diff"]);
+    expect(dirty.status, `stdout=${dirty.stdout}\nstderr=${dirty.stderr}`).toBe(0);
+    expect(dirty.stdout).toContain("1 page would be invalidated by the working tree");
+    expect(dirty.stdout).toContain("livewiki/foo.md");
+    expect(dirty.stdout).toContain("[changed] src/foo.ts#bar");
+    expect(dirty.stdout).toContain("moved");
+
+    git(["add", "-A"]);
+    git([
+      "-c",
+      "user.name=livewiki-test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "second",
+    ]);
+    const clean = runCli(["--repo", repoRoot, "status", "--diff"]);
+    expect(clean.status).toBe(0);
+    expect(clean.stdout).toContain("working tree clean vs anchors");
+  });
+
+  it("non-git directory degrades cleanly: exit 1, not_a_git_repo in JSON, no stack trace", () => {
+    const r = runCli(["--json", "--repo", repoRoot, "status", "--diff"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(1);
+    const j = JSON.parse(r.stdout) as {
+      ok: boolean;
+      error: string;
+      diffPreview: { notGitRepo: boolean; pages: unknown[] };
+    };
+    expect(j.ok).toBe(false);
+    expect(j.error).toBe("not_a_git_repo");
+    expect(j.diffPreview.notGitRepo).toBe(true);
+    expect(j.diffPreview.pages).toEqual([]);
+    expect(r.stderr).not.toMatch(/\bat .*\.ts:\d+/); // no stack trace
+  });
+});

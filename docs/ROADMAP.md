@@ -170,7 +170,7 @@ CLAUDE.md pointer. Constraints: pointer stays opt-in per rule #2 (explicit
 flag or interactive confirmation, never silent); every write outside the
 repo allowlist is shown before it happens; idempotent re-run.
 
-### 5. `livewiki status --diff` — pre-commit debt preview
+### 5. `livewiki status --diff` — pre-commit debt preview ✅ DONE 2026-07-28
 
 The anchor ledger detects debt AFTER a commit/index. Add a mode that maps
 the UNCOMMITTED working-tree diff to the wiki pages whose anchors it would
