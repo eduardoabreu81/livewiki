@@ -12,12 +12,26 @@
  *      corromper, `livewiki_search` reindexa e segue.
  *   3. Mantém `core` sem dependência de FTS5 — só o MCP server precisa.
  *
- * Tokenizer: porter (default FTS5) — bom pra inglês/PT sem normalização
- * extra. Se docs forem majoritariamente em outra língua, vale revisar.
+ * Tokenizer: FTS5 default (unicode61 — no `tokenize=` option is set, so
+ * tokens are matched whole, without stemming). The tokenizer treats
+ * `resolveDebt` / `ValidationError` / `resolve_debt` as ONE opaque token,
+ * so the index uses TWO tables:
+ *   - `wiki_search`: the original page text (default-tokenizer semantics
+ *     unchanged; snippets always come from here, so readers see the real
+ *     text);
+ *   - `wiki_search_tokens`: the same text run through `splitIdentifiers`
+ *     (camelCase/PascalCase split at lower→upper boundaries and acronym
+ *     runs, snake_case split on `_`), keeping the original token alongside
+ *     its parts — match-only, never displayed.
+ * `search()` queries both (raw query on `wiki_search`, split query on
+ * `wiki_search_tokens`) and merges: original-table hits first, then unique
+ * extras from the tokens table, deduped by wiki_path. search.db is rebuilt
+ * on startup, so the second table needs no migration — old files upgrade
+ * in place via CREATE IF NOT EXISTS + full reindex.
  *
  * Estratégia de indexação: rebuild completo em cada startup (rápido —
  * uma repo de 1000 páginas indexa em <1s). Idempotente. Após startup,
- * write_doc atualiza incrementally via indexPage.
+ * write_doc atualiza incrementalmente via indexPage.
  */
 
 import Database from "better-sqlite3";
@@ -26,6 +40,9 @@ import * as nodePath from "node:path";
 import * as safeIo from "@livewiki/core/safe-io";
 
 const SEARCH_DB_REL = ".livewiki/search.db";
+
+/** Identifier runs: start with a letter, then letters/digits/underscore. */
+const IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9_]*/g;
 
 export interface SearchHit {
   wikiPath: string;
@@ -40,6 +57,36 @@ export interface SearchOptions {
 
 export interface SearchIndex {
   db: Database.Database;
+}
+
+/**
+ * Splits identifier runs into their component words, keeping the ORIGINAL
+ * token alongside its parts so both the compound and the individual words
+ * match. Pure function — same input, same output.
+ *
+ * Rules:
+ *   - camelCase/PascalCase: split at lower→upper boundaries and at acronym
+ *     runs (`resolveDebt` → `resolveDebt resolve Debt`;
+ *     `HTTPServerError` → `HTTPServerError HTTP Server Error`);
+ *   - snake_case: split on `_` (`resolve_debt` → `resolve_debt resolve debt`);
+ *   - kebab-case: no-op (FTS5 already splits on `-`);
+ *   - only identifier runs `[A-Za-z][A-Za-z0-9_]*` are touched — plain
+ *     words and prose pass through unchanged.
+ */
+export function splitIdentifiers(text: string): string {
+  return text.replace(IDENTIFIER_RE, (token) => {
+    const parts: string[] = [];
+    for (const segment of token.split("_")) {
+      if (segment.length === 0) continue; // leading/trailing/double `_`
+      const split = segment
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2") // lower→upper boundary
+        .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2"); // acronym-run boundary
+      parts.push(...split.split(" "));
+    }
+    // Single-part tokens are plain words — prose passes through untouched.
+    if (parts.length <= 1) return token;
+    return `${token} ${parts.join(" ")}`;
+  });
 }
 
 /**
@@ -62,6 +109,10 @@ export async function openAndIndex(
       wiki_path UNINDEXED,
       content
     );
+    CREATE VIRTUAL TABLE IF NOT EXISTS wiki_search_tokens USING fts5(
+      wiki_path UNINDEXED,
+      content
+    );
   `);
   await reindexAll(db, absRoot);
   return { db };
@@ -70,16 +121,26 @@ export async function openAndIndex(
 /**
  * Reindexa todas as páginas markdown de `livewiki/` no índice FTS5.
  * Idempotente — limpa o índice antes pra evitar páginas órfãs.
+ *
+ * Dual insert: original text into `wiki_search`, split form into
+ * `wiki_search_tokens` (same transaction).
  */
 async function reindexAll(db: Database.Database, absRoot: string): Promise<void> {
   db.exec("DELETE FROM wiki_search");
+  db.exec("DELETE FROM wiki_search_tokens");
   const wikiDir = nodePath.join(absRoot, "livewiki");
   const pages = await collectMarkdownFiles(wikiDir);
   const insert = db.prepare(
     "INSERT INTO wiki_search (wiki_path, content) VALUES (?, ?)",
   );
+  const insertTokens = db.prepare(
+    "INSERT INTO wiki_search_tokens (wiki_path, content) VALUES (?, ?)",
+  );
   const tx = db.transaction((entries: Array<{ path: string; content: string }>) => {
-    for (const e of entries) insert.run(e.path, e.content);
+    for (const e of entries) {
+      insert.run(e.path, e.content);
+      insertTokens.run(e.path, splitIdentifiers(e.content));
+    }
   });
   const entries: Array<{ path: string; content: string }> = [];
   for (const absPath of pages) {
@@ -118,15 +179,22 @@ async function collectMarkdownFiles(dir: string): Promise<string[]> {
 
 /**
  * Indexa (ou atualiza) uma página individual. Chamado por write_doc.
+ *
+ * Both tables are updated in a single transaction: original text into
+ * `wiki_search`, split form into `wiki_search_tokens`.
  */
 export function indexPage(idx: SearchIndex, wikiPath: string, content: string): void {
   // FTS5 não tem UPSERT nativo — usa DELETE + INSERT em transação.
   const tx = idx.db.transaction(() => {
     idx.db.prepare("DELETE FROM wiki_search WHERE wiki_path = ?").run(wikiPath);
+    idx.db.prepare("DELETE FROM wiki_search_tokens WHERE wiki_path = ?").run(wikiPath);
     idx.db.prepare("INSERT INTO wiki_search (wiki_path, content) VALUES (?, ?)").run(
       wikiPath,
       content,
     );
+    idx.db
+      .prepare("INSERT INTO wiki_search_tokens (wiki_path, content) VALUES (?, ?)")
+      .run(wikiPath, splitIdentifiers(content));
   });
   tx();
 }
@@ -136,11 +204,57 @@ export function indexPage(idx: SearchIndex, wikiPath: string, content: string): 
  */
 export function removePage(idx: SearchIndex, wikiPath: string): void {
   idx.db.prepare("DELETE FROM wiki_search WHERE wiki_path = ?").run(wikiPath);
+  idx.db.prepare("DELETE FROM wiki_search_tokens WHERE wiki_path = ?").run(wikiPath);
+}
+
+/** Extracts the individual searchable words of a query (identifiers split). */
+function queryTerms(query: string): string[] {
+  const terms: string[] = [];
+  for (const m of query.matchAll(IDENTIFIER_RE)) {
+    for (const piece of splitIdentifiers(m[0]).split(" ")) {
+      terms.push(piece.toLowerCase());
+    }
+  }
+  return terms;
+}
+
+/**
+ * Builds a snippet around the first occurrence of any query term in the
+ * ORIGINAL page content (same `<<`/`>>` markers as the FTS5 snippet). Used
+ * for hits that only matched the split tokens table, where the raw FTS5
+ * snippet cannot highlight the compound identifier.
+ */
+function snippetAround(content: string, terms: string[]): string {
+  const lower = content.toLowerCase();
+  let pos = -1;
+  let termLen = 0;
+  for (const t of terms) {
+    const i = lower.indexOf(t);
+    if (i >= 0 && (pos < 0 || i < pos)) {
+      pos = i;
+      termLen = t.length;
+    }
+  }
+  if (pos < 0) {
+    const head = content.slice(0, 160).trimEnd();
+    return content.length > 160 ? `${head}...` : head;
+  }
+  const start = Math.max(0, pos - 80);
+  const end = Math.min(content.length, pos + termLen + 80);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < content.length ? "..." : "";
+  return `${prefix}${content.slice(start, pos)}<<${content.slice(pos, pos + termLen)}>>${content.slice(pos + termLen, end)}${suffix}`;
 }
 
 /**
  * Busca full-text. Query é expressão FTS5 (suporta prefixo `term*`, AND/OR,
  * frases `"exact phrase"`). Limite default 20.
+ *
+ * Two-table merge: hits from `wiki_search` (raw query, porter semantics
+ * unchanged) come first, ordered by rank; then unique extras from
+ * `wiki_search_tokens` (query run through `splitIdentifiers`), also by
+ * rank, deduped by wiki_path, up to the limit. Snippets ALWAYS come from
+ * `wiki_search` (original text) — the split content is match-only.
  *
  * Retorna array de hits com snippet (trecho ao redor do primeiro match).
  */
@@ -151,6 +265,7 @@ export function search(
 ): SearchHit[] {
   const limit = opts.limit ?? 20;
   // Sanitiza query: FTS5 syntax errors quebram a query. Captura e retorna [].
+  // Covers both the raw and the split query.
   try {
     const rows = idx.db
       .prepare(
@@ -161,7 +276,32 @@ export function search(
          LIMIT ?`,
       )
       .all(query, limit) as Array<{ wiki_path: string; snip: string }>;
-    return rows.map((r) => ({ wikiPath: r.wiki_path, snippet: r.snip }));
+    const hits = rows.map((r) => ({ wikiPath: r.wiki_path, snippet: r.snip }));
+    if (hits.length >= limit) return hits;
+    const seen = new Set(hits.map((h) => h.wikiPath));
+    const extraRows = idx.db
+      .prepare(
+        `SELECT wiki_path
+         FROM wiki_search_tokens
+         WHERE wiki_search_tokens MATCH ?
+         ORDER BY rank
+         LIMIT ?`,
+      )
+      .all(splitIdentifiers(query), limit) as Array<{ wiki_path: string }>;
+    const terms = queryTerms(query);
+    for (const row of extraRows) {
+      if (hits.length >= limit) break;
+      if (seen.has(row.wiki_path)) continue;
+      seen.add(row.wiki_path);
+      const original = idx.db
+        .prepare("SELECT content FROM wiki_search WHERE wiki_path = ?")
+        .get(row.wiki_path) as { content: string } | undefined;
+      hits.push({
+        wikiPath: row.wiki_path,
+        snippet: snippetAround(original?.content ?? "", terms),
+      });
+    }
+    return hits;
   } catch {
     return [];
   }

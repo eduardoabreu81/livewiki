@@ -134,7 +134,7 @@ natively through livewiki's own core, CLI, MCP server, and skills.
   changes; and
 - draft-first Git-host automation with human review and operational metrics.
 
-### 1. Identifier-aware FTS5 tokenizer for `livewiki_search`
+### 1. Identifier-aware FTS5 tokenizer for `livewiki_search` ✅ DONE 2026-07-28
 
 `packages/mcp/src/search.ts` uses the porter tokenizer, so camelCase /
 snake_case identifiers are single opaque tokens: searching "resolve debt"

@@ -424,6 +424,11 @@ for closing the lot.
   (deterministic cluster headings), `moduleSourceExceedsBudget` +
   `MODULE_COVERAGE_NOTE` in `navigation.ts`; anti-meta prompt rule in
   `prompts.ts` (`EXCEPTION_BRANCH_PROMPT_RULE`, shared by module/flow/topic).
+- **Identifier-aware search (backlog 1)** → two-table FTS5 in
+  `packages/mcp/src/search.ts` (`wiki_search` original text for snippets,
+  `wiki_search_tokens` identifier-split for matching); `splitIdentifiers`
+  camelCase/PascalCase/acronym/snake; query split-expanded on both tables,
+  merged + deduped. Tests in `search.test.ts`.
 - **Viewer (Phase 7)** → site builder `packages/core/src/view.ts`
   (build-time `marked` MD→HTML, `search-index.js` offline index, vendored
   mermaid, tasks.md-mirrored sidebar groups); CLI wrapper
