@@ -111,6 +111,28 @@ describe("isInsideAllowlist", () => {
     const target = nodePath.join(repoRoot, "AGENTS.md");
     expect(isInsideAllowlist(repoRoot, target)).toBe(false);
   });
+
+  it("com allowReadme=true aceita README.md na raiz", () => {
+    const target = nodePath.join(repoRoot, "README.md");
+    expect(isInsideAllowlist(repoRoot, target, { allowReadme: true })).toBe(true);
+  });
+
+  it("com allowReadme=true rejeita outros arquivos da raiz", () => {
+    for (const name of ["CONTRIBUTING.md", "package.json", "AGENTS.md"]) {
+      const target = nodePath.join(repoRoot, name);
+      expect(isInsideAllowlist(repoRoot, target, { allowReadme: true })).toBe(false);
+    }
+  });
+
+  it("com allowReadme=true rejeita subdir/README.md (só na raiz)", () => {
+    const target = nodePath.join(repoRoot, "subdir", "README.md");
+    expect(isInsideAllowlist(repoRoot, target, { allowReadme: true })).toBe(false);
+  });
+
+  it("com allowReadme=false (default) rejeita README.md na raiz", () => {
+    const target = nodePath.join(repoRoot, "README.md");
+    expect(isInsideAllowlist(repoRoot, target)).toBe(false);
+  });
 });
 
 describe("resolveAndValidate (declared path, sem symlinks)", () => {

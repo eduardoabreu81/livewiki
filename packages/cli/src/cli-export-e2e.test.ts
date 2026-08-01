@@ -409,3 +409,77 @@ describe("CLI E2E — livewiki export", () => {
     expect(parsed!.export.issues.some((i) => i.code === "invalid_target")).toBe(true);
   });
 });
+
+describe("CLI E2E — livewiki export readme", () => {
+  const README_QUICKSTART = [
+    "# Quickstart",
+    "",
+    "## What this repository is",
+    "",
+    "WidgetKit renders dashboard widgets from declarative configs.",
+    "",
+    "## What you'll find in this wiki",
+    "",
+    "- **[Renderer](renderer.md)** — Renders widget trees into the host surface.",
+    "",
+  ].join("\n");
+
+  it("creates README.md with --yes and exits 0", async () => {
+    await writeWiki("livewiki/quickstart.md", README_QUICKSTART);
+    const r = runCli(["--repo", repoRoot, "export", "readme", "--yes"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+    const readme = await nodeFs.readFile(nodePath.join(repoRoot, "README.md"), "utf8");
+    expect(readme).toContain("<!-- livewiki:readme:start -->");
+    expect(readme).toContain("WidgetKit renders dashboard widgets");
+    expect(readme).toContain("- **[Renderer](livewiki/renderer.md)**");
+  });
+
+  it("dry-run without --yes exits 0 and writes nothing", async () => {
+    await writeWiki("livewiki/quickstart.md", README_QUICKSTART);
+    const r = runCli(["--repo", repoRoot, "export", "readme"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain("dry-run");
+    await expect(
+      nodeFs.access(nodePath.join(repoRoot, "README.md")),
+    ).rejects.toThrow();
+  });
+
+  it("refuses a marker-less README with exit 1 and a clear opt-in message", async () => {
+    await writeWiki("livewiki/quickstart.md", README_QUICKSTART);
+    await writeWiki("README.md", "# Hand-written\n");
+    const r = runCli(["--repo", repoRoot, "export", "readme", "--yes"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(1);
+    expect(r.stdout).toContain("never overwritten");
+    expect(r.stdout).toContain("<!-- livewiki:readme:start -->");
+    // The human file is untouched.
+    expect(await nodeFs.readFile(nodePath.join(repoRoot, "README.md"), "utf8")).toBe(
+      "# Hand-written\n",
+    );
+  });
+
+  it("replaces only the marker block of an opted-in README", async () => {
+    await writeWiki("livewiki/quickstart.md", README_QUICKSTART);
+    await writeWiki(
+      "README.md",
+      "# Mine\n\nIntro.\n\n<!-- livewiki:readme:start -->\n\nstale\n\n<!-- livewiki:readme:end -->\n\nFooter.\n",
+    );
+    const r = runCli(["--repo", repoRoot, "export", "readme", "--yes"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+    const readme = await nodeFs.readFile(nodePath.join(repoRoot, "README.md"), "utf8");
+    expect(readme).toContain("Intro.");
+    expect(readme).toContain("Footer.");
+    expect(readme).toContain("WidgetKit renders dashboard widgets");
+    expect(readme).not.toContain("stale");
+  });
+
+  it("missing wiki exits 1 with a run-init message (JSON honors the contract)", async () => {
+    const r = runCli(["--json", "--repo", repoRoot, "export", "readme", "--yes"]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(1);
+    const parsed = JSON.parse(r.stdout) as {
+      ok: boolean;
+      readme: { refusal?: string };
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.readme.refusal).toContain("livewiki init");
+  });
+});

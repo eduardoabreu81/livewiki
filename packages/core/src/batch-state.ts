@@ -19,6 +19,7 @@ import type { LlmUsage } from "./llm/types.js";
 import type { ArtifactValidationError } from "./prompts.js";
 import type { MechanicalArtifactRepair } from "./artifact-repair.js";
 import type { TopicCandidate } from "./topics.js";
+import type { CommunityCrossCheckReport } from "./community.js";
 
 /** Stages do pipeline batch. */
 export type BatchStage = 1 | 2 | 3 | 4 | 5;
@@ -177,6 +178,15 @@ export interface TaskCheckpoint {
    * reader notice. Additive; absent on strict completions and failures.
    */
   degraded?: boolean;
+  /**
+   * Roadmap item 9 (diagnostic-only): community-detection cross-check of
+   * the stage-2 HEURISTIC partition against import-graph communities.
+   * Additive; absent when `communityDetection` is off, when the
+   * cross-check itself failed (diagnostics never abort a run), and in
+   * checkpoints persisted before this field existed. Never affects task
+   * or run status.
+   */
+  communityCrossCheck?: CommunityCrossCheckReport;
 }
 
 export interface TaskError {
@@ -236,6 +246,13 @@ export interface TaskReportItem {
    * compat per CONTRACT I5).
    */
   diagnosticHistory?: DiagnosticAttempt[];
+  /**
+   * Roadmap item 9 (diagnostic-only): stage-2 community cross-check
+   * report, surfaced from `batch_tasks.checkpoint_json.communityCrossCheck`
+   * when present (same additive backward-compat pattern as
+   * `diagnosticHistory`). Only ever set on the stage-2 task.
+   */
+  communityCrossCheck?: CommunityCrossCheckReport;
   /** Comando pronto pra retry: `livewiki batch --only <target> <runId>` */
   retryCommand: string;
 }

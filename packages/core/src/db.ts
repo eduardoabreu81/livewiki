@@ -15,7 +15,7 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -154,13 +154,17 @@ CREATE INDEX IF NOT EXISTS idx_manual_blocks_doc_page_id ON manual_blocks(doc_pa
 -- NULL for callees the resolver couldn't confidently match to one symbol
 -- (dynamic dispatch, external/unindexed code, ambiguous name) — a raw,
 -- unresolved row is still kept for the callee_name-only searches.
+-- Schema v7 (roadmap item 8): \`confidence\` tags each edge as 'extracted'
+-- (bare-identifier/constructor callee) or 'inferred' (member/attribute
+-- access — receiver unknown). Resolution can only downgrade, never upgrade.
 CREATE TABLE IF NOT EXISTS calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   file_id INTEGER NOT NULL REFERENCES files(id),
   caller_key TEXT NOT NULL,
   callee_name TEXT NOT NULL,
   resolved_callee_key TEXT,
-  line INTEGER NOT NULL
+  line INTEGER NOT NULL,
+  confidence TEXT NOT NULL DEFAULT 'inferred'
 );
 
 CREATE INDEX IF NOT EXISTS idx_calls_file_id ON calls(file_id);
@@ -309,6 +313,22 @@ export function migrateV5ToV6(db: Database.Database): void {
 }
 
 /**
+ * Migration v6 → v7 (roadmap item 8): adds `calls.confidence`
+ * ('extracted' | 'inferred') — Graphify-style edge confidence tags.
+ * JS function (not a SQL string) for idempotence: SCHEMA_SQL already
+ * carries the column, so a from-scratch DB must not re-ADD it — check
+ * PRAGMA table_info first (SQLite has no `ADD COLUMN IF NOT EXISTS`).
+ * Existing rows keep the DEFAULT 'inferred' (conservative: a pre-v7 edge
+ * has no recorded extraction shape, so it is treated as a name guess).
+ */
+export function migrateV6ToV7(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(calls)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "confidence")) {
+    db.exec("ALTER TABLE calls ADD COLUMN confidence TEXT NOT NULL DEFAULT 'inferred'");
+  }
+}
+
+/**
  * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
  * Cada entry é o SQL (string) OU a função (db) => void pra aplicar quando o
  * DB está em uma versão menor.
@@ -335,6 +355,7 @@ export function postV3Migrations(
   if (fromVersion < 4 && toVersion >= 4) out.push(migrateV3ToV4);
   if (fromVersion < 5 && toVersion >= 5) out.push(migrateV4ToV5);
   if (fromVersion < 6 && toVersion >= 6) out.push(migrateV5ToV6);
+  if (fromVersion < 7 && toVersion >= 7) out.push(migrateV6ToV7);
   return out;
 }
 
@@ -419,6 +440,7 @@ export type CallRow = {
   callee_name: string;
   resolved_callee_key: string | null;
   line: number;
+  confidence: string;
 };
 
 export type RationaleRow = {

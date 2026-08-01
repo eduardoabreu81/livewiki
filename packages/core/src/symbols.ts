@@ -57,8 +57,17 @@ export interface SymbolRecord {
   content_hash: string;
 }
 
-interface ExtractedSymbol extends SymbolRecord {
+interface ExtractedSymbol extends SymbolRecord, SymbolRange {}
+
+/**
+ * Byte range of the symbol's AST node in the source string the parser saw.
+ * Not persisted — the DB stores only hashes (rule: never store source
+ * text). Used by the indexer's per-symbol EOL realignment (roadmap item
+ * 12) to re-slice the normalized file text.
+ */
+export interface SymbolRange {
   source_start_byte: number;
+  source_end_byte: number;
 }
 
 /**
@@ -70,6 +79,20 @@ export function extractSymbols(
   relPath: string,
   source: string,
 ): SymbolRecord[] {
+  return extractSymbolsWithRanges(tree, relPath, source).map(toSymbolRecord);
+}
+
+/**
+ * Same extraction/dedup as `extractSymbols`, but each record keeps the AST
+ * node's byte range in `source`. The indexer uses the range to re-slice
+ * the normalized file text for the per-symbol EOL realignment (roadmap
+ * item 12); the range is never persisted.
+ */
+export function extractSymbolsWithRanges(
+  tree: Tree,
+  relPath: string,
+  source: string,
+): Array<SymbolRecord & SymbolRange> {
   const candidates: ExtractedSymbol[] = [];
   walkNode(tree.rootNode, source, relPath, null, candidates);
 
@@ -82,12 +105,12 @@ export function extractSymbols(
         left.discoveryOrder - right.discoveryOrder,
     );
   const seenKeys = new Set<string>();
-  const unique: SymbolRecord[] = [];
+  const unique: Array<SymbolRecord & SymbolRange> = [];
 
   for (const { symbol } of ordered) {
     if (seenKeys.has(symbol.key)) continue;
     seenKeys.add(symbol.key);
-    unique.push(toSymbolRecord(symbol));
+    unique.push(symbol);
   }
 
   return unique;
@@ -268,6 +291,7 @@ function makeRecord(
     end_line: endLine,
     content_hash: sha256Slice(source, startByte, endByte),
     source_start_byte: startByte,
+    source_end_byte: endByte,
   };
 }
 
@@ -285,6 +309,18 @@ function toSymbolRecord(symbol: ExtractedSymbol): SymbolRecord {
 
 // === Phase 3: raw call-site extraction (symbol call graph) ===
 
+/**
+ * Confidence tag for a call edge (roadmap item 8, Graphify-style):
+ *   - "extracted": the callee is a bare identifier or a `new X()` constructor
+ *     call — the name the parser saw IS the symbol being invoked.
+ *   - "inferred": the callee is the right-most identifier of a member/attribute
+ *     access (`obj.method()`, `self.attr()`) — the receiver is unknown, so the
+ *     name alone is a guess at which `method` symbol is meant.
+ * The tag is final: resolution (call-resolution.ts) never changes it — a
+ * bare-identifier callee that resolves repo-uniquely stays `extracted`.
+ */
+export type CallConfidence = "extracted" | "inferred";
+
 export interface CallRecord {
   /** Same key format as SymbolRecord.key — the enclosing function/method. */
   caller_key: string;
@@ -292,6 +328,8 @@ export interface CallRecord {
   callee_name: string;
   /** 1-based line of the call site. */
   line: number;
+  /** Extraction confidence — see CallConfidence. */
+  confidence: CallConfidence;
 }
 
 /**
@@ -305,7 +343,9 @@ export interface CallRecord {
  * `extractSymbols`: only emit a `callee_name` this scan is confident about
  * (a plain identifier or a `.property`/`.attribute` access). Anything else
  * — computed member access (`obj[expr]()`), spread callees, IIFEs — is
- * skipped rather than guessed. Resolving `callee_name` to a real symbol
+ * skipped rather than guessed. Each emitted row carries a `confidence` tag
+ * (see `CallConfidence`) so consumers can tell bare-name edges apart from
+ * member-access name guesses. Resolving `callee_name` to a real symbol
  * key is a SEPARATE pass (indexer.ts), since it needs cross-file import
  * data this module doesn't have.
  */
@@ -362,9 +402,18 @@ function walkForCalls(
     case "new_expression":
     case "call": {
       const calleeField = node.type === "new_expression" ? "constructor" : "function";
-      const calleeName = extractCalleeName(node.childForFieldName(calleeField));
-      if (calleeName && callerKey) {
-        out.push({ caller_key: callerKey, callee_name: calleeName, line: node.startPosition.row + 1 });
+      const callee = extractCalleeName(node.childForFieldName(calleeField));
+      if (callee && callerKey) {
+        // A `new X()` constructor invocation is explicit about the symbol it
+        // targets even when the callee is a member path — always "extracted".
+        const confidence: CallConfidence =
+          node.type === "new_expression" ? "extracted" : callee.confidence;
+        out.push({
+          caller_key: callerKey,
+          callee_name: callee.name,
+          line: node.startPosition.row + 1,
+          confidence,
+        });
       }
       break;
     }
@@ -376,16 +425,23 @@ function walkForCalls(
   }
 }
 
-/** Right-most confident identifier of a callee expression, or null if unclear. */
-function extractCalleeName(node: Node | null): string | null {
+/**
+ * Right-most confident identifier of a callee expression plus its extraction
+ * confidence, or null if unclear. A bare identifier is "extracted" (the name
+ * IS the callee); a member/attribute access is "inferred" (the receiver is
+ * unknown, so the right-most identifier is only a name guess).
+ */
+function extractCalleeName(node: Node | null): { name: string; confidence: CallConfidence } | null {
   if (!node) return null;
-  if (node.type === "identifier") return node.text;
+  if (node.type === "identifier") return { name: node.text, confidence: "extracted" };
   if (node.type === "member_expression") {
-    return node.childForFieldName("property")?.text ?? null;
+    const name = node.childForFieldName("property")?.text;
+    return name ? { name, confidence: "inferred" } : null;
   }
   if (node.type === "attribute") {
     // Python
-    return node.childForFieldName("attribute")?.text ?? null;
+    const name = node.childForFieldName("attribute")?.text;
+    return name ? { name, confidence: "inferred" } : null;
   }
   return null;
 }

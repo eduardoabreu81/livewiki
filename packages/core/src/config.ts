@@ -219,6 +219,23 @@ export interface LivewikiConfig {
    * topics.
    */
   concernTopics?: boolean;
+  /**
+   * Community-detection cross-check of the stage-2 heuristic module
+   * partition (roadmap item 9). Default true; diagnostic-only — the
+   * report is persisted in the stage-2 task checkpoint and NEVER changes
+   * run status or exit code (the heuristic partition always wins). Set
+   * false to skip the cross-check.
+   */
+  communityDetection?: boolean;
+  /**
+   * Stage-4 module-task worker pool size (roadmap item 7). Default 1
+   * (current sequential behavior, byte-for-byte). Values > 1 run that
+   * many workers pulling stage-4 module tasks from the prioritized
+   * queue; stage 5 (flows/topics) stays SEQUENTIAL — its loops share
+   * hub files inside transactions, a documented out-of-scope hazard.
+   * Must be an integer 1..16.
+   */
+  batchConcurrency?: number;
 }
 
 /** Max safe timeout for Node `setTimeout` (signed 32-bit ms). */
@@ -307,6 +324,10 @@ export const CONFIG_DEFAULTS = {
   relaxedRound: true,
   /** Concern-grouped topic candidates (D2: deployment/testing). */
   concernTopics: true,
+  /** Community-detection cross-check of the stage-2 partition (diagnostic-only). */
+  communityDetection: true,
+  /** Stage-4 module-task worker pool size; 1 keeps sequential behavior. */
+  batchConcurrency: 1,
 } as const;
 
 /**
@@ -411,6 +432,8 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     surgicalRepair: CONFIG_DEFAULTS.surgicalRepair,
     relaxedRound: CONFIG_DEFAULTS.relaxedRound,
     concernTopics: CONFIG_DEFAULTS.concernTopics,
+    communityDetection: CONFIG_DEFAULTS.communityDetection,
+    batchConcurrency: CONFIG_DEFAULTS.batchConcurrency,
     ...config,
   };
 }
@@ -699,6 +722,20 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error(`invalid concernTopics: must be a boolean, got ${JSON.stringify(v)}`);
     }
     out.concernTopics = v;
+  }
+  if (obj["communityDetection"] !== undefined) {
+    const v = obj["communityDetection"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid communityDetection: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.communityDetection = v;
+  }
+  if (obj["batchConcurrency"] !== undefined) {
+    const v = obj["batchConcurrency"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 16) {
+      throw new Error(`invalid batchConcurrency: must be an integer between 1 and 16, got ${JSON.stringify(v)}`);
+    }
+    out.batchConcurrency = v;
   }
   if (obj["flowMaxDiagramNodes"] !== undefined) {
     const v = obj["flowMaxDiagramNodes"];

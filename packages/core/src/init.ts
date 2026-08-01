@@ -91,6 +91,11 @@ export interface InitOptions {
   plan?: boolean;
   /** --no-refine: pula refinamento LLM da etapa 2 (só com --batch) */
   noRefine?: boolean;
+  /**
+   * Roadmap item 7: stage-4 module-task worker pool size forwarded to
+   * `runBatch` (only with --batch). Integer 1..16; default 1 = sequential.
+   */
+  batchConcurrency?: number;
   /** Language do plano/report (default: config.language || "en") */
   language?: string;
   /** Quiet mode (suprime notas informativas) */
@@ -340,6 +345,9 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
       repoRoot: absRoot,
       ...(opts.noRefine ? { noRefine: true } : {}),
       ...(opts.language ? { language: opts.language } : {}),
+      ...(opts.batchConcurrency !== undefined
+        ? { concurrency: opts.batchConcurrency }
+        : {}),
       // Não re-cria index (já rodou acima). The batch loads
       // `.livewiki/config.json` itself (T0 fail-closed) and forwards
       // `config.ignores` to its own stage-1 indexer. We do NOT pass

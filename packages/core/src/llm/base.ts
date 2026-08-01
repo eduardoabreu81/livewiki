@@ -3,7 +3,9 @@
  *
  * Centralizes:
  *   - fetch wrapper with optional per-attempt timeout
- *   - retry with exponential backoff for explicit HTTP retryables (429/5xx)
+ *   - retry with exponential backoff for explicit HTTP retryables (429/5xx);
+ *     the `Retry-After` header is honored on 429/503
+ *     (max(exponentialBackoff, retryAfterSeconds * 1000))
  *   - normalized errors (LlmRequestError / LlmTimeoutError; no auth headers)
  *
  * Timeout policy (client/provider-level, not stage-specific):
@@ -65,6 +67,31 @@ function isRetryableStatus(status: number): boolean {
 }
 
 /**
+ * Parse the `Retry-After` header (honored on 429/503 — the statuses whose
+ * semantics include rate limiting / temporary overload). Returns the delay
+ * in ms, or null when the header is absent or unparseable.
+ *
+ * The standard form is integer seconds; the HTTP-date form is handled
+ * defensively (rare on 429). Non-numeric, unparseable values are ignored —
+ * the caller falls back to pure exponential backoff. There is no cap: the
+ * provider asked for the delay, and per-call 429 retries are uncoordinated
+ * by design (the stage-4 worker pool size IS the client-side limiter).
+ */
+function parseRetryAfterMs(res: Response): number | null {
+  const header = res.headers.get("retry-after");
+  if (header === null) return null;
+  const seconds = Number(header.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+  const dateMs = Date.parse(header);
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+  return null;
+}
+
+/**
  * Spread helper: include `timeoutMs` even when it is 0 (truthy checks drop 0).
  */
 export function withTimeoutMs(
@@ -110,9 +137,13 @@ export async function requestWithRetry(
         throw new LlmRequestError(provider, res.status, body);
       }
       lastStatus = res.status;
+      const retryAfterMs =
+        res.status === 429 || res.status === 503 ? parseRetryAfterMs(res) : null;
       await res.text().catch(() => "");
       if (attempt < maxRetries) {
-        await sleep(retryDelayMs * Math.pow(2, attempt - 1));
+        await sleep(
+          Math.max(retryDelayMs * Math.pow(2, attempt - 1), retryAfterMs ?? 0),
+        );
       }
     } catch (err) {
       if (err instanceof LlmRequestError) throw err;

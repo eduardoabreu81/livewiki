@@ -475,16 +475,35 @@ debt(id, anchor_id→anchors, event,                           -- changed|moved|
 undocumented(id, symbol_key, detected_at, dismissed)          -- new symbols with no docs
 rationales(id, file_id→files, symbol_key NULL, kind,          -- tagged comment|docstring
            text, start_line, content_hash)                    -- sha256 of normalized text
+calls(id, file_id→files, caller_key, callee_name,
+      resolved_callee_key NULL, line, confidence)             -- extracted|inferred
 batch_runs(id, started_at, stage, config_json, status)
 batch_tasks(id, run_id→batch_runs, stage, target, status,    -- pending|done|failed
             checkpoint_json, updated_at)
 meta(key PRIMARY KEY, value)                                  -- schema_version, etc.
 ```
 
+**Call-edge confidence** (schema v7): every `calls` row is tagged at
+extraction — `extracted` for bare-identifier and `new X()` callees (the name
+the parser saw IS the invoked symbol), `inferred` for member/attribute
+callees (`obj.method()` — receiver unknown, right-most identifier is a name
+guess). The tag is final — resolution never changes it: a bare-identifier
+callee that resolves repo-uniquely cross-file stays `extracted` (an
+explicitly called, unambiguous name is strong cross-module evidence).
+Consumers are confidence-aware:
+cross-module callee sets and caller centrality count `extracted` rows only;
+blast radius presents direct vs inferred callers separately.
+
 **Moved** detection: a symbol disappears from file A and appears in file B with
 the same `content_hash` (or the same name+signature) → `moved` event, anchors are
 automatically updated to the new key, and the debt records `detail` with the
-from/to. **Prerequisite**: symbols that disappear from an *updated* file also
+from/to. **Twin guard (roadmap item 13)**: a move is accepted only when the
+disappeared symbol's name is gone from ALL active files — if any same-name,
+same-kind symbol survives anywhere (the match candidate excepted), there is
+no move and no anchor rewrite; the disappearance follows the normal
+`changed`/`deleted` path. Provider twins and exact rotations are therefore
+never misclassified as moves; a relocation of the only copy (twin count 0)
+remains a legitimate `moved`. **Prerequisite**: symbols that disappear from an *updated* file also
 become `status='deleted'` (never hard-delete) — without the old row there's no
 hash to match the move against. This applies to file updates, not just file
 deletions. **Supersession ≠ moved**: a pair with `oldKey === newKey` is a re-index
@@ -596,7 +615,14 @@ responses carry no hints. The table is pure presentation-layer data
    parent directory (`refine_fragmented_peers`). Any refine rejection keeps
    the full heuristic and does **not** abort the batch. The pre-stage-4
    partition assert compares executable modules to the original indexed
-   `filePaths`, never to a post-refine subset.
+   `filePaths`, never to a post-refine subset. A deterministic community
+   cross-check (`communityDetection`, boolean default `true`) clusters the
+   file-level import graph by label propagation and compares the result
+   against the heuristic partition; the report (per-module dominant
+   community/share, disagreement count, `agree`/`divergent` verdict) is
+   persisted in the stage-2 task checkpoint as DIAGNOSTIC ONLY — it never
+   changes the partition, the refine flow, the run status, or the exit
+   code, and any failure in the check itself degrades to "no report".
    A refined module may also carry an optional presentation-only
    `displayTitle`. Missing, malformed, duplicate, or low-quality title values
    are discarded without rejecting the refined module partition; the
@@ -726,7 +752,17 @@ consuming one of the `1 + maxRepairAttempts` bounded slots. After the retry
 budget is exhausted, later `incomplete` outcomes consume slots exactly as
 before, so exhaustion degrades to the ordinary bounded-loop behavior. The
 worst-case paid call count per task is
-`1 + maxRepairAttempts + maxIncompleteRetries` (default `5`). The next prompt
+`1 + maxRepairAttempts + maxIncompleteRetries` (default `5`). Stage-4 module
+tasks may run in a bounded worker pool: `batchConcurrency` (integer `1..16`,
+default `1` = sequential) sets how many workers pull tasks from the
+prioritized queue. Tasks are atomic (transactional write, per-task
+checkpoint, monotonic usage accounting), so workers never share a task row.
+Abort policy under the pool: the circuit breaker and rollback-abort stop NEW
+task dispatch; in-flight tasks finish and checkpoint before the run
+finalizes. Stage 5 (flows/topics) always runs sequentially — its loops share
+hub files inside transactions. Provider 429/503 retries honor `Retry-After`
+(`max(exponentialBackoff, retryAfter)`); the pool size IS the client-side
+concurrency limiter. The next prompt
 depends only on the immediately previous attempt:
 
 | Previous outcome | Next prompt | Repair inputs |
@@ -964,6 +1000,15 @@ with tests** (it's rule 1).
 web-tree-sitter + TS/JS/Python grammars, symbol extraction (functions, classes,
 methods, exports), hashes, SQLite schema, `.gitignore` respect. Performance
 target: a 50k LOC repo indexed in < 30s on the first run, < 2s incremental.
+All content hashing is EOL-insensitive (roadmap item 12): file text is
+normalized CRLF→LF once at read time and feeds the file `content_hash`,
+the parser, and every symbol/rationale hash, so a git `core.autocrlf`
+checkout conversion never produces phantom `changed` debt. On upgrade, a
+one-run migration window (`meta.eol_hashes_normalized`) realigns legacy
+hashes silently: per file (stored hash matching the raw or CRLF-expanded
+bytes ⇒ EOL-only) and per symbol inside genuinely-updated files (old hash
+matching the new slice re-expanded to CRLF ⇒ code-identical), with ZERO
+debt emitted and anchors moved to the normalized hashes.
 The walker indexes every text file by default (denylist, not allowlist):
 archives/binaries, media/fonts, `.map`/minified files, and known lockfiles are
 skipped, and `livewiki/` is always ignored alongside `.git/`, `node_modules/`,
@@ -1058,6 +1103,13 @@ One-way, lossy transformation, `livewiki/` → repo-wiki format:
   hand-edited or created by a third party), warn and require `--force`
 - MVP targets: `github-wiki`, `gitlab-wiki`, `generic`. Push via git (the wiki
   repo is a normal git clone); no proprietary API calls
+- `readme` target (deterministic, zero LLM): synthesizes the repo-root
+  `README.md` from accepted wiki pages (quickstart purpose, module digests,
+  flows). Rule-#6 contract: no README → create (whole file is the generated
+  block); README with `<!-- livewiki:readme:start/end -->` markers → replace
+  only inside the markers; README without markers → REFUSE (human content is
+  never overwritten). Root writes pass safe-io through an explicit opt-in
+  flag (the `allowPointer` precedent); dry-run preview without `--yes`.
 
 ### Phase 7 — Local viewer + templates ✅ criterion: `livewiki view` opens a navigable site in the browser with search working offline; switching `--template` changes the look without regenerating content
 
@@ -1077,6 +1129,14 @@ verify’s relative resolution; livewiki control markers are stripped and
 `lw:manual` content kept. Output defaults to `.livewiki/site/` (derived
 cache, rebuilt every run); `--out <dir>` must not resolve inside the
 wiki; the browser opens cross-platform unless `--no-open`.
+The viewer also marks freshness deterministically: a `new`/`updated` badge
+(sidebar + page header) derived from ONE bounded `git log` over `livewiki/`,
+compared against the newest commit in the log (never wall clock), so the
+same git state rebuilds byte-identical pages; no git ⇒ no badges, never an
+error. Window: `--badge-days <n>` (default `7`, `0` disables). Every page
+head carries static social/OG meta tags (description from the page excerpt,
+`og:title`/`og:type`/`og:site_name`, `twitter:card`) — no `og:url`, no
+`og:image`, preserving the offline/no-asset posture.
 Self-contained static site generated in `.livewiki/site/` (gitignored; `--out` to
 publish wherever, e.g. GitHub Pages):
 - **Zero build step, zero server**: static HTML+CSS+JS, works via `file://`

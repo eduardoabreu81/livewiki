@@ -40,18 +40,28 @@
  *     is derived cache, rebuilt on every run) or `--out <dir>` (validated:
  *     must NOT be inside `livewiki/`, must not contain `livewiki/`, never
  *     the repo or a filesystem root).
+ *   - Freshness badges ("new"/"updated") in the sidebar and page header
+ *     come from ONE bounded `git log` over livewiki/ (offline, no LLM);
+ *     epochs are compared against the newest commit in the log (never
+ *     Date.now()), so the same git state rebuilds byte-identical pages.
+ *     No git / any spawn failure ⇒ no badges, never an error.
+ *   - Every page head carries static OG/social meta tags (description
+ *     from the search excerpt, og:title/type/site_name, twitter:card) —
+ *     no og:url (unknown at build time), no og:image (offline posture).
  */
 
 import * as nodeFs from "node:fs/promises";
 import * as nodeFsSync from "node:fs";
 import * as nodePath from "node:path";
 import { createRequire } from "node:module";
+import { spawn } from "node:child_process";
 import { Marked } from "marked";
 import * as safeIo from "./safe-io.js";
 import { collectWikiArtifactPaths, resolveWikiLink, isInsideWiki } from "./verify.js";
 import { parseFrontmatter, type Frontmatter } from "./frontmatter.js";
 import { slugify } from "./anchors.js";
 import { maskCodeSpans, maskCodeSpansPreservingLength } from "./markdown-mask.js";
+import type { SpawnImpl } from "./risk.js";
 
 export const VIEW_TEMPLATES = ["agent", "docs"] as const;
 export type ViewTemplate = (typeof VIEW_TEMPLATES)[number];
@@ -80,6 +90,10 @@ export interface BuildSiteOptions {
   outDir?: string;
   /** Theme shell. Default: `agent`. */
   template?: ViewTemplate;
+  /** Days window for the git-history new/updated badges. Default 7; 0 disables badges. */
+  badgeDays?: number;
+  /** Injectable spawn for the git-log freshness probe (tests substitute a fake). */
+  spawnImpl?: SpawnImpl;
 }
 
 export interface BuildSiteResult {
@@ -107,6 +121,8 @@ interface PageRecord {
   contentHtml: string;
   headings: string[];
   excerpt: string;
+  /** Freshness badge from git history (absent without git data or when disabled). */
+  badge?: "new" | "updated";
 }
 
 type SiteGroup =
@@ -129,6 +145,12 @@ const GROUP_ORDER: readonly SiteGroup[] = [
 ];
 
 const SEARCH_EXCERPT_CAP = 400;
+/** Meta description / og:description cap (~one social-card snippet). */
+const META_DESCRIPTION_CAP = 200;
+/** Default new/updated badge window, in days (0 disables badges). */
+export const DEFAULT_BADGE_DAYS = 7;
+/** Bound for the git-log freshness probe. */
+const FRESHNESS_LOG_MAX_COMMITS = 200;
 
 /** localStorage key for the light/dark choice (read by the inline bootstrap + view-app.js). */
 export const THEME_STORAGE_KEY = "livewiki-theme";
@@ -195,6 +217,15 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
       : await safeIo.readText(absRoot, wikiPath);
     pages.push(await renderPage(md, wikiPath, source, artifactPaths, tasksGrouping, mmdSources));
   }
+
+  // Freshness badges from git history (deterministic: epochs are compared
+  // against the newest commit in the log, never Date.now()).
+  await applyFreshnessBadges(
+    pages,
+    absRoot,
+    opts.badgeDays ?? DEFAULT_BADGE_DAYS,
+    opts.spawnImpl ?? spawn,
+  );
 
   // Rebuilt on every run: wipe the previous site before writing.
   if (out.viaSafeIo) {
@@ -536,6 +567,126 @@ function parseTasksGrouping(tasksSource: string | null): TasksGrouping {
   return { byPage, order };
 }
 
+// ── Freshness badges (git history) ─────────────────────────────────────────
+
+interface PageFreshness {
+  /** Oldest commit epoch seen for the page (when it was born). */
+  firstEpoch: number;
+  /** Newest commit epoch seen for the page. */
+  lastEpoch: number;
+}
+
+interface FreshnessLog {
+  byPage: Map<string, PageFreshness>;
+  /** Newest commit epoch in the log — the repo-relative "now". */
+  maxEpoch: number;
+}
+
+/**
+ * Parses `git log --no-merges --format=COMMIT:%ct --name-only` output into
+ * per-page commit epochs. Pure: git walks newest → oldest, so the first
+ * sighting of a path is its LATEST commit and the last its earliest.
+ * Blank-line tolerant; paths outside livewiki/ are ignored by the caller's
+ * page lookup, not here.
+ */
+export function parseGitFreshnessLog(text: string): FreshnessLog {
+  const byPage = new Map<string, PageFreshness>();
+  let maxEpoch = 0;
+  let currentEpoch: number | null = null;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "") continue;
+    const commit = line.match(/^COMMIT:(\d+)$/);
+    if (commit) {
+      currentEpoch = Number(commit[1]);
+      if (currentEpoch > maxEpoch) maxEpoch = currentEpoch;
+      continue;
+    }
+    if (currentEpoch === null) continue;
+    // Git already emits repo-relative posix paths — they key the wiki
+    // pages directly (`livewiki/auth.md`).
+    const existing = byPage.get(line);
+    if (existing === undefined) {
+      byPage.set(line, { firstEpoch: currentEpoch, lastEpoch: currentEpoch });
+    } else {
+      existing.firstEpoch = currentEpoch;
+    }
+  }
+  return { byPage, maxEpoch };
+}
+
+/**
+ * Classifies pages as new/updated from ONE bounded git log over livewiki/
+ * (the newest commit epoch in the log is the reference "now" — same git
+ * state ⇒ byte-identical site). A page is "new" when its earliest seen
+ * commit falls inside the window (born recently), "updated" when it is
+ * older but its latest commit does. ANY git failure — missing git, not a
+ * repo, non-zero exit, spawn throw — yields no badges, never an error:
+ * the viewer must work on any checked-out wiki. `badgeDays <= 0` (or a
+ * non-positive/NaN value) disables badges and skips the spawn entirely.
+ */
+async function applyFreshnessBadges(
+  pages: PageRecord[],
+  absRoot: string,
+  badgeDays: number,
+  spawnImpl: SpawnImpl,
+): Promise<void> {
+  if (!(badgeDays > 0)) return;
+  const log = await collectFreshnessLog(absRoot, spawnImpl);
+  if (log === null || log.maxEpoch === 0) return;
+  const windowStart = log.maxEpoch - badgeDays * 86_400;
+  for (const page of pages) {
+    const fresh = log.byPage.get(page.wikiPath);
+    if (fresh === undefined) continue;
+    if (fresh.firstEpoch >= windowStart) page.badge = "new";
+    else if (fresh.lastEpoch >= windowStart) page.badge = "updated";
+  }
+}
+
+/** One bounded git spawn; returns null on ANY failure, never throws. */
+async function collectFreshnessLog(absRoot: string, spawnImpl: SpawnImpl): Promise<FreshnessLog | null> {
+  const text = await runGitLog(absRoot, spawnImpl);
+  return text === null ? null : parseGitFreshnessLog(text);
+}
+
+function runGitLog(absRoot: string, spawnImpl: SpawnImpl): Promise<string | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<SpawnImpl>;
+    try {
+      child = spawnImpl(
+        "git",
+        // core.quotepath=false: without it, git C-quotes paths containing
+        // non-ASCII bytes, which would never match the wiki page keys.
+        [
+          "-c", "core.quotepath=false",
+          "log", "--no-merges",
+          "--format=COMMIT:%ct",
+          "--name-only",
+          `--max-count=${FRESHNESS_LOG_MAX_COMMITS}`,
+          "--", "livewiki",
+        ],
+        { cwd: absRoot, shell: false },
+      );
+    } catch {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    const done = (value: string | null): void => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+    let out = "";
+    child.stdout?.on("data", (chunk: unknown) => {
+      out += String(chunk);
+    });
+    child.on("error", () => done(null));
+    child.on("close", (code: number | null) => done(code === 0 ? out : null));
+  });
+}
+
 // ── Shell, sidebar, search index ────────────────────────────────────────────
 
 function renderShell(opts: {
@@ -547,18 +698,29 @@ function renderShell(opts: {
 }): string {
   const { template, page, sidebarHtml, rootPrefix, repoName } = opts;
   const siteTitle = `${repoName} — livewiki docs`;
+  const pageTitle = `${page.title} — ${siteTitle}`;
+  // Static social/OG meta: no og:url (unknown at build time), no og:image
+  // (no assets; offline posture). The description reuses the search excerpt.
+  const description = page.excerpt.slice(0, META_DESCRIPTION_CAP);
   const brandLink = `<a class="brand-link" href="${rootPrefix}index.html">${escapeHtml(siteTitle)}</a>`;
   // The home page carries the site title as the chrome H1; other pages
   // keep it as a plain brand header (their content owns the H1).
   const brand = page.outRel === "index.html"
     ? `<h1 class="brand">${brandLink}</h1>`
     : `<div class="brand">${brandLink}</div>`;
+  const headerBadge = page.badge === undefined ? "" : `<div class="page-badges">${badgeSpan(page)}</div>\n`;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(page.title)} — ${escapeHtml(siteTitle)}</title>
+<title>${escapeHtml(pageTitle)}</title>
+<meta name="description" content="${escapeHtml(description)}">
+<meta property="og:title" content="${escapeHtml(pageTitle)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${escapeHtml(siteTitle)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+<meta name="twitter:card" content="summary">
 <script>(function(){var t=null;try{t=window.localStorage.getItem("${THEME_STORAGE_KEY}")}catch(e){}if(t!=="light"&&t!=="dark"){t=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}document.documentElement.setAttribute("data-theme",t)})();</script>
 <link rel="stylesheet" href="${rootPrefix}assets/view-${template}.css">
 </head>
@@ -578,7 +740,7 @@ ${sidebarHtml}
 <ul id="search-results" hidden></ul>
 </nav>
 <main class="content">
-${page.contentHtml}
+${headerBadge}${page.contentHtml}
 </main>
 </div>
 <script>window.LIVEWIKI_ROOT = ${JSON.stringify(rootPrefix)};</script>
@@ -602,7 +764,7 @@ function buildSidebar(pages: PageRecord[], currentOutRel: string): string {
     const href = relativeHref(currentOutRel, page.outRel);
     const active = page.outRel === currentOutRel;
     const attrs = active ? ` class="active" aria-current="page"` : "";
-    return `<li><a${attrs} href="${href}">${escapeHtml(page.title)}</a></li>`;
+    return `<li><a${attrs} href="${href}">${escapeHtml(page.title)}${badgeSpan(page)}</a></li>`;
   };
   const byTitle = (a: PageRecord, b: PageRecord): number =>
     a.title.localeCompare(b.title) || a.wikiPath.localeCompare(b.wikiPath);
@@ -653,8 +815,13 @@ function buildSidebar(pages: PageRecord[], currentOutRel: string): string {
   return sections.join("\n");
 }
 
-function buildSearchIndexJs(pages: PageRecord[]): string {
-  const entries = pages.map((page) => ({
+/** Sidebar/header freshness pill markup (empty when the page has no badge). */
+function badgeSpan(page: PageRecord): string {
+  if (page.badge === undefined) return "";
+  return `<span class="lw-badge lw-badge-${page.badge}">${page.badge}</span>`;
+}
+
+function buildSearchIndexJs(pages: PageRecord[]): string {  const entries = pages.map((page) => ({
     title: page.title,
     group: page.group,
     url: page.outRel,
@@ -846,6 +1013,20 @@ body {
    max-width style on the svg. */
 .mermaid { overflow-x: auto; }
 .mermaid svg { max-width: none !important; height: auto; }
+/* Freshness pill (git-history new/updated badge): a subtle outline chip
+   driven by the palette variables — works in both templates/palettes. */
+.lw-badge {
+  display: inline-block; margin-left: 0.4em; padding: 0 0.45em;
+  font-family: var(--lw-font-accent); font-size: var(--lw-text-sm);
+  line-height: 1.6; border-radius: 999px; vertical-align: middle;
+  border: 1px solid var(--lw-border-strong); color: var(--lw-muted);
+}
+.lw-badge-new {
+  color: var(--lw-active-fg); border-color: var(--lw-active-fg);
+  background: var(--lw-active-bg);
+}
+.page-badges { margin: 0 0 0.5rem; }
+.page-badges .lw-badge { margin-left: 0; }
 `;
 
 const AGENT_CSS = `${LAYOUT_CSS}

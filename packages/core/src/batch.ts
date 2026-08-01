@@ -63,6 +63,11 @@ import {
   type Module,
 } from "./modules.js";
 import { collectImportsForFiles } from "./imports.js";
+import {
+  detectFileCommunities,
+  comparePartitions,
+  type CommunityCrossCheckReport,
+} from "./community.js";
 import { createLlmClient, LlmTimeoutError, type LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult, StopReason } from "./llm/types.js";
 import { loadConfig, applyDefaults, validateConfigForBatch, resolveExtraIgnores, CONFIG_DEFAULTS } from "./config.js";
@@ -201,6 +206,13 @@ export interface BatchOptions {
    * one `testing` concern-grouped candidate after the import clusters.
    */
   concernTopics?: boolean;
+  /**
+   * Roadmap item 9: override of `communityDetection` (default = config or
+   * true). When on, the stage-2 heuristic partition is cross-checked
+   * against import-graph communities and the report is persisted in the
+   * stage-2 checkpoint (diagnostic-only; never changes run status).
+   */
+  communityDetection?: boolean;
   /** Stage-4 max output tokens (default from config / 8192). */
   stage4MaxOutputTokens?: number;
   /** Override thinking mode for openai-compat (MiniMax-M3 etc.). */
@@ -208,6 +220,12 @@ export interface BatchOptions {
   /** Module split thresholds (0 = disable that axis). */
   maxModuleFiles?: number;
   maxModuleSymbols?: number;
+  /**
+   * Roadmap item 7: stage-4 module-task worker pool size (default = config
+   * `batchConcurrency` or 1 = sequential). Must be an integer 1..16.
+   * Stage 5 (flows/topics) stays sequential regardless.
+   */
+  concurrency?: number;
 }
 
 export interface BatchRunResult {
@@ -348,6 +366,22 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         `invalid maxIncompleteRetries: must be a non-negative integer, got ${JSON.stringify(maxIncompleteRetries)}`,
       );
     }
+    // Roadmap item 7: stage-4 worker pool size (opts > config > default 1).
+    // 1 keeps the sequential path; stage 5 stays sequential regardless.
+    const batchConcurrency =
+      opts.concurrency ??
+      resolvedConfig.batchConcurrency ??
+      CONFIG_DEFAULTS.batchConcurrency;
+    if (
+      typeof batchConcurrency !== "number" ||
+      !Number.isInteger(batchConcurrency) ||
+      batchConcurrency < 1 ||
+      batchConcurrency > 16
+    ) {
+      throw new Error(
+        `invalid batchConcurrency: must be an integer between 1 and 16, got ${JSON.stringify(batchConcurrency)}`,
+      );
+    }
     // Recovery tier (Component 1): surgical repair toggle
     // (opts > config > default true).
     const surgicalRepair =
@@ -359,6 +393,10 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // D2: concern-grouped topic candidates toggle (opts > config > default true).
     const concernTopics =
       opts.concernTopics ?? resolvedConfig.concernTopics ?? true;
+    // Roadmap item 9: community-detection cross-check toggle
+    // (opts > config > default true). Diagnostic-only.
+    const communityDetection =
+      opts.communityDetection ?? resolvedConfig.communityDetection ?? true;
     const stage4MaxOutputTokens =
       opts.stage4MaxOutputTokens ??
       resolvedConfig.stage4MaxOutputTokens ??
@@ -399,6 +437,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         contextCharBudget: charBudget,
         maxRepairAttempts,
         maxIncompleteRetries,
+        batchConcurrency,
       });
       const res = db
         .prepare(
@@ -451,6 +490,24 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       symbolCountByPath.set(p, (symbolCountByPath.get(p) ?? 0) + 1);
     }
 
+    // === File-level import edges (ONE resolution per run) ===
+    // Hoisted above stage 2 (roadmap item 9): the community cross-check
+    // audits the heuristic partition with the SAME resolved edges that
+    // stage 3 projects into module edges and stage 5 uses for the flow
+    // detector's per-occurrence external accounting. Stage 3 reuses the
+    // hoisted result — it must NOT recompute.
+    const importsByFile = await collectImportsForFiles(absRoot, filePaths);
+    const knownFiles = new Set(filePaths);
+    // R10.1 (J): ONE resolver produces the file-level import edges —
+    // relative AND declared-workspace specifiers.
+    const workspacePackages = await loadWorkspacePackages(absRoot);
+    const resolvedImportEdges = resolveImportEdges({
+      importsByFile,
+      knownFiles,
+      workspacePackages,
+      tsconfig: await loadEffectiveTsconfig(absRoot, workspacePackages),
+    });
+
     // === Estágio 2: Identificação de módulos (heurística + optional LLM refine) ===
     let modules = identifyModulesHeuristic(filePaths, symbolCountByPath);
     const stage2Task = createOrGetTask(db, runId, 2, "modules", opts.mode);
@@ -460,6 +517,25 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       let error: TaskCheckpoint["error"] | undefined;
       let artifacts: TaskCheckpoint["artifacts"] | undefined;
       let attempt = stage2Task.attempt;
+
+      // Roadmap item 9 (diagnostic-only): cross-check the DETERMINISTIC
+      // heuristic partition against import-graph communities, BEFORE any
+      // LLM refine — the audit targets the deterministic partition, not
+      // the LLM's. The heuristic partition always wins; the report is
+      // persisted in this checkpoint for human review and never changes
+      // task/run status or exit code. Any failure in the cross-check
+      // itself degrades silently to "no report" (diagnostics never abort
+      // a run; unlike refine degradation there is no separate error
+      // channel for an optional deterministic diagnostic).
+      let communityCrossCheck: CommunityCrossCheckReport | undefined;
+      if (communityDetection) {
+        try {
+          const communities = detectFileCommunities(filePaths, resolvedImportEdges);
+          communityCrossCheck = comparePartitions(modules, communities);
+        } catch {
+          communityCrossCheck = undefined;
+        }
+      }
 
       if (!opts.noRefine && llmClient) {
         try {
@@ -525,6 +601,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         usageHistory,
         ...(error ? { error } : {}),
         ...(artifacts ? { artifacts } : {}),
+        // Roadmap item 9: additive diagnostic report (see above); never
+        // affects status. Absent when disabled or when the check failed.
+        ...(communityCrossCheck ? { communityCrossCheck } : {}),
       };
       const checkpointJson = JSON.stringify(checkpoint);
       // FIX J (rev2): refined modules are NEVER concatenated into checkpoint_json —
@@ -591,21 +670,10 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     }
 
     // === Stage 3: Prioritization (with IDs already unique and stable) ===
-    // Hoisted for stage 5: the flow detector re-derives external import
-    // specifiers from the SAME per-file extraction stage 3 uses for edges.
-    const importsByFile = await collectImportsForFiles(absRoot, filePaths);
-    const knownFiles = new Set(filePaths);
-    // R10.1 (J): ONE resolver produces the file-level import edges —
-    // relative AND declared-workspace specifiers. The same resolved edges
-    // feed the module-edge projection below and the flow detector's
-    // per-occurrence external accounting in stage 5.
-    const workspacePackages = await loadWorkspacePackages(absRoot);
-    const resolvedImportEdges = resolveImportEdges({
-      importsByFile,
-      knownFiles,
-      workspacePackages,
-      tsconfig: await loadEffectiveTsconfig(absRoot, workspacePackages),
-    });
+    // The per-file imports / resolved edges were hoisted above stage 2
+    // (roadmap item 9 — single resolution reused by the community
+    // cross-check, the module-edge projection below, and stage 5's flow
+    // detector external accounting).
     const edges = resolveModuleEdges(modules, importsByFile, knownFiles, resolvedImportEdges);
     let ordered = prioritizeModules(modules, edges, resolvedConfig.pathRoles);
 
@@ -723,7 +791,19 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // for the other modules — disk may be inconsistent.
     let runAbortedByRollback = false;
 
-    for (const module of tasksToRun) {
+    // One stage-4 module task, extracted from the original sequential loop
+    // body so both drivers below (sequential and worker pool) run the SAME
+    // code. Returns the per-module usage accumulator; the caller decides
+    // whether/when to append it to `moduleUsage` (the circuit-breaker path
+    // suppresses the tripping task's entry — pre-pool behavior). Shared
+    // mutable state (`cb`, `failures`, `degradedPages`, `failedModuleIds`,
+    // `stageUsageTotals`, `moduleTasksDone`, `runAbortedByRollback`) is
+    // captured by closure; every mutation inside is synchronous (better-
+    // sqlite3 statements and plain counter/array updates), so concurrent
+    // workers cannot interleave mid-update.
+    const runStage4ModuleTask = async (
+      module: (typeof tasksToRun)[number],
+    ): Promise<StageUsage> => {
       let moduleUsageEntry: StageUsage = emptyUsage();
       const task = getOrCreateTask(db, runId, 4, module.id);
       const startedAt = Date.now();
@@ -1324,51 +1404,112 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         if (degraded) degradedPages.push(wikiPath);
       }
 
-      // Circuit breaker check: 3 CONSECUTIVE failures, OR >50% with at least
-      // 3 tasks already attempted.
+      return moduleUsageEntry;
+    };
+
+    // Circuit breaker predicate shared by both stage-4 drivers: 3
+    // CONSECUTIVE failures, OR >50% with at least 3 tasks already attempted.
+    const circuitBreakerTripped = (): boolean => {
       const totalAttempted = cb.done + cb.fails;
-      if (
+      return (
         cb.consecutive >= 3 ||
         (totalAttempted >= 3 && cb.fails / totalAttempted > 0.5)
-      ) {
-        byStageAcc["4"] = stageUsageTotals;
-        finalizeRun(db, runId, "aborted", {
-          totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
-          byStage: byStageAcc,
-          byModule: moduleUsage,
-          modulesRefined: modules.map((m) => ({
-            id: m.id,
-            paths: m.paths,
-            ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
-          })),
-          tasksDone: cb.done,
-          tasksFailed: cb.fails,
-          degradedPages,
-        });
-        return withDegraded(buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, true, cb.done, cb.fails));
-      }
-      moduleUsage.push({ module: module.id, ...moduleUsageEntry });
+      );
+    };
 
-      // Reviewer revision (finding #4): rollback_failed aborts the RUN
-      // INTEIRO. Do not process the next modules — they will NEVER call
-      // LLM and NEVER write. Exit the loop here and finalize as "aborted".
-      if (runAbortedByRollback) {
-        byStageAcc["4"] = stageUsageTotals;
-        finalizeRun(db, runId, "aborted", {
-          totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
-          byStage: byStageAcc,
-          byModule: moduleUsage,
-          modulesRefined: modules.map((m) => ({
-            id: m.id,
-            paths: m.paths,
-            ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
-          })),
-          tasksDone: cb.done,
-          tasksFailed: cb.fails,
-          degradedPages,
-        });
-        return withDegraded(buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, false, cb.done, cb.fails));
+    // Abort finalization shared by both drivers (circuit-breaker trip and
+    // rollback abort — reviewer revision finding #4: rollback_failed aborts
+    // the ENTIRE run; disk may be inconsistent, so the remaining modules
+    // must never call the LLM or write). `breakerTriggered` maps to
+    // `circuitBreakerTriggered` in the result; a rollback abort reports
+    // false, exactly as the pre-pool inline blocks did.
+    const finalizeStage4Abort = (breakerTriggered: boolean): BatchRunResult => {
+      byStageAcc["4"] = stageUsageTotals;
+      finalizeRun(db, runId, "aborted", {
+        totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
+        byStage: byStageAcc,
+        byModule: moduleUsage,
+        modulesRefined: modules.map((m) => ({
+          id: m.id,
+          paths: m.paths,
+          ...(m.displayTitle ? { displayTitle: m.displayTitle } : {}),
+        })),
+        tasksDone: cb.done,
+        tasksFailed: cb.fails,
+        degradedPages,
+      });
+      return withDegraded(buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, breakerTriggered, cb.done, cb.fails));
+    };
+
+    // Roadmap item 7 (`batchConcurrency`): bounded worker pool for stage-4
+    // module tasks only. 1 (default) = sequential, byte-for-byte the
+    // pre-pool behavior. > 1 spawns N workers pulling modules from the
+    // prioritized `tasksToRun` queue via a shared cursor (JS is
+    // single-threaded: a `nextIndex` counter is race-free).
+    //
+    // Abort/drain policy: workers check the breaker and
+    // `runAbortedByRollback` BEFORE pulling the next task; once tripped, no
+    // new tasks start and in-flight tasks run to their natural completion
+    // (the checkpoint is persisted inside `runStage4ModuleTask`), then the
+    // run finalizes as `aborted` exactly as the sequential path. No
+    // mid-task cancellation.
+    //
+    // There is NO client-side rate limiter beyond the pool size — the pool
+    // IS the limiter. Per-call 429 retries stay uncoordinated by design and
+    // honor `Retry-After` (llm/base.ts).
+    //
+    // Stage 5 (flows/topics) stays SEQUENTIAL below: its loops share hub
+    // files inside transactions — a documented hazard, out of scope here.
+    if (batchConcurrency <= 1) {
+      for (const module of tasksToRun) {
+        const moduleUsageEntry = await runStage4ModuleTask(module);
+        if (circuitBreakerTripped()) return finalizeStage4Abort(true);
+        moduleUsage.push({ module: module.id, ...moduleUsageEntry });
+        if (runAbortedByRollback) return finalizeStage4Abort(false);
       }
+    } else {
+      let nextIndex = 0;
+      let poolAbort: "breaker" | "rollback" | null = null;
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          if (poolAbort !== null) return;
+          const index = nextIndex++;
+          if (index >= tasksToRun.length) return;
+          const module = tasksToRun[index]!;
+          const moduleUsageEntry = await runStage4ModuleTask(module);
+          // Mirrors the sequential order: a breaker trip suppresses the
+          // tripping task's byModule entry; a rollback abort keeps it.
+          if (circuitBreakerTripped()) {
+            poolAbort ??= "breaker";
+            return;
+          }
+          moduleUsage.push({ module: module.id, ...moduleUsageEntry });
+          if (runAbortedByRollback) {
+            poolAbort ??= "rollback";
+            return;
+          }
+        }
+      };
+      const workerCount = Math.min(batchConcurrency, tasksToRun.length);
+      // The pool is awaited BEFORE stage 5, so the `db.close()` in the
+      // outer finally still happens only after every worker has settled.
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+      // Deterministic report ordering: completion order is nondeterministic
+      // under the pool, so sort by the stage-3 module priority (`ordered`)
+      // before any result/summary is built. Stable sort — stage-5 flow/
+      // topic entries appended later (unknown to this map) keep their
+      // relative order.
+      const priorityIndex = new Map(ordered.map((m, i) => [m.id, i]));
+      const byPriority = (
+        a: { module: string },
+        b: { module: string },
+      ): number =>
+        (priorityIndex.get(a.module) ?? Number.MAX_SAFE_INTEGER) -
+        (priorityIndex.get(b.module) ?? Number.MAX_SAFE_INTEGER);
+      moduleUsage.sort(byPriority);
+      failures.sort(byPriority);
+      if (poolAbort === "breaker") return finalizeStage4Abort(true);
+      if (poolAbort === "rollback") return finalizeStage4Abort(false);
     }
     byStageAcc["4"] = stageUsageTotals;
     // === Stage 5: semantic product flows (SPEC §"Semantic product-flow layer") ===

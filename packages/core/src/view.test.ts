@@ -24,10 +24,12 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { EventEmitter } from "node:events";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { buildSite, ViewError, THEME_STORAGE_KEY, type BuildSiteResult } from "./view.js";
+import type { SpawnImpl } from "./risk.js";
 
 let repoRoot: string;
 
@@ -564,5 +566,183 @@ describe("view.buildSite", () => {
     await expect(buildSite({ repoRoot, outDir: nodePath.join(repoRoot, "out") })).rejects.toBeInstanceOf(
       ViewError,
     );
+  });
+});
+
+// ── Freshness badges (git history) ─────────────────────────────────────────
+
+/** Fake spawn: emits the given stdout then closes with the given code. */
+function fakeSpawnOk(output: string, code = 0): SpawnImpl {
+  return (() => {
+    const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter };
+    child.stdout = new EventEmitter();
+    process.nextTick(() => {
+      if (output.length > 0) child.stdout.emit("data", Buffer.from(output));
+      child.emit("close", code);
+    });
+    return child;
+  }) as unknown as SpawnImpl;
+}
+
+/** Fake spawn: emits an `error` (git missing / cannot spawn). */
+function fakeSpawnError(): SpawnImpl {
+  return (() => {
+    const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter };
+    child.stdout = new EventEmitter();
+    process.nextTick(() => {
+      child.emit("error", new Error("spawn git ENOENT"));
+    });
+    return child;
+  }) as unknown as SpawnImpl;
+}
+
+const DAY_SECONDS = 86_400;
+/** Fake "newest commit" epoch — the repo-relative now the badges compare against. */
+const LOG_NOW = 1_800_000_000;
+
+function gitLogOutput(commits: Array<[number, string[]]>): string {
+  return commits.map(([epoch, paths]) => `COMMIT:${epoch}\n\n${paths.join("\n")}\n`).join("\n");
+}
+
+describe("view.buildSite freshness badges", () => {
+  it("badges new/updated pages in the sidebar and the page header from git history", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    const log = gitLogOutput([
+      [LOG_NOW - 1 * DAY_SECONDS, ["livewiki/billing.md"]],
+      [LOG_NOW - 2 * DAY_SECONDS, ["livewiki/auth.md"]],
+      [LOG_NOW - 10 * DAY_SECONDS, ["livewiki/auth.md"]],
+      [LOG_NOW - 30 * DAY_SECONDS, ["livewiki/quickstart.md"]],
+    ]);
+    await buildSite({ repoRoot, outDir, spawnImpl: fakeSpawnOk(log) });
+
+    const auth = (await readSite(outDir, "pages/auth.html"))!;
+    // billing was born inside the 7-day window → new; auth is older but
+    // changed inside the window → updated.
+    expect(auth).toContain('<span class="lw-badge lw-badge-new">new</span>');
+    expect(auth).toContain('<span class="lw-badge lw-badge-updated">updated</span>');
+    // The active page's badge is repeated in the page header, before the H1.
+    expect(auth).toMatch(
+      /<main class="content">\s*<div class="page-badges"><span class="lw-badge lw-badge-updated">updated<\/span><\/div>\s*<h1/,
+    );
+
+    const index = (await readSite(outDir, "index.html"))!;
+    // quickstart is old → no badge on its own link and no page header.
+    expect(index).toContain('<a class="active" aria-current="page" href="index.html">Quickstart</a>');
+    expect(index).not.toContain("page-badges");
+    // But the sidebar still carries the other pages' badges.
+    expect(index).toContain('>Billing<span class="lw-badge lw-badge-new">new</span></a>');
+  });
+
+  it("no badges when git is unavailable (spawn error / non-zero exit)", async () => {
+    await writeFixtureWiki();
+    for (const [name, impl] of [
+      ["error", fakeSpawnError()],
+      ["exit128", fakeSpawnOk("fatal: not a git repository\n", 128)],
+    ] as const) {
+      const outDir = nodePath.join(repoRoot, `site-${name}`);
+      await buildSite({ repoRoot, outDir, spawnImpl: impl });
+      const html = (await readSite(outDir, "index.html"))!;
+      expect(html, name).not.toContain("lw-badge");
+    }
+  });
+
+  it("badgeDays: 0 disables badges entirely and never spawns git", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    const spawnThatThrows = (() => {
+      throw new Error("must not be called");
+    }) as unknown as SpawnImpl;
+    await buildSite({ repoRoot, outDir, badgeDays: 0, spawnImpl: spawnThatThrows });
+    const html = (await readSite(outDir, "index.html"))!;
+    expect(html).not.toContain("lw-badge");
+  });
+
+  it("a shorter window reclassifies updated→no-badge; a wider one keeps it", async () => {
+    await writeFixtureWiki();
+    // The window is anchored at the NEWEST commit in the log (billing's),
+    // so auth's 5-day-old change falls inside 7 days but outside 3.
+    const log = gitLogOutput([
+      [LOG_NOW, ["livewiki/billing.md"]],
+      [LOG_NOW - 5 * DAY_SECONDS, ["livewiki/auth.md"]],
+      [LOG_NOW - 30 * DAY_SECONDS, ["livewiki/auth.md"]],
+    ]);
+    const wide = nodePath.join(repoRoot, "site-wide");
+    await buildSite({ repoRoot, outDir: wide, badgeDays: 7, spawnImpl: fakeSpawnOk(log) });
+    expect((await readSite(wide, "pages/auth.html"))!).toContain("lw-badge-updated");
+
+    const narrow = nodePath.join(repoRoot, "site-narrow");
+    await buildSite({ repoRoot, outDir: narrow, badgeDays: 3, spawnImpl: fakeSpawnOk(log) });
+    const narrowAuth = (await readSite(narrow, "pages/auth.html"))!;
+    // auth itself is outside the 3-day window: no own badge in the sidebar
+    // and no page header (billing's "new" pill still shows in the sidebar).
+    expect(narrowAuth).not.toContain("page-badges");
+    expect(narrowAuth).not.toContain("lw-badge-updated");
+  });
+
+  it("same git state rebuilds byte-identical pages", async () => {
+    await writeFixtureWiki();
+    const log = gitLogOutput([
+      [LOG_NOW - DAY_SECONDS, ["livewiki/billing.md"]],
+      [LOG_NOW - 2 * DAY_SECONDS, ["livewiki/auth.md"]],
+      [LOG_NOW - 10 * DAY_SECONDS, ["livewiki/auth.md"]],
+    ]);
+    const outA = nodePath.join(repoRoot, "site-a");
+    const outB = nodePath.join(repoRoot, "site-b");
+    await buildSite({ repoRoot, outDir: outA, spawnImpl: fakeSpawnOk(log) });
+    await buildSite({ repoRoot, outDir: outB, spawnImpl: fakeSpawnOk(log) });
+    for (const rel of ["index.html", "pages/auth.html", "pages/billing.html"]) {
+      expect(await readSite(outA, rel), rel).toBe(await readSite(outB, rel));
+    }
+  });
+});
+
+// ── OG/social meta ──────────────────────────────────────────────────────────
+
+describe("view.buildSite OG/social meta", () => {
+  it("emits static OG/twitter meta in every page head (no og:url, no og:image)", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+    const siteTitle = `${nodePath.basename(repoRoot)} — livewiki docs`;
+
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).toContain(`<meta property="og:title" content="Quickstart — ${siteTitle}">`);
+    expect(index).toContain('<meta property="og:type" content="website">');
+    expect(index).toContain(`<meta property="og:site_name" content="${siteTitle}">`);
+    expect(index).toContain('<meta name="twitter:card" content="summary">');
+    // The description reuses the search excerpt (markdown stripped).
+    expect(index).toMatch(/<meta name="description" content="[^"]*Start with Auth or the CLI flow/);
+    expect(index).toMatch(/<meta property="og:description" content="[^"]*Start with Auth or the CLI flow/);
+    // Deliberately absent: unknown at build time / offline posture.
+    expect(index).not.toContain("og:url");
+    expect(index).not.toContain("og:image");
+  });
+
+  it("escapes ampersands, quotes and angle brackets in titles and excerpts", async () => {
+    await writeWiki("livewiki/quickstart.md", "# Home\n\nOverview.\n");
+    await writeWiki(
+      "livewiki/tricky.md",
+      '# Auth & "Login" <flow>\n\nTom & Jerry <3 "docs".\n',
+    );
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+    const html = (await readSite(outDir, "pages/tricky.html"))!;
+    expect(html).toContain(
+      '<meta property="og:title" content="Auth &amp; &quot;Login&quot; &lt;flow&gt; — ',
+    );
+    expect(html).toContain('Tom &amp; Jerry &lt;3 &quot;docs&quot;.');
+    expect(html).not.toContain('content="Auth & "');
+  });
+
+  it("trims the meta description to ~200 chars", async () => {
+    await writeWiki("livewiki/quickstart.md", "# Home\n\nShort.\n");
+    await writeWiki("livewiki/long.md", `# Long\n\n${"lorem ipsum dolor sit amet ".repeat(40)}\n`);
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+    const html = (await readSite(outDir, "pages/long.html"))!;
+    const m = html.match(/<meta name="description" content="([^"]*)">/);
+    expect(m).not.toBeNull();
+    expect(m![1]!.length).toBeLessThanOrEqual(200);
   });
 });

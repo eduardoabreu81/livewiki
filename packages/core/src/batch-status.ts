@@ -124,6 +124,11 @@ export async function buildStatusReport(
         ...(cp?.diagnosticHistory !== undefined
           ? { diagnosticHistory: cp.diagnosticHistory }
           : {}),
+        // Roadmap item 9: surface the stage-2 community cross-check
+        // (diagnostic-only) additively, same pattern as diagnosticHistory.
+        ...(cp?.communityCrossCheck !== undefined
+          ? { communityCrossCheck: cp.communityCrossCheck }
+          : {}),
         retryCommand: `livewiki batch --only ${t.target} ${run.id}`,
       });
       if (t.status === "failed") {

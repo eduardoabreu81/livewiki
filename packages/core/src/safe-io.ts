@@ -36,6 +36,13 @@ export interface SafeIoOptions {
    * caminho explícito: default false, opt-in consciente.
    */
   allowPointer?: boolean;
+  /**
+   * When true, accepts writes to README.md at the repository root.
+   * Opt-in for the `export readme` target only (rule #6: human content is
+   * never rewritten by automation — readme-export enforces the marker-block
+   * contract before any write reaches safe-io). Default false.
+   */
+  allowReadme?: boolean;
 }
 
 export class PathOutsideAllowlistError extends Error {
@@ -63,9 +70,10 @@ export class InvalidRelativePathError extends Error {
 }
 
 function allowlistFor(opts: SafeIoOptions): readonly string[] {
-  return opts.allowPointer
-    ? [...ALLOWED_DIRS, "AGENTS.md", "CLAUDE.md"]
-    : [...ALLOWED_DIRS];
+  const extras: string[] = [];
+  if (opts.allowPointer) extras.push("AGENTS.md", "CLAUDE.md");
+  if (opts.allowReadme) extras.push("README.md");
+  return [...ALLOWED_DIRS, ...extras];
 }
 
 /**
@@ -106,6 +114,12 @@ export function isInsideAllowlist(
       const allowed = nodePath.resolve(repoRoot, filename);
       if (target === allowed) return true;
     }
+  }
+  if (opts.allowReadme) {
+    // README.md at the repository root — validated by file name, like the
+    // pointer files above, because the opt-in covers exactly one file.
+    const allowed = nodePath.resolve(repoRoot, "README.md");
+    if (target === allowed) return true;
   }
   return ALLOWED_DIRS.some((dir) => {
     const allowed = allowedAbs(repoRoot, dir);

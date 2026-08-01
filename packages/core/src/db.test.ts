@@ -316,4 +316,92 @@ describe("db.openIndex", () => {
       db.close();
     }
   });
+
+  it("migrates v6 → v7: calls gains confidence, old rows default to 'inferred'", () => {
+    // Simulates a v6 DB — calls WITHOUT the confidence column, plus one
+    // pre-v7 edge row that must keep the conservative default.
+    const Database = require("better-sqlite3");
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '6');
+      CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL UNIQUE,
+        lang TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mtime INTEGER NOT NULL,
+        indexed_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
+      );
+      CREATE TABLE calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id),
+        caller_key TEXT NOT NULL,
+        callee_name TEXT NOT NULL,
+        resolved_callee_key TEXT,
+        line INTEGER NOT NULL
+      );
+      INSERT INTO files (path, lang, content_hash, size, mtime, indexed_at) VALUES ('a.ts', 'ts', 'h', 1, 1, 1);
+      INSERT INTO calls (file_id, caller_key, callee_name, line) VALUES (1, 'a.ts#outer', 'helper', 1);
+    `);
+    legacyDb.close();
+
+    const db = openIndex(dbPath);
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
+
+      const cols = (db.prepare("PRAGMA table_info(calls)").all() as Array<{ name: string }>)
+        .map((c) => c.name);
+      expect(cols).toContain("confidence");
+
+      // Pre-v7 rows have no recorded extraction shape → conservative default.
+      const edge = db.prepare("SELECT confidence FROM calls WHERE caller_key = 'a.ts#outer'").get() as
+        | { confidence: string }
+        | undefined;
+      expect(edge?.confidence).toBe("inferred");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v6 → v7 migration is idempotent: reopening a migrated v7 DB does not fail", () => {
+    openIndex(dbPath).close();
+    const db = openIndex(dbPath);
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
+      const cols = (db.prepare("PRAGMA table_info(calls)").all() as Array<{ name: string }>)
+        .map((c) => c.name);
+      // Exactly one confidence column (no duplicate ADD COLUMN).
+      expect(cols.filter((c) => c === "confidence")).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("fresh schema (from scratch) already carries calls.confidence", () => {
+    const db = openIndex(dbPath);
+    try {
+      const cols = (db.prepare("PRAGMA table_info(calls)").all() as Array<{ name: string }>)
+        .map((c) => c.name);
+      expect(cols).toEqual([
+        "id",
+        "file_id",
+        "caller_key",
+        "callee_name",
+        "resolved_callee_key",
+        "line",
+        "confidence",
+      ]);
+    } finally {
+      db.close();
+    }
+  });
 });

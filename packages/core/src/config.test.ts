@@ -758,6 +758,41 @@ describe("config — D2 concernTopics key", () => {
   });
 });
 
+describe("config — communityDetection key (roadmap item 9)", () => {
+  it("applyDefaults fills communityDetection=true when absent", () => {
+    const cfg = applyDefaults({});
+    expect(cfg.communityDetection).toBe(true);
+  });
+
+  it("applyDefaults does NOT overwrite an explicit value", () => {
+    const cfg = applyDefaults({ communityDetection: false });
+    expect(cfg.communityDetection).toBe(false);
+  });
+
+  it("loadConfig accepts a communityDetection boolean", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ communityDetection: false }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.communityDetection).toBe(false);
+  });
+
+  it.each([
+    ["a string", "yes"],
+    ["a number", 1],
+    ["null", null],
+  ])("rejects communityDetection as %s", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ communityDetection: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/communityDetection/);
+  });
+});
+
 describe("config — recovery tier relaxedRound key", () => {
   it("applyDefaults fills relaxedRound=true when absent", () => {
     const cfg = applyDefaults({});
@@ -790,5 +825,59 @@ describe("config — recovery tier relaxedRound key", () => {
       "utf8",
     );
     await expect(loadConfig(repoRoot)).rejects.toThrow(/relaxedRound/);
+  });
+});
+
+// === Roadmap item 7 — batchConcurrency (stage-4 worker pool size) ===
+describe("config — batchConcurrency", () => {
+  it("CONFIG_DEFAULTS.batchConcurrency === 1 (sequential default)", () => {
+    expect(CONFIG_DEFAULTS.batchConcurrency).toBe(1);
+  });
+
+  it("applyDefaults fills default 1 when config omits the field", () => {
+    expect(applyDefaults({}).batchConcurrency).toBe(1);
+    expect(applyDefaults({ provider: "anthropic", model: "x" }).batchConcurrency).toBe(1);
+  });
+
+  it("applyDefaults does NOT overwrite an explicit config value", () => {
+    expect(applyDefaults({ batchConcurrency: 4 }).batchConcurrency).toBe(4);
+    expect(applyDefaults({ batchConcurrency: 16 }).batchConcurrency).toBe(16);
+  });
+
+  it("loadConfig accepts valid integers 1 and 16 (bounds inclusive)", async () => {
+    for (const value of [1, 8, 16]) {
+      await nodeFs.writeFile(
+        nodePath.join(repoRoot, ".livewiki/config.json"),
+        JSON.stringify({
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          batchConcurrency: value,
+        }),
+        "utf8",
+      );
+      const cfg = await loadConfig(repoRoot);
+      expect(cfg.batchConcurrency).toBe(value);
+    }
+  });
+
+  it.each([
+    ["zero", 0],
+    ["a float", 1.5],
+    ["above the cap", 17],
+    ["negative", -2],
+    ["a string", "4"],
+    ["null", null],
+    ["a boolean", true],
+  ])("loadConfig REJECTS %s (no silent fallback to the default)", async (_label, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        batchConcurrency: value,
+      }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/batchConcurrency/);
   });
 });

@@ -17,6 +17,7 @@
  */
 
 import type Database from "better-sqlite3";
+import type { CallConfidence } from "./symbols.js";
 
 export interface AffectedPage {
   wikiPath: string;
@@ -31,6 +32,13 @@ export interface BlastRadiusResult {
   /** Callers found at depth >= 2, in BFS discovery order. */
   transitiveCallers: string[];
   affectedPages: AffectedPage[];
+  /**
+   * Additive (schema v7): confidence of each collected caller's edge into
+   * this walk — 'extracted' (direct evidence) vs 'inferred' (name guess),
+   * so consumers can present direct vs inferred callers separately. A
+   * caller with BOTH edge kinds into the same callee reports 'extracted'.
+   */
+  callerConfidence: Record<string, CallConfidence>;
   /** True when maxDepth or maxNodes stopped the walk before it exhausted callers. */
   truncated: boolean;
 }
@@ -54,11 +62,13 @@ export function computeBlastRadius(
   const maxNodes = opts.maxNodes ?? DEFAULT_MAX_NODES;
 
   const callersOf = db.prepare(
-    "SELECT DISTINCT caller_key FROM calls WHERE resolved_callee_key = ?",
+    `SELECT caller_key, MAX(confidence = 'extracted') AS has_extracted
+     FROM calls WHERE resolved_callee_key = ? GROUP BY caller_key`,
   );
 
   const directCallers: string[] = [];
   const transitiveCallers: string[] = [];
+  const callerConfidence: Record<string, CallConfidence> = {};
   const visited = new Set<string>([symbolKey]);
   let truncated = false;
 
@@ -70,11 +80,12 @@ export function computeBlastRadius(
         truncated = true;
         break;
       }
-      const rows = callersOf.all(target) as Array<{ caller_key: string }>;
+      const rows = callersOf.all(target) as Array<{ caller_key: string; has_extracted: number }>;
       for (const row of rows) {
         if (visited.has(row.caller_key)) continue;
         visited.add(row.caller_key);
         (depth === 0 ? directCallers : transitiveCallers).push(row.caller_key);
+        callerConfidence[row.caller_key] = row.has_extracted ? "extracted" : "inferred";
         next.push(row.caller_key);
         if (visited.size - 1 >= maxNodes) {
           truncated = true;
@@ -94,7 +105,7 @@ export function computeBlastRadius(
   const allKeys = [symbolKey, ...directCallers, ...transitiveCallers];
   const affectedPages = findAffectedPages(db, allKeys);
 
-  return { symbolKey, directCallers, transitiveCallers, affectedPages, truncated };
+  return { symbolKey, directCallers, transitiveCallers, affectedPages, callerConfidence, truncated };
 }
 
 function findAffectedPages(db: Database.Database, symbolKeys: string[]): AffectedPage[] {

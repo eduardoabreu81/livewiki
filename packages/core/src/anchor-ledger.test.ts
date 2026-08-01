@@ -17,6 +17,9 @@ import * as nodeFs from "node:fs/promises";
 import * as nodeFsSync from "node:fs";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
+import { sha256 } from "./hashes.js";
+import { parseSource } from "./parser.js";
+import { extractSymbols } from "./symbols.js";
 
 let repoRoot: string;
 
@@ -1421,6 +1424,366 @@ owner: generated
 });
 
 // Helper pra queries SQLite sem depender de abrir o DB manualmente
+describe("anchor-ledger — EOL-insensitive hashing (roadmap item 12)", () => {
+  it("CRLF→LF flip produces zero debt and zero file-change accounting", async () => {
+    const crlf = "export function eol() {\r\n  return 1;\r\n}\r\n";
+    await writeCode("src/eol.ts", crlf);
+    await writeWiki("livewiki/eol.md", `---
+title: EOL
+owner: generated
+anchors:
+  - src/eol.ts#eol
+---
+`);
+    const i1 = await runIndexer(repoRoot, { quiet: true });
+    expect(i1.filesAdded).toBe(1);
+    await runLedger(repoRoot, { quiet: true });
+
+    // git core.autocrlf checkout conversion: same content, LF endings.
+    await writeCode("src/eol.ts", crlf.replace(/\r\n/g, "\n"));
+    const i2 = await runIndexer(repoRoot, { quiet: true });
+    expect(i2.filesUpdated).toBe(0);
+    expect(i2.filesUnchanged).toBe(1);
+    expect(i2.symbolsAdded).toBe(0);
+
+    const r = await runLedger(repoRoot, { quiet: true });
+    expect(r.debtCreated).toBe(0);
+  });
+
+  it("real one-line change plus EOL flip yields exactly the real changed debt", async () => {
+    const crlf = "export function eol2() {\r\n  return 1;\r\n}\r\n";
+    await writeCode("src/eol2.ts", crlf);
+    await writeWiki("livewiki/eol2.md", `---
+title: EOL2
+owner: generated
+anchors:
+  - src/eol2.ts#eol2
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // Real edit AND an EOL flip at once.
+    await writeCode("src/eol2.ts", "export function eol2() {\n  return 2;\n}\n");
+    await runIndexer(repoRoot, { quiet: true });
+    const r = await runLedger(repoRoot, { quiet: true });
+    expect(r.debtCreated).toBe(1);
+    expect(r.debtByEvent.changed).toBe(1);
+    expect(r.debtByEvent.moved).toBe(0);
+    expect(r.debtByEvent.deleted).toBe(0);
+  });
+
+  it("legacy raw-bytes hashes migrate silently: zero debt, anchors realigned", async () => {
+    const crlf = "export function legacy() {\r\n  return 1;\r\n}\r\n";
+    await writeCode("src/legacy.ts", crlf);
+    await writeWiki("livewiki/legacy.md", `---
+title: Legacy
+owner: generated
+anchors:
+  - src/legacy.ts#legacy
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // Simulate a pre-item-12 database: raw-bytes file hash, and stale
+    // symbol/anchor hashes as a pre-upgrade DB would hold.
+    nodeSqliteExec(
+      repoRoot,
+      `UPDATE files SET content_hash = '${sha256(crlf)}' WHERE path = 'src/legacy.ts'`,
+    );
+    nodeSqliteExec(repoRoot, "UPDATE symbols SET content_hash = 'legacy-' || id");
+    nodeSqliteExec(repoRoot, "UPDATE anchors SET symbol_hash_at_doc = 'legacy'");
+
+    // Bytes on disk unchanged: silent migration, no file-change accounting.
+    const i = await runIndexer(repoRoot, { quiet: true });
+    expect(i.filesUpdated).toBe(0);
+    expect(i.filesUnchanged).toBe(1);
+
+    const r = await runLedger(repoRoot, { quiet: true });
+    expect(r.debtCreated).toBe(0);
+    expect(r.movedPairs).toEqual([]);
+
+    // The anchor hash was realigned to the live (normalized) symbol hash.
+    const rows = nodeSqliteQuery(
+      repoRoot,
+      "SELECT a.symbol_hash_at_doc AS h, s.content_hash AS sh " +
+        "FROM anchors a JOIN symbols s ON s.key = a.symbol_key AND s.status = 'active'",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.h).toBe(rows[0]?.sh);
+    expect(rows[0]?.h).not.toBe("legacy");
+  });
+
+  it("legacy-CRLF DB + LF files: silent flipped-EOL migration, zero debt", async () => {
+    const lf = "export function flipleg() {\n  return 1;\n}\n";
+    await writeCode("src/flipleg.ts", lf);
+    await writeWiki("livewiki/flipleg.md", `---
+title: FlipLeg
+owner: generated
+anchors:
+  - src/flipleg.ts#flipleg
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // Simulate a pre-item-12 database indexed when the file was CRLF on
+    // disk (stored file hash = raw CRLF bytes, stale symbol/anchor hashes
+    // from raw CRLF slices); the file on disk is now LF.
+    const crlf = lf.replace(/\n/g, "\r\n");
+    nodeSqliteExec(
+      repoRoot,
+      `UPDATE files SET content_hash = '${sha256(crlf)}' WHERE path = 'src/flipleg.ts'`,
+    );
+    nodeSqliteExec(repoRoot, "UPDATE symbols SET content_hash = 'legacy-' || id");
+    nodeSqliteExec(repoRoot, "UPDATE anchors SET symbol_hash_at_doc = 'legacy'");
+
+    const i = await runIndexer(repoRoot, { quiet: true });
+    expect(i.filesUpdated).toBe(0);
+    expect(i.filesUnchanged).toBe(1);
+
+    const r = await runLedger(repoRoot, { quiet: true });
+    expect(r.debtCreated).toBe(0);
+    expect(r.movedPairs).toEqual([]);
+
+    const rows = nodeSqliteQuery(
+      repoRoot,
+      "SELECT a.symbol_hash_at_doc AS h, s.content_hash AS sh " +
+        "FROM anchors a JOIN symbols s ON s.key = a.symbol_key AND s.status = 'active'",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.h).toBe(rows[0]?.sh);
+    expect(rows[0]?.h).not.toBe("legacy");
+  });
+
+  it("legacy-LF DB + CRLF files: zero debt via the unchanged fast path", async () => {
+    const lf = "export function lfleg() {\n  return 1;\n}\n";
+    await writeCode("src/lfleg.ts", lf);
+    await writeWiki("livewiki/lfleg.md", `---
+title: LfLeg
+owner: generated
+anchors:
+  - src/lfleg.ts#lfleg
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // A current-code index of the LF file is already a faithful legacy-LF
+    // database (normalizeEol is a no-op on LF-only text, so normalized
+    // hashes == legacy raw hashes, file and symbol level alike).
+    await writeCode("src/lfleg.ts", lf.replace(/\n/g, "\r\n"));
+    const i = await runIndexer(repoRoot, { quiet: true });
+    expect(i.filesUpdated).toBe(0);
+    expect(i.filesUnchanged).toBe(1);
+
+    const r = await runLedger(repoRoot, { quiet: true });
+    expect(r.debtCreated).toBe(0);
+  });
+
+  it("legacy-CRLF DB + LF files + a real change: exactly the real changed debt", async () => {
+    const lf = "export function realleg() {\n  return 1;\n}\n";
+    await writeCode("src/realleg.ts", lf);
+    await writeWiki("livewiki/realleg.md", `---
+title: RealLeg
+owner: generated
+anchors:
+  - src/realleg.ts#realleg
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // Legacy-CRLF stored hash; then a REAL content change in the now-LF
+    // file — the flipped-variant check must NOT claim an EOL migration.
+    nodeSqliteExec(
+      repoRoot,
+      `UPDATE files SET content_hash = '${sha256(lf.replace(/\n/g, "\r\n"))}' WHERE path = 'src/realleg.ts'`,
+    );
+    await writeCode("src/realleg.ts", "export function realleg() {\n  return 2;\n}\n");
+    await runIndexer(repoRoot, { quiet: true });
+    const r = await runLedger(repoRoot, { quiet: true });
+    expect(r.debtCreated).toBe(1);
+    expect(r.debtByEvent.changed).toBe(1);
+    expect(r.debtByEvent.moved).toBe(0);
+    expect(r.debtByEvent.deleted).toBe(0);
+  });
+
+  it("legacy-CRLF DB + updated multi-function file: exactly the real changed debt, unchanged symbols realigned silently", async () => {
+    const lf =
+      "export function alpha() {\n  return 1;\n}\n\n" +
+      "export function beta() {\n  return 10;\n}\n";
+    await writeCode("src/multi.ts", lf);
+    await writeWiki("livewiki/multi.md", `---
+title: Multi
+owner: generated
+anchors:
+  - src/multi.ts#alpha
+  - src/multi.ts#beta
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    await simulateLegacyCrlfDb("src/multi.ts", lf);
+
+    // Real one-line change in ONE function of the now-LF file.
+    const edited = lf.replace("return 1;", "return 2;");
+    await writeCode("src/multi.ts", edited);
+    await runIndexer(repoRoot, { quiet: true });
+    const r = await runLedger(repoRoot, { quiet: true });
+
+    // Only the edited function emits debt — the unchanged function's
+    // anchor was realigned to the normalized hash by the indexer.
+    expect(r.debtCreated).toBe(1);
+    expect(r.debtByEvent.changed).toBe(1);
+    expect(r.debtByEvent.moved).toBe(0);
+    expect(r.debtByEvent.deleted).toBe(0);
+    const debts = nodeSqliteQuery(repoRoot, "SELECT symbol_key, event FROM debt");
+    expect(debts).toEqual([{ symbol_key: "src/multi.ts#alpha", event: "changed" }]);
+
+    // Every anchor ends at the live (normalized) symbol hash.
+    const rows = nodeSqliteQuery(
+      repoRoot,
+      "SELECT a.symbol_key AS k, a.symbol_hash_at_doc AS h, s.content_hash AS sh " +
+        "FROM anchors a JOIN symbols s ON s.key = a.symbol_key AND s.status = 'active' ORDER BY k",
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.h, `anchor ${row.k} must be at the normalized hash`).toBe(row.sh);
+    }
+  });
+
+  it("after the per-symbol migration run, a second index emits zero debt (stable rebaseline)", async () => {
+    const lf =
+      "export function alpha() {\n  return 1;\n}\n\n" +
+      "export function beta() {\n  return 10;\n}\n";
+    await writeCode("src/multi.ts", lf);
+    await writeWiki("livewiki/multi.md", `---
+title: Multi
+owner: generated
+anchors:
+  - src/multi.ts#alpha
+  - src/multi.ts#beta
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    await simulateLegacyCrlfDb("src/multi.ts", lf);
+
+    await writeCode("src/multi.ts", lf.replace("return 1;", "return 2;"));
+    await runIndexer(repoRoot, { quiet: true });
+    const first = await runLedger(repoRoot, { quiet: true });
+    expect(first.debtCreated).toBe(1); // only alpha, proven by the test above
+
+    // Second index: the file is unchanged (fast path) and every anchor
+    // hash is normalized — zero new debt.
+    const i2 = await runIndexer(repoRoot, { quiet: true });
+    expect(i2.filesUpdated).toBe(0);
+    expect(i2.filesUnchanged).toBe(1);
+    const second = await runLedger(repoRoot, { quiet: true });
+    expect(second.debtCreated).toBe(0);
+  });
+});
+
+describe("anchor-ledger — conservative twin moved detection (roadmap item 13)", () => {
+  it("twin survives: editing one twin yields changed, zero moved, zero rewrites", async () => {
+    // Two provider files with the SAME function body (twins). One is
+    // edited; the other keeps the old implementation.
+    await writeCode("src/a.ts", 'export function render() { return "old"; }');
+    await writeCode("src/b.ts", 'export function render() { return "old"; }');
+    await writeWiki("livewiki/a.md", `---
+title: A
+owner: generated
+anchors:
+  - src/a.ts#render
+---
+
+Docs describing the A implementation.
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    const baseline = await runLedger(repoRoot, { quiet: true });
+    expect(baseline.debtCreated).toBe(0);
+
+    await writeCode("src/a.ts", 'export function render() { return "new"; }');
+    await runIndexer(repoRoot, { quiet: true });
+    const r = await runLedger(repoRoot, { quiet: true });
+
+    // The name survives (both files have an active `render`): never a move.
+    expect(r.debtByEvent.moved).toBe(0);
+    expect(r.movedPairs).toEqual([]);
+    expect(r.debtByEvent.changed).toBe(1);
+    expect(r.debtByEvent.deleted).toBe(0);
+
+    // The page still anchors to its original file — in the DB and on disk.
+    const anchors = nodeSqliteQuery(repoRoot, "SELECT symbol_key FROM anchors");
+    expect(anchors).toEqual([{ symbol_key: "src/a.ts#render" }]);
+    const md = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki", "a.md"),
+      "utf8",
+    );
+    expect(md).toContain("src/a.ts#render");
+    expect(md).not.toContain("src/b.ts#render");
+  });
+
+  it("method twins across two classes are not a move (same short name + kind)", async () => {
+    await writeCode("src/foo.ts", "export class Foo {\n  render() { return 1; }\n}");
+    await writeCode("src/bar.ts", "export class Bar {\n  render() { return 1; }\n}");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: generated
+anchors:
+  - src/foo.ts#Foo.render
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/foo.ts", "export class Foo {\n  render() { return 2; }\n}");
+    await runIndexer(repoRoot, { quiet: true });
+    const r = await runLedger(repoRoot, { quiet: true });
+
+    expect(r.debtByEvent.moved).toBe(0);
+    expect(r.debtByEvent.changed).toBe(1);
+    const anchors = nodeSqliteQuery(repoRoot, "SELECT symbol_key FROM anchors");
+    expect(anchors).toEqual([{ symbol_key: "src/foo.ts#Foo.render" }]);
+  });
+
+  it("exact rotation (bodies swapped between twin files) is not a move", async () => {
+    await writeCode("src/a.ts", 'export function rot() { return "A"; }');
+    await writeCode("src/b.ts", 'export function rot() { return "B"; }');
+    await writeWiki("livewiki/rot.md", `---
+title: Rot
+owner: generated
+anchors:
+  - src/a.ts#rot
+  - src/b.ts#rot
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    // A's body moves to B while B's moves to A.
+    await writeCode("src/a.ts", 'export function rot() { return "B"; }');
+    await writeCode("src/b.ts", 'export function rot() { return "A"; }');
+    await runIndexer(repoRoot, { quiet: true });
+    const r = await runLedger(repoRoot, { quiet: true });
+
+    // Both names survive as active symbols: no move, just two real changes.
+    expect(r.debtByEvent.moved).toBe(0);
+    expect(r.movedPairs).toEqual([]);
+    expect(r.debtByEvent.changed).toBe(2);
+    const anchors = nodeSqliteQuery(
+      repoRoot,
+      "SELECT symbol_key FROM anchors ORDER BY symbol_key",
+    );
+    expect(anchors).toEqual([
+      { symbol_key: "src/a.ts#rot" },
+      { symbol_key: "src/b.ts#rot" },
+    ]);
+  });
+});
+
 function nodeSqliteQuery(repoRoot: string, sql: string): Array<Record<string, unknown>> {
   // Import dinâmico evita ciclo
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1431,4 +1794,45 @@ function nodeSqliteQuery(repoRoot: string, sql: string): Array<Record<string, un
   } finally {
     db.close();
   }
+}
+
+function nodeSqliteExec(repoRoot: string, sql: string): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Database = require("better-sqlite3") as typeof import("better-sqlite3");
+  const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"));
+  try {
+    db.exec(sql);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Rewrites the DB rows of `relPath` (currently LF on disk, indexed by
+ * current code) into a faithful pre-item-12 CRLF-era state: the file hash
+ * is the sha256 of the raw CRLF bytes, and symbol/anchor hashes are the
+ * raw CRLF node slices recomputed through the same extractor (the parser
+ * is already initialized — the indexer ran first). Also deletes the
+ * `eol_hashes_normalized` meta flag, which a pre-upgrade DB cannot have —
+ * that reopens the legacy window for the per-symbol realignment.
+ */
+async function simulateLegacyCrlfDb(relPath: string, lfText: string): Promise<void> {
+  const crlfText = lfText.replace(/\n/g, "\r\n");
+  const tree = await parseSource(nodePath.extname(relPath), crlfText);
+  const legacySymbols = extractSymbols(tree, relPath, crlfText);
+  nodeSqliteExec(
+    repoRoot,
+    `UPDATE files SET content_hash = '${sha256(crlfText)}' WHERE path = '${relPath}'`,
+  );
+  for (const sym of legacySymbols) {
+    nodeSqliteExec(
+      repoRoot,
+      `UPDATE symbols SET content_hash = '${sym.content_hash}' WHERE key = '${sym.key}'`,
+    );
+    nodeSqliteExec(
+      repoRoot,
+      `UPDATE anchors SET symbol_hash_at_doc = '${sym.content_hash}' WHERE symbol_key = '${sym.key}'`,
+    );
+  }
+  nodeSqliteExec(repoRoot, "DELETE FROM meta WHERE key = 'eol_hashes_normalized'");
 }

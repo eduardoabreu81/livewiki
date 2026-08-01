@@ -106,6 +106,10 @@
       "types": "./dist/export.d.ts",
       "import": "./dist/export.js"
     },
+    "./readme-export": {
+      "types": "./dist/readme-export.d.ts",
+      "import": "./dist/readme-export.js"
+    },
     "./flows": {
       "types": "./dist/flows.d.ts",
       "import": "./dist/flows.js"
@@ -141,6 +145,10 @@
     "./install": {
       "types": "./dist/install.d.ts",
       "import": "./dist/install.js"
+    },
+    "./community": {
+      "types": "./dist/community.d.ts",
+      "import": "./dist/community.js"
     }
   },
   "files": [

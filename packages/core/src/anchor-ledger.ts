@@ -19,6 +19,26 @@
  *
  * Regra inviolável #6: páginas `owner: human` e blocos `lw:manual` JAMAIS
  * são modificados por escrita automatizada de rewrite de anchor.
+ *
+ * Conservative twin policy for `moved` (roadmap item 13): a disappeared
+ * symbol is accepted as `moved` ONLY when its name is truly gone from the
+ * active index — i.e. no ACTIVE symbol with the same name AND same kind
+ * survives anywhere else (the match candidate itself excepted). A "twin"
+ * is same SHORT name + same kind, in any active file — so `Class.render`
+ * in two classes are twins of each other (the qualified key differs but
+ * the method name survives), while a function and a class sharing a name
+ * are NOT twins (different kinds). When a twin survives, the disappearance
+ * is classified by the normal rules (`changed` if the file was updated,
+ * `deleted` if the file is gone) and anchors keep pointing at their
+ * original file: rewriting them to the twin would re-anchor the page to an
+ * implementation its prose does not describe, and `verify` cannot catch
+ * that (the anchor exists). Consequences, by design:
+ *   - exact rotation (A's body moves to B while B's moves to A) is NOT a
+ *     move — both names survive as active symbols;
+ *   - file deletion where the ONLY copy relocates to a new file IS a
+ *     legitimate moved (no twin survives);
+ *   - two identical surviving copies make the target ambiguous, so that
+ *     disappearance is also not a move.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -731,6 +751,16 @@ function detectMoves(
     activeByHash.set(sym.content_hash, sym);
   }
 
+  // Roadmap item 13 (conservative twin policy): count active symbols per
+  // (name, kind) so a move is accepted only when the disappeared symbol's
+  // name is truly gone from the active index. See the module docblock for
+  // the twin definition and the rotation/file-deletion edge cases.
+  const activeCountByNameKind = new Map<string, number>();
+  for (const sym of activeSymbols.values()) {
+    const k = `${sym.name}|${sym.kind}`;
+    activeCountByNameKind.set(k, (activeCountByNameKind.get(k) ?? 0) + 1);
+  }
+
   for (const [oldKey, deadSym] of deletedSymbols) {
     // 1. Match exato por content_hash
     let match = activeByHash.get(deadSym.content_hash);
@@ -754,6 +784,13 @@ function detectMoves(
       // não movimento real. Sem esse guard, todo edit gerava dívida moved
       // espúria com from == to.
       if (match.key === oldKey) continue;
+      // Item 13: a surviving same-name same-kind active symbol (other than
+      // the match itself) means the name is NOT gone from the index — the
+      // disappearance is an edit or a deletion, never a move.
+      const nameKindCount = activeCountByNameKind.get(`${deadSym.name}|${deadSym.kind}`) ?? 0;
+      const matchIsSameNameKind =
+        match.name === deadSym.name && match.kind === deadSym.kind ? 1 : 0;
+      if (nameKindCount - matchIsSameNameKind > 0) continue;
       movedMap.set(oldKey, match.key);
       result.movedPairs.push({ from: oldKey, to: match.key });
     }

@@ -16,6 +16,8 @@ interface InitOptions {
    * Do not look for `noRefine` — that property is never set by Commander.
    */
   refine?: boolean;
+  /** --concurrency <n>: stage-4 worker pool size (integer 1..16; only with --batch). */
+  concurrency?: string;
 }
 
 /**
@@ -36,6 +38,10 @@ export function registerInit(program: Command): void {
     .option("--batch", "run the full LLM documentation pipeline")
     .option("--plan", "show the module plan (no LLM, no writes)")
     .option("--no-refine", "skip LLM refinement of stage 2 (stage 2 stays heuristic-only)")
+    .option(
+      "--concurrency <n>",
+      "stage-4 module-task worker pool size (integer 1..16; default 1 = sequential; only with --batch)",
+    )
     .action(async (_options: InitOptions, command: Command) => {
       const opts = command.optsWithGlobals<InitOptions>();
       const json = Boolean(opts.json);
@@ -48,6 +54,10 @@ export function registerInit(program: Command): void {
           ...(opts.batch !== undefined ? { batch: opts.batch } : {}),
           ...(opts.plan !== undefined ? { plan: opts.plan } : {}),
           ...(noRefine ? { noRefine: true } : {}),
+          // Validated (and rejected) by core as an integer 1..16.
+          ...(opts.concurrency !== undefined
+            ? { batchConcurrency: Number(opts.concurrency) }
+            : {}),
           quiet: json,
         });
         emit(

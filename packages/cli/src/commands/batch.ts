@@ -15,6 +15,8 @@ interface BatchOptions {
    * Default is true when the negated option is declared.
    */
   refine?: boolean;
+  /** --concurrency <n>: stage-4 worker pool size (integer 1..16). */
+  concurrency?: string;
 }
 
 /**
@@ -38,12 +40,19 @@ export function registerBatch(program: Command): void {
     )
     .option("--only <target>", "re-run 1 task (module or task-id)")
     .option("--no-refine", "skip LLM refinement of stage 2")
+    .option(
+      "--concurrency <n>",
+      "stage-4 module-task worker pool size (integer 1..16; default 1 = sequential; stage 5 stays sequential)",
+    )
     .action(async (_options: BatchOptions, command: Command) => {
       const opts = command.optsWithGlobals<BatchOptions & { args?: string[] }>();
       const json = Boolean(opts.json);
       const repoRoot = resolveRepoRoot(opts.repo);
       const absRoot = path.resolve(process.cwd(), repoRoot);
       const args = command.args ?? [];
+      // Validated (and rejected) by core as an integer 1..16.
+      const concurrency =
+        opts.concurrency !== undefined ? Number(opts.concurrency) : undefined;
 
       try {
         // No args: status of the last run
@@ -83,6 +92,7 @@ export function registerBatch(program: Command): void {
             repoRoot: absRoot,
             // Commander `--no-refine` → opts.refine === false
             ...(opts.refine === false ? { noRefine: true } : {}),
+            ...(concurrency !== undefined ? { concurrency } : {}),
           });
           emit(json, result, formatResultHuman(result));
           return setExitCode(absRoot, result.status, json);

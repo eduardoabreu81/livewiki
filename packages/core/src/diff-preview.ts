@@ -33,6 +33,7 @@ import { openIndex } from "./db.js";
 import { grammarForExtension, parseSource } from "./parser.js";
 import { extractSymbols } from "./symbols.js";
 import { BINARY_SNIFF_BYTES, MAX_FILE_BYTES } from "./indexer.js";
+import { normalizeEol } from "./hashes.js";
 import { derivePathFromSymbolKey } from "./risk.js";
 import { normalizeRepoPath } from "./modules.js";
 
@@ -164,11 +165,15 @@ export async function previewWorkingTreeDebt(repoRoot: string): Promise<DiffPrev
       skippedFiles.add(rel);
       continue;
     }
-    const content = await nodeFs.readFile(abs, "utf8").catch(() => null);
-    if (content === null || content.slice(0, BINARY_SNIFF_BYTES).includes("\0")) {
+    const rawContent = await nodeFs.readFile(abs, "utf8").catch(() => null);
+    if (rawContent === null || rawContent.slice(0, BINARY_SNIFF_BYTES).includes("\0")) {
       skippedFiles.add(rel);
       continue;
     }
+    // Roadmap item 12: the indexer hashes/parses EOL-normalized text, so
+    // this working-tree recompute must normalize identically — otherwise a
+    // pure CRLF→LF flip would read as a phantom `changed` for every anchor.
+    const content = normalizeEol(rawContent);
     const symbolsByKey = new Map<string, string>();
     // Tier 2 (SPEC §"Coverage ladder"): without a grammar there is no parse
     // attempt at all — zero symbols, matching the indexer.

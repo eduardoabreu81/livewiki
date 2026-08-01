@@ -465,7 +465,61 @@ for closing the lot.
   (build-time `marked` MD→HTML, `search-index.js` offline index, vendored
   mermaid, tasks.md-mirrored sidebar groups); CLI wrapper
   `packages/cli/src/commands/view.ts` (`--template/--out/--no-open`,
-  cross-platform browser open via spawn `shell: false`).
+  cross-platform browser open via spawn `shell: false`). Roadmap item 10:
+  `new`/`updated` freshness badges from ONE bounded `git log` over
+  `livewiki/` (`parseGitFreshnessLog`/`applyFreshnessBadges`; window vs the
+  newest commit in the log — never `Date.now()` — so rebuilds are
+  byte-identical; any spawn failure ⇒ no badges), `--badge-days <n>`
+  (default 7, 0 disables), static OG meta in `renderShell` (no `og:url`,
+  no `og:image` — offline posture).
+- **`batchConcurrency` (roadmap item 7)** → stage-4 worker pool in
+  `batch.ts` (shared cursor over `tasksToRun`; breaker/rollback stop NEW
+  dispatch, in-flight drains; pool awaited before stage 5; reports sorted
+  by stage-3 priority); config key integer 1..16 default 1; `--concurrency`
+  on `batch` and `init --batch`; `Retry-After` honored in
+  `llm/base.ts:parseRetryAfterMs` (pool size IS the client-side limiter).
+  Stage 5 (flows/topics) stays sequential — shared hub files inside
+  transactions. Tests: `batch-concurrency.test.ts`.
+- **CALLS confidence (roadmap item 8)** → `calls.confidence` (schema v7,
+  `migrateV6ToV7`): tagged in `symbols.ts:extractCalleeName` (bare
+  identifier/`new X()` = `extracted`, member/attribute = `inferred`);
+  resolution never changes the tag (repo-unique bare callees stay
+  `extracted` — unambiguous cross-module evidence); `computeCrossModuleCallees`/`computeCallerCentrality` count
+  `extracted` only; `blast-radius.ts` exposes additive `callerConfidence`
+  (reaches MCP `livewiki_impact` for free via the payload spread).
+- **Community cross-check (roadmap item 9)** → pure label propagation in
+  `packages/core/src/community.ts` (`detectFileCommunities`,
+  `comparePartitions`; sorted tie-breaks, byte-identical under shuffled
+  input); stage-2 wiring in `batch.ts` (edge resolution hoisted above
+  stage 2 — stage 3 reuses it; cross-check runs on the HEURISTIC partition
+  before refine); additive `communityCrossCheck` on `TaskCheckpoint`
+  (`batch-state.ts`), surfaced JSON-only via `batch status --json`
+  (`batch-status.ts`). Diagnostic ONLY — never changes partition, refine,
+  status, or exit code; exceptions degrade silently to "no report".
+  Config `communityDetection` (bool, default true). Tests:
+  `community.test.ts` (pure), `batch-community.test.ts` (wiring).
+- **EOL-insensitive hashing (roadmap item 12)** → `normalizeEol` in
+  `hashes.ts` (CRLF→LF only; lone `\r` preserved); `indexer.ts` normalizes
+  once at read time and feeds hash + parser + extraction from the same
+  string; `diff-preview.ts` normalizes identically. Silent legacy
+  migration (one-run window `meta.eol_hashes_normalized`): per file
+  (stored hash == raw OR CRLF-expanded bytes ⇒ EOL-only) and per symbol
+  inside genuinely-updated files (old hash == sha256 of the new slice
+  re-expanded to CRLF ⇒ code-identical) ⇒ realign hashes, ZERO debt.
+  Manual-block hashes deliberately NOT normalized (would invalidate every
+  baseline).
+- **Twin-move guard (roadmap item 13)** → `anchor-ledger.ts:detectMoves`
+  accepts a move only when the disappeared symbol's (name, kind) has zero
+  survivors across active files (match candidate excepted); twins ⇒
+  `changed`/`deleted`, no anchor rewrite. Rotation is not a move;
+  relocation of the only copy still is.
+- **`export readme` (roadmap item 11)** → `packages/core/src/readme-export.ts`
+  (deterministic, zero LLM: quickstart purpose + module digests + flow/topic
+  links); rule-#6 contract create/replace-block/REFUSE on human README
+  without `<!-- livewiki:readme:start/end -->`; safe-io `allowReadme`
+  (mirrors `allowPointer`); CLI `livewiki export readme [--yes]` — dry-run
+  without the flag, dispatched BEFORE the flatten pipeline (not an
+  `ExportTarget`).
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate
@@ -1075,6 +1129,35 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   sees their proposals, merged plan re-validated whole, evidence hashes
   stable (proven: byte-identical intent/hash/slug with refine on vs off).
   Gate: core 1382 / CLI 93 / MCP 31, zero paid calls.
+- **Roadmap lot 7–11 (2026-08-01, implemented, uncommitted)**: the five
+  items approved from the 2026-08-01 market scan
+  (`docs/market-research.md`, `docs/ROADMAP.md` items 7–11). 7:
+  `batchConcurrency` (stage-4 worker pool, breaker/rollback stop NEW
+  dispatch + in-flight drain, deterministic report ordering, `Retry-After`
+  honored; stage 5 stays sequential). 8: `calls.confidence` schema v7
+  (tagged at extraction; resolution never changes it — a coordinator fix
+  removed the initial global-unique downgrade, which had killed the
+  cross-module tie-break and failed 2 batch-stage5 tests). 9: community
+  cross-check (label propagation in `community.ts`; stage-2 diagnostic-only
+  report in the checkpoint; edge resolution hoisted above stage 2). 10:
+  viewer `new`/`updated` badges from one bounded `git log` (never mtime,
+  never index.db; window vs newest commit — byte-stable rebuilds) + static
+  OG meta (no `og:url`/`og:image`). 11: `export readme` (deterministic,
+  rule-#6 create/replace-block/REFUSE contract, safe-io `allowReadme`
+  mirroring `allowPointer`, `--yes` opt-in + dry-run). SPEC.md and the
+  "Where to touch" section updated. Zero paid calls; no commits.
+- **Incremental-loop field test + items 12–13 (2026-08-01, implemented,
+  uncommitted)**: the first incremental test on a real upgraded repo (MPTP,
+  old batch corpus + new code) validated deterministic detection and risk
+  ranking live, and surfaced two product defects no suite had caught:
+  phantom `changed` debt from CRLF→LF checkout conversion (~50% of the
+  drift — `core.autocrlf=true` makes every fresh clone CRLF while the
+  git index is LF-canonical), and `moved` anchor rewrites landing on
+  provider twins that kept the OLD implementation (an anti-hallucination
+  hole verify cannot see). Fixes implemented as roadmap items 12
+  (EOL-insensitive hashing + silent legacy migration) and 13 (twin-move
+  guard: a move requires zero same-name survivors). Gate: core 1581 /
+  CLI 118 / MCP 54, zero paid calls; SPEC + AGENTS updated.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series

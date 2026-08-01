@@ -16,13 +16,15 @@ interface ViewCliOptions {
   out?: string;
   /** commander `--no-open` → `open: false`; default true. */
   open?: boolean;
+  badgeDays?: string;
 }
 
 /**
  * `livewiki view` — Phase 7. Builds a self-contained static site from the
  * canonical `livewiki/` wiki (default output `.livewiki/site/`, `--out
  * <dir>` to publish elsewhere) and opens it in the browser unless
- * `--no-open`. The path is always printed.
+ * `--no-open`. The path is always printed. `--badge-days <n>` sets the
+ * git-history freshness window for the new/updated badges (0 disables).
  *
  * Exit codes: 0 = site built, 1 = failure (missing wiki, invalid
  * template/out dir). Uses `process.exitCode`, never `process.exit`
@@ -36,17 +38,31 @@ export function registerView(program: Command): void {
     )
     .option("--template <name>", "visual template: 'agent' (dense, technical) or 'docs' (clean)", "agent")
     .option("--out <dir>", "output directory to publish (default: .livewiki/site/)")
+    .option("--badge-days <n>", "days window for the new/updated freshness badges (0 disables)", "7")
     .option("--no-open", "build the site without opening the browser")
     .action(async (_options: ViewCliOptions, command: Command) => {
       const opts = command.optsWithGlobals<ViewCliOptions>();
       const json = Boolean(opts.json);
       const repoRoot = resolveRepoRoot(opts.repo);
 
+      const badgeDays = Number(opts.badgeDays ?? "7");
+      if (!Number.isInteger(badgeDays) || badgeDays < 0) {
+        process.exitCode = 1;
+        const detail = `--badge-days must be a non-negative integer (0 disables the badges), got "${String(opts.badgeDays)}"`;
+        if (json) {
+          emitJson({ ok: false, error: { code: "invalid_badge_days", detail } });
+        } else {
+          emitHuman(`livewiki view: FAILED [invalid_badge_days] ${detail}`);
+        }
+        return;
+      }
+
       try {
         const result = await buildSite({
           repoRoot,
           ...(opts.out !== undefined ? { outDir: opts.out } : {}),
           template: (opts.template ?? "agent") as ViewTemplate,
+          badgeDays,
         });
         const indexHtml = nodePath.join(result.outDir, "index.html");
         let opened = false;

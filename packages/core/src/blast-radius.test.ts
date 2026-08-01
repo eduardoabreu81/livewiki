@@ -29,10 +29,15 @@ function insertFile(path: string): number {
 }
 
 /** caller_key --calls--> resolved_callee_key (already-resolved edge). */
-function insertResolvedCall(fileId: number, callerKey: string, resolvedCalleeKey: string): void {
+function insertResolvedCall(
+  fileId: number,
+  callerKey: string,
+  resolvedCalleeKey: string,
+  confidence: "extracted" | "inferred" = "extracted",
+): void {
   db.prepare(
-    "INSERT INTO calls (file_id, caller_key, callee_name, resolved_callee_key, line) VALUES (?, ?, ?, ?, 1)",
-  ).run(fileId, callerKey, resolvedCalleeKey.split("#")[1] ?? resolvedCalleeKey, resolvedCalleeKey);
+    "INSERT INTO calls (file_id, caller_key, callee_name, resolved_callee_key, line, confidence) VALUES (?, ?, ?, ?, 1, ?)",
+  ).run(fileId, callerKey, resolvedCalleeKey.split("#")[1] ?? resolvedCalleeKey, resolvedCalleeKey, confidence);
 }
 
 function insertPage(wikiPath: string): number {
@@ -146,5 +151,29 @@ describe("computeBlastRadius", () => {
 
     const result = computeBlastRadius(db, "a.ts#target");
     expect(result.affectedPages).toEqual([]);
+  });
+
+  it("exposes each caller's edge confidence additively (extracted vs inferred)", () => {
+    const fileId = insertFile("a.ts");
+    insertResolvedCall(fileId, "a.ts#direct", "a.ts#target", "extracted");
+    insertResolvedCall(fileId, "a.ts#guessed", "a.ts#target", "inferred");
+    insertResolvedCall(fileId, "a.ts#top", "a.ts#direct", "inferred");
+
+    const result = computeBlastRadius(db, "a.ts#target");
+    expect(result.callerConfidence).toEqual({
+      "a.ts#direct": "extracted",
+      "a.ts#guessed": "inferred",
+      "a.ts#top": "inferred",
+    });
+  });
+
+  it("reports 'extracted' when a caller has both edge kinds into the same callee", () => {
+    const fileId = insertFile("a.ts");
+    insertResolvedCall(fileId, "a.ts#outer", "a.ts#target", "inferred");
+    insertResolvedCall(fileId, "a.ts#outer", "a.ts#target", "extracted");
+
+    const result = computeBlastRadius(db, "a.ts#target");
+    expect(result.directCallers).toEqual(["a.ts#outer"]);
+    expect(result.callerConfidence["a.ts#outer"]).toBe("extracted");
   });
 });

@@ -5,6 +5,7 @@
  *   - `--no-open --out <tmp>` exits 0 and the site files are present;
  *   - the output path is always printed;
  *   - `--template docs` switches the theme shell;
+ *   - `--badge-days` is accepted (0 disables the freshness badges);
  *   - missing wiki exits 1 with a clear message (human and JSON modes);
  *   - `--out` inside livewiki/ is rejected with exit 1.
  */
@@ -163,5 +164,39 @@ describe("CLI E2E — livewiki view", () => {
     ]);
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("invalid_out_dir");
+  });
+
+  it("--badge-days 0 is accepted and no badge spans appear in the output", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-badges-off");
+    const r = runCli([
+      "--repo",
+      repoRoot,
+      "view",
+      "--no-open",
+      "--out",
+      outDir,
+      "--badge-days",
+      "0",
+    ]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+    const index = await nodeFs.readFile(nodePath.join(outDir, "index.html"), "utf8");
+    expect(index).not.toContain("lw-badge");
+  });
+
+  it("--badge-days rejects a non-integer with exit 1", async () => {
+    await writeFixtureWiki();
+    const r = runCli([
+      "--repo",
+      repoRoot,
+      "view",
+      "--no-open",
+      "--out",
+      nodePath.join(repoRoot, "site-out"),
+      "--badge-days",
+      "abc",
+    ]);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain("invalid_badge_days");
   });
 });

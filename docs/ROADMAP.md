@@ -203,6 +203,91 @@ variant could ship earlier. Also adopt their operational-metrics discipline
 (median hours from feature merge to merged docs — `update-metrics.ts` is the
 base).
 
+### 7. Bounded parallel stage-4 execution (`batchConcurrency`)
+
+Source: 2026-08-01 market scan (`docs/market-research.md`): Mintlify cut a
+large-repo run 70→45 min with parallel section writers; RepoAgent ships
+multi-threaded generation; Graphify ships concurrent LLM extraction
+(`--max-concurrency`) with 429/Retry-After discipline. livewiki's stage 4
+runs tasks sequentially (`packages/core/src/batch.ts:726`), and with
+quality/cost already solved (Etapa 3: exit 0, verify zero, ~6–8% of
+OpenWiki tokens) wall-clock is now the weakest axis. Add a
+`batchConcurrency` config key (default 1 = current behavior; 3–5 typical).
+Tasks are already atomic (transactional write, per-task checkpoint,
+monotonic usage accounting), so they parallelize cleanly. Design care:
+circuit-breaker semantics under interleaved failures, shared rate-limit
+backoff honoring `Retry-After`, monotonic per-task usage history, and a
+deterministic barrier before stage 5 (flows/topics consume stage-4
+results).
+
+### 8. Native CALLS edges with confidence tags
+
+Source: 2026-08-01 Graphify analysis (EXTRACTED/INFERRED edge tags) plus
+the standing watch-list item. Extend the indexer beyond imports with call
+edges tagged by extraction confidence, and consume them in flow/topic
+candidate detection: fewer false candidates, fewer burned repair rounds
+(the class of bug fixed in `733fc53` came from weak graph evidence).
+Native only (rule #8); never a general-purpose call-graph database — the
+rejection below stands; this is the documentation-focused edge set only.
+
+### 9. Community-detection cross-check for stage-2 modules
+
+Source: 2026-08-01 Graphify analysis (Leiden communities with LLM-free
+labels) plus the standing watch-list item. Use deterministic graph
+clustering as a cross-check or fallback for the directory heuristic in
+module identification. The exact-partition contract (100% of the indexed
+inventory, heuristic wins on any rejection) is preserved; the goal is
+better partitions with less reliance on the LLM refine pass.
+
+### 10. Viewer freshness badge + social previews (Phase 7 polish)
+
+Source: maintainer request + the codec8 thread insight (2026-08-01
+`docs/market-research.md`). (a) A deterministic "new/recently changed"
+badge in the viewer (sidebar + page header), derived from anchor-ledger
+`detected_at` and/or git history — zero LLM, consistent with the
+staleness-is-deterministic principle. (b) Social/OG preview metadata
+(title, description, generated card) in the exported/built site so shared
+doc links render professionally on Slack/Discord.
+
+### 11. `export readme` — README as an output, not just an input
+
+Source: 2026-08-01 codec8 analysis (`docs/market-research.md`) — their
+sharpest idea is generating the repo README itself, and it connects to
+the no-README fallback question: today a repo without a README gets an
+omitted block plus a synthesized digest fallback; with this target the
+answer becomes "livewiki writes you a starter README from the wiki".
+An opt-in `export readme` target (Phase 6 family) that synthesizes a
+README from accepted wiki pages (quickstart purpose, module digests,
+flows). Hard constraints: only for repos without a README, or explicitly
+opt-in overwrite of a `owner: generated`-marked block — never touches
+human-authored README content (rule #6); content anchored and verified
+like any generated artifact; positions livewiki's top-of-funnel ("your
+first artifact in minutes") against one-shot generators while the debt
+ledger keeps the long-term moat.
+
+### 12. EOL-insensitive content hashing (phantom-debt fix)
+
+Source: 2026-08-01 incremental-loop test on the real MPTP repo
+(`docs/market-research.md` session; corpus `/c/tmp/livewiki-e2e/incremental-mptp-2026-08-01/`).
+A CRLF↔LF-only difference (which git produces silently on checkout via
+`core.autocrlf`) changes every `content_hash` and floods the ledger with
+phantom `changed` debt — ~50% of 956 items in the test were exactly this.
+Normalize line endings to `\n` before all content hashing (file-level and
+symbol-level). The upgrade must NOT emit a one-time phantom debt wave for
+EOL-only files: silently migrate hashes when the stored hash still matches
+the legacy raw-bytes hash.
+
+### 13. Conservative twin-file `moved` detection
+
+Source: same 2026-08-01 test. Provider twins (`elevenlabs_music.py` hardened,
+`sonilo.py` unchanged, identical old bodies) produced `moved` rewrites
+pointing page anchors at the twin that KEPT the old implementation — verify
+passes (anchors exist) while prose and anchor describe different
+implementations: an anti-hallucination hole. Policy (maintainer-approved):
+accept a `moved` only when the symbol is gone from ALL active files (no
+same-name twin survives anywhere); otherwise classify as `changed` (donor)
+and let the new occurrence surface as new/undocumented.
+
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
 - **Committed graph/cache artifact in the repo** (their

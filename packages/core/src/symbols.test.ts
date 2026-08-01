@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { extractSymbols, extractRationales, isLikelyGenerated } from "./symbols.js";
-import { sha256 } from "./hashes.js";
+import { sha256, normalizeEol } from "./hashes.js";
 import { parseSource, initParser } from "./parser.js";
 
 beforeAll(async () => {
@@ -10,6 +10,26 @@ beforeAll(async () => {
 async function parse(ext: string, src: string) {
   return parseSource(ext, src);
 }
+
+describe("symbols — EOL-insensitive hashing (roadmap item 12)", () => {
+  it("content_hash do símbolo é igual para LF e CRLF (source normalizado)", async () => {
+    // Mirrors the indexer contract: the file text is normalizeEol'd ONCE
+    // before parse + extraction, so both line-ending variants yield the
+    // same symbol keys, byte ranges, and content hashes.
+    const lf = "export function foo() {\n  return 1;\n}\n";
+    const crlf = lf.replace(/\n/g, "\r\n");
+    const fromLf = extractSymbols(await parse(".ts", lf), "x.ts", lf);
+    const fromCrlf = extractSymbols(
+      await parse(".ts", normalizeEol(crlf)),
+      "x.ts",
+      normalizeEol(crlf),
+    );
+    expect(fromCrlf.map((s) => s.key)).toEqual(fromLf.map((s) => s.key));
+    expect(fromCrlf.map((s) => s.content_hash)).toEqual(
+      fromLf.map((s) => s.content_hash),
+    );
+  });
+});
 
 describe("symbols — TypeScript", () => {
   it("extrai function_declaration top-level", async () => {

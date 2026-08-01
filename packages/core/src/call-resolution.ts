@@ -21,6 +21,15 @@
  * bare name — that's intentional, not a bug, until a resolver that tracks
  * the call's receiver expression is worth building.
  *
+ * Confidence policy (schema v7, roadmap item 8): the tag is decided at
+ * EXTRACTION time (symbols.ts) and resolution never changes it. A bare-
+ * identifier callee keeps 'extracted' through both steps — an explicitly
+ * called name that is unique in the whole repo is strong cross-module
+ * evidence (the flow tie-break relies on exactly this). Member/attribute
+ * callees (`obj.method()`) arrive as 'inferred' from extraction and stay
+ * so: the receiver is unknown, and that name guess is the noise the
+ * consumers filter out.
+ *
  * Scope note: this runs over the WHOLE `calls` table each index (only
  * touching `resolved_callee_key IS NULL` rows), so a symbol that starts
  * existing/becomes unique this run retroactively resolves any earlier,
@@ -43,7 +52,9 @@ export interface ResolveCallsResult {
  * Priority-0 Phase 3 (flows.ts integration): the set of symbol keys with
  * at least one RESOLVED call whose caller lives in a DIFFERENT module —
  * i.e. a callee proven, by the indexed call graph, to be an actual
- * cross-module dependency (not just an import). Fed into
+ * cross-module dependency (not just an import). Only 'extracted'-
+ * confidence edges count (schema v7): a member-access name guess
+ * (`obj.open()`) is not evidence of a cross-module dependency. Fed into
  * `detectFlowCandidates`'s `resolvedCrossModuleCallees` option, which only
  * uses it to break ties within the T2 (crossing) seed-key group; flows.ts
  * itself never touches the database, so this computation lives here.
@@ -59,7 +70,7 @@ export function computeCrossModuleCallees(
 
   const rows = db
     .prepare(
-      "SELECT caller_key, resolved_callee_key FROM calls WHERE resolved_callee_key IS NOT NULL",
+      "SELECT caller_key, resolved_callee_key FROM calls WHERE resolved_callee_key IS NOT NULL AND confidence = 'extracted'",
     )
     .all() as Array<{ caller_key: string; resolved_callee_key: string }>;
 
@@ -80,7 +91,10 @@ export function computeCrossModuleCallees(
  * Workstream B (deterministic topic-plan proposer): a cheap centrality
  * proxy over the existing `calls` table — the number of DISTINCT resolved
  * callers per callee key ("god node"-lite, no Leiden/community-detection
- * complexity). Consumed by `selectTopicAnchors` (topics.ts) to rank
+ * complexity). Only 'extracted'-confidence edges count (schema v7):
+ * inferred callers (member-access name guesses) are excluded so
+ * `obj.method()` noise cannot rank anchors. Consumed by
+ * `selectTopicAnchors` (topics.ts) to rank
  * anchors within a bucket; a key absent from the returned map has zero
  * resolved callers (centrality 0), not an error.
  */
@@ -88,7 +102,7 @@ export function computeCallerCentrality(db: Database.Database): Map<string, numb
   const rows = db
     .prepare(
       `SELECT resolved_callee_key AS key, COUNT(DISTINCT caller_key) AS callers
-       FROM calls WHERE resolved_callee_key IS NOT NULL GROUP BY resolved_callee_key`,
+       FROM calls WHERE resolved_callee_key IS NOT NULL AND confidence = 'extracted' GROUP BY resolved_callee_key`,
     )
     .all() as Array<{ key: string; callers: number }>;
   return new Map(rows.map((r) => [r.key, r.callers]));

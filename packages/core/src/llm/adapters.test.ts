@@ -487,3 +487,132 @@ describe("requestWithRetry — retry policy (timeout vs HTTP)", () => {
     expect(generations).toBe(1);
   });
 });
+
+describe("requestWithRetry — Retry-After honoring (429/503)", () => {
+  it("429 with `Retry-After: 2` waits >= 2s before the next attempt (fake clock)", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const fetchImpl = vi.fn(async () => {
+        calls++;
+        if (calls < 3) {
+          return new Response("rate limited", {
+            status: 429,
+            headers: { "Retry-After": "2" },
+          });
+        }
+        return new Response("{}", { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const p = requestWithRetry(
+        "openai-compat",
+        "https://example.test/v1/chat/completions",
+        { method: "POST" },
+        {
+          apiKey: "k",
+          baseUrl: "x",
+          model: "y",
+          fetchImpl,
+          maxRetries: 3,
+          timeoutMs: 60_000,
+          retryDelayMs: 10, // exponential backoff (10ms, 20ms) loses to Retry-After
+        },
+      );
+      // Retry-After dominates: the second call must NOT fire at 10ms.
+      // (Fake-timer note: continuations run while the clock sits at the
+      // previous timer's fire time, so each sleep anchors at t=0/2000.)
+      await vi.advanceTimersByTimeAsync(1999);
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      const res = await p;
+      expect(res.ok).toBe(true);
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("exponential backoff wins when it exceeds the Retry-After value", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const fetchImpl = vi.fn(async () => {
+        calls++;
+        if (calls === 1) {
+          return new Response("rate limited", {
+            status: 429,
+            headers: { "Retry-After": "0" },
+          });
+        }
+        return new Response("{}", { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const p = requestWithRetry(
+        "openai-compat",
+        "https://example.test/v1/chat/completions",
+        { method: "POST" },
+        {
+          apiKey: "k",
+          baseUrl: "x",
+          model: "y",
+          fetchImpl,
+          maxRetries: 2,
+          timeoutMs: 60_000,
+          retryDelayMs: 1000, // attempt-1 backoff = 1000ms > Retry-After 0
+        },
+      );
+      await vi.advanceTimersByTimeAsync(999);
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+      await vi.advanceTimersByTimeAsync(10);
+      const res = await p;
+      expect(res.ok).toBe(true);
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unparseable Retry-After is ignored (falls back to pure backoff)", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const fetchImpl = vi.fn(async () => {
+        calls++;
+        if (calls === 1) {
+          return new Response("server error", {
+            status: 503,
+            headers: { "Retry-After": "not-a-date-or-seconds" },
+          });
+        }
+        return new Response("{}", { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const p = requestWithRetry(
+        "openai-compat",
+        "https://example.test/v1/chat/completions",
+        { method: "POST" },
+        {
+          apiKey: "k",
+          baseUrl: "x",
+          model: "y",
+          fetchImpl,
+          maxRetries: 2,
+          timeoutMs: 60_000,
+          retryDelayMs: 50,
+        },
+      );
+      await vi.advanceTimersByTimeAsync(49);
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+      await vi.advanceTimersByTimeAsync(10);
+      const res = await p;
+      expect(res.ok).toBe(true);
+      expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
