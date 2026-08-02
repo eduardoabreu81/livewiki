@@ -82,6 +82,11 @@ describe("status.formatHuman", () => {
         efficiencyRatio: 0.5,
         lastPackage: null,
         lastWrite: null,
+        debtResolvedTotal: 0,
+        batchRuns: 0,
+        batchInputTokens: 0,
+        batchOutputTokens: 0,
+        recent: [],
       },
       degraded: { total: 0, pages: [] },
       meta: {
@@ -107,6 +112,83 @@ describe("status.formatHuman", () => {
     expect(out).toContain("Undocumented: 5");
     // ISO 8601 format (toISOString() → "YYYY-MM-DDTHH:MM:SS.sssZ")
     expect(out).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    // Empty ledger: no Activity block at all (roadmap item 14).
+    expect(out).not.toContain("Activity:");
+  });
+
+  it("renders the Activity block with totals and recent events (roadmap item 14)", () => {
+    const report: StatusReport = {
+      files: { total: 0, byLang: {}, tiers: {}, top: [] },
+      symbols: { total: 0, byKind: {} },
+      debt: {
+        total: 0,
+        byEvent: { changed: 0, moved: 0, deleted: 0 },
+        byAssignee: { agent: 0, human: 0 },
+        items: [],
+      },
+      undocumented: { total: 0, sample: [] },
+      metrics: {
+        packagesEmitted: 2,
+        totalPackageTokens: 800,
+        writesReceived: 1,
+        totalWriteTokens: 120,
+        efficiencyRatio: 0.15,
+        lastPackage: null,
+        lastWrite: null,
+        debtResolvedTotal: 3,
+        batchRuns: 1,
+        batchInputTokens: 1000,
+        batchOutputTokens: 250,
+        recent: [
+          {
+            kind: "package_emitted",
+            timestamp: 1700000000000,
+            tokensEstimated: 500,
+            bytes: 2000,
+            debtCount: 2,
+          },
+          {
+            kind: "write_received",
+            timestamp: 1700000060000,
+            wikiPath: "livewiki/foo.md",
+            bytes: 480,
+            tokensEstimated: 120,
+          },
+          {
+            kind: "debt_resolved",
+            timestamp: 1700000120000,
+            count: 3,
+            source: "mcp",
+          },
+          {
+            kind: "batch_run",
+            timestamp: 1700000180000,
+            runId: 7,
+            status: "completed",
+            inputTokens: 1000,
+            outputTokens: 250,
+            costUsd: null,
+            durationMs: 1234,
+            tasksDone: 4,
+            tasksFailed: 0,
+          },
+        ],
+      },
+      degraded: { total: 0, pages: [] },
+      meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
+    };
+    const out = formatHuman(report);
+    expect(out).toContain("Activity:");
+    expect(out).toContain(
+      "2 packages (800 tokens), 1 writes (120 tokens), 3 debt resolved, " +
+        "1 batch runs (1000 in / 250 out)",
+    );
+    expect(out).toContain("package_emitted ~500 tokens, 2 debt items");
+    expect(out).toContain("write_received livewiki/foo.md (~120 tokens)");
+    expect(out).toContain("debt_resolved 3 item(s) via mcp");
+    expect(out).toContain("batch_run #7 completed, 1000 in / 250 out");
+    // Events render as `YYYY-MM-DD HH:mm kind detail` in local time.
+    expect(out).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} batch_run #7/);
   });
 
   it("top-N respected (even with more files in the array)", () => {

@@ -17,6 +17,12 @@
  *   - kind: "package_emitted" — emitido pelo loadWorkPackage (SPEC §tese)
  *   - kind: "write_received"  — emitido quando o agente/HUMANO devolve
  *     doc escrita (skill document-as-you-go ou CLI pós-edição manual)
+ *   - kind: "debt_resolved"   — debt paid via MCP/CLI (roadmap item 14)
+ *   - kind: "batch_run"       — one batch run's token totals, mirrored from
+ *     finalizeRun (roadmap item 14: in-session cost accounting)
+ *
+ * Backward compat: v1 files containing only the two original kinds keep
+ * parsing — the new kinds are additive to the union and to the snapshot.
  *
  * A tese do produto ("800 tokens em vez de reler o repo") mora aqui:
  * a razão `packageEmittedTokens / writeReceivedTokens` mostra quantas
@@ -47,6 +53,26 @@ export type UpdateMetric =
       wikiPath: string;
       bytes: number;
       tokensEstimated: number;
+    }
+  | {
+      kind: "debt_resolved";
+      timestamp: number;
+      /** How many debt rows were resolved in this call. */
+      count: number;
+      /** Which surface resolved them. */
+      source: "mcp" | "cli";
+    }
+  | {
+      kind: "batch_run";
+      timestamp: number;
+      runId: number;
+      status: "completed" | "completed_with_failures" | "aborted";
+      inputTokens: number;
+      outputTokens: number;
+      costUsd: number | null;
+      durationMs: number;
+      tasksDone: number;
+      tasksFailed: number;
     };
 
 export interface UpdateMetricsFile {
@@ -118,6 +144,15 @@ export interface UpdateMetricsSnapshot {
   /** Última métrica de cada kind (debug). */
   lastPackage: UpdateMetric | null;
   lastWrite: UpdateMetric | null;
+  /** Sum of `count` across all `debt_resolved` entries (roadmap item 14). */
+  debtResolvedTotal: number;
+  /** Number of `batch_run` entries (roadmap item 14). */
+  batchRuns: number;
+  /** Sum of input/output tokens across all `batch_run` entries. */
+  batchInputTokens: number;
+  batchOutputTokens: number;
+  /** Last 10 ledger entries, oldest first (newest last). */
+  recent: UpdateMetric[];
 }
 
 export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSnapshot> {
@@ -128,16 +163,26 @@ export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSn
   let writesReceived = 0;
   let totalWriteTokens = 0;
   let lastWrite: UpdateMetric | null = null;
+  let debtResolvedTotal = 0;
+  let batchRuns = 0;
+  let batchInputTokens = 0;
+  let batchOutputTokens = 0;
 
   for (const e of file.entries) {
     if (e.kind === "package_emitted") {
       packagesEmitted++;
       totalPackageTokens += e.tokensEstimated;
       lastPackage = e;
-    } else {
+    } else if (e.kind === "write_received") {
       writesReceived++;
       totalWriteTokens += e.tokensEstimated;
       lastWrite = e;
+    } else if (e.kind === "debt_resolved") {
+      debtResolvedTotal += e.count;
+    } else if (e.kind === "batch_run") {
+      batchRuns++;
+      batchInputTokens += e.inputTokens;
+      batchOutputTokens += e.outputTokens;
     }
   }
 
@@ -152,6 +197,11 @@ export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSn
     efficiencyRatio,
     lastPackage,
     lastWrite,
+    debtResolvedTotal,
+    batchRuns,
+    batchInputTokens,
+    batchOutputTokens,
+    recent: file.entries.slice(-10),
   };
 }
 

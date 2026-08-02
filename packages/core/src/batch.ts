@@ -132,6 +132,7 @@ import {
 import { validateMermaidSyntax } from "./mermaid-validator.js";
 import { computeSnapshotHash, writeManifestIfChanged, buildManifest } from "./manifest.js";
 import { sha256 } from "./hashes.js";
+import { recordUpdateMetric } from "./update-metrics.js";
 import { regenerateArchitectureOverview, syncClassDiagrams, syncStaleFlowArtifacts, syncStaleTopicArtifacts } from "./init.js";
 import { ensureTopicsIndexScaffold, extractModuleOpeningDigest, loadFlowPresentations, syncFlowsIndexHub } from "./navigation.js";
 import { parseFrontmatter, getOwner } from "./frontmatter.js";
@@ -1423,9 +1424,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // must never call the LLM or write). `breakerTriggered` maps to
     // `circuitBreakerTriggered` in the result; a rollback abort reports
     // false, exactly as the pre-pool inline blocks did.
-    const finalizeStage4Abort = (breakerTriggered: boolean): BatchRunResult => {
+    const finalizeStage4Abort = async (breakerTriggered: boolean): Promise<BatchRunResult> => {
       byStageAcc["4"] = stageUsageTotals;
-      finalizeRun(db, runId, "aborted", {
+      finalizeRun(db, absRoot, runId, "aborted", {
         totals: aggregateTotals(stage2UsageAcc, stageUsageTotals),
         byStage: byStageAcc,
         byModule: moduleUsage,
@@ -1438,6 +1439,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         tasksFailed: cb.fails,
         degradedPages,
       });
+      await drainPendingMetrics();
       return withDegraded(buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, breakerTriggered, cb.done, cb.fails));
     };
 
@@ -1463,9 +1465,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     if (batchConcurrency <= 1) {
       for (const module of tasksToRun) {
         const moduleUsageEntry = await runStage4ModuleTask(module);
-        if (circuitBreakerTripped()) return finalizeStage4Abort(true);
+        if (circuitBreakerTripped()) return await finalizeStage4Abort(true);
         moduleUsage.push({ module: module.id, ...moduleUsageEntry });
-        if (runAbortedByRollback) return finalizeStage4Abort(false);
+        if (runAbortedByRollback) return await finalizeStage4Abort(false);
       }
     } else {
       let nextIndex = 0;
@@ -1508,8 +1510,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         (priorityIndex.get(b.module) ?? Number.MAX_SAFE_INTEGER);
       moduleUsage.sort(byPriority);
       failures.sort(byPriority);
-      if (poolAbort === "breaker") return finalizeStage4Abort(true);
-      if (poolAbort === "rollback") return finalizeStage4Abort(false);
+      if (poolAbort === "breaker") return await finalizeStage4Abort(true);
+      if (poolAbort === "rollback") return await finalizeStage4Abort(false);
     }
     byStageAcc["4"] = stageUsageTotals;
     // === Stage 5: semantic product flows (SPEC §"Semantic product-flow layer") ===
@@ -2137,7 +2139,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         (totalAttempted >= 3 && cb.fails / totalAttempted > 0.5)
       ) {
         byStageAcc["5"] = stage5UsageTotals;
-        finalizeRun(db, runId, "aborted", {
+        finalizeRun(db, absRoot, runId, "aborted", {
           totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
           byStage: byStageAcc,
           byModule: moduleUsage,
@@ -2150,6 +2152,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksFailed: cb.fails,
           degradedPages,
         });
+        await drainPendingMetrics();
         const abortedByBreaker = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, true, cb.done, cb.fails));
         if (skippedFlowCandidates.length > 0) abortedByBreaker.skippedFlowCandidates = skippedFlowCandidates;
         return abortedByBreaker;
@@ -2161,7 +2164,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       // NEW work; already-written module pages stay on disk.
       if (runAbortedByRollback) {
         byStageAcc["5"] = stage5UsageTotals;
-        finalizeRun(db, runId, "aborted", {
+        finalizeRun(db, absRoot, runId, "aborted", {
           totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
           byStage: byStageAcc,
           byModule: moduleUsage,
@@ -2174,6 +2177,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksFailed: cb.fails,
           degradedPages,
         });
+        await drainPendingMetrics();
         const abortedByRollback = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, false, cb.done, cb.fails));
         if (skippedFlowCandidates.length > 0) abortedByRollback.skippedFlowCandidates = skippedFlowCandidates;
         return abortedByRollback;
@@ -2255,7 +2259,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 
       if (combinedCircuitBreaker || topicStage.rollbackFailed) {
         byStageAcc["5"] = stage5UsageTotals;
-        finalizeRun(db, runId, "aborted", {
+        finalizeRun(db, absRoot, runId, "aborted", {
           totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
           byStage: byStageAcc,
           byModule: moduleUsage,
@@ -2268,6 +2272,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksFailed: cb.fails,
           degradedPages,
         });
+        await drainPendingMetrics();
         const aborted = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, combinedCircuitBreaker, cb.done, cb.fails));
         if (skippedFlowCandidates.length > 0) aborted.skippedFlowCandidates = skippedFlowCandidates;
         if (skippedTopicPlan) aborted.skippedTopicPlan = skippedTopicPlan;
@@ -2313,7 +2318,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     } else {
       status = "completed";
     }
-    finalizeRun(db, runId, status, {
+    finalizeRun(db, absRoot, runId, status, {
       totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
       byStage: byStageAcc,
       byModule: moduleUsage,
@@ -2326,6 +2331,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       tasksFailed: cb.fails,
       degradedPages,
     });
+    await drainPendingMetrics();
 
     // Manifest at the end (if not skipped)
     if (!opts.skipManifestWrite) {
@@ -4497,6 +4503,7 @@ async function getFileIdsForModule(absRoot: string, module: Module): Promise<num
 
 function finalizeRun(
   db: import("better-sqlite3").Database,
+  absRoot: string,
   runId: number,
   status: "completed" | "completed_with_failures" | "aborted",
   opts: {
@@ -4525,9 +4532,49 @@ function finalizeRun(
       ? { degradedPages: [...opts.degradedPages] }
       : {}),
   };
+  const finishedAt = Date.now();
   db.prepare(
     "UPDATE batch_runs SET status = ?, finished_at = ?, summary_json = ? WHERE id = ?",
-  ).run(status, Date.now(), JSON.stringify(summary), runId);
+  ).run(status, finishedAt, JSON.stringify(summary), runId);
+
+  // Roadmap item 14 (in-session cost accounting): mirror the run's token
+  // totals into the append-only activity ledger. Fire-and-forget — the
+  // accounting write must NEVER affect the run's outcome or exit code.
+  try {
+    const startedRow = db
+      .prepare("SELECT started_at FROM batch_runs WHERE id = ?")
+      .get(runId) as { started_at: number } | undefined;
+    const write = recordUpdateMetric(absRoot, {
+      kind: "batch_run",
+      timestamp: finishedAt,
+      runId,
+      status,
+      inputTokens: opts.totals.inputTokens,
+      outputTokens: opts.totals.outputTokens,
+      costUsd: opts.totals.costUsd,
+      durationMs: startedRow ? Math.max(0, finishedAt - startedRow.started_at) : 0,
+      tasksDone: opts.tasksDone,
+      tasksFailed: opts.tasksFailed,
+    });
+    // Belt-and-braces: recordUpdateMetric already swallows its own errors.
+    pendingMetricWrites.push(write.catch(() => {}));
+  } catch {
+    // best-effort: accounting never blocks finalization
+  }
+}
+
+/**
+ * Roadmap item 14: fire-and-forget metric writes fired by finalizeRun.
+ * Every caller awaits `drainPendingMetrics` right after finalizeRun, so the
+ * ledger write always lands before runBatch returns (deterministic for
+ * tests and for CLI exit) — it can never throw, because each queued write
+ * is already `.catch(() => {})`.
+ */
+const pendingMetricWrites: Promise<void>[] = [];
+
+/** Awaits every pending metric write. Never rejects. */
+async function drainPendingMetrics(): Promise<void> {
+  await Promise.all(pendingMetricWrites.splice(0));
 }
 
 function buildResult(

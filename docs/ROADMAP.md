@@ -288,6 +288,31 @@ accept a `moved` only when the symbol is gone from ALL active files (no
 same-name twin survives anywhere); otherwise classify as `changed` (donor)
 and let the new occurrence surface as new/undocumented.
 
+### 14. In-session cost accounting
+
+Source: maintainer review of the 2026-08-01 incremental MPTP update. The
+in-session payment path (the agent already in the user's session writes
+the prose) rides the host subscription instead of per-token billing — a
+real cost in a different currency, and today it is UNMEASURED: batch has
+exact checkpoint accounting, in-session has nothing. Make the loop
+measurable: every payment session records estimated tokens written +
+debt closed (wire `--record-write` / `update-metrics.ts` into the flow as
+a required step, surfaced in `status`/metrics), so the in-session vs
+batch economics per repo are decided on numbers, not guesses.
+
+### 15. Activity dashboard (viewer)
+
+Source: maintainer directive 2026-08-01 ("everything accounted and
+expressed to the client"). Once item 14's accounting history exists
+(`update_metrics.json` + batch checkpoints), the Phase 7 viewer gains an
+Activity/dashboard page rendering the full documentation-activity history
+of the repo: packages emitted, tokens consumed per period (estimated
+in-session vs provider-billed batch), debt burndown over time, writes per
+page, and time-to-document metrics (median hours from code change to paid
+debt — the operational-metrics discipline of backlog #6). Static, offline,
+deterministic — built at site-build time from the metrics file and
+index.db, zero LLM. Implemented after item 14.
+
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
 - **Committed graph/cache artifact in the repo** (their

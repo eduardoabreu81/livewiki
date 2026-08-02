@@ -94,6 +94,8 @@ import { run as runVerify } from "@livewiki/core/verify";
 import { openIndex } from "@livewiki/core/db";
 import { computeBlastRadius } from "@livewiki/core/blast-radius";
 import { computeChangeImpact } from "@livewiki/core/change-impact";
+import { recordUpdateMetric } from "@livewiki/core/update-metrics";
+import { CHARS_PER_TOKEN } from "@livewiki/core/update";
 import { run as runIndexer } from "@livewiki/core/indexer";
 import { run as runLedger } from "@livewiki/core/anchor-ledger";
 import * as nodePath from "node:path";
@@ -521,6 +523,18 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
       // 3) Atualiza índice FTS5 incrementalmente (write bem-sucedido).
       indexPage(searchIdx, path, content);
 
+      // 4) Roadmap item 14: record the write in the activity ledger.
+      //    Awaited so the ledger is consistent when the tool returns (and
+      //    temp-dir cleanup never races the write); recordUpdateMetric
+      //    swallows its own errors, so this never fails the tool.
+      await recordUpdateMetric(repoRoot, {
+        kind: "write_received",
+        timestamp: Date.now(),
+        wikiPath: path,
+        bytes: Buffer.byteLength(content, "utf8"),
+        tokensEstimated: Math.ceil(content.length / CHARS_PER_TOKEN),
+      });
+
       return hintedTextResult("livewiki_write_doc", `wrote ${path} (verified)`);
     },
   );
@@ -561,6 +575,17 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
             }
           });
           tx();
+          // Roadmap item 14: record the resolution in the activity ledger
+          // (only when at least one row was resolved; best-effort, the
+          // recorder swallows its own errors).
+          if (resolved.length > 0) {
+            await recordUpdateMetric(repoRoot, {
+              kind: "debt_resolved",
+              timestamp: ts,
+              count: resolved.length,
+              source: "mcp",
+            });
+          }
           return textResult(
             JSON.stringify(
               {

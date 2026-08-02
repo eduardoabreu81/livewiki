@@ -498,6 +498,112 @@ Conteudo.
 });
 
 /**
+ * Roadmap item 14 (in-session cost accounting): the MCP write/resolve
+ * surfaces record into the same append-only activity ledger the CLI uses.
+ * Recording is fire-and-forget, so tests poll the snapshot briefly.
+ */
+describe("MCP server — activity ledger (roadmap item 14)", () => {
+  async function pollSnapshot(
+    cond: (s: import("@livewiki/core/update-metrics").UpdateMetricsSnapshot) => boolean,
+    timeoutMs = 5000,
+  ): Promise<import("@livewiki/core/update-metrics").UpdateMetricsSnapshot> {
+    const { snapshotMetrics } = await import("@livewiki/core/update-metrics");
+    const deadline = Date.now() + timeoutMs;
+    let snap = await snapshotMetrics(repoRoot);
+    while (!cond(snap) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+      snap = await snapshotMetrics(repoRoot);
+    }
+    return snap;
+  }
+
+  it("livewiki_write_doc records a write_received entry on success", async () => {
+    const content = `---
+title: ledger-check
+owner: generated
+---
+
+# ledger-check
+
+Content here.
+`;
+    const c = await connect();
+    try {
+      const r = await c.client.callTool({
+        name: "livewiki_write_doc",
+        arguments: { path: "livewiki/ledger-check.md", content },
+      });
+      expect(extractText(r)).toMatch(/wrote livewiki\/ledger-check\.md/);
+
+      const snap = await pollSnapshot((s) => s.writesReceived === 1);
+      expect(snap.writesReceived).toBe(1);
+      const entry = snap.recent[snap.recent.length - 1];
+      if (entry?.kind !== "write_received") throw new Error("expected write_received");
+      expect(entry.wikiPath).toBe("livewiki/ledger-check.md");
+      expect(entry.bytes).toBe(Buffer.byteLength(content, "utf8"));
+      expect(entry.tokensEstimated).toBe(Math.ceil(content.length / 4));
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("livewiki_resolve_debt records debt_resolved with the resolved count", async () => {
+    // Create one open debt row: anchored page + source change + ledger runs.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".gitignore"),
+      ".livewiki/\n",
+    );
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "livewiki/login.md"),
+      "---\ntitle: login\nowner: generated\nanchors:\n  - src/auth/login.ts#login\n---\n\n# login\n\nDocs.\n",
+    );
+    const { run: runIndexer } = await import("@livewiki/core/indexer");
+    const { run: runLedger } = await import("@livewiki/core/anchor-ledger");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/auth/login.ts"),
+      "export function login() { return 'changed'; }\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const c = await connect();
+    try {
+      const debtReport = JSON.parse(
+        extractText(await c.client.callTool({ name: "livewiki_debt", arguments: {} })),
+      ) as { debt: { items: Array<{ id: number }> } };
+      expect(debtReport.debt.items.length).toBe(1);
+      const debtId = debtReport.debt.items[0]!.id;
+
+      // A no-match resolve records NOTHING (count would be 0).
+      const miss = await c.client.callTool({
+        name: "livewiki_resolve_debt",
+        arguments: { debtIds: [9999] },
+      });
+      expect(JSON.parse(extractText(miss)).resolved).toEqual([]);
+
+      const hit = await c.client.callTool({
+        name: "livewiki_resolve_debt",
+        arguments: { debtIds: [debtId] },
+      });
+      expect(JSON.parse(extractText(hit)).resolved).toEqual([debtId]);
+
+      const snap = await pollSnapshot((s) => s.debtResolvedTotal === 1);
+      expect(snap.debtResolvedTotal).toBe(1);
+      const resolvedEntries = snap.recent.filter((e) => e.kind === "debt_resolved");
+      expect(resolvedEntries).toHaveLength(1);
+      const entry = resolvedEntries[0]!;
+      if (entry.kind !== "debt_resolved") throw new Error("expected debt_resolved");
+      expect(entry.count).toBe(1);
+      expect(entry.source).toBe("mcp");
+    } finally {
+      await teardown(c);
+    }
+  });
+});
+
+/**
  * Etapa 2d — workflow-adjacency hints (capability backlog item 4).
  * Every SUCCESS tool response must carry a static `_hints` block suggesting
  * the next most useful tool calls; error responses carry no hints.

@@ -970,6 +970,16 @@ dropped without drama when there's no price.
 - **Incremental**: `update` records the size (tokenizer-estimated tokens) of the
   work package emitted to the agent and of the docs written back. Metrics in a
   dedicated table under `.livewiki/`, exposed via `status --json`.
+- **Activity ledger** (roadmap item 14): every documentation-related action is
+  an append-only entry in `.livewiki/update_metrics.json`. Event kinds:
+  `package_emitted` and `write_received` (CLI `update`/MCP `write_doc`),
+  `debt_resolved` (MCP `resolve_debt`, with the resolved count and source), and
+  `batch_run` (each finished batch run's status, input/output tokens, duration,
+  and done/failed tasks — mirrored from `finalizeRun`, best-effort so accounting
+  never affects the run's outcome or exit code). The snapshot aggregates totals
+  per kind plus the 10 most recent entries; `livewiki status` (human) shows an
+  "Activity" block with the totals and the last 5 events, omitted entirely when
+  the ledger is empty.
 - The anchor instruction in the batch prompt is closed: the LLM receives the list
   of canonical keys of the module (from the index) and **distributes** those keys
   across the sections — never invents a key. Stage-4 artifact validation rejects

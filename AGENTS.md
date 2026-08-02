@@ -520,6 +520,18 @@ for closing the lot.
   (mirrors `allowPointer`); CLI `livewiki export readme [--yes]` — dry-run
   without the flag, dispatched BEFORE the flatten pipeline (not an
   `ExportTarget`).
+- **In-session cost accounting (roadmap item 14)** → `update-metrics.ts`
+  activity ledger gains `debt_resolved` + `batch_run` kinds (additive; v1
+  files with the two original kinds still parse) and snapshot totals +
+  `recent` (last 10, newest last). Recorders: MCP `write_doc` /
+  `resolve_debt` in `packages/mcp/src/server.ts` (awaited —
+  `recordUpdateMetric` swallows its own errors), batch `finalizeRun` in
+  `batch.ts` (fire-and-forget drained by `drainPendingMetrics` before
+  `runBatch` returns — never affects outcome or exit code). Human
+  surfacing: `status.ts:formatHuman` "Activity" block (totals + last 5
+  events as `YYYY-MM-DD HH:mm kind detail` local time; omitted when the
+  ledger is empty). Tests: `update-metrics.test.ts`, `server.test.ts`,
+  `batch-concurrency.test.ts`, `status.test.ts`.
 - **New MCP tool** → add `server.tool(name, desc, schema, handler)` in
   `packages/mcp/src/server.ts`. Schema with `zod`. If it needs a new
   operation in core, add it there and import here (don't duplicate

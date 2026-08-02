@@ -3,6 +3,7 @@ import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { runBatch } from "./batch.js";
+import { snapshotMetrics } from "./update-metrics.js";
 import type { LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult } from "./llm/types.js";
 
@@ -346,5 +347,34 @@ describe("batchConcurrency — stage-4 worker pool (roadmap item 7)", () => {
     expect(result.status).toBe("completed");
     expect(llm.maxInFlight).toBeGreaterThan(1);
     expect(llm.maxInFlight).toBeLessThanOrEqual(2);
+  });
+
+  it("finalizeRun mirrors the run's totals into the activity ledger (roadmap item 14)", async () => {
+    const repo = await makeRepo(MODULE_IDS.slice(0, 3));
+    const llm = new ValidMockLlm(0);
+
+    const result = await runBatch({
+      repoRoot: repo,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      concurrency: 2,
+    });
+    expect(result.status).toBe("completed");
+
+    // runBatch drains the fire-and-forget ledger write before returning.
+    const snap = await snapshotMetrics(repo);
+    expect(snap.batchRuns).toBe(1);
+    expect(snap.batchInputTokens).toBe(result.totals.inputTokens);
+    expect(snap.batchOutputTokens).toBe(result.totals.outputTokens);
+
+    const entry = snap.recent[snap.recent.length - 1];
+    expect(entry).toBeDefined();
+    if (entry?.kind !== "batch_run") throw new Error("expected a batch_run entry");
+    expect(entry.runId).toBe(result.runId);
+    expect(entry.status).toBe("completed");
+    expect(entry.tasksDone).toBe(result.tasksDone);
+    expect(entry.tasksFailed).toBe(0);
+    expect(entry.durationMs).toBeGreaterThanOrEqual(0);
   });
 });

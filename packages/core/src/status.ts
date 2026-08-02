@@ -15,7 +15,7 @@ import * as nodeFs from "node:fs/promises";
 import * as safeIo from "./safe-io.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
 import { parseFrontmatter } from "./frontmatter.js";
-import { snapshotMetrics, type UpdateMetricsSnapshot } from "./update-metrics.js";
+import { snapshotMetrics, type UpdateMetricsSnapshot, type UpdateMetric } from "./update-metrics.js";
 import { EXTENSION_LANG } from "./walker.js";
 import { applyDefaults, loadConfig, CONFIG_DEFAULTS, type LivewikiConfig } from "./config.js";
 import { collectImportsForFiles } from "./imports.js";
@@ -392,6 +392,33 @@ function formatSnapshotAge(ms: number): string {
   return `${Math.round(h / 24)}d`;
 }
 
+/** Local-time `YYYY-MM-DD HH:mm` for the Activity block (zero-padded). */
+function formatLocalTimestamp(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
+/** One-line rendering of a ledger entry for the Activity block. */
+function formatActivityEvent(e: UpdateMetric): string {
+  switch (e.kind) {
+    case "package_emitted":
+      return `package_emitted ~${e.tokensEstimated} tokens, ${e.debtCount} debt items`;
+    case "write_received":
+      return `write_received ${e.wikiPath} (~${e.tokensEstimated} tokens)`;
+    case "debt_resolved":
+      return `debt_resolved ${e.count} item(s) via ${e.source}`;
+    case "batch_run":
+      return (
+        `batch_run #${e.runId} ${e.status}, ` +
+        `${e.inputTokens} in / ${e.outputTokens} out`
+      );
+  }
+}
+
 /**
  * Recovery tier (Component 2): walk the `livewiki/` tree fresh from disk
  * and collect Markdown pages whose frontmatter declares `quality: degraded`.
@@ -488,6 +515,22 @@ export function formatHuman(report: StatusReport): string {
     lines.push(`Degraded pages (relaxed contract): ${report.degraded.total}`);
     for (const page of report.degraded.pages) {
       lines.push(`  ${page}`);
+    }
+    lines.push("");
+  }
+  // Roadmap item 14: activity ledger summary. Quiet when the ledger is
+  // empty (no block at all) — JSON consumers read report.metrics instead.
+  if (report.metrics !== null && report.metrics.recent.length > 0) {
+    const m = report.metrics;
+    lines.push("Activity:");
+    lines.push(
+      `  ${m.packagesEmitted} packages (${m.totalPackageTokens} tokens), ` +
+        `${m.writesReceived} writes (${m.totalWriteTokens} tokens), ` +
+        `${m.debtResolvedTotal} debt resolved, ` +
+        `${m.batchRuns} batch runs (${m.batchInputTokens} in / ${m.batchOutputTokens} out)`,
+    );
+    for (const e of m.recent.slice(-5)) {
+      lines.push(`  ${formatLocalTimestamp(e.timestamp)} ${formatActivityEvent(e)}`);
     }
     lines.push("");
   }
