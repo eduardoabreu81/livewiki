@@ -563,7 +563,10 @@ for closing the lot.
   logic). Update `server.test.ts` with an E2E scenario.
 - **Hook / skill change** → `packages/cli/templates/` or
   `packages/cli/skills/`. Update README/SKILL.md; tests in
-  `packages/cli/src/templates.test.ts`.
+  `packages/cli/src/templates.test.ts`. CI template (item 6) lives at
+  `templates/github-actions/docs-debt.yml`, dogfooded by
+  `.github/workflows/docs-debt.yml` (local build until npm publish;
+  keep the key steps mirrored — the test asserts parity).
 
 ## Phase 5 specific notes (in progress)
 

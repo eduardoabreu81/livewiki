@@ -185,7 +185,7 @@ invalidate ("this diff will invalidate anchors in pages X, Y"), closing
 the document-as-you-go loop at pre-commit time instead of post-commit.
 Read-only: no ledger mutation, no debt creation — preview only.
 
-### 6. GitHub Actions template — "docs-debt on merge"
+### 6. GitHub Actions template — "docs-debt on merge" ✅ v1 DONE 2026-08-02
 
 Source: maintainer-approved evaluation (2026-07-14) of GitHub Agentic
 Workflows for cross-repo documentation
@@ -209,6 +209,17 @@ Depends on Phase 6 (export) for the separate-docs-repo variant; the same-repo
 variant could ship earlier. Also adopt their operational-metrics discipline
 (median hours from feature merge to merged docs — `update-metrics.ts` is the
 base).
+
+**v1 shipped 2026-08-02 (detect + report, zero tokens):**
+`packages/cli/templates/github-actions/docs-debt.yml` — push-triggered
+`index --quiet` + `status --json`, debt table in the step summary,
+`LIVEWIKI_DEBT_MODE=enforce|report` (fail vs informational),
+`contents: read`, no secrets/GitHub App. Dogfooded by
+`.github/workflows/docs-debt.yml` (local build pre-publish, report mode
+for the first window). **Still open (v2):** the pay-variant — provider
+pays the debt via `update --llm`, then `gh pr create --draft` with the
+merge author as reviewer; needs provider secrets and
+`pull-requests: write`.
 
 ### 7. Bounded parallel stage-4 execution (`batchConcurrency`)
 

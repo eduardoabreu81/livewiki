@@ -996,6 +996,14 @@ dropped without drama when there's no price.
   not block the commit).
 - **Claude Code Stop hook** (template in `templates/`): same, in the hooks JSON
   format.
+- **GitHub Actions "docs-debt on merge" template** (roadmap item 6, v1 —
+  `templates/github-actions/docs-debt.yml`): the CI sibling of the hooks.
+  On push to the default branch: `index --quiet` + `status --json` → debt
+  summary in the step summary; `LIVEWIKI_DEBT_MODE=enforce` (default)
+  fails the job on debt, `report` never fails. Detection is
+  deterministic — zero tokens, `contents: read`, no secrets, no GitHub
+  App. v1 never calls an LLM and never writes; the pay-variant
+  (`update --llm` + draft PR) is v2.
 
 ## Implementation phases
 

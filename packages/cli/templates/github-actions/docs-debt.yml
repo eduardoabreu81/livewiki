@@ -1,0 +1,91 @@
+# livewiki — "docs-debt on merge" (v1: detect + report)
+#
+# What this does: after every push to the default branch, re-run the
+# deterministic index and check documentation debt. Detection costs ZERO
+# LLM tokens, always — the anchor ledger diffs tree-sitter symbols and
+# content hashes; no model is ever called in this workflow.
+#
+#   debt.total == 0  → green check, "zero tokens spent".
+#   debt.total  > 0  → debt table in the job summary; the job FAILS in
+#                      enforce mode (the red X is the notification).
+#
+# Install: copy this file to `.github/workflows/docs-debt.yml` in a repo
+# where `livewiki/` already exists (run `livewiki init` once locally
+# first). No secrets, no GitHub App, no extra permissions.
+#
+# What it NEVER does (v1): no LLM calls, no writes to the repo, no issue
+# or PR comments. The paid variant (provider pays the debt with
+# `livewiki update --llm`, then opens a draft PR with the merge author
+# as reviewer via `gh pr create --draft`) is a documented v2 — see the
+# livewiki templates README.
+
+name: livewiki docs debt
+
+on:
+  push:
+    branches: [main] # ← adjust to your default branch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # enforce: job fails when debt exists (red check on the merge).
+  # report:  never fails — the step summary is the only signal.
+  LIVEWIKI_DEBT_MODE: enforce
+
+jobs:
+  docs-debt:
+    name: docs-debt (zero tokens)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the risk/churn factor reads `git log`
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: livewiki index (deterministic — no LLM)
+        run: npx --yes @livewiki/cli index --quiet
+
+      - name: docs-debt report and gate
+        shell: bash
+        env:
+          STATUS_JSON: ${{ runner.temp }}/livewiki-status.json
+        run: |
+          set -euo pipefail
+          npx --yes @livewiki/cli status --json > "$STATUS_JSON"
+          node -e '
+            const fs = require("node:fs");
+            const s = JSON.parse(fs.readFileSync(process.env.STATUS_JSON, "utf8"));
+            const debt = s.debt ?? { total: 0, byEvent: {}, items: [] };
+            const lines = [];
+            lines.push("## livewiki docs debt");
+            lines.push("");
+            if (debt.total === 0) {
+              lines.push("**No documentation debt — zero tokens spent.**");
+            } else {
+              lines.push(`**${debt.total} open debt item(s)** — changed: ${debt.byEvent.changed ?? 0}, ` +
+                `moved: ${debt.byEvent.moved ?? 0}, deleted: ${debt.byEvent.deleted ?? 0}.`);
+              lines.push("");
+              lines.push("| risk | event | assignee | anchor |");
+              lines.push("|---:|---|---|---|");
+              for (const it of (debt.items ?? []).slice(0, 10)) {
+                const risk = it.risk && typeof it.risk.score === "number" ? it.risk.score : "—";
+                lines.push(`| ${risk} | ${it.event} | ${it.assignee} | \`${it.symbol_key ?? it.wiki_path ?? "?"}\` |`);
+              }
+              lines.push("");
+              lines.push("Pay the debt with `livewiki update` (in-session) or `livewiki update --llm`, " +
+                "then `livewiki verify`. Detection above cost zero tokens.");
+            }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+            console.log(lines.join("\n"));
+            if (debt.total > 0 && process.env.LIVEWIKI_DEBT_MODE !== "report") {
+              console.error(`docs debt: ${debt.total} open item(s) — failing (mode=enforce)`);
+              process.exit(1);
+            }
+          '

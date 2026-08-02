@@ -122,3 +122,39 @@ npm install --save-dev @livewiki/cli
 # ou global
 npm install -g @livewiki/cli
 ```
+
+## GitHub Actions — "docs-debt on merge" (CI template)
+
+The CI sibling of the hooks above: same deterministic detection, same
+zero-token cost, on every push to the default branch. Template at
+`templates/github-actions/docs-debt.yml`.
+
+**Install** (repo must already have `livewiki/` — run `livewiki init`
+once locally first):
+
+```bash
+mkdir -p .github/workflows
+cp node_modules/@livewiki/cli/templates/github-actions/docs-debt.yml \
+   .github/workflows/docs-debt.yml
+# adjust `branches: [main]` if your default branch differs
+```
+
+**What it does:** checkout (`fetch-depth: 0`, because the risk/churn
+factor reads `git log`) → `livewiki index --quiet` → `livewiki status
+--json` → a debt summary in the job's step summary. No secrets, no
+GitHub App, `contents: read` only. A no-debt merge costs **zero tokens**
+— that is the point: the anchor ledger answers "does this merge need
+docs?" deterministically.
+
+**Two modes** (env `LIVEWIKI_DEBT_MODE` at the top of the file):
+
+| Mode | Debt > 0 |
+|---|---|
+| `enforce` (default) | job FAILS — the red check on the merge is the notification |
+| `report` | never fails — the step summary is the only signal |
+
+**v1 never calls an LLM and never writes anywhere.** The paid v2 sketch
+(provider pays the debt, then opens a draft PR with the merge author as
+reviewer): configure provider secrets, run `livewiki update --llm`,
+then `gh pr create --draft --title "docs: pay livewiki debt"` — see
+ROADMAP §6. Not implemented in this template.

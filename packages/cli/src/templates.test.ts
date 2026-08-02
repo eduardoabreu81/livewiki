@@ -119,6 +119,69 @@ describe("templates/README.md", () => {
     expect(content).toMatch(/Claude Code|claude-code/i);
     expect(content).toMatch(/desinstalar|uninstall/i);
   });
+
+  it("cobre o template GitHub Actions (instalação, modos, v2 não implementada)", async () => {
+    const content = await nodeFs.readFile(
+      nodePath.join(templatesDir, "README.md"),
+      "utf8",
+    );
+    expect(content).toMatch(/github-actions\/docs-debt\.yml/);
+    expect(content).toMatch(/LIVEWIKI_DEBT_MODE/);
+    expect(content).toMatch(/zero tokens/i);
+    expect(content).toMatch(/update --llm/);
+  });
+});
+
+describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", () => {
+  let content: string;
+  beforeAll(async () => {
+    content = await nodeFs.readFile(
+      nodePath.join(templatesDir, "github-actions", "docs-debt.yml"),
+      "utf8",
+    );
+  });
+
+  it("dispara em push na branch default + workflow_dispatch", () => {
+    expect(content).toMatch(/push:\s*\n\s*branches:\s*\[main\]/);
+    expect(content).toMatch(/workflow_dispatch:/);
+  });
+
+  it("detecção determinística: index --quiet + status --json, zero LLM", () => {
+    expect(content).toMatch(/index\s+--quiet/);
+    expect(content).toMatch(/status\s+--json/);
+    expect(content).toMatch(/zero tokens/i);
+    // v1 executa EXATAMENTE dois comandos CLI (index + status) — qualquer
+    // caminho pago (update --llm) só existe como texto informativo.
+    const calls = content.match(/npx --yes @livewiki\/cli \S+/g) ?? [];
+    expect(calls.sort()).toEqual([
+      "npx --yes @livewiki/cli index",
+      "npx --yes @livewiki/cli status",
+    ]);
+  });
+
+  it("permissões mínimas e fetch-depth 0 (risk/churn lê git log)", () => {
+    expect(content).toMatch(/permissions:\s*\n\s*contents:\s*read/);
+    expect(content).toMatch(/fetch-depth:\s*0/);
+  });
+
+  it("modo enforce falha o job; toggle report documentado", () => {
+    expect(content).toMatch(/LIVEWIKI_DEBT_MODE:\s*enforce/);
+    expect(content).toMatch(/LIVEWIKI_DEBT_MODE\s*!==\s*"report"/);
+  });
+
+  it("dogfood (.github/workflows/docs-debt.yml) espelha os passos-chave via build local", async () => {
+    const dogfood = await nodeFs.readFile(
+      nodePath.resolve(templatesDir, "..", "..", "..", ".github", "workflows", "docs-debt.yml"),
+      "utf8",
+    );
+    // Pré-publish: o dogfood constrói o CLI do checkout em vez de npx.
+    expect(dogfood).toMatch(/pnpm -r build/);
+    expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js index --quiet/);
+    expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js status --json/);
+    expect(dogfood).toMatch(/fetch-depth:\s*0/);
+    // E roda em report mode na primeira janela (nunca falha).
+    expect(dogfood).toMatch(/LIVEWIKI_DEBT_MODE:\s*report/);
+  });
 });
 
 describe("templates/ — comportamento simulado do hook", () => {
