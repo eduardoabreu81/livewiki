@@ -494,7 +494,9 @@ async function enumerateSourcePages(
       issues.push({
         code: "source_path_unsafe",
         severity: "error",
-        path: nodePath.relative(absRoot, cur).split(nodePath.sep).join("/"),
+        path:
+          "livewiki/" +
+          nodePath.relative(safeLivewikiDir, cur).split(nodePath.sep).join("/"),
         detail: errMessage(err),
       });
       continue;
@@ -509,7 +511,15 @@ async function enumerateSourcePages(
       if (!e.isFile()) continue;
       const ext = nodePath.extname(name).toLowerCase();
       if (ext !== ".md" && ext !== ".mmd") continue;
-      const rel = nodePath.relative(absRoot, abs).split(nodePath.sep).join("/");
+      // Compute rel against safeLivewikiDir — NOT absRoot. safeLivewikiDir
+      // is the realpath-canonicalized directory we are actually walking;
+      // absRoot is lexical. On macOS (/var → /private/var) and on Windows
+      // CI (8.3 RUNNER~1 → runneradmin) the two differ, and
+      // relative(lexical, realpath'd) escapes with `..`, poisoning every
+      // downstream safeIo call (CI run 30760337075: empty_source on all
+      // 46 export tests on those legs).
+      const rel =
+        "livewiki/" + nodePath.relative(safeLivewikiDir, abs).split(nodePath.sep).join("/");
       if (rel === "livewiki/.manifest.json") continue;
       const safeRel = rel;
       let raw: string;

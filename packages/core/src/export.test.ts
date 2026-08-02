@@ -677,6 +677,33 @@ describe("symlink regression — safe-io allowlist", () => {
   );
 
   it.runIf(canSymlink)(
+    "repoRoot passed THROUGH a symlink: export succeeds (macOS /var → /private/var, Windows 8.3 names)",
+    async () => {
+      // CI run 30760337075: enumerateSourcePages computed page rels against
+      // the lexical root while walking the realpath'd one; where the two
+      // differ (macOS /var→/private/var, Windows 8.3 RUNNER~1→runneradmin)
+      // every page rel escaped with `..` and the export died with
+      // empty_source. rel is now computed against safeLivewikiDir.
+      await writeWiki("livewiki/quickstart.md", "# Quickstart\n");
+      const linkRoot = nodePath.join(
+        nodeOs.tmpdir(),
+        `livewiki-export-rootlink-${process.pid}`,
+      );
+      await nodeFs.symlink(repoRoot, linkRoot, "dir");
+      try {
+        const r = await exportWiki({ repoRoot: linkRoot, target: "generic" });
+        expect(r.ok).toBe(true);
+        expect(r.issues).toEqual([]);
+        // The file lands in the REAL repo (safeIo canonicalizes); readDest
+        // uses the lexical root, which is the same directory.
+        expect(await readDest("generic", "quickstart.md")).not.toBeNull();
+      } finally {
+        await nodeFs.rm(linkRoot, { force: true });
+      }
+    },
+  );
+
+  it.runIf(canSymlink)(
     "a planned destination leaf is a symlink to an external file: export fails and the external file is unchanged",
     async () => {
       // 1. Source page that will be exported as foo.md in the destination.
