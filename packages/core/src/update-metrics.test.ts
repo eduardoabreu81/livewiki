@@ -13,6 +13,7 @@ import * as nodePath from "node:path";
 import {
   recordUpdateMetric,
   snapshotMetrics,
+  listUpdateMetrics,
   clearMetricsForTests,
   type UpdateMetricsFile,
 } from "./update-metrics.js";
@@ -208,5 +209,25 @@ describe("update-metrics — activity ledger (roadmap item 14)", () => {
     expect(snap.debtResolvedTotal).toBe(0);
     expect(snap.batchRuns).toBe(0);
     expect(snap.recent).toEqual([]);
+  });
+
+  it("listUpdateMetrics returns the FULL history in ledger order (roadmap item 15)", async () => {
+    for (let i = 1; i <= 12; i++) {
+      await recordUpdateMetric(repoRoot, {
+        kind: "debt_resolved",
+        timestamp: i,
+        count: 1,
+        source: "cli",
+      });
+    }
+    const entries = await listUpdateMetrics(repoRoot);
+    expect(entries).toHaveLength(12);
+    expect(entries.map((e) => e.timestamp)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  });
+
+  it("listUpdateMetrics degrades to [] without a ledger (never throws)", async () => {
+    // Fresh tmp repo: no .livewiki/update_metrics.json at all.
+    await nodeFs.rm(nodePath.join(repoRoot, ".livewiki"), { recursive: true, force: true });
+    await expect(listUpdateMetrics(repoRoot)).resolves.toEqual([]);
   });
 });

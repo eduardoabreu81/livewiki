@@ -186,7 +186,7 @@ describe("status.formatHuman", () => {
     expect(out).toContain("package_emitted ~500 tokens, 2 debt items");
     expect(out).toContain("write_received livewiki/foo.md (~120 tokens)");
     expect(out).toContain("debt_resolved 3 item(s) via mcp");
-    expect(out).toContain("batch_run #7 completed, 1000 in / 250 out");
+    expect(out).toContain("batch_run #7 completed, 1000 in / 250 out, 1s");
     // Events render as `YYYY-MM-DD HH:mm kind detail` in local time.
     expect(out).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} batch_run #7/);
   });

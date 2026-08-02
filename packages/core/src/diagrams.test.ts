@@ -4,6 +4,7 @@ import {
   generateStructure,
   generateModulesGraph,
   generateClassDiagram,
+  STRUCTURE_MAX_EDGES,
 } from "./diagrams.js";
 import type { SymbolRow } from "./db.js";
 import type { Module } from "./modules.js";
@@ -27,15 +28,15 @@ describe("diagrams.moduleSlug", () => {
 });
 
 describe("diagrams.generateStructure", () => {
-  it("gera graph TD com edges parent→child", () => {
+  it("gera graph LR com edges parent→child", () => {
     const out = generateStructure(["src/auth/login.ts", "src/utils/x.ts"]);
-    expect(out).toContain("graph TD");
+    expect(out).toContain("graph LR");
     expect(out).toContain("-->");
   });
 
   it("lida com lista vazia", () => {
     const out = generateStructure([]);
-    expect(out.trim()).toBe("graph TD");
+    expect(out.trim()).toBe("graph LR");
   });
 
   it("labels não contêm aspas cruas (Mermaid quebraria)", () => {
@@ -53,6 +54,30 @@ describe("diagrams.generateStructure", () => {
     ]);
     expect(out.split("\n").filter((line) => line.trim() === "docs --> docs_benchmarks"))
       .toHaveLength(1);
+  });
+
+  it("collapses to per-directory (N files) nodes over the Mermaid edge budget", () => {
+    // 10 dirs × 60 files = 600 file edges — over STRUCTURE_MAX_EDGES (450).
+    // Mermaid's parser rejects >500 edges (secure maxEdges config), so the
+    // exact graph would fail livewiki's own verify on a medium repo.
+    const files: string[] = [];
+    for (let d = 0; d < 10; d++) {
+      for (let f = 0; f < 60; f++) files.push(`pkg/mod${d}/file${f}.ts`);
+    }
+    const out = generateStructure(files);
+    const edgeCount = out.split("\n").filter((line) => line.includes("-->")).length;
+    expect(edgeCount).toBeLessThanOrEqual(STRUCTURE_MAX_EDGES);
+    expect(out).toContain("pkg/mod0/… (60 files)");
+    expect(out).not.toContain("file0.ts");
+    // Directory chain is preserved: pkg --> pkg_mod0.
+    expect(out).toContain("pkg --> pkg_mod0");
+  });
+
+  it("stays exact (per-file nodes) under the budget", () => {
+    const files = Array.from({ length: 30 }, (_, i) => `src/f${i}.ts`);
+    const out = generateStructure(files);
+    expect(out).toContain('src_f0_ts["src/f0.ts"]');
+    expect(out).not.toContain("files)");
   });
 });
 

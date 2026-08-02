@@ -206,6 +206,22 @@ export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSn
 }
 
 /**
+ * Full ledger history, oldest first. Used by the Phase 7 viewer's Activity
+ * page (roadmap item 15), which needs every entry — `snapshotMetrics`
+ * exposes aggregates plus only the last 10 (`recent`).
+ */
+export async function listUpdateMetrics(repoRoot: string): Promise<UpdateMetric[]> {
+  try {
+    const file = await readMetrics(repoRoot);
+    return file.entries;
+  } catch {
+    // best-effort: accounting never blocks the caller (same posture as
+    // recordUpdateMetric — a path/realpath failure means "no history").
+    return [];
+  }
+}
+
+/**
  * Helper exposto pra tests: limpa as métricas (útil em setup).
  * NUNCA chamar em código de produção — destrutivo.
  */

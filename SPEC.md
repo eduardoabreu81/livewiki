@@ -1075,7 +1075,11 @@ graph by imports — a byproduct of pipeline stage 2), and
 `diagrams/<module>.classes.mmd` (Mermaid classDiagram: classes/methods/inheritance,
 straight from the `symbols` table). These are pure `owner: generated`: they never
 age, never enter debt — the generator is what changes. Large graphs: one diagram
-per module, never a mega-diagram of the whole repo. These deterministic
+per module, never a mega-diagram of the whole repo. The structure graph is
+bounded (`STRUCTURE_MAX_EDGES` = 450, under Mermaid's secure 500-edge parse
+limit): over budget, per-file nodes collapse into one `dir/… (N files)` node
+per directory — an unbounded graph fails livewiki's own verify on medium
+repos. These deterministic
 diagrams are structural source maps: they answer what exists and what depends
 on what, and by themselves they do not explain behavior. Automatic
 whole-repository function call-graphs and edge-dense mega-diagrams remain OUT
@@ -1147,6 +1151,17 @@ error. Window: `--badge-days <n>` (default `7`, `0` disables). Every page
 head carries static social/OG meta tags (description from the page excerpt,
 `og:title`/`og:type`/`og:site_name`, `twitter:card`) — no `og:url`, no
 `og:image`, preserving the offline/no-asset posture.
+Roadmap item 15 (activity dashboard, 2026-08-02): when
+`.livewiki/update_metrics.json` holds at least one entry, the site gains a
+synthetic Activity page (`activity.html`, its own sidebar group, included
+in the offline search index): totals (provider-billed batch tokens vs
+estimated in-session tokens, USD as a secondary dated estimate, debt
+resolved, batch runs, write/package ratio), tokens per UTC week and debt
+burndown as build-time inline-SVG charts (zero runtime JS), writes per
+page, median/max detection→payment hours, and the last 10 ledger events
+in UTC. It is derived data rendered at build time — never a wiki page —
+and rebuilds byte-identical for the same ledger. An empty or missing
+ledger omits the page and its group entirely.
 Self-contained static site generated in `.livewiki/site/` (gitignored; `--out` to
 publish wherever, e.g. GitHub Pages):
 - **Zero build step, zero server**: static HTML+CSS+JS, works via `file://`

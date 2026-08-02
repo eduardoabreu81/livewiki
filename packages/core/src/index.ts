@@ -41,6 +41,7 @@ export * as topics from "./topics.js";
 export * as importResolution from "./import-resolution.js";
 export * as risk from "./risk.js";
 export * as view from "./view.js";
+export * as viewActivity from "./view-activity.js";
 export * as diffPreview from "./diff-preview.js";
 export * as changeImpact from "./change-impact.js";
 export * as install from "./install.js";

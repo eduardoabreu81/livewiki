@@ -61,6 +61,8 @@ import { collectWikiArtifactPaths, resolveWikiLink, isInsideWiki } from "./verif
 import { parseFrontmatter, type Frontmatter } from "./frontmatter.js";
 import { slugify } from "./anchors.js";
 import { maskCodeSpans, maskCodeSpansPreservingLength } from "./markdown-mask.js";
+import { listUpdateMetrics } from "./update-metrics.js";
+import { buildActivityModel, renderActivityPage } from "./view-activity.js";
 import type { SpawnImpl } from "./risk.js";
 
 export const VIEW_TEMPLATES = ["agent", "docs"] as const;
@@ -132,7 +134,8 @@ type SiteGroup =
   | "Implementation reference"
   | "Auxiliary"
   | "Diagrams"
-  | "Wiki indexes";
+  | "Wiki indexes"
+  | "Activity";
 
 const GROUP_ORDER: readonly SiteGroup[] = [
   "Quickstart",
@@ -142,6 +145,7 @@ const GROUP_ORDER: readonly SiteGroup[] = [
   "Auxiliary",
   "Diagrams",
   "Wiki indexes",
+  "Activity",
 ];
 
 const SEARCH_EXCERPT_CAP = 400;
@@ -226,6 +230,26 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
     opts.badgeDays ?? DEFAULT_BADGE_DAYS,
     opts.spawnImpl ?? spawn,
   );
+
+  // Roadmap item 15: synthetic Activity dashboard from the local metrics
+  // ledger (derived data, never a wiki page — rule #3). Added AFTER the
+  // badges (it carries none) and omitted entirely when the ledger is
+  // missing or empty — same graceful-degrade posture as the badges.
+  const activityModel = buildActivityModel(await listUpdateMetrics(absRoot));
+  if (activityModel !== null) {
+    const fragment = renderActivityPage(activityModel);
+    pages.push({
+      wikiPath: ".livewiki/update_metrics.json",
+      outRel: "activity.html",
+      title: "Activity",
+      group: "Activity",
+      subgroup: null,
+      tasksIndex: Number.MAX_SAFE_INTEGER,
+      contentHtml: fragment.contentHtml,
+      headings: fragment.headings,
+      excerpt: fragment.excerpt,
+    });
+  }
 
   // Rebuilt on every run: wipe the previous site before writing.
   if (out.viaSafeIo) {
@@ -1009,10 +1033,13 @@ body {
 .content hr { border: none; border-top: 1px solid var(--lw-border); }
 /* Diagrams render at natural readable size; the container scrolls
    horizontally instead of shrinking a wide chart into illegibility.
-   max-width: none needs !important to beat Mermaid's own inline
-   max-width style on the svg. */
+   Natural size comes from mermaid.initialize useMaxWidth:false (pixel
+   width/height attributes on the svg) — do NOT add a CSS width/height
+   rule here, it would override those attributes and re-squash the
+   graph. max-width: none !important only guards diagram kinds that
+   still default to useMaxWidth:true (inline max-width style). */
 .mermaid { overflow-x: auto; }
-.mermaid svg { max-width: none !important; height: auto; }
+.mermaid svg { max-width: none !important; }
 /* Freshness pill (git-history new/updated badge): a subtle outline chip
    driven by the palette variables — works in both templates/palettes. */
 .lw-badge {
@@ -1027,6 +1054,30 @@ body {
 }
 .page-badges { margin: 0 0 0.5rem; }
 .page-badges .lw-badge { margin-left: 0; }
+/* Activity dashboard (roadmap item 15): stat cards, chart sizing, legend.
+   Chart series colors come from the per-palette --lw-chart-a/-b variables
+   below; everything else rides the shared palette like the badges. */
+.activity-cards { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0.6rem 0 1rem; }
+.activity-card {
+  min-width: 8rem; padding: 0.5rem 0.8rem; border-radius: 6px;
+  background: var(--lw-code-bg); border: 1px solid var(--lw-border-strong);
+}
+.activity-card .activity-value {
+  display: block; font-family: var(--lw-font-accent);
+  font-size: var(--lw-text-h3); font-weight: 700; color: var(--lw-heading);
+}
+.activity-card .activity-label {
+  display: block; font-size: var(--lw-text-sm); color: var(--lw-muted);
+}
+.activity-chart { max-width: 100%; height: auto; margin: 0.4rem 0 1rem; }
+.activity-legend {
+  display: flex; flex-wrap: wrap; gap: 1rem; margin: 0.2rem 0;
+  font-size: var(--lw-text-sm); color: var(--lw-muted);
+}
+.activity-swatch {
+  display: inline-block; width: 0.8em; height: 0.8em; margin-right: 0.3em;
+  border-radius: 2px;
+}
 `;
 
 const AGENT_CSS = `${LAYOUT_CSS}
@@ -1051,6 +1102,7 @@ body { line-height: 1.45; }
   --lw-muted: #7d8590; --lw-link: #58a6ff;
   --lw-hover-bg: #1c232c; --lw-active-bg: #1f6feb33; --lw-active-fg: #58a6ff;
   --lw-code-bg: #161b22;
+  --lw-chart-a: #58a6ff; --lw-chart-b: #3fb950;
 }
 :root[data-theme="light"] {
   --lw-bg: #ffffff; --lw-fg: #1f2328; --lw-heading: #1f2328;
@@ -1059,6 +1111,7 @@ body { line-height: 1.45; }
   --lw-muted: #59636e; --lw-link: #0969da;
   --lw-hover-bg: #e9ecf0; --lw-active-bg: #ddf4ff; --lw-active-fg: #0969da;
   --lw-code-bg: #f6f8fa;
+  --lw-chart-a: #0969da; --lw-chart-b: #1a7f37;
 }
 `;
 
@@ -1084,6 +1137,7 @@ body { line-height: 1.65; }
   --lw-muted: #59636e; --lw-link: #0969da;
   --lw-hover-bg: #e9ecf0; --lw-active-bg: #ddf4ff; --lw-active-fg: #0969da;
   --lw-code-bg: #f6f8fa;
+  --lw-chart-a: #0969da; --lw-chart-b: #1a7f37;
 }
 :root[data-theme="dark"] {
   --lw-bg: #0f1419; --lw-fg: #c9d1d9; --lw-heading: #e6edf3;
@@ -1092,6 +1146,7 @@ body { line-height: 1.65; }
   --lw-muted: #7d8590; --lw-link: #58a6ff;
   --lw-hover-bg: #1c232c; --lw-active-bg: #1f6feb33; --lw-active-fg: #58a6ff;
   --lw-code-bg: #161b22;
+  --lw-chart-a: #58a6ff; --lw-chart-b: #3fb950;
 }
 `;
 
@@ -1206,9 +1261,17 @@ const VIEW_APP_JS = `(function () {
       pre.appendChild(code);
       entry.div.parentNode.replaceChild(pre, entry.div);
     }
+    // A failed diagram must degrade to the plain code block. Mermaid
+    // renders parse errors AS an svg (the red "bomb", marked with
+    // aria-roledescription="error"), so "has an svg" alone cannot be the
+    // success test — an error svg counts as unrendered.
+    function hasRenderedDiagram(div) {
+      var svg = div.querySelector("svg");
+      return !!svg && svg.getAttribute("aria-roledescription") !== "error";
+    }
     function restoreUnrendered() {
       for (var j = 0; j < entries.length; j++) {
-        if (!entries[j].div.querySelector("svg")) restore(entries[j]);
+        if (!hasRenderedDiagram(entries[j].div)) restore(entries[j]);
       }
     }
 
@@ -1217,7 +1280,20 @@ const VIEW_APP_JS = `(function () {
       return;
     }
     try {
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+      // useMaxWidth: false — Mermaid's default (true) stamps width="100%"
+      // on the svg, which (per SVG2 auto sizing) always fills the
+      // container and squashes huge graphs. With false it emits natural
+      // pixel dimensions and the .mermaid container scrolls horizontally.
+      // maxTextSize: the 50k default aborts RENDERING (not parsing — so
+      // verify's mermaid.parse passes) on legit large structure graphs;
+      // the wiki is trusted local content, so render it.
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        maxTextSize: 1000000,
+        flowchart: { useMaxWidth: false },
+        class: { useMaxWidth: false },
+      });
       Promise.resolve(mermaid.run({ nodes: entries.map(function (e) { return e.div; }) }))
         .then(restoreUnrendered)
         .catch(restoreUnrendered);

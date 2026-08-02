@@ -414,9 +414,19 @@ function formatActivityEvent(e: UpdateMetric): string {
     case "batch_run":
       return (
         `batch_run #${e.runId} ${e.status}, ` +
-        `${e.inputTokens} in / ${e.outputTokens} out`
+        `${e.inputTokens} in / ${e.outputTokens} out, ${formatDuration(e.durationMs)}`
       );
   }
+}
+
+/** Wall-clock duration for the Activity block: `45s`, `30m`, `1h12m`. */
+function formatDuration(ms: number): string {
+  const totalMinutes = Math.floor(ms / 60_000);
+  if (totalMinutes < 1) return `${Math.round(ms / 1000)}s`;
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes === 0 ? `${hours}h` : `${hours}h${String(minutes).padStart(2, "0")}m`;
 }
 
 /**

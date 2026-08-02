@@ -29,6 +29,7 @@ import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { buildSite, ViewError, THEME_STORAGE_KEY, type BuildSiteResult } from "./view.js";
+import { recordUpdateMetric } from "./update-metrics.js";
 import type { SpawnImpl } from "./risk.js";
 
 let repoRoot: string;
@@ -451,8 +452,31 @@ describe("view.buildSite", () => {
     for (const css of ["assets/view-agent.css", "assets/view-docs.css"]) {
       const content = (await readSite(outDir, css))!;
       expect(content, css).toContain(".mermaid { overflow-x: auto; }");
-      expect(content, css).toContain(".mermaid svg { max-width: none !important; height: auto; }");
+      expect(content, css).toContain(".mermaid svg { max-width: none !important; }");
+      // A CSS width/height rule on the svg would override the natural
+      // pixel attributes mermaid emits under useMaxWidth:false.
+      expect(content, css).not.toContain(".mermaid svg { width:");
     }
+    // Natural sizing itself comes from the mermaid config: useMaxWidth
+    // false makes mermaid stamp pixel dimensions instead of width="100%".
+    const appJs = (await readSite(outDir, "assets/view-app.js"))!;
+    expect(appJs).toContain("useMaxWidth: false");
+    // maxTextSize raised: the 50k default aborts RENDERING (parse passes)
+    // on legit large structure graphs.
+    expect(appJs).toContain("maxTextSize: 1000000");
+  });
+
+  it("a mermaid parse error degrades to the plain code block (no error bomb)", async () => {
+    await writeFixtureWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir });
+
+    // Mermaid renders parse errors AS an svg marked
+    // aria-roledescription="error" — the restore check must treat that as
+    // unrendered, not as success.
+    const appJs = (await readSite(outDir, "assets/view-app.js"))!;
+    expect(appJs).toContain('aria-roledescription") !== "error"');
+    expect(appJs).toContain("hasRenderedDiagram");
   });
 
   it("template typography: distinctive system font stacks + ≥1.25 type scale, no webfonts", async () => {
@@ -744,5 +768,66 @@ describe("view.buildSite OG/social meta", () => {
     const m = html.match(/<meta name="description" content="([^"]*)">/);
     expect(m).not.toBeNull();
     expect(m![1]!.length).toBeLessThanOrEqual(200);
+  });
+});
+
+// ── Activity dashboard (roadmap item 15) ────────────────────────────────────
+
+describe("view.buildSite Activity dashboard", () => {
+  it("emits activity.html + Activity sidebar group + search entry from the ledger", async () => {
+    await writeWiki("livewiki/quickstart.md", "# Home\n\nOverview.\n");
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    await recordUpdateMetric(repoRoot, {
+      kind: "package_emitted",
+      timestamp: Date.UTC(2026, 0, 5, 10, 0, 0),
+      tokensEstimated: 800,
+      bytes: 0,
+      debtCount: 3,
+    });
+    await recordUpdateMetric(repoRoot, {
+      kind: "batch_run",
+      timestamp: Date.UTC(2026, 0, 6, 10, 0, 0),
+      runId: 1,
+      status: "completed",
+      inputTokens: 10_000,
+      outputTokens: 2_000,
+      costUsd: 1.5,
+      durationMs: 1000,
+      tasksDone: 5,
+      tasksFailed: 0,
+    });
+    const outDir = nodePath.join(repoRoot, "site-out");
+    const result = await buildSite({ repoRoot, outDir });
+
+    expect(result.filesWritten).toContain("activity.html");
+    const activity = (await readSite(outDir, "activity.html"))!;
+    expect(activity).toContain("<h1>Activity</h1>");
+    expect(activity).toContain("Tokens per week");
+    expect(activity).toContain("12,000"); // batch in+out grouped
+    expect(activity).toContain("$1.50");
+    // The sidebar marks the synthetic page active (class + aria-current).
+    expect(activity).toContain('href="activity.html"');
+    expect(activity).toContain('aria-current="page"');
+    // The home page sidebar links to the Activity group.
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).toContain("<h2>Activity</h2>");
+    expect(index).toContain('href="activity.html"');
+    // Offline search index carries the synthetic page.
+    const search = (await readSite(outDir, "assets/search-index.js"))!;
+    expect(search).toContain('"url": "activity.html"');
+    expect(search).toContain('"group": "Activity"');
+  });
+
+  it("omits the Activity page entirely when the ledger is missing or empty", async () => {
+    await writeWiki("livewiki/quickstart.md", "# Home\n\nOverview.\n");
+    const outDir = nodePath.join(repoRoot, "site-out");
+    const result = await buildSite({ repoRoot, outDir });
+
+    expect(result.filesWritten).not.toContain("activity.html");
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).not.toContain("activity.html");
+    expect(index).not.toContain("<h2>Activity</h2>");
+    const search = (await readSite(outDir, "assets/search-index.js"))!;
+    expect(search).not.toContain("activity.html");
   });
 });

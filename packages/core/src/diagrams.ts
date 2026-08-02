@@ -20,11 +20,40 @@ export function moduleSlug(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/** Generates the repository directory graph. */
+/**
+ * Edge budget for the structure graph. Mermaid's parser rejects diagrams
+ * over 500 edges by default and `maxEdges` is a secure config (verify's
+ * `invalid_mermaid_diagram` check and the viewer both use defaults), so
+ * the generator must stay under it or the artifact fails livewiki's own
+ * verify. 450 leaves headroom.
+ */
+export const STRUCTURE_MAX_EDGES = 450;
+
+/**
+ * Generates the repository directory graph. Two deterministic modes:
+ *   - exact (≤ STRUCTURE_MAX_EDGES): every directory AND file is a node,
+ *     deduped parent→child edges (the historical contract);
+ *   - collapsed (over budget): directories stay nodes and each directory's
+ *     direct files become ONE `dir/… (N files)` node — medium/large repos
+ *     would otherwise emit a graph Mermaid itself refuses to parse.
+ * Orientation is LR (like `modules.mmd`): a file tree laid out TD grows
+ * tens of thousands of pixels wide; LR grows vertically, which is the
+ * natural page-scroll direction.
+ */
 export function generateStructure(filePaths: string[]): string {
-  const lines: string[] = ["graph TD"];
+  const exact = buildExactStructureLines(filePaths);
+  if (exact.edgeCount <= STRUCTURE_MAX_EDGES) {
+    return ["graph LR", ...exact.lines].join("\n") + "\n";
+  }
+  return ["graph LR", ...buildCollapsedStructureLines(filePaths)].join("\n") + "\n";
+}
+
+/** Exact per-file graph: node + edge emission in walk order, deduped. */
+function buildExactStructureLines(filePaths: string[]): { lines: string[]; edgeCount: number } {
+  const lines: string[] = [];
   const seenNodes = new Set<string>();
   const seenEdges = new Set<string>();
+  let edgeCount = 0;
 
   for (const path of filePaths) {
     const segments = path.split("/");
@@ -40,13 +69,53 @@ export function generateStructure(filePaths: string[]): string {
         if (!seenEdges.has(edgeKey)) {
           lines.push(`  ${mermaidId(parent)} --> ${mermaidId(node)}`);
           seenEdges.add(edgeKey);
+          edgeCount++;
         }
       }
       parent = node;
     }
   }
 
-  return lines.join("\n") + "\n";
+  return { lines, edgeCount };
+}
+
+/** Collapsed graph: directory chain + one `(N files)` node per directory. */
+function buildCollapsedStructureLines(filePaths: string[]): string[] {
+  const lines: string[] = [];
+  const seenNodes = new Set<string>();
+  const seenEdges = new Set<string>();
+  /** Direct files per directory, insertion order = first seen. */
+  const fileCountByDir = new Map<string, number>();
+
+  for (const path of filePaths) {
+    const segments = path.split("/");
+    let parent = "";
+    for (let i = 0; i < segments.length - 1; i++) {
+      const node = parent ? `${parent}/${segments[i]!}` : segments[i]!;
+      if (!seenNodes.has(node)) {
+        lines.push(`  ${mermaidId(node)}["${escapeLabel(node)}"]`);
+        seenNodes.add(node);
+      }
+      if (parent) {
+        const edgeKey = JSON.stringify([parent, node]);
+        if (!seenEdges.has(edgeKey)) {
+          lines.push(`  ${mermaidId(parent)} --> ${mermaidId(node)}`);
+          seenEdges.add(edgeKey);
+        }
+      }
+      parent = node;
+    }
+    fileCountByDir.set(parent, (fileCountByDir.get(parent) ?? 0) + 1);
+  }
+
+  for (const [dir, count] of fileCountByDir) {
+    const label = dir ? `${dir}/… (${count} files)` : `… (${count} files)`;
+    const groupId = mermaidId(`${dir}__files`);
+    lines.push(`  ${groupId}["${escapeLabel(label)}"]`);
+    if (dir) lines.push(`  ${mermaidId(dir)} --> ${groupId}`);
+  }
+
+  return lines;
 }
 
 /** Generates the import graph between modules. */

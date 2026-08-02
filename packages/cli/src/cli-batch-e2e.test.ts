@@ -246,7 +246,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       // Diagramas
       expect(
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/structure.mmd"), "utf8"),
-      ).toContain("graph TD");
+      ).toContain("graph LR");
       expect(
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/modules.mmd"), "utf8"),
       ).toContain("graph LR");
@@ -772,7 +772,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     // Gera layout determinístico
     expect(
       await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/structure.mmd"), "utf8"),
-    ).toContain("graph TD");
+    ).toContain("graph LR");
     expect(
       await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/quickstart.md"), "utf8"),
     ).toContain("## Document a repo");
