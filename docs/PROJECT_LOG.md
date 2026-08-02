@@ -6,6 +6,76 @@
 
 ---
 
+### 2026-08-01 — Market-scan roadmap lots 7–14, first real incremental loop, and cost accounting
+
+**Scope (1 day, 2 commits, both pushed):**
+
+- **Market research round** (`docs/market-research.md`, 5 dated sections):
+  speed-focused scan (DeepWiki 5–10 min/repo, Mintlify plan-first + parallel
+  writers 70→45 min, DocBot per-PR on a cheap model, RepoAgent multi-thread),
+  Wiki.js (adjacent platform, possible export target, AGPL caution),
+  Graphify+CodeGraph (graph-speed analysis; runtime dependency stays
+  rejected), and the Codec8 correction (r/SideProject one-shot generator;
+  thread insights: sync is the real pain, OG previews, README as output).
+  Headline: our batch was the only fully-sequential pipeline — wall-clock,
+  not quality or cost, was the weakest axis.
+- **Lot 7–11** (`dac874d`): 7 `batchConcurrency` (stage-4 worker pool,
+  breaker/rollback stop-new-dispatch + drain, Retry-After); 8 `calls.confidence`
+  schema v7 (extraction-tagged, resolution never changes it — a coordinator
+  fix removed the downgrade that killed the cross-module tie-break);
+  9 community cross-check (deterministic label propagation, diagnostic-only
+  stage-2 report); 10 viewer `new`/`updated` badges from one bounded git log
+  (never mtime/index.db; byte-stable vs newest commit) + static OG meta;
+  11 `export readme` (deterministic, rule-#6 create/replace-block/REFUSE,
+  safe-io `allowReadme` mirroring `allowPointer`).
+- **First real incremental loop (field test on the maintainer's upgraded
+  MPTP repo)**: detection worked end-to-end with zero tokens, but ~50% of
+  the initial 956 `changed` debt was PHANTOM — CRLF→LF checkout conversion
+  (`core.autocrlf=true`; git index is LF-canonical) — and 73 `moved` pairs
+  were false rewrites onto provider twins that kept the OLD implementation
+  (an anti-hallucination hole verify cannot see). Fixes shipped in the same
+  commit as items **12** (EOL-insensitive hashing + one-run silent migration
+  window, per-file dual-direction + per-symbol re-expanded slice) and **13**
+  (twin-move guard: a move requires zero same-name survivors). A/B on the
+  real corpus: changed 956→84 (the genuine drift), moved 73→0, second run
+  zero debt, verify clean.
+- **Update paid in-session (zero provider cost)**: 84/84 changed resolved,
+  114 undocumented → 0, 13 pages updated (material_cache, presets,
+  task_artifacts, elevenlabs hardening, config-save atomicity, webui
+  presets panel), verify OK. Truth audit (in-session, claim-by-claim vs
+  code): **77/77 code-verifiable claims TRUE**, 0 false, 3 trivial
+  imprecisions. Key clarity for positioning: writing ALWAYS needs an LLM —
+  the product's line is "zero tokens to DETECT, minimal tokens to WRITE".
+- **Item 14** (`a7da50e`): in-session cost accounting — `debt_resolved` +
+  `batch_run` event kinds in `update_metrics.json` (v1-compatible), every
+  path records (CLI update, MCP write_doc/resolve_debt, batch finalizeRun
+  with drain-before-return), `livewiki status` Activity block (totals +
+  last 5 timestamped events). Live demo on the corpus showed the packages
+  AND honestly exposed that the manual payment went unmeasured — the gap
+  the item closes. Item **15** (viewer activity dashboard: history, tokens
+  per period, debt burndown, time-to-document) registered for later.
+
+**Sensitive points for future agents:**
+
+- `pnpm --filter X test -- src/file.test.ts` passes a literal `--` to vitest
+  and runs the WHOLE suite; use `npx vitest run <files>` for targeted runs.
+- Subagent parallel editing works if file scopes are disjoint and mid-flight
+  `git status` audits run; two agents blamed "the reviewer" for failures our
+  own item 8 caused — always diff before believing a collision claim.
+- The `batch-review.test.ts` 5s-timeout flake appeared twice under 3-suite
+  parallel load; green isolated. Pre-existing class, now slightly slower
+  after the item-9 hoist — watch it.
+- The MPTP test corpus (`/c/tmp/livewiki-e2e/incremental-mptp-2026-08-01/`)
+  is scratch with an updated wiki; the maintainer's real MPTP repo has no
+  `livewiki/` of its own yet.
+
+**Validation:** gate green at every commit (final: core 1598, CLI 118,
+MCP 56; batch-review flake isolated-green). Zero paid provider calls all day.
+
+---
+
+
+
 ### 2026-07-25/28 — Etapa 3 acceptance, A/B parity drive, Phase 7 viewer, and the onboarding backlog
 
 **Scope (4 days, 31 commits, all pushed):**
@@ -214,28 +284,38 @@ MCP 54); all E2E acceptance runs and blind evals preserved LOCAL-ONLY.
 
 ## Next steps
 
-1. Cross-platform CI block (deferred by the maintainer to last): macOS
+1. Item 15 — viewer activity dashboard (history, tokens per period, debt
+   burndown, time-to-document) on top of item 14's accounting base.
+2. Cross-platform CI block (deferred by the maintainer to last): macOS
    realpath canonicalization and the workflow smoke step (`livewiki` bin not
    found); the matrix must be green on ubuntu/windows/macos before any
    "cross-platform validated" claim.
-2. Backlog #6 — GitHub Actions "docs-debt on merge" template (depends on the
+3. Backlog #6 — GitHub Actions "docs-debt on merge" template (depends on the
    CI block; same-repo variant can ship first).
-3. Beta launch: packaging (npm publish), then real-user feedback decides the
-   remaining items (watch-list: CALLS edges, community detection, tier-1
-   language expansion by usage).
-4. Optional hardening recorded: batch-review 5s-timeout and CLI E2E load
-   flakes (pre-existing, pass isolated); voice/subtitle precision frontier in
-   app-services-03 pages.
+4. Beta launch: packaging (npm publish), then real-user feedback decides the
+   remaining items (watch-list: CALLS-edge confidence tiers → DONE item 8,
+   community detection → DONE item 9, tier-1 language expansion by usage).
+5. Optional hardening recorded: batch-review 5s-timeout and CLI E2E load
+   flakes (pre-existing, pass isolated; slightly slower after the item-9
+   hoist); voice/subtitle precision frontier in app-services-03 pages.
 
 ## Backlog
 
+- [ ] #15 Viewer activity dashboard (tokens/history/burndown — item 14 base done)
 - [ ] Cross-platform CI green (macOS realpath + smoke step) — deferred to last
 - [ ] #6 GitHub Actions "docs-debt on merge" template
 - [ ] Beta: npm packaging/publish + launch
-- [ ] Watch-list: CALLS-edge confidence tiers, community detection cross-check,
-      tier-1 language expansion (usage-driven), git-pinned evidence verification
+- [ ] Watch-list: tier-1 language expansion (usage-driven), git-pinned evidence verification
 - [ ] Optional: batch-review/CLI-E2E load-flake hardening
 - [ ] Optional: voice/subtitle false-claim frontier (app-services-03 hotspot)
+- [x] #14 In-session cost accounting (debt_resolved + batch_run + Activity block)
+- [x] #13 Twin-move guard (field-tested: moved 73→0)
+- [x] #12 EOL-insensitive hashing + silent migration (field-tested: changed 956→84)
+- [x] #11 export readme (rule-#6 contract, allowReadme)
+- [x] #10 Viewer freshness badges + OG meta
+- [x] #9 Community cross-check (diagnostic-only stage 2)
+- [x] #8 CALLS confidence tags (schema v7)
+- [x] #7 batchConcurrency (stage-4 worker pool + Retry-After)
 - [x] `livewiki install` — 13-agent registry + merge adapters
 - [x] Index freshness (status stale) + MCP watcher debounce sync
 - [x] Change-impact context (CLI + MCP)
