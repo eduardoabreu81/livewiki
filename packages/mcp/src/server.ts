@@ -100,7 +100,7 @@ import { run as runIndexer } from "@livewiki/core/indexer";
 import { run as runLedger } from "@livewiki/core/anchor-ledger";
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs/promises";
-import { watch, type FSWatcher } from "node:fs";
+import { watch, realpathSync, type FSWatcher } from "node:fs";
 import {
   openAndIndex,
   indexPage,
@@ -216,14 +216,33 @@ function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
       debounce = null;
     }
     if (watcher) {
-      watcher.close();
+      const w = watcher;
       watcher = null;
+      // Await the OS-level close: watcher.close() only REQUESTS it, and on
+      // Windows libuv can still deliver events (e.g. the repo dir being
+      // removed right after close) to the dying handle — the fs-event.c
+      // assertion that killed CI run 30761374513's mcp workers.
+      await new Promise<void>((resolve) => {
+        w.once("close", () => resolve());
+        w.close();
+      });
     }
     if (inFlight) await inFlight;
   }
 
   try {
-    watcher = watch(repoRoot, { recursive: true }, (_eventType, filename) => {
+    // Canonicalize the watched path: on Windows CI the temp root arrives
+    // in 8.3 form (RUNNER~1) while the OS reports events with long names —
+    // the mismatch is the prime suspect for libuv's win fs-event assert.
+    // realpathSync.native resolves 8.3 aliases and fixes casing; on any
+    // failure we keep the lexical path (watch errors degrade gracefully).
+    let watchRoot = repoRoot;
+    try {
+      watchRoot = realpathSync.native(repoRoot);
+    } catch {
+      watchRoot = repoRoot;
+    }
+    watcher = watch(watchRoot, { recursive: true }, (_eventType, filename) => {
       // filename may be null on some platforms — treat as "sync anyway".
       if (filename !== null && isWatchDenied(filename)) return;
       schedule();
