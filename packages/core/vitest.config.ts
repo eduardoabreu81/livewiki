@@ -4,6 +4,12 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    // Loaded CI Windows runners make git-spawning tests (risk/churn,
+    // status freshness) and the batch suites exceed the 5s default —
+    // the documented "batch-review 5s-timeout flake" class. 30s matches
+    // the CLI E2E budget and covers the whole class at once.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],

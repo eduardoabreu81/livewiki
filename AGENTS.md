@@ -1292,12 +1292,18 @@ protected and untouched.
 
 Next planned steps (maintainer decision 2026-08-02 — supersedes the old
 list below):
-1. #16 dogfood batch (paid, requires at-the-moment approval).
-2. Cross-platform CI green (macOS realpath + workflow smoke step) —
-   FIRST infra block; no "cross-platform validated" claim until the
-   matrix is green on all three OS hosts.
-3. #6 GitHub Actions "docs-debt on merge" template (after CI green).
-4. Beta launch (npm publish) once all of the above succeed.
+1. #16 dogfood batch (paid, requires at-the-moment approval). DONE
+   (exit 0, 742,693 tokens, verify zero, debt 0).
+2. Cross-platform CI green. DONE — matrix green on all three OS hosts
+   (run 30762327404, Node 24; five fix rounds).
+3. #6 GitHub Actions "docs-debt on merge" template. DONE v1 —
+   detect + report, zero tokens (`8d80d86`); dogfood run 30763814325
+   green with "No documentation debt — zero tokens spent". Open (v2):
+   pay-variant with `update --llm` + draft PR.
+4. Beta launch (npm publish) once all of the above succeed — the only
+   remaining block; pre-beta naming/domain decision pending
+   (livewiki.com is an active commercial AI summarizer; npm `livewiki`
+   + `@livewiki/*` are free).
 
 Historical list (kept for context):
 1. Maintainer review of the recovery-tier design

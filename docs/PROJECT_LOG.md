@@ -365,24 +365,26 @@ MCP 54); all E2E acceptance runs and blind evals preserved LOCAL-ONLY.
 
 ## Next steps
 
-1. Backlog #6 — GitHub Actions "docs-debt on merge" template (CI block
-   DONE — matrix green run 30762327404 on all three OS hosts; same-repo
-   variant can ship first).
-2. Beta launch: packaging (npm publish). Pre-beta decision pending:
-   naming/domain (livewiki.com is an active commercial AI summarizer;
-   npm `livewiki` + `@livewiki/*` are free — rename vs scoped publish).
-3. Optional hardening recorded: batch-review 5s-timeout and CLI E2E load
-   flakes (pre-existing, pass isolated); voice/subtitle precision
+1. Beta launch: packaging (npm publish) — the only remaining block.
+   Pre-beta decision pending: naming/domain (livewiki.com is an active
+   commercial AI summarizer; npm `livewiki` + `@livewiki/*` are free —
+   rename vs scoped publish).
+2. #6 v2 (optional): pay-variant of the docs-debt workflow —
+   `update --llm` + `gh pr create --draft` with the merge author as
+   reviewer (needs provider secrets + `pull-requests: write`).
+3. Optional hardening recorded: batch-review/batch-concurrency/CLI-E2E
+   load flakes (pre-existing, pass isolated); voice/subtitle precision
    frontier in app-services-03 pages.
 
 ## Backlog
 
-- [ ] #6 GitHub Actions "docs-debt on merge" template — NEXT
-- [ ] Beta: npm packaging/publish + launch (pre-beta naming decision)
+- [ ] Beta: npm packaging/publish + launch (pre-beta naming decision) — LAST
+- [ ] #6 v2: pay-variant (`update --llm` + draft PR on debt)
 - [ ] Watch-list: tier-1 language expansion (usage-driven), git-pinned evidence verification
-- [ ] Optional: batch-review/CLI-E2E load-flake hardening
+- [ ] Optional: batch-review/batch-concurrency/CLI-E2E load-flake hardening
 - [ ] Optional: voice/subtitle false-claim frontier (app-services-03 hotspot)
 - [x] Cross-platform CI green (run 30762327404: ubuntu/windows/macOS, Node 24)
+- [x] #6 v1 GitHub Actions docs-debt template (dogfood run 30763814325 green, zero tokens)
 - [x] #16 Dogfood batch on livewiki itself (exit 0, 742,693 tokens, verify zero, debt 0)
 - [x] #15 Viewer activity dashboard (+ batch wall time on both surfaces)
 - [x] #14 In-session cost accounting (debt_resolved + batch_run + Activity block)
