@@ -6,6 +6,87 @@
 
 ---
 
+### 2026-08-02 — Item 15 activity dashboard, viewer mermaid fixes, item 16 dogfood batch
+
+**Scope (1 day, 3 commits):**
+
+- **Item 15 — Activity dashboard (viewer)**: synthetic `activity.html`
+  page + `Activity` sidebar group, built at site-build time from
+  `.livewiki/update_metrics.json` — totals cards, tokens-per-UTC-week and
+  debt-burndown inline-SVG charts (build-time, zero runtime JS, UTC-
+  deterministic), writes per page, detection→payment median, recent
+  events. New `view-activity.ts` (pure model, one-way dep view →
+  view-activity) fed by the new `listUpdateMetrics`; page omitted when
+  the ledger is empty. Follow-up same day: batch wall time surfaced
+  permanently (`batchDurationMs` + card + `formatDuration` on the
+  `batch_run` line in BOTH the dashboard and the `status` Activity block).
+- **Viewer mermaid fixes** (surfaced by reviewing this repo's own site in
+  a real browser): natural size via `useMaxWidth: false` (a 16,164px
+  graph scrolls instead of squashing), mermaid error svgs
+  (`aria-roledescription="error"`) now degrade to the code block instead
+  of showing the red bomb, and `maxTextSize` raised to 1M (the 50k
+  default aborts RENDERING — parse passes — on legit large graphs).
+  All three verified live via Playwright measurements.
+- **`generateStructure` bounded + LR**: the deterministic init regen
+  exposed that the structure graph was unbounded — 740 edges on the
+  current index, over Mermaid's secure 500-edge parse limit (fails
+  livewiki's own verify). Now `STRUCTURE_MAX_EDGES` = 450 with a
+  collapsed mode (`dir/… (N files)` nodes; exact output byte-identical
+  under budget), and orientation `graph LR` (maintainer decision:
+  33,496px wide TD → 2,292×16,102px LR, vertical page scroll).
+- **core.md debt paid in-session**: 10 `broken_anchor` issues (anchors to
+  removed batch/init internals) remapped 1:1 to current symbols
+  (`collectImportsForFiles`, `attemptStage4Generation`,
+  `readOwnerFromFrontmatter`, `tryWriteAndVerify`,
+  `navigation.ts#generateQuickstart`); the 10 dangling `deleted` debt
+  rows closed via `resolved_at` with a `debt_resolved` ×10 ledger entry.
+- **Item 16 — dogfood batch (approved paid run)**: `init --batch
+  --no-refine`, MiniMax-M3 via openai-compat + local mmx-cli oauth
+  bridge proxy (:8900). Run #1 `completed`, 138 tasks done / 0 failed,
+  exit 0, ~30 min. Verify OK (141 pages, zero issues). Accounting
+  exact: checkpoint 742,693 tokens == proxy (742,735 − 42 smoke ping).
+  29 anchored modules LLM-documented (561k tokens), 107 prose-tier
+  modules via the deterministic compact zero-token contract, 3 flows +
+  1 topic-plan (3 candidates skipped on seed-key overlap), zero
+  degraded. The 208 stale `changed` debt rows closed + `debt_resolved`
+  ×208 ledger entry; `status` now reports **debt 0**.
+- **Execution order (maintainer decision)**: #16 → cross-platform CI →
+  #6 GitHub Actions template → beta launch. Recorded in ROADMAP
+  "Current execution order" and AGENTS "Next planned steps".
+- **Naming risk logged**: livewiki.com is an active commercial AI
+  summarizer (YouTube/PDF); npm `livewiki` + `@livewiki/*` scope are
+  FREE. Maintainer aware; naming/domain decision deferred to pre-beta.
+
+**Validation:** core 1621 + known `batch-review` timeout flake
+(isolated-green 27/27), CLI batch e2e 21/21, targeted suites green at
+every step (view-activity 16, view 32, diagrams 27, status, update-
+metrics). One paid run (item 16, approved): 742,693 tokens.
+
+**Sensitive points for future agents:**
+
+- CSS `width: auto` on a root `<svg>` does NOT restore natural size —
+  SVG2 auto sizing resolves to 100% of the container. Natural mermaid
+  sizing comes from `useMaxWidth: false` (pixel attributes), and a CSS
+  width/height rule would override those attributes.
+- Mermaid has THREE separate limits: `maxEdges` 500 (secure, parse-time
+  — verify sees it), `maxTextSize` 50k (render-time only — verify does
+  NOT see it), and parse errors render AS an svg marked
+  `aria-roledescription="error"` (an svg exists, but it is the bomb).
+- `livewiki_resolve_debt` is the only in-product debt closer (MCP);
+  closing rows from a script must mirror its semantics (`UPDATE debt
+  SET resolved_at`) AND record the `debt_resolved` metric, or the
+  Activity dashboard under-counts.
+- The token proxy bridge (`/c/tmp/livewiki-r11a-mmx-proxy.js`,
+  `MMX_PROXY_PORT=8900`, dummy `OPENAI_API_KEY=mmx-oauth-local-bridge`,
+  upstream auth via the user's mmx-cli oauth) is the standing shape for
+  approved MiniMax-M3 runs on this machine.
+- Stage-4 prose-tier auxiliary modules (benchmark evidence dirs,
+  fixtures) go through the deterministic compact contract — 107 modules
+  documented with ZERO tokens in the item-16 run. Not a bug.
+
+---
+
+
 ### 2026-08-01 — Market-scan roadmap lots 7–14, first real incremental loop, and cost accounting
 
 **Scope (1 day, 2 commits, both pushed):**
@@ -284,30 +365,29 @@ MCP 54); all E2E acceptance runs and blind evals preserved LOCAL-ONLY.
 
 ## Next steps
 
-1. Item 15 — viewer activity dashboard (history, tokens per period, debt
-   burndown, time-to-document) on top of item 14's accounting base.
-2. Cross-platform CI block (deferred by the maintainer to last): macOS
-   realpath canonicalization and the workflow smoke step (`livewiki` bin not
-   found); the matrix must be green on ubuntu/windows/macos before any
-   "cross-platform validated" claim.
-3. Backlog #6 — GitHub Actions "docs-debt on merge" template (depends on the
-   CI block; same-repo variant can ship first).
-4. Beta launch: packaging (npm publish), then real-user feedback decides the
-   remaining items (watch-list: CALLS-edge confidence tiers → DONE item 8,
-   community detection → DONE item 9, tier-1 language expansion by usage).
-5. Optional hardening recorded: batch-review 5s-timeout and CLI E2E load
-   flakes (pre-existing, pass isolated; slightly slower after the item-9
-   hoist); voice/subtitle precision frontier in app-services-03 pages.
+1. Cross-platform CI block (maintainer-ordered FIRST after #16): macOS
+   realpath canonicalization and the workflow smoke step (`livewiki` bin
+   not found); the matrix must be green on ubuntu/windows/macos before
+   any "cross-platform validated" claim.
+2. Backlog #6 — GitHub Actions "docs-debt on merge" template (after CI
+   green; same-repo variant can ship first).
+3. Beta launch: packaging (npm publish). Pre-beta decision pending:
+   naming/domain (livewiki.com is an active commercial AI summarizer;
+   npm `livewiki` + `@livewiki/*` are free — rename vs scoped publish).
+4. Optional hardening recorded: batch-review 5s-timeout and CLI E2E load
+   flakes (pre-existing, pass isolated); voice/subtitle precision
+   frontier in app-services-03 pages.
 
 ## Backlog
 
-- [ ] #15 Viewer activity dashboard (tokens/history/burndown — item 14 base done)
-- [ ] Cross-platform CI green (macOS realpath + smoke step) — deferred to last
+- [ ] Cross-platform CI green (macOS realpath + smoke step) — NEXT
 - [ ] #6 GitHub Actions "docs-debt on merge" template
-- [ ] Beta: npm packaging/publish + launch
+- [ ] Beta: npm packaging/publish + launch (pre-beta naming decision)
 - [ ] Watch-list: tier-1 language expansion (usage-driven), git-pinned evidence verification
 - [ ] Optional: batch-review/CLI-E2E load-flake hardening
 - [ ] Optional: voice/subtitle false-claim frontier (app-services-03 hotspot)
+- [x] #16 Dogfood batch on livewiki itself (exit 0, 742,693 tokens, verify zero, debt 0)
+- [x] #15 Viewer activity dashboard (+ batch wall time on both surfaces)
 - [x] #14 In-session cost accounting (debt_resolved + batch_run + Activity block)
 - [x] #13 Twin-move guard (field-tested: moved 73→0)
 - [x] #12 EOL-insensitive hashing + silent migration (field-tested: changed 956→84)

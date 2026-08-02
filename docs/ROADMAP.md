@@ -7,7 +7,14 @@
 
 ## Current execution order (see AGENTS.md)
 
-> **Reconciled 2026-07-26** (after the Etapa 3 + A/B measurement cycle):
+> **Reconciled 2026-08-02** (maintainer decision; supersedes the 2026-07-26
+> reconciliation below, kept for history): the queue is now **#16 dogfood
+> batch (paid, on approval) → cross-platform CI green (macOS realpath +
+> workflow smoke step) → #6 GitHub Actions "docs-debt on merge" template →
+> beta launch (npm publish)**. Items 1–5 and 7–15 are DONE (#15 activity
+> dashboard + viewer mermaid fixes + bounded LR structure graph shipped
+> 2026-08-02, uncommitted). No "cross-platform validated" claim until the
+> matrix is green on all three OS hosts.
 > items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
 > dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
 > ~6% of its token cost; R11-A validated and kept; commit/push done).
@@ -312,6 +319,32 @@ page, and time-to-document metrics (median hours from code change to paid
 debt — the operational-metrics discipline of backlog #6). Static, offline,
 deterministic — built at site-build time from the metrics file and
 index.db, zero LLM. Implemented after item 14.
+
+### 16. Dogfood batch on the livewiki repo itself ✅ DONE 2026-08-02
+
+Source: maintainer directive 2026-08-02, after the deterministic `init`
+regen of the repo's own stale wiki. The reindex surfaced the real debt
+behind months of drift: 208 `changed` items across the dogfood module
+pages (`core.md`, `cli.md`, `mcp.md`) — pages anchored to code written
+long before the U–X/R10/R11/Etapa series. Run one approved `init --batch`
+(paid, MiniMax-M3 or current reference provider) on this repository to
+regenerate the module pages from current code, closing the 208 items and
+leaving `verify` at zero issues. Side benefits: a live self-hosting
+corpus for the Activity dashboard and a real-world acceptance pass over
+the current pipeline (recovery tier, topics, concurrency). Requires
+explicit paid-call approval at execution time.
+
+**Result (2026-08-02, MiniMax-M3 via openai-compat + token proxy,
+`--no-refine`):** run #1 `completed`, 138 tasks done / 0 failed, exit 0,
+~30 min. Verify OK (141 pages, zero issues). Accounting exact:
+checkpoint 583,202 in + 159,491 out = 742,693 tokens == proxy
+(742,735 − 42 smoke ping). 29 anchored modules LLM-documented (stage 4,
+561k tokens), 107 prose-tier auxiliary modules via the deterministic
+compact zero-token contract, stage 5: 3 flows + 1 topic-plan (3 flow
+candidates skipped on seed-key overlap, `flowMaxOverlap` working as
+designed). Zero degraded pages. The 208 stale `changed` debt rows
+dangled after the rewrite and were closed (`resolved_at`) with a
+`debt_resolved` ×208 ledger entry; `status` now reports debt 0.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 

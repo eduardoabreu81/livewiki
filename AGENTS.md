@@ -471,7 +471,15 @@ for closing the lot.
   newest commit in the log — never `Date.now()` — so rebuilds are
   byte-identical; any spawn failure ⇒ no badges), `--badge-days <n>`
   (default 7, 0 disables), static OG meta in `renderShell` (no `og:url`,
-  no `og:image` — offline posture).
+  no `og:image` — offline posture). Roadmap item 15: synthetic Activity
+  dashboard — `packages/core/src/view-activity.ts` (pure model +
+  build-time inline-SVG charts, UTC-deterministic so the same ledger
+  rebuilds byte-identical pages; one-way dep `view` → `view-activity`),
+  fed by `listUpdateMetrics` in `update-metrics.ts`; new `Activity`
+  sidebar group with `activity.html` at the site root; page and group
+  omitted entirely when the ledger is missing or empty. Tests:
+  `view-activity.test.ts`, plus Activity blocks in `view.test.ts` and
+  `update-metrics.test.ts`.
 - **`batchConcurrency` (roadmap item 7)** → stage-4 worker pool in
   `batch.ts` (shared cursor over `tasksToRun`; breaker/rollback stop NEW
   dispatch, in-flight drains; pool awaited before stage 5; reports sorted
@@ -1170,6 +1178,67 @@ uncommitted and unpushed** on top of the R2–R9 hardening patch:
   (EOL-insensitive hashing + silent legacy migration) and 13 (twin-move
   guard: a move requires zero same-name survivors). Gate: core 1581 /
   CLI 118 / MCP 54, zero paid calls; SPEC + AGENTS updated.
+- **Item 15 — viewer activity dashboard (2026-08-02, implemented,
+  uncommitted)**: the Phase 7 viewer gains a synthetic Activity page
+  (`activity.html`, own sidebar group, in the offline search index) built
+  at site-build time from `.livewiki/update_metrics.json` — totals cards
+  (batch vs estimated in-session tokens, USD secondary, debt resolved,
+  write/package ratio), tokens-per-UTC-week and debt-burndown inline-SVG
+  charts (build-time, zero runtime JS), writes per page, median/max
+  detection→payment hours, and the last 10 ledger events in UTC. New
+  `view-activity.ts` (pure model + deterministic UTC rendering, one-way
+  dep `view` → `view-activity`) fed by the new `listUpdateMetrics`;
+  page and group omitted when the ledger is missing or empty. Gate: core
+  1619 / CLI 118 / MCP 56 (12 expected Windows symlink skips), zero paid
+  calls; SPEC + AGENTS updated. PROJECT_LOG/backlog marking deferred to
+  the daily wrap, per convention. Follow-up (same day): batch wall time
+  is surfaced permanently — `ActivityTotals.batchDurationMs` + "batch
+  wall time" card on the dashboard and `formatDuration` on the
+  `batch_run` line of BOTH the viewer's Recent activity and the `status`
+  human Activity block. Same window, two viewer rendering
+  defects fixed from a real-browser check of this repo's own site:
+  Mermaid parse errors rendered the red "bomb" svg instead of degrading
+  to the code block (the restore test now rejects
+  `aria-roledescription="error"` svgs), and huge graphs squashed to the
+  container width (natural size now comes from `useMaxWidth: false` in
+  `mermaid.initialize` — pixel width attributes + horizontal scroll;
+  a CSS width/height rule would override them, so the stylesheet only
+  keeps `overflow-x` + `max-width: none !important`). Verified in a real
+  browser via Playwright (16,164px graph scrolls; small diagrams keep
+  natural size; bomb degrades to code block). Regression assertions in
+  `view.test.ts`. The deterministic `init` regen of this repo's own stale
+  wiki then exposed two more classes, both fixed: `generateStructure` was
+  unbounded and emitted a 740-edge graph that Mermaid's parser rejects
+  (secure `maxEdges` 500) — it now collapses to `dir/… (N files)` nodes
+  over `STRUCTURE_MAX_EDGES` (450), byte-identical exact output under
+  budget; and the viewer hit Mermaid's render-only `maxTextSize` (50k)
+  on the legitimate 52k collapsed graph — raised to 1M in
+  `mermaid.initialize` (parse-level verify unaffected). Maintainer
+  decision: the structure graph is now `graph LR` (like `modules.mmd`) —
+  TD laid the 257-node tree out 33,496px wide; LR measures 2,292×16,102px
+  (vertical page scroll). `init` also
+  surfaced pre-existing drift in the dogfood wiki: 10 `broken_anchor`
+  issues in `livewiki/core.md` documenting removed batch/init internals —
+  PAID in-session same day (1:1 anchor remap to
+  `collectImportsForFiles`/`attemptStage4Generation`/
+  `readOwnerFromFrontmatter`/`tryWriteAndVerify`/
+  `navigation.ts#generateQuickstart` + prose fixups; the 10 dangling
+  `deleted` debt rows closed via direct `resolved_at` update mirroring
+  `livewiki_resolve_debt` semantics, recorded as `debt_resolved` ×10 in
+  the metrics ledger). Verify: OK, zero issues. Remaining real debt:
+  208 `changed` items — the dogfood module pages (core/cli/mcp.md)
+  anchor code written months ago; paying that is a batch-scale rewrite.
+  **PAID 2026-08-02 (item 16, approved paid run)**: `init --batch
+  --no-refine`, MiniMax-M3 via openai-compat + local token proxy
+  (mmx-cli oauth bridge, `/c/tmp/livewiki-r11a-mmx-proxy.js` on :8900).
+  Run #1 `completed` — 138 done / 0 failed, exit 0, ~30 min; verify OK
+  (141 pages, zero issues); accounting exact (checkpoint 742,693 ==
+  proxy 742,735 − 42 smoke ping). 29 anchored modules LLM-documented,
+  107 prose-tier modules via the deterministic compact zero-token
+  contract, 3 flows + 1 topic-plan, zero degraded. The 208 stale rows
+  closed via `resolved_at` + `debt_resolved` ×208 ledger entry; debt 0.
+  Gate: core 1621 + known `batch-review` timeout flake (isolated-green
+  27/27), CLI/MCP untouched since the green 118/56 gate.
 
 Benchmark status: clean v18 **PASSED** (13/13, verify clean, exact
 accounting) at commit 572b8a3 after the v9→v18 hardening series
@@ -1201,7 +1270,16 @@ seven-file local CI correction was discarded on 2026-07-15 so the next window
 starts from the committed tree. The untracked v21 benchmark evidence remains
 protected and untouched.
 
-Next planned steps:
+Next planned steps (maintainer decision 2026-08-02 — supersedes the old
+list below):
+1. #16 dogfood batch (paid, requires at-the-moment approval).
+2. Cross-platform CI green (macOS realpath + workflow smoke step) —
+   FIRST infra block; no "cross-platform validated" claim until the
+   matrix is green on all three OS hosts.
+3. #6 GitHub Actions "docs-debt on merge" template (after CI green).
+4. Beta launch (npm publish) once all of the above succeed.
+
+Historical list (kept for context):
 1. Maintainer review of the recovery-tier design
    (`docs/plans/2026-07-26-recovery-tier.md`) — the standing mitigation for
    model flakiness under the strict contract; implement only after review.
