@@ -22,10 +22,10 @@ jobs:
           - windows-latest
           - macos-latest
         node:
-          - "20"
-        include:
-          - os: ubuntu-latest
-            node: "24"
+          # Node 24 only: Node 20 is deprecated on GitHub Actions, and
+          # better-sqlite3 ships no win32 prebuilt for it (the node-gyp
+          # fallback cannot parse the runner's VS 18 install).
+          - "24"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -52,15 +52,17 @@ jobs:
       - name: CLI entry-point smoke (default shell)
         # Default shell on Windows is PowerShell, on Ubuntu/macOS is Bash.
         # This step intentionally runs once per matrix leg using the
-        # runner's default shell.
-        run: pnpm exec livewiki --help
+        # runner's default shell. Invoke the built CLI via `node` —
+        # `pnpm exec livewiki` cannot resolve a workspace-local bin from
+        # the root (ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL, exit 254).
+        run: node packages/cli/dist/index.js --help
 
       - name: "CLI entry-point smoke (Windows: cmd)"
         if: matrix.os == 'windows-latest'
         shell: cmd
-        run: pnpm exec livewiki --help
+        run: node packages\cli\dist\index.js --help
 
       - name: "CLI entry-point smoke (macOS: zsh)"
         if: matrix.os == 'macos-latest'
         shell: zsh {0}
-        run: pnpm exec livewiki --help
+        run: node packages/cli/dist/index.js --help

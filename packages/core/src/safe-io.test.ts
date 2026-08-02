@@ -337,6 +337,28 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   );
 
   it.runIf(canSymlink)(
+    "PERMITIDO: repoRoot passado ATRAVÉS de um symlink (macOS /var → /private/var)",
+    async () => {
+      // Reproduz a falha em massa do CI macOS (run 29445115951): mkdtemp
+      // devolve /var/folders/... mas realpath é /private/var/folders/... —
+      // o target realpathado nunca batia com o root lexical e TODA escrita
+      // caía em PathOutsideAllowlistError ("failed to create .livewiki/").
+      const linkRoot = nodePath.join(nodeOs.tmpdir(), `livewiki-rootlink-${process.pid}`);
+      await nodeFs.symlink(repoRoot, linkRoot, "dir");
+      try {
+        await mkdir(linkRoot, ".livewiki");
+        await writeText(linkRoot, "livewiki/page.md", "# Hi\n");
+        expect(
+          await nodeFs.readFile(nodePath.join(repoRoot, "livewiki", "page.md"), "utf8"),
+        ).toBe("# Hi\n");
+        expect(await exists(linkRoot, ".livewiki")).toBe(true);
+      } finally {
+        await nodeFs.rm(linkRoot, { force: true });
+      }
+    },
+  );
+
+  it.runIf(canSymlink)(
     "ancestral existente mais profundo: target novo, parent é symlink para fora",
     async () => {
       // Cenário: livewiki/novo-dir/file.md

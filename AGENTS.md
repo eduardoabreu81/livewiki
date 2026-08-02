@@ -322,18 +322,24 @@ those files are explicitly out of the `vitest` unit suite).
 ### Cross-platform validation
 
 The matrix CI lives at `.github/workflows/cross-platform-ci.yml`. It
-runs on `ubuntu-latest`, `windows-latest`, and `macos-latest` (Node 20),
-plus `ubuntu-latest` (Node 24) for a current-runtime sanity check.
+runs on `ubuntu-latest`, `windows-latest`, and `macos-latest`, all on
+Node 24 since 2026-08-02 (Node 20 retired: GitHub deprecation + no
+win32 better-sqlite3 prebuilt for it, and the node-gyp fallback could
+not parse the runner's VS 18 install).
 Windows may skip the export symlink tests when the runner cannot
 create symlinks (no Developer Mode, no admin); the same tests run
 (without skipping) on the Ubuntu and macOS jobs. A test-file guard
 in `packages/core/src/export.test.ts` makes any Unix-host skip
 enforceable as a CI failure.
 
-This workflow is not currently green. Runs `29438763571`, `29441166630`,
-and `29445115951` exposed workflow/runtime and macOS path-canonicalization
-issues. They are recorded for later work, but MUST NOT be repaired or retried
-until the local product E2E sequence in the current handoff is complete.
+This workflow was not green for a long window. Runs `29438763571`, `29441166630`,
+and `29445115951` exposed three root causes, all fixed on 2026-08-02
+(maintainer-ordered CI block): Node 20 retired (see above), the smoke
+step now invokes the built CLI via `node` (`pnpm exec` cannot resolve a
+workspace-local bin from the root), and `safe-io.resolveAndValidate`
+realpath-canonicalizes the repo root before comparisons (macOS
+`/var`→`/private/var` made EVERY write fail the allowlist — 100+ tests).
+The earlier repair hold is lifted.
 
 Until the remote matrix has been observed green on all three OS hosts,
 this repo must NOT claim "cross-platform validated", "matrix green",

@@ -212,7 +212,19 @@ export async function resolveAndValidate(
   relPath: string,
   opts: SafeIoOptions = {},
 ): Promise<string> {
-  const absRoot = nodePath.resolve(repoRoot);
+  // Canonicalize the root BEFORE any comparison: on macOS the temp dir is
+  // /var/folders/... with /var → /private/var, so a realpath'd target never
+  // prefix-matches a lexical root (and vice versa). The allowlist must apply
+  // to the REAL location — that is the whole point of the symlink defense.
+  // Fall back to the lexical resolve when the root doesn't exist yet (a
+  // caller may create it below; comparisons then stay consistently lexical).
+  const lexicalRoot = nodePath.resolve(repoRoot);
+  let absRoot: string;
+  try {
+    absRoot = await nodeFs.realpath(lexicalRoot);
+  } catch {
+    absRoot = lexicalRoot;
+  }
   const absDeclared = validateDeclared(absRoot, relPath, opts);
 
   const [ancestor, suffix] = findDeepestExisting(absDeclared, absRoot);
