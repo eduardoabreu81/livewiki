@@ -162,14 +162,19 @@ describe("resolveAndValidate (declared path, sem symlinks)", () => {
 
   it("aceita path dentro de livewiki/", async () => {
     const abs = await resolveAndValidate(repoRoot, "livewiki/architecture/overview.md");
+    // The returned path is canonicalized: realpath(repoRoot) + relPath.
+    // On macOS (/var → /private/var) and Windows (8.3 RUNNER~1) the two
+    // forms differ; compare against the realpath'd root.
+    const realRoot = await nodeFs.realpath(repoRoot);
     expect(abs).toBe(
-      nodePath.resolve(repoRoot, "livewiki", "architecture", "overview.md"),
+      nodePath.join(realRoot, "livewiki", "architecture", "overview.md"),
     );
   });
 
   it("aceita path dentro de .livewiki/", async () => {
     const abs = await resolveAndValidate(repoRoot, ".livewiki/index.db");
-    expect(abs).toBe(nodePath.resolve(repoRoot, ".livewiki", "index.db"));
+    const realRoot = await nodeFs.realpath(repoRoot);
+    expect(abs).toBe(nodePath.join(realRoot, ".livewiki", "index.db"));
   });
 
   it("erros têm nome e contexto útil", async () => {
