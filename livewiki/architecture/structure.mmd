@@ -1,256 +1,253 @@
-graph TD
+graph LR
+  _claude[".claude"]
+  _github[".github"]
+  _github_workflows[".github/workflows"]
+  _github --> _github_workflows
+  _playwright_mcp[".playwright-mcp"]
+  docs["docs"]
+  docs_benchmarks["docs/benchmarks"]
+  docs --> docs_benchmarks
+  docs_benchmarks_2026_07_10_minimax_m3["docs/benchmarks/2026-07-10-minimax-m3"]
+  docs_benchmarks --> docs_benchmarks_2026_07_10_minimax_m3
+  docs_benchmarks_2026_07_10_minimax_m3_offline_inventory_t0["docs/benchmarks/2026-07-10-minimax-m3/offline-inventory-t0"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_offline_inventory_t0
+  docs_benchmarks_2026_07_10_minimax_m3_raw["docs/benchmarks/2026-07-10-minimax-m3/raw"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_raw
+  docs_benchmarks_2026_07_10_minimax_m3_raw_metrics["docs/benchmarks/2026-07-10-minimax-m3/raw/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw --> docs_benchmarks_2026_07_10_minimax_m3_raw_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_architecture["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/architecture"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_architecture
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_integrations["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/integrations"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_integrations
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_operations["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/operations"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_operations
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_workflows["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/workflows"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_workflows
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v10"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v10/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v11"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v11/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v12"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v12/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v13"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v13/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v14"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v14/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v15"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v15/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v16"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v16/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v17"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v17/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v18"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v18/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v19"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v19/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v2["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v2"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v2
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v2_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v2/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v2 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v2_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v20"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v20/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v21"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v21/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v22"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v22/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v23"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v23/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v24"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v24/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v25"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v25/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v26"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v26/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v27["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v27"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v27
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v27_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v27/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v27 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v27_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v28["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v28"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v28
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v28_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v28/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v28 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v28_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v29["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v29"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v29
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v29_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v29/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v29 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v29_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v3-attempt-invalid-1"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v3-attempt-invalid-1/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v3"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v3/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v30["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v30"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v30
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v30_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v30/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v30 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v30_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v31["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v31"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v31
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v31_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v31/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v31 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v31_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v32["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v32"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v32
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v32_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v32/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v32 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v32_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v33["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v33"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v33
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v33_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v33/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v33 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v33_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v34["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v34"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v34
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v34_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v34/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v34 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v34_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v4"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v4/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v5"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v5/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v6"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v6/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v7"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v7/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v8"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v8/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v9"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v9/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_rerun["docs/benchmarks/2026-07-10-minimax-m3/rerun"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_metrics["docs/benchmarks/2026-07-10-minimax-m3/rerun/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun --> docs_benchmarks_2026_07_10_minimax_m3_rerun_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_revert_check["docs/benchmarks/2026-07-10-minimax-m3/revert-check"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_revert_check
+  docs_benchmarks_2026_07_10_minimax_m3_revert_check_metrics["docs/benchmarks/2026-07-10-minimax-m3/revert-check/metrics"]
+  docs_benchmarks_2026_07_10_minimax_m3_revert_check --> docs_benchmarks_2026_07_10_minimax_m3_revert_check_metrics
+  docs_benchmarks_2026_07_10_minimax_m3_tools["docs/benchmarks/2026-07-10-minimax-m3/tools"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3_tools
+  docs_handoffs["docs/handoffs"]
+  docs --> docs_handoffs
+  docs_plans["docs/plans"]
+  docs --> docs_plans
+  docs_tasks["docs/tasks"]
+  docs --> docs_tasks
+  docs_tasks_2026_07_12_stage4_diagnostics["docs/tasks/2026-07-12-stage4-diagnostics"]
+  docs_tasks --> docs_tasks_2026_07_12_stage4_diagnostics
+  docs_tasks_2026_07_13_anchor_placement_guidance["docs/tasks/2026-07-13-anchor-placement-guidance"]
+  docs_tasks --> docs_tasks_2026_07_13_anchor_placement_guidance
+  docs_tasks_2026_07_13_duplicate_anchor_guidance["docs/tasks/2026-07-13-duplicate-anchor-guidance"]
+  docs_tasks --> docs_tasks_2026_07_13_duplicate_anchor_guidance
+  docs_tasks_2026_07_13_incomplete_retry_budget["docs/tasks/2026-07-13-incomplete-retry-budget"]
+  docs_tasks --> docs_tasks_2026_07_13_incomplete_retry_budget
+  docs_tasks_2026_07_13_marker_abbreviation_guidance["docs/tasks/2026-07-13-marker-abbreviation-guidance"]
+  docs_tasks --> docs_tasks_2026_07_13_marker_abbreviation_guidance
+  docs_tasks_2026_07_13_repair_recovery["docs/tasks/2026-07-13-repair-recovery"]
+  docs_tasks --> docs_tasks_2026_07_13_repair_recovery
+  docs_tasks_2026_07_13_symbol_key_collision["docs/tasks/2026-07-13-symbol-key-collision"]
+  docs_tasks --> docs_tasks_2026_07_13_symbol_key_collision
+  docs_tasks_2026_07_14_english_sweep["docs/tasks/2026-07-14-english-sweep"]
+  docs_tasks --> docs_tasks_2026_07_14_english_sweep
+  docs_tasks_2026_07_14_fence_aware_markers["docs/tasks/2026-07-14-fence-aware-markers"]
+  docs_tasks --> docs_tasks_2026_07_14_fence_aware_markers
+  docs_tasks_2026_07_14_navigation_investigation["docs/tasks/2026-07-14-navigation-investigation"]
+  docs_tasks --> docs_tasks_2026_07_14_navigation_investigation
+  docs_tasks_2026_07_14_opening_validator_tolerance["docs/tasks/2026-07-14-opening-validator-tolerance"]
+  docs_tasks --> docs_tasks_2026_07_14_opening_validator_tolerance
+  docs_tasks_2026_07_14_writedoc_fail_closed["docs/tasks/2026-07-14-writedoc-fail-closed"]
+  docs_tasks --> docs_tasks_2026_07_14_writedoc_fail_closed
+  docs_tasks_2026_07_15_local_product_e2e["docs/tasks/2026-07-15-local-product-e2e"]
+  docs_tasks --> docs_tasks_2026_07_15_local_product_e2e
+  docs_tasks_2026_07_15_phase6_export["docs/tasks/2026-07-15-phase6-export"]
+  docs_tasks --> docs_tasks_2026_07_15_phase6_export
+  docs_tasks_2026_07_18_semantic_product_flow["docs/tasks/2026-07-18-semantic-product-flow"]
+  docs_tasks --> docs_tasks_2026_07_18_semantic_product_flow
+  docs_tasks_2026_07_19_r10_1_acceptance_fixes["docs/tasks/2026-07-19-r10-1-acceptance-fixes"]
+  docs_tasks --> docs_tasks_2026_07_19_r10_1_acceptance_fixes
+  docs_tasks_2026_07_20_r11_a_concept_navigation["docs/tasks/2026-07-20-r11-a-concept-navigation"]
+  docs_tasks --> docs_tasks_2026_07_20_r11_a_concept_navigation
+  docs_tasks_2026_07_20_r11_nav["docs/tasks/2026-07-20-r11-nav"]
+  docs_tasks --> docs_tasks_2026_07_20_r11_nav
+  docs_tasks_2026_07_25_etapa_3_e2e["docs/tasks/2026-07-25-etapa-3-e2e"]
+  docs_tasks --> docs_tasks_2026_07_25_etapa_3_e2e
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics_run5["docs/tasks/2026-07-25-etapa-3-e2e/metrics-run5"]
+  docs_tasks_2026_07_25_etapa_3_e2e --> docs_tasks_2026_07_25_etapa_3_e2e_metrics_run5
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics_run6["docs/tasks/2026-07-25-etapa-3-e2e/metrics-run6"]
+  docs_tasks_2026_07_25_etapa_3_e2e --> docs_tasks_2026_07_25_etapa_3_e2e_metrics_run6
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics["docs/tasks/2026-07-25-etapa-3-e2e/metrics"]
+  docs_tasks_2026_07_25_etapa_3_e2e --> docs_tasks_2026_07_25_etapa_3_e2e_metrics
   packages["packages"]
   packages_cli["packages/cli"]
   packages --> packages_cli
+  packages_cli_scripts["packages/cli/scripts"]
+  packages_cli --> packages_cli_scripts
+  packages_cli_skills["packages/cli/skills"]
+  packages_cli --> packages_cli_skills
+  packages_cli_skills_document_as_you_go["packages/cli/skills/document-as-you-go"]
+  packages_cli_skills --> packages_cli_skills_document_as_you_go
   packages_cli_src["packages/cli/src"]
-  packages_cli --> packages_cli_src
-  packages_cli_src_cli_batch_e2e_subdirs_test_ts["packages/cli/src/cli-batch-e2e-subdirs.test.ts"]
-  packages_cli_src --> packages_cli_src_cli_batch_e2e_subdirs_test_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src_cli_batch_e2e_test_ts["packages/cli/src/cli-batch-e2e.test.ts"]
-  packages_cli_src --> packages_cli_src_cli_batch_e2e_test_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src_cli_e2e_test_ts["packages/cli/src/cli-e2e.test.ts"]
-  packages_cli_src --> packages_cli_src_cli_e2e_test_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src_cli_ts["packages/cli/src/cli.ts"]
-  packages_cli_src --> packages_cli_src_cli_ts
-  packages --> packages_cli
   packages_cli --> packages_cli_src
   packages_cli_src_commands["packages/cli/src/commands"]
   packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_batch_ts["packages/cli/src/commands/batch.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_batch_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_export_ts["packages/cli/src/commands/export.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_export_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_index_cmd_ts["packages/cli/src/commands/index-cmd.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_index_cmd_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_init_ts["packages/cli/src/commands/init.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_init_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_pointer_ts["packages/cli/src/commands/pointer.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_pointer_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_serve_ts["packages/cli/src/commands/serve.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_serve_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_status_ts["packages/cli/src/commands/status.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_status_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_stub_ts["packages/cli/src/commands/stub.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_stub_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_update_ts["packages/cli/src/commands/update.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_update_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_verify_ts["packages/cli/src/commands/verify.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_verify_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src --> packages_cli_src_commands
-  packages_cli_src_commands_view_ts["packages/cli/src/commands/view.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_view_ts
-  packages --> packages_cli
-  packages_cli --> packages_cli_src
-  packages_cli_src_output_ts["packages/cli/src/output.ts"]
-  packages_cli_src --> packages_cli_src_output_ts
+  packages_cli_templates["packages/cli/templates"]
+  packages_cli --> packages_cli_templates
+  packages_cli_templates_claude_code["packages/cli/templates/claude-code"]
+  packages_cli_templates --> packages_cli_templates_claude_code
   packages_core["packages/core"]
   packages --> packages_core
   packages_core_src["packages/core/src"]
   packages_core --> packages_core_src
-  packages_core_src_anchor_ledger_test_ts["packages/core/src/anchor-ledger.test.ts"]
-  packages_core_src --> packages_core_src_anchor_ledger_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_anchor_ledger_ts["packages/core/src/anchor-ledger.ts"]
-  packages_core_src --> packages_core_src_anchor_ledger_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_anchors_ts["packages/core/src/anchors.ts"]
-  packages_core_src --> packages_core_src_anchors_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_batch_status_ts["packages/core/src/batch-status.ts"]
-  packages_core_src --> packages_core_src_batch_status_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_batch_test_ts["packages/core/src/batch.test.ts"]
-  packages_core_src --> packages_core_src_batch_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_batch_ts["packages/core/src/batch.ts"]
-  packages_core_src --> packages_core_src_batch_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_config_ts["packages/core/src/config.ts"]
-  packages_core_src --> packages_core_src_config_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_db_ts["packages/core/src/db.ts"]
-  packages_core_src --> packages_core_src_db_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_diagrams_ts["packages/core/src/diagrams.ts"]
-  packages_core_src --> packages_core_src_diagrams_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_frontmatter_ts["packages/core/src/frontmatter.ts"]
-  packages_core_src --> packages_core_src_frontmatter_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_gitignore_ts["packages/core/src/gitignore.ts"]
-  packages_core_src --> packages_core_src_gitignore_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_hashes_ts["packages/core/src/hashes.ts"]
-  packages_core_src --> packages_core_src_hashes_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_imports_ts["packages/core/src/imports.ts"]
-  packages_core_src --> packages_core_src_imports_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_indexer_ts["packages/core/src/indexer.ts"]
-  packages_core_src --> packages_core_src_indexer_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_init_ts["packages/core/src/init.ts"]
-  packages_core_src --> packages_core_src_init_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_key_leak_test_ts["packages/core/src/key-leak.test.ts"]
-  packages_core_src --> packages_core_src_key_leak_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
   packages_core_src_llm["packages/core/src/llm"]
   packages_core_src --> packages_core_src_llm
-  packages_core_src_llm_adapters_test_ts["packages/core/src/llm/adapters.test.ts"]
-  packages_core_src_llm --> packages_core_src_llm_adapters_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src --> packages_core_src_llm
-  packages_core_src_llm_anthropic_ts["packages/core/src/llm/anthropic.ts"]
-  packages_core_src_llm --> packages_core_src_llm_anthropic_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src --> packages_core_src_llm
-  packages_core_src_llm_base_ts["packages/core/src/llm/base.ts"]
-  packages_core_src_llm --> packages_core_src_llm_base_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src --> packages_core_src_llm
-  packages_core_src_llm_index_ts["packages/core/src/llm/index.ts"]
-  packages_core_src_llm --> packages_core_src_llm_index_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src --> packages_core_src_llm
-  packages_core_src_llm_openai_compat_ts["packages/core/src/llm/openai-compat.ts"]
-  packages_core_src_llm --> packages_core_src_llm_openai_compat_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_manifest_test_ts["packages/core/src/manifest.test.ts"]
-  packages_core_src --> packages_core_src_manifest_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_manifest_ts["packages/core/src/manifest.ts"]
-  packages_core_src --> packages_core_src_manifest_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_modules_ts["packages/core/src/modules.ts"]
-  packages_core_src --> packages_core_src_modules_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_parser_ts["packages/core/src/parser.ts"]
-  packages_core_src --> packages_core_src_parser_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_pointer_ts["packages/core/src/pointer.ts"]
-  packages_core_src --> packages_core_src_pointer_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_presets_ts["packages/core/src/presets.ts"]
-  packages_core_src --> packages_core_src_presets_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_pricing_ts["packages/core/src/pricing.ts"]
-  packages_core_src --> packages_core_src_pricing_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_prompts_ts["packages/core/src/prompts.ts"]
-  packages_core_src --> packages_core_src_prompts_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_safe_io_test_ts["packages/core/src/safe-io.test.ts"]
-  packages_core_src --> packages_core_src_safe_io_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_safe_io_ts["packages/core/src/safe-io.ts"]
-  packages_core_src --> packages_core_src_safe_io_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_status_ts["packages/core/src/status.ts"]
-  packages_core_src --> packages_core_src_status_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_symbols_test_ts["packages/core/src/symbols.test.ts"]
-  packages_core_src --> packages_core_src_symbols_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_symbols_ts["packages/core/src/symbols.ts"]
-  packages_core_src --> packages_core_src_symbols_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_update_metrics_ts["packages/core/src/update-metrics.ts"]
-  packages_core_src --> packages_core_src_update_metrics_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_update_test_ts["packages/core/src/update.test.ts"]
-  packages_core_src --> packages_core_src_update_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_update_ts["packages/core/src/update.ts"]
-  packages_core_src --> packages_core_src_update_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_verify_test_ts["packages/core/src/verify.test.ts"]
-  packages_core_src --> packages_core_src_verify_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_verify_ts["packages/core/src/verify.ts"]
-  packages_core_src --> packages_core_src_verify_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_walker_test_ts["packages/core/src/walker.test.ts"]
-  packages_core_src --> packages_core_src_walker_test_ts
-  packages --> packages_core
-  packages_core --> packages_core_src
-  packages_core_src_walker_ts["packages/core/src/walker.ts"]
-  packages_core_src --> packages_core_src_walker_ts
-  packages --> packages_core
   packages_core_test["packages/core/test"]
   packages_core --> packages_core_test
   packages_core_test_fixtures["packages/core/test/fixtures"]
@@ -259,36 +256,253 @@ graph TD
   packages_core_test_fixtures --> packages_core_test_fixtures_fase2_repo
   packages_core_test_fixtures_fase2_repo_src["packages/core/test/fixtures/fase2-repo/src"]
   packages_core_test_fixtures_fase2_repo --> packages_core_test_fixtures_fase2_repo_src
-  packages_core_test_fixtures_fase2_repo_src_auth_ts["packages/core/test/fixtures/fase2-repo/src/auth.ts"]
-  packages_core_test_fixtures_fase2_repo_src --> packages_core_test_fixtures_fase2_repo_src_auth_ts
-  packages --> packages_core
-  packages_core --> packages_core_test
-  packages_core_test --> packages_core_test_fixtures
   packages_core_test_fixtures_sample_ts_repo["packages/core/test/fixtures/sample-ts-repo"]
   packages_core_test_fixtures --> packages_core_test_fixtures_sample_ts_repo
+  packages_core_test_fixtures_sample_ts_repo_lib["packages/core/test/fixtures/sample-ts-repo/lib"]
+  packages_core_test_fixtures_sample_ts_repo --> packages_core_test_fixtures_sample_ts_repo_lib
   packages_core_test_fixtures_sample_ts_repo_src["packages/core/test/fixtures/sample-ts-repo/src"]
   packages_core_test_fixtures_sample_ts_repo --> packages_core_test_fixtures_sample_ts_repo_src
-  packages_core_test_fixtures_sample_ts_repo_src_auth_ts["packages/core/test/fixtures/sample-ts-repo/src/auth.ts"]
-  packages_core_test_fixtures_sample_ts_repo_src --> packages_core_test_fixtures_sample_ts_repo_src_auth_ts
   packages_mcp["packages/mcp"]
   packages --> packages_mcp
+  packages_mcp_scripts["packages/mcp/scripts"]
+  packages_mcp --> packages_mcp_scripts
   packages_mcp_src["packages/mcp/src"]
   packages_mcp --> packages_mcp_src
-  packages_mcp_src_index_ts["packages/mcp/src/index.ts"]
-  packages_mcp_src --> packages_mcp_src_index_ts
-  packages --> packages_mcp
-  packages_mcp --> packages_mcp_src
-  packages_mcp_src_phase5_e2e_test_ts["packages/mcp/src/phase5-e2e.test.ts"]
-  packages_mcp_src --> packages_mcp_src_phase5_e2e_test_ts
-  packages --> packages_mcp
-  packages_mcp --> packages_mcp_src
-  packages_mcp_src_search_ts["packages/mcp/src/search.ts"]
-  packages_mcp_src --> packages_mcp_src_search_ts
-  packages --> packages_mcp
-  packages_mcp --> packages_mcp_src
-  packages_mcp_src_server_test_ts["packages/mcp/src/server.test.ts"]
-  packages_mcp_src --> packages_mcp_src_server_test_ts
-  packages --> packages_mcp
-  packages_mcp --> packages_mcp_src
-  packages_mcp_src_server_ts["packages/mcp/src/server.ts"]
-  packages_mcp_src --> packages_mcp_src_server_ts
+  scripts["scripts"]
+  _claude__files[".claude/… (1 files)"]
+  _claude --> _claude__files
+  _github_workflows__files[".github/workflows/… (1 files)"]
+  _github_workflows --> _github_workflows__files
+  _playwright_mcp__files[".playwright-mcp/… (8 files)"]
+  _playwright_mcp --> _playwright_mcp__files
+  __files["… (6 files)"]
+  docs__files["docs/… (5 files)"]
+  docs --> docs__files
+  docs_benchmarks_2026_07_10_minimax_m3__files["docs/benchmarks/2026-07-10-minimax-m3/… (5 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3 --> docs_benchmarks_2026_07_10_minimax_m3__files
+  docs_benchmarks_2026_07_10_minimax_m3_offline_inventory_t0__files["docs/benchmarks/2026-07-10-minimax-m3/offline-inventory-t0/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_offline_inventory_t0 --> docs_benchmarks_2026_07_10_minimax_m3_offline_inventory_t0__files
+  docs_benchmarks_2026_07_10_minimax_m3_raw_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/raw/metrics/… (3 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_metrics --> docs_benchmarks_2026_07_10_minimax_m3_raw_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki__files["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki__files
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_architecture__files["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/architecture/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_architecture --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_architecture__files
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_integrations__files["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/integrations/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_integrations --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_integrations__files
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_operations__files["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/operations/… (3 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_operations --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_operations__files
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_workflows__files["docs/benchmarks/2026-07-10-minimax-m3/raw/openwiki/workflows/… (3 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_workflows --> docs_benchmarks_2026_07_10_minimax_m3_raw_openwiki_workflows__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v10/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v10/metrics/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v10_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v11/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v11/metrics/… (13 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v11_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v12/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v12/metrics/… (11 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v12_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v13/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v13/metrics/… (12 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v13_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v14/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v14/metrics/… (12 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v14_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v15/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v15/metrics/… (12 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v15_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v16/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v16/metrics/… (12 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v16_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v17/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v17/metrics/… (12 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v17_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v18/… (6 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v18/metrics/… (19 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v18_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v19/… (5 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v19/metrics/… (11 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v19_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v2_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v2/metrics/… (5 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v2_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v2_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v20/… (6 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v20/metrics/… (13 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v20_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v21/… (6 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v21/metrics/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v21_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v22/metrics/… (6 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v22/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v22__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v23/metrics/… (5 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v23/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v23__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v24/metrics/… (6 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v24/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v24__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v25/metrics/… (5 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v25/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v25__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v26/metrics/… (7 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v26/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v26__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v27_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v27/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v27_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v27_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v28_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v28/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v28_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v28_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v29_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v29/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v29_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v29_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v3-attempt-invalid-1/metrics/… (3 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v3-attempt-invalid-1/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_attempt_invalid_1__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v3/… (3 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v3/metrics/… (8 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v3_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v30_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v30/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v30_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v30_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v31_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v31/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v31_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v31_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v32_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v32/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v32_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v32_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v33_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v33/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v33_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v33_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v34_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v34/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v34_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v34_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v4/metrics/… (10 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v4/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v4__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v5/… (3 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v5/metrics/… (11 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v5_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v6/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v6/metrics/… (10 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v6_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v7/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v7/metrics/… (9 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v7_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v8/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v8/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v8_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v9/… (4 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9 --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v9/metrics/… (11 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_v9_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean/metrics/… (5 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean__files["docs/benchmarks/2026-07-10-minimax-m3/rerun-clean/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_clean --> docs_benchmarks_2026_07_10_minimax_m3_rerun_clean__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/rerun/metrics/… (5 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun_metrics --> docs_benchmarks_2026_07_10_minimax_m3_rerun_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_rerun__files["docs/benchmarks/2026-07-10-minimax-m3/rerun/… (1 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_rerun --> docs_benchmarks_2026_07_10_minimax_m3_rerun__files
+  docs_benchmarks_2026_07_10_minimax_m3_revert_check_metrics__files["docs/benchmarks/2026-07-10-minimax-m3/revert-check/metrics/… (2 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_revert_check_metrics --> docs_benchmarks_2026_07_10_minimax_m3_revert_check_metrics__files
+  docs_benchmarks_2026_07_10_minimax_m3_tools__files["docs/benchmarks/2026-07-10-minimax-m3/tools/… (3 files)"]
+  docs_benchmarks_2026_07_10_minimax_m3_tools --> docs_benchmarks_2026_07_10_minimax_m3_tools__files
+  docs_handoffs__files["docs/handoffs/… (10 files)"]
+  docs_handoffs --> docs_handoffs__files
+  docs_plans__files["docs/plans/… (11 files)"]
+  docs_plans --> docs_plans__files
+  docs_tasks_2026_07_12_stage4_diagnostics__files["docs/tasks/2026-07-12-stage4-diagnostics/… (3 files)"]
+  docs_tasks_2026_07_12_stage4_diagnostics --> docs_tasks_2026_07_12_stage4_diagnostics__files
+  docs_tasks_2026_07_13_anchor_placement_guidance__files["docs/tasks/2026-07-13-anchor-placement-guidance/… (1 files)"]
+  docs_tasks_2026_07_13_anchor_placement_guidance --> docs_tasks_2026_07_13_anchor_placement_guidance__files
+  docs_tasks_2026_07_13_duplicate_anchor_guidance__files["docs/tasks/2026-07-13-duplicate-anchor-guidance/… (1 files)"]
+  docs_tasks_2026_07_13_duplicate_anchor_guidance --> docs_tasks_2026_07_13_duplicate_anchor_guidance__files
+  docs_tasks_2026_07_13_incomplete_retry_budget__files["docs/tasks/2026-07-13-incomplete-retry-budget/… (1 files)"]
+  docs_tasks_2026_07_13_incomplete_retry_budget --> docs_tasks_2026_07_13_incomplete_retry_budget__files
+  docs_tasks_2026_07_13_marker_abbreviation_guidance__files["docs/tasks/2026-07-13-marker-abbreviation-guidance/… (1 files)"]
+  docs_tasks_2026_07_13_marker_abbreviation_guidance --> docs_tasks_2026_07_13_marker_abbreviation_guidance__files
+  docs_tasks_2026_07_13_repair_recovery__files["docs/tasks/2026-07-13-repair-recovery/… (3 files)"]
+  docs_tasks_2026_07_13_repair_recovery --> docs_tasks_2026_07_13_repair_recovery__files
+  docs_tasks_2026_07_13_symbol_key_collision__files["docs/tasks/2026-07-13-symbol-key-collision/… (1 files)"]
+  docs_tasks_2026_07_13_symbol_key_collision --> docs_tasks_2026_07_13_symbol_key_collision__files
+  docs_tasks_2026_07_14_english_sweep__files["docs/tasks/2026-07-14-english-sweep/… (1 files)"]
+  docs_tasks_2026_07_14_english_sweep --> docs_tasks_2026_07_14_english_sweep__files
+  docs_tasks_2026_07_14_fence_aware_markers__files["docs/tasks/2026-07-14-fence-aware-markers/… (1 files)"]
+  docs_tasks_2026_07_14_fence_aware_markers --> docs_tasks_2026_07_14_fence_aware_markers__files
+  docs_tasks_2026_07_14_navigation_investigation__files["docs/tasks/2026-07-14-navigation-investigation/… (4 files)"]
+  docs_tasks_2026_07_14_navigation_investigation --> docs_tasks_2026_07_14_navigation_investigation__files
+  docs_tasks_2026_07_14_opening_validator_tolerance__files["docs/tasks/2026-07-14-opening-validator-tolerance/… (1 files)"]
+  docs_tasks_2026_07_14_opening_validator_tolerance --> docs_tasks_2026_07_14_opening_validator_tolerance__files
+  docs_tasks_2026_07_14_writedoc_fail_closed__files["docs/tasks/2026-07-14-writedoc-fail-closed/… (1 files)"]
+  docs_tasks_2026_07_14_writedoc_fail_closed --> docs_tasks_2026_07_14_writedoc_fail_closed__files
+  docs_tasks_2026_07_15_local_product_e2e__files["docs/tasks/2026-07-15-local-product-e2e/… (1 files)"]
+  docs_tasks_2026_07_15_local_product_e2e --> docs_tasks_2026_07_15_local_product_e2e__files
+  docs_tasks_2026_07_15_phase6_export__files["docs/tasks/2026-07-15-phase6-export/… (1 files)"]
+  docs_tasks_2026_07_15_phase6_export --> docs_tasks_2026_07_15_phase6_export__files
+  docs_tasks_2026_07_18_semantic_product_flow__files["docs/tasks/2026-07-18-semantic-product-flow/… (3 files)"]
+  docs_tasks_2026_07_18_semantic_product_flow --> docs_tasks_2026_07_18_semantic_product_flow__files
+  docs_tasks_2026_07_19_r10_1_acceptance_fixes__files["docs/tasks/2026-07-19-r10-1-acceptance-fixes/… (1 files)"]
+  docs_tasks_2026_07_19_r10_1_acceptance_fixes --> docs_tasks_2026_07_19_r10_1_acceptance_fixes__files
+  docs_tasks_2026_07_20_r11_a_concept_navigation__files["docs/tasks/2026-07-20-r11-a-concept-navigation/… (1 files)"]
+  docs_tasks_2026_07_20_r11_a_concept_navigation --> docs_tasks_2026_07_20_r11_a_concept_navigation__files
+  docs_tasks_2026_07_20_r11_nav__files["docs/tasks/2026-07-20-r11-nav/… (1 files)"]
+  docs_tasks_2026_07_20_r11_nav --> docs_tasks_2026_07_20_r11_nav__files
+  docs_tasks_2026_07_25_etapa_3_e2e__files["docs/tasks/2026-07-25-etapa-3-e2e/… (3 files)"]
+  docs_tasks_2026_07_25_etapa_3_e2e --> docs_tasks_2026_07_25_etapa_3_e2e__files
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics_run5__files["docs/tasks/2026-07-25-etapa-3-e2e/metrics-run5/… (2 files)"]
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics_run5 --> docs_tasks_2026_07_25_etapa_3_e2e_metrics_run5__files
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics_run6__files["docs/tasks/2026-07-25-etapa-3-e2e/metrics-run6/… (2 files)"]
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics_run6 --> docs_tasks_2026_07_25_etapa_3_e2e_metrics_run6__files
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics__files["docs/tasks/2026-07-25-etapa-3-e2e/metrics/… (2 files)"]
+  docs_tasks_2026_07_25_etapa_3_e2e_metrics --> docs_tasks_2026_07_25_etapa_3_e2e_metrics__files
+  packages_cli__files["packages/cli/… (3 files)"]
+  packages_cli --> packages_cli__files
+  packages_cli_scripts__files["packages/cli/scripts/… (1 files)"]
+  packages_cli_scripts --> packages_cli_scripts__files
+  packages_cli_skills_document_as_you_go__files["packages/cli/skills/document-as-you-go/… (1 files)"]
+  packages_cli_skills_document_as_you_go --> packages_cli_skills_document_as_you_go__files
+  packages_cli_src__files["packages/cli/src/… (15 files)"]
+  packages_cli_src --> packages_cli_src__files
+  packages_cli_src_commands__files["packages/cli/src/commands/… (12 files)"]
+  packages_cli_src_commands --> packages_cli_src_commands__files
+  packages_cli_templates__files["packages/cli/templates/… (1 files)"]
+  packages_cli_templates --> packages_cli_templates__files
+  packages_cli_templates_claude_code__files["packages/cli/templates/claude-code/… (1 files)"]
+  packages_cli_templates_claude_code --> packages_cli_templates_claude_code__files
+  packages_core__files["packages/core/… (3 files)"]
+  packages_core --> packages_core__files
+  packages_core_src__files["packages/core/src/… (117 files)"]
+  packages_core_src --> packages_core_src__files
+  packages_core_src_llm__files["packages/core/src/llm/… (7 files)"]
+  packages_core_src_llm --> packages_core_src_llm__files
+  packages_core_test_fixtures_fase2_repo_src__files["packages/core/test/fixtures/fase2-repo/src/… (1 files)"]
+  packages_core_test_fixtures_fase2_repo_src --> packages_core_test_fixtures_fase2_repo_src__files
+  packages_core_test_fixtures_sample_ts_repo_lib__files["packages/core/test/fixtures/sample-ts-repo/lib/… (1 files)"]
+  packages_core_test_fixtures_sample_ts_repo_lib --> packages_core_test_fixtures_sample_ts_repo_lib__files
+  packages_core_test_fixtures_sample_ts_repo_src__files["packages/core/test/fixtures/sample-ts-repo/src/… (1 files)"]
+  packages_core_test_fixtures_sample_ts_repo_src --> packages_core_test_fixtures_sample_ts_repo_src__files
+  packages_mcp__files["packages/mcp/… (3 files)"]
+  packages_mcp --> packages_mcp__files
+  packages_mcp_scripts__files["packages/mcp/scripts/… (1 files)"]
+  packages_mcp_scripts --> packages_mcp_scripts__files
+  packages_mcp_src__files["packages/mcp/src/… (6 files)"]
+  packages_mcp_src --> packages_mcp_src__files
+  scripts__files["scripts/… (1 files)"]
+  scripts --> scripts__files

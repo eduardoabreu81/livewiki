@@ -1,15 +1,24 @@
+%%{init: {"themeCSS": ".relation { stroke: transparent !important; }"}}%%
 classDiagram
-  class AnthropicAdapter {
-    constructor(opts: { apiKey: string; baseUrl: string; model: string; fetchImpl?: typeof fetch; timeoutMs?: number; maxRetries?: number }) {
-    async generate(req: GenerateRequest): Promise<GenerateResult> {
+  direction TB
+  class class_1["AnthropicAdapter"] {
+    +constructor()
+    +generate()
   }
-  class MissingApiKeyError {
-    constructor(provider: LlmProvider, envVar: string) {
+  class class_2["LlmTimeoutError"] {
+    +constructor()
   }
-  class LlmRequestError {
-    constructor(provider: LlmProvider, status: number, errorBody: string) {
+  class class_3["LlmRequestError"] {
+    +constructor()
   }
-  class OpenAiCompatAdapter {
-    constructor(opts: { apiKey: string; baseUrl: string; model: string; fetchImpl?: typeof fetch; timeoutMs?: number; maxRetries?: number }) {
-    async generate(req: GenerateRequest): Promise<GenerateResult> {
+  class class_4["MissingApiKeyError"] {
+    +constructor()
   }
+  class class_5["OpenAiCompatAdapter"] {
+    +constructor()
+    +generate()
+  }
+  class_1 -- class_2
+  class_2 -- class_3
+  class_3 -- class_4
+  class_4 -- class_5
