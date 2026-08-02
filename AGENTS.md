@@ -341,6 +341,17 @@ realpath-canonicalizes the repo root before comparisons (macOS
 `/var`→`/private/var` made EVERY write fail the allowlist — 100+ tests).
 The earlier repair hold is lifted.
 
+**MATRIX GREEN 2026-08-02** (run `30762327404`, all three OS legs,
+Node 24). Five rounds total; beyond the three root causes above, the
+green run required: export source rels computed against the realpath'd
+wiki root (`0286a39`), safe-io test assertions matching the
+canonicalized contract (`1d31c39`), fs.watch hardening — canonicalized
+watch path + awaited close, fixing the Windows libuv fs-event assert
+(`c117ab3`) — and a 30s vitest `testTimeout` for the CLI subprocess
+E2E suites (`99065d1`; the 5s default raced env mutations across
+tests). The no-claim rule below is satisfied by this run; any FUTURE
+red window re-arms it immediately.
+
 Until the remote matrix has been observed green on all three OS hosts,
 this repo must NOT claim "cross-platform validated", "matrix green",
 or equivalent in any commit, PR description, release note, or

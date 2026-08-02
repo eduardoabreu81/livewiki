@@ -365,27 +365,24 @@ MCP 54); all E2E acceptance runs and blind evals preserved LOCAL-ONLY.
 
 ## Next steps
 
-1. Cross-platform CI block (maintainer-ordered FIRST after #16): macOS
-   realpath canonicalization and the workflow smoke step (`livewiki` bin
-   not found); the matrix must be green on ubuntu/windows/macos before
-   any "cross-platform validated" claim.
-2. Backlog #6 — GitHub Actions "docs-debt on merge" template (after CI
-   green; same-repo variant can ship first).
-3. Beta launch: packaging (npm publish). Pre-beta decision pending:
+1. Backlog #6 — GitHub Actions "docs-debt on merge" template (CI block
+   DONE — matrix green run 30762327404 on all three OS hosts; same-repo
+   variant can ship first).
+2. Beta launch: packaging (npm publish). Pre-beta decision pending:
    naming/domain (livewiki.com is an active commercial AI summarizer;
    npm `livewiki` + `@livewiki/*` are free — rename vs scoped publish).
-4. Optional hardening recorded: batch-review 5s-timeout and CLI E2E load
+3. Optional hardening recorded: batch-review 5s-timeout and CLI E2E load
    flakes (pre-existing, pass isolated); voice/subtitle precision
    frontier in app-services-03 pages.
 
 ## Backlog
 
-- [ ] Cross-platform CI green (macOS realpath + smoke step) — NEXT
-- [ ] #6 GitHub Actions "docs-debt on merge" template
+- [ ] #6 GitHub Actions "docs-debt on merge" template — NEXT
 - [ ] Beta: npm packaging/publish + launch (pre-beta naming decision)
 - [ ] Watch-list: tier-1 language expansion (usage-driven), git-pinned evidence verification
 - [ ] Optional: batch-review/CLI-E2E load-flake hardening
 - [ ] Optional: voice/subtitle false-claim frontier (app-services-03 hotspot)
+- [x] Cross-platform CI green (run 30762327404: ubuntu/windows/macOS, Node 24)
 - [x] #16 Dogfood batch on livewiki itself (exit 0, 742,693 tokens, verify zero, debt 0)
 - [x] #15 Viewer activity dashboard (+ batch wall time on both surfaces)
 - [x] #14 In-session cost accounting (debt_resolved + batch_run + Activity block)
