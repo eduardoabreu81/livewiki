@@ -221,7 +221,7 @@ pays the debt via `update --llm`, then `gh pr create --draft` with the
 merge author as reviewer; needs provider secrets and
 `pull-requests: write`.
 
-### 7. Bounded parallel stage-4 execution (`batchConcurrency`)
+### 7. Bounded parallel stage-4 execution (`batchConcurrency`) ✅ DONE 2026-08-01
 
 Source: 2026-08-01 market scan (`docs/market-research.md`): Mintlify cut a
 large-repo run 70→45 min with parallel section writers; RepoAgent ships
@@ -237,6 +237,17 @@ circuit-breaker semantics under interleaved failures, shared rate-limit
 backoff honoring `Retry-After`, monotonic per-task usage history, and a
 deterministic barrier before stage 5 (flows/topics consume stage-4
 results).
+
+**Result (2026-08-01, shipped in `dac874d`):** the sequential loop is
+gone — stage 4 runs a bounded worker pool over the shared task cursor
+(`batchConcurrency` config, integer 1..16, default 1; `--concurrency`
+on `batch` and `init --batch`). Breaker/rollback stop NEW dispatch and
+drain in-flight tasks; the pool is awaited before stage 5; reports
+stay sorted by stage-3 priority; `Retry-After` is honored in
+`llm/base.ts:parseRetryAfterMs`. Stage 5 stays sequential (shared hub
+files inside transactions). Tests: `batch-concurrency.test.ts`.
+The "runs tasks sequentially" premise above is historical — kept as
+the source rationale.
 
 ### 8. Native CALLS edges with confidence tags
 
