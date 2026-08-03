@@ -11,9 +11,10 @@
 > #16 dogfood batch DONE, cross-platform CI DONE (matrix green twice),
 > #6 v1 DONE. The remaining pre-beta queue is **#17 viewer version
 > stamp + source deep-links → #18 `view --ref` → #19 Go / #20 Rust /
-> #21 Java tier-1 (Go pilot first) → beta launch (npm publish, with the
-> naming/domain decision before it)**. #6 v2 (pay-variant) and the
-> optional hardening list stay post-beta.
+> #21 Java tier-1 (Go pilot first) → #23 repository understanding
+> layer → beta launch (npm publish, with the naming/domain decision
+> before it)**. #6 v2 (pay-variant), #22 (CodeWiki-grade output format)
+> and the optional hardening list stay post-beta.
 > items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
 > dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
 > ~6% of its token cost; R11-A validated and kept; commit/push done).
@@ -449,6 +450,29 @@ page (stage-5 flow budgets are the precedent), diagram validity gate
 kind variant or a prompt-contract revision. Evaluate on the A/B harness
 before adopting — CodeWiki's static text quality was impressive but
 unmeasured against our corpus.
+
+### 23. Repository understanding layer (PRE-BETA, after #19–#21)
+
+Source: maintainer 2026-08-03 — the quickstart orientation proved the
+gap on this very repo: with no README, the deterministic fallback
+synthesized a module enumeration, not a purpose ("organized around Core
+Repair, Status…"). Broader than a no-README patch: **the README is one
+evidence input, never the authority** — a bad README ("porcaria") must
+not poison the orientation either. Design: batch stage 5 gains ONE
+bounded task (same machinery as flows/topics) that synthesizes the
+**repository understanding** — what the repo is, for whom, key surfaces
+— from the closed evidence inventory (accepted module pages, flows,
+topics, entry points, README when present). Everything it may claim is
+already verify-gated, so the synthesis inherits the anti-hallucination
+contract. Orientation rules: synthesis is the primary `## What this
+repository is` content with provenance marking; README purpose becomes
+provenance-marked evidence inside it. `export readme` uses the
+synthesis as its purpose paragraph; the refuse-to-overwrite-human-README
+contract (rule #6) is unchanged — the wiki is where the understanding
+lives. Cost: one LLM call per batch, always — detection stays zero-token,
+writing stays minimal. Acceptance: on a no-README repo AND on a
+bad-README repo, the quickstart states the product's purpose correctly
+without human edits.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
