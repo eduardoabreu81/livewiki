@@ -6,6 +6,68 @@
 
 ---
 
+### 2026-08-02 (pm) — Cross-platform CI green, item 6 v1, repo cleanup for beta
+
+**Scope (afternoon, 8 commits):**
+
+- **Cross-platform CI — DONE** (matrix green twice: runs `30762327404`
+  and `30764064930`, ubuntu/windows/macOS on Node 24). Six rounds, each
+  with a distinct root cause: Node 20 retired (GitHub deprecation + no
+  win32 better-sqlite3 prebuilt — the node-gyp fallback could not parse
+  the runner's VS 18); smoke step moved off `pnpm exec` (cannot resolve
+  a workspace bin from the root) to `node packages/cli/dist/index.js`;
+  `safe-io.resolveAndValidate` realpath-canonicalizes the repo root
+  (macOS `/var`→`/private/var` made EVERY write fail the allowlist);
+  export source rels computed against the realpath'd wiki root (Windows
+  8.3 `RUNNER~1`→`runneradmin`, reproduced locally via `%~sI`); safe-io
+  test assertions aligned to the canonical contract; fs.watch hardened
+  (canonicalized watch path + awaited close — Windows libuv fs-event
+  assert, `c117ab3`); and a 30s vitest `testTimeout` for core+CLI —
+  the 5s default raced env mutations across tests on the loaded runner
+  (this also closes the documented batch-review/batch-concurrency flake
+  class).
+- **Item 6 v1 — GitHub Actions "docs-debt on merge" template** shipped
+  (`8d80d86`): `templates/github-actions/docs-debt.yml` — push-triggered
+  `index --quiet` + `status --json`, debt table in the step summary,
+  `LIVEWIKI_DEBT_MODE=enforce|report`, `contents: read`, zero tokens,
+  no secrets/GitHub App. Dogfood instance
+  `.github/workflows/docs-debt.yml` (local build pre-publish, report
+  mode) — first live run `30763814325` GREEN with "No documentation
+  debt — zero tokens spent". Pay-variant (`update --llm` + draft PR)
+  stays v2.
+- **Repo cleanup (maintainer decision)**: the repo must contain only
+  what IS the tool. Removed from HEAD (all preserved in git history and
+  locally on disk where untracked): `docs/benchmarks/`, `docs/tasks/`,
+  `docs/plans/`, `docs/handoffs/`, `docs/market-research.md`,
+  `docs/BENCHMARK.md`, and every wiki page documenting them
+  (benchmark reruns v2–v34 incl. v18, OpenWiki comparisons, task
+  briefs, tools) — 1,242 tracked files + 98 wiki pages. Kept:
+  `docs/ROADMAP.md`, `docs/PROJECT_CONTEXT.md`, `docs/PROJECT_LOG.md`.
+  Benchmark/OpenWiki comparison + final E2E results return as a README
+  summary in the beta block. `init` + `verify` after the cleanup: 45
+  pages, zero issues.
+
+**Sensitive points for future agents:**
+
+- The untracked local evidence (`docs/benchmarks/`, `docs/tasks/` on
+  disk) was deliberately NOT deleted from the working tree — it is out
+  of the repo (git) but preserved locally per the evidence rule.
+- `livewiki init` transiently failed with `unknown error, open
+  .../livewiki/docs.md` once during the cleanup (file lock while index
+  + verify ran concurrently); a plain retry succeeded. Not a defect.
+- Windows CI runners hand temp roots in 8.3 form (`RUNNER~1`); macOS
+  temp roots are `/var` symlinked to `/private/var`. Any path
+  comparison between a lexical root and a realpath'd target breaks on
+  both — canonicalize first (the pattern behind three of today's
+  fixes).
+
+**Validation:** full local gate green before every push (core 1622 /
+CLI 118 / MCP 56 + flakes isolated-green); remote matrix green twice;
+dogfood docs-debt green. Zero paid calls this block.
+
+---
+
+
 ### 2026-08-02 — Item 15 activity dashboard, viewer mermaid fixes, item 16 dogfood batch
 
 **Scope (1 day, 3 commits):**
