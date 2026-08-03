@@ -359,6 +359,93 @@ describe("symbols — Go (roadmap item 19)", () => {
   });
 });
 
+describe("symbols — Rust (roadmap item 20)", () => {
+  it("extrai function_item top-level", async () => {
+    const src = "fn greet(name: &str) -> &str {\n    name\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => s.name)).toEqual(["greet"]);
+    expect(symbols[0]?.kind).toBe("function");
+    expect(symbols[0]?.key).toBe("x.rs#greet");
+    expect(symbols[0]?.start_line).toBe(1);
+  });
+
+  it("extrai struct como kind=class", async () => {
+    const src = "pub struct Server {\n    port: u16,\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Server"]);
+    expect(symbols[0]?.kind).toBe("class");
+    expect(symbols[0]?.key).toBe("x.rs#Server");
+  });
+
+  it("extrai enum como kind=class", async () => {
+    const src = "pub enum Mode {\n    Fast,\n    Slow,\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Mode"]);
+    expect(symbols[0]?.kind).toBe("class");
+  });
+
+  it("extrai trait como kind=interface e NÃO extrai suas assinaturas", async () => {
+    const src = "pub trait Runner {\n    fn start(&self) -> Result<(), String>;\n    fn stop(&self) {}\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Runner"]);
+    expect(symbols[0]?.kind).toBe("interface");
+    expect(symbols[0]?.key).toBe("x.rs#Runner");
+  });
+
+  it("extrai métodos de impl block qualificados Type.method", async () => {
+    const src = "struct Server;\n\nimpl Server {\n    pub fn new() -> Self {\n        Server\n    }\n\n    fn addr(&self) -> String {\n        String::new()\n    }\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => [s.name, s.kind])).toEqual([
+      ["Server", "class"],
+      ["Server.new", "method"],
+      ["Server.addr", "method"],
+    ]);
+    expect(symbols[1]?.key).toBe("x.rs#Server.new");
+  });
+
+  it("impl Trait for T qualifica os membros sob T (decisão: são chamáveis em T)", async () => {
+    const src = "struct Server;\n\ntrait Runner {\n    fn start(&self);\n}\n\nimpl Runner for Server {\n    fn start(&self) {}\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    const start = symbols.filter((s) => s.key === "x.rs#Server.start");
+    expect(start).toHaveLength(1);
+    expect(start[0]?.kind).toBe("method");
+  });
+
+  it("impl de tipo genérico usa o tipo base (impl<T> Vec<T> → Vec.push)", async () => {
+    const src = "struct Vec<T> {\n    items: std::vec::Vec<T>,\n}\n\nimpl<T> Vec<T> {\n    fn push(&mut self, v: T) {\n        self.items.push(v);\n    }\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Vec", "Vec.push"]);
+  });
+
+  it("impl de tipo com path (impl a::B) usa o nome mais à direita", async () => {
+    const src = "impl a::B {\n    fn m(&self) {}\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => s.name)).toEqual(["B.m"]);
+  });
+
+  it("NÃO extrai struct/trait/enum/impl locais dentro de função", async () => {
+    const src = "fn run() {\n    struct Local {\n        x: u32,\n    }\n    let _ = Local { x: 1 };\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => s.name)).toEqual(["run"]);
+  });
+
+  it("extrai fn aninhada com chave simples (mesma política do TS)", async () => {
+    const src = "fn outer() {\n    fn inner() {}\n    inner();\n}\n";
+    const tree = await parse(".rs", src);
+    const symbols = extractSymbols(tree, "x.rs", src);
+    expect(symbols.map((s) => s.name)).toEqual(["outer", "inner"]);
+  });
+});
+
 // === Etapa 2b: rationale extraction (intent evidence) ===
 
 describe("extractRationales — tagged comments", () => {
@@ -528,6 +615,80 @@ export function f() { return 1; }
     const rationales = extractRationales(tree, "x.ts", src);
     expect(rationales).toHaveLength(1);
     expect(rationales[0]?.symbol_key).toBeNull();
+  });
+});
+
+describe("extractRationales — Rust (roadmap item 20)", () => {
+  it("captures a /// doc comment as docstring with positional attribution", async () => {
+    const src = `/// Server accepts inbound requests and dispatches them to handlers.
+pub struct Server {
+    port: u16,
+}
+`;
+    const tree = await parse(".rs", src);
+    const rationales = extractRationales(tree, "x.rs", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("docstring");
+    expect(rationales[0]?.symbol_key).toBe("x.rs#Server");
+    expect(rationales[0]?.text).toBe(
+      "Server accepts inbound requests and dispatches them to handlers.",
+    );
+  });
+
+  it("captures a //! inner doc comment as file-level docstring", async () => {
+    const src = `//! Binary entry point for the fixture service.
+
+fn main() {}
+`;
+    const tree = await parse(".rs", src);
+    const rationales = extractRationales(tree, "x.rs", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("docstring");
+    expect(rationales[0]?.symbol_key).toBeNull();
+  });
+
+  it("rejects a /// doc comment shorter than 20 normalized chars", async () => {
+    const src = `/// Short.
+fn f() {}
+`;
+    const tree = await parse(".rs", src);
+    expect(extractRationales(tree, "x.rs", src)).toEqual([]);
+  });
+
+  it("does NOT treat //// as a doc comment (plain comment by convention)", async () => {
+    const src = `//// A long divider-style comment that would pass the length floor.
+fn f() {}
+`;
+    const tree = await parse(".rs", src);
+    expect(extractRationales(tree, "x.rs", src)).toEqual([]);
+  });
+
+  it("captures a tagged // comment inside a method body (line_comment nodes)", async () => {
+    const src = `struct Server;
+
+impl Server {
+    pub fn handle(&self) {
+        // HACK: the dispatch ignores backpressure until the queue lands
+        self.dispatch();
+    }
+}
+`;
+    const tree = await parse(".rs", src);
+    const rationales = extractRationales(tree, "x.rs", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("hack");
+    expect(rationales[0]?.symbol_key).toBe("x.rs#Server.handle");
+  });
+
+  it("captures a /** block doc comment (shared with the TS branch)", async () => {
+    const src = `/** Computes the retry backoff for the next attempt. */
+fn backoff() {}
+`;
+    const tree = await parse(".rs", src);
+    const rationales = extractRationales(tree, "x.rs", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("docstring");
+    expect(rationales[0]?.symbol_key).toBe("x.rs#backoff");
   });
 });
 

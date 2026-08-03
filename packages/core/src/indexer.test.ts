@@ -222,8 +222,8 @@ const secondClient = {
 
   it("indexes a grammar-less file with 0 symbols and no parse warning (tier 2)", async () => {
     await nodeFs.writeFile(
-      nodePath.join(repoRoot, "main.rs"),
-      "fn main() {}\n",
+      nodePath.join(repoRoot, "main.rb"),
+      "def main\nend\n",
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let result;
@@ -240,9 +240,9 @@ const secondClient = {
     const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
     try {
       const row = db
-        .prepare("SELECT id, lang FROM files WHERE path = 'main.rs' AND status = 'active'")
+        .prepare("SELECT id, lang FROM files WHERE path = 'main.rb' AND status = 'active'")
         .get() as { id: number; lang: string } | undefined;
-      expect(row?.lang).toBe("rs");
+      expect(row?.lang).toBe("rb");
       const syms = db
         .prepare("SELECT COUNT(*) AS n FROM symbols WHERE file_id = ?")
         .get(row!.id) as { n: number };
@@ -295,21 +295,21 @@ const secondClient = {
   });
 
   it("incremental run treats prose files as unchanged by hash", async () => {
-    await nodeFs.writeFile(nodePath.join(repoRoot, "main.rs"), "fn main() {}\n");
+    await nodeFs.writeFile(nodePath.join(repoRoot, "main.rb"), "def main\nend\n");
     await runIndexer(repoRoot, { quiet: true });
     const r2 = await runIndexer(repoRoot, { quiet: true });
     expect(r2.filesAdded).toBe(0);
     expect(r2.filesUpdated).toBe(0);
-    expect(r2.filesUnchanged).toBe(3); // auth.ts + calc.py + main.rs
+    expect(r2.filesUnchanged).toBe(3); // auth.ts + calc.py + main.rb
   });
 
   it("status classifies each language by coverage tier", async () => {
-    await nodeFs.writeFile(nodePath.join(repoRoot, "main.rs"), "fn main() {}\n");
+    await nodeFs.writeFile(nodePath.join(repoRoot, "main.rb"), "def main\nend\n");
     await runIndexer(repoRoot, { quiet: true });
     const report = await runStatus(repoRoot);
     expect(report.files.tiers.typescript).toBe("anchored");
     expect(report.files.tiers.python).toBe("anchored");
-    expect(report.files.tiers.rs).toBe("prose");
+    expect(report.files.tiers.rb).toBe("prose");
   });
 });
 
@@ -414,6 +414,124 @@ describe("indexer — Go fixture repo (roadmap item 19)", () => {
     })();
     expect(rationales).toContainEqual({ symbol_key: "cmd/main.go#main", kind: "why" });
     expect(rationales).toContainEqual({ symbol_key: "server/server.go#Server.Start", kind: "hack" });
+  });
+});
+
+// === Roadmap item 20: Rust tier-1 anchored indexing ===
+
+describe("indexer — Rust fixture repo (roadmap item 20)", () => {
+  let rustRoot: string;
+
+  beforeEach(async () => {
+    const fixture = nodePath.resolve(process.cwd(), "test/fixtures/sample-rust-repo");
+    rustRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-indexer-rust-"));
+    await nodeFs.cp(fixture, rustRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(rustRoot, { recursive: true, force: true });
+  });
+
+  it("indexes .rs files with symbols (tier 1, not prose-zero)", async () => {
+    const result = await runIndexer(rustRoot, { quiet: true });
+    // Cargo.toml has no .rs symbols; src/{main,models,server}.rs carry them.
+    expect(result.filesAdded).toBe(4);
+    expect(result.symbolsAdded).toBeGreaterThan(0);
+
+    const report = await runStatus(rustRoot);
+    expect(report.files.tiers.rust).toBe("anchored");
+    expect(report.files.byLang.rust).toBe(3);
+    expect(report.symbols.byKind.function).toBe(4); // main, log_startup, dispatch, dispatch_ref
+    expect(report.symbols.byKind.class).toBe(3); // Server, Mode, Request
+    expect(report.symbols.byKind.interface).toBe(1); // Handler
+    expect(report.symbols.byKind.method).toBe(5); // Request.new, Server.{new,addr,handle,process}
+  });
+
+  it("method keys are qualified by impl type (inherent AND trait impls)", async () => {
+    await runIndexer(rustRoot, { quiet: true });
+    const addr = await activeSymbolsForKeyIn(rustRoot, "src/server.rs#Server.addr");
+    expect(addr).toHaveLength(1);
+    expect(addr[0]).toMatchObject({ kind: "method" });
+    const process = await activeSymbolsForKeyIn(rustRoot, "src/server.rs#Server.process");
+    expect(process).toHaveLength(1);
+    expect(process[0]).toMatchObject({ kind: "method" });
+  });
+
+  it("extracts calls with confidence tags and doc/tagged rationale comments", async () => {
+    await runIndexer(rustRoot, { quiet: true });
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(rustRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const calls = db
+        .prepare(
+          `SELECT c.caller_key, c.callee_name, c.confidence FROM calls c
+           JOIN files f ON f.id = c.file_id WHERE f.path = 'src/main.rs'
+           ORDER BY c.line, c.callee_name`,
+        )
+        .all() as Array<{ caller_key: string; callee_name: string; confidence: string }>;
+      // log_startup() is bare → extracted; Server::new / Request::new are
+      // scoped paths → inferred; server.addr()/server.handle() are field
+      // accesses → inferred; println! is a macro → no row.
+      expect(calls).toContainEqual({
+        caller_key: "src/main.rs#main", callee_name: "log_startup", confidence: "extracted",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "src/main.rs#main", callee_name: "new", confidence: "inferred",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "src/main.rs#main", callee_name: "addr", confidence: "inferred",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "src/main.rs#main", callee_name: "handle", confidence: "inferred",
+      });
+      expect(calls.find((c) => c.callee_name === "println")).toBeUndefined();
+
+      // src/server.rs: the bare dispatch/dispatch_ref calls inside the impl
+      // methods are extracted and qualified by the impl type — including the
+      // `impl Handler for Server` member.
+      const serverCalls = db
+        .prepare(
+          `SELECT c.caller_key, c.callee_name, c.confidence FROM calls c
+           JOIN files f ON f.id = c.file_id WHERE f.path = 'src/server.rs'
+           ORDER BY c.line, c.callee_name`,
+        )
+        .all() as Array<{ caller_key: string; callee_name: string; confidence: string }>;
+      expect(serverCalls).toContainEqual({
+        caller_key: "src/server.rs#Server.handle", callee_name: "dispatch", confidence: "extracted",
+      });
+      expect(serverCalls).toContainEqual({
+        caller_key: "src/server.rs#Server.process", callee_name: "dispatch_ref", confidence: "extracted",
+      });
+    } finally {
+      db.close();
+    }
+
+    const rationales = await (async () => {
+      const db2 = new (await import("better-sqlite3")).default(
+        nodePath.join(rustRoot, ".livewiki", "index.db"), { readonly: true },
+      );
+      try {
+        return db2
+          .prepare(
+            `SELECT r.symbol_key, r.kind FROM rationales r
+             JOIN files f ON f.id = r.file_id WHERE f.lang = 'rust'
+             ORDER BY f.path, r.start_line`,
+          )
+          .all() as Array<{ symbol_key: string | null; kind: string }>;
+      } finally {
+        db2.close();
+      }
+    })();
+    // //! inner doc at the top of main.rs → file-level docstring.
+    expect(rationales).toContainEqual({ symbol_key: null, kind: "docstring" });
+    // WHY tagged comment above fn main.
+    expect(rationales).toContainEqual({ symbol_key: "src/main.rs#main", kind: "why" });
+    // /// doc comments above the struct and an impl method.
+    expect(rationales).toContainEqual({ symbol_key: "src/server.rs#Server", kind: "docstring" });
+    expect(rationales).toContainEqual({ symbol_key: "src/server.rs#Server.new", kind: "docstring" });
+    // HACK tagged comment inside Server.handle's body.
+    expect(rationales).toContainEqual({ symbol_key: "src/server.rs#Server.handle", kind: "hack" });
   });
 });
 

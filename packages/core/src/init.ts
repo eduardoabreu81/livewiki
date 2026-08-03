@@ -49,6 +49,7 @@ import type { TopicCandidate } from "./topics.js";
 import {
   loadEffectiveTsconfig,
   loadGoModulePath,
+  loadRustCrateName,
   loadWorkspacePackages,
   resolveImportEdges,
 } from "./import-resolution.js";
@@ -656,6 +657,7 @@ async function buildPlan(
       workspacePackages,
       tsconfig: await loadEffectiveTsconfig(absRoot, workspacePackages),
       goModulePath: await loadGoModulePath(absRoot),
+      rustCrateName: await loadRustCrateName(absRoot),
     });
     const edges = resolveModuleEdges(modules, importsByFile, knownFiles, resolvedImportEdges);
     const ordered = prioritizeModules(modules, edges, cfg.pathRoles);

@@ -171,6 +171,77 @@ describe("extractCalls — Go (roadmap item 19)", () => {
   });
 });
 
+describe("extractCalls — Rust (roadmap item 20)", () => {
+  it("attributes a bare call to its enclosing function (extracted)", async () => {
+    const src = "fn outer() {\n    helper();\n}\n";
+    const tree = await parse(".rs", src);
+    const calls = extractCalls(tree, "x.rs", src);
+    expect(calls).toEqual([
+      { caller_key: "x.rs#outer", callee_name: "helper", line: 2, confidence: "extracted" },
+    ]);
+  });
+
+  it("tags a receiver method call x.m() as inferred (field_expression)", async () => {
+    const src = "fn run(s: &Server) {\n    s.start();\n}\n";
+    const tree = await parse(".rs", src);
+    const calls = extractCalls(tree, "x.rs", src);
+    expect(calls).toEqual([
+      { caller_key: "x.rs#run", callee_name: "start", line: 2, confidence: "inferred" },
+    ]);
+  });
+
+  it("tags a path call Type::assoc() / a::b::f() as inferred (scoped_identifier)", async () => {
+    const src = "fn run() {\n    let s = Server::new(8080);\n    crate::a::b::work();\n}\n";
+    const tree = await parse(".rs", src);
+    const calls = extractCalls(tree, "x.rs", src);
+    expect(calls).toEqual([
+      { caller_key: "x.rs#run", callee_name: "new", line: 2, confidence: "inferred" },
+      { caller_key: "x.rs#run", callee_name: "work", line: 3, confidence: "inferred" },
+    ]);
+  });
+
+  it("tags a bare generic call foo::<T>() as extracted (generic_function)", async () => {
+    const src = "fn run() {\n    parse::<u32>();\n}\n";
+    const tree = await parse(".rs", src);
+    const calls = extractCalls(tree, "x.rs", src);
+    expect(calls).toEqual([
+      { caller_key: "x.rs#run", callee_name: "parse", line: 2, confidence: "extracted" },
+    ]);
+  });
+
+  it("qualifies a call inside an impl method with Type.method", async () => {
+    const src = "struct Server;\n\nimpl Server {\n    fn start(&self) {\n        listen(self.port);\n    }\n}\n";
+    const tree = await parse(".rs", src);
+    const calls = extractCalls(tree, "x.rs", src);
+    expect(calls).toEqual([
+      { caller_key: "x.rs#Server.start", callee_name: "listen", line: 5, confidence: "extracted" },
+    ]);
+  });
+
+  it("impl Trait for T also qualifies members under T", async () => {
+    const src = "struct Server;\n\ntrait Runner {\n    fn start(&self);\n}\n\nimpl Runner for Server {\n    fn start(&self) {\n        listen();\n    }\n}\n";
+    const tree = await parse(".rs", src);
+    const calls = extractCalls(tree, "x.rs", src);
+    expect(calls).toEqual([
+      { caller_key: "x.rs#Server.start", callee_name: "listen", line: 9, confidence: "extracted" },
+    ]);
+  });
+
+  it("skips macro invocations (format!/println! are not call_expression)", async () => {
+    const src = "fn run() {\n    println!(\"{}\", 1);\n}\n";
+    const tree = await parse(".rs", src);
+    const calls = extractCalls(tree, "x.rs", src);
+    expect(calls).toEqual([]);
+  });
+
+  it("skips a call at module top level (no enclosing named symbol)", async () => {
+    const src = "static X: u32 = compute();\n";
+    const tree = await parse(".rs", src);
+    const calls = extractCalls(tree, "x.rs", src);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("extractCalls — confidence tags per callee shape", () => {
   it("tags a bare function call as extracted", async () => {
     const src = "function outer() { helper(); }";

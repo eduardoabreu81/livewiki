@@ -95,12 +95,15 @@ export function computeTestCoverageAndFanIn(opts: {
   knownFiles: ReadonlySet<string>;
   /** Go module path from the root go.mod (loadGoModulePath), when known. */
   goModulePath?: string | null;
+  /** Rust package name from the root Cargo.toml (loadRustCrateName), when known. */
+  rustCrateName?: string | null;
 }): { coveredByTest: Set<string>; fanIn: Map<string, number> } {
   const edges = resolveImportEdges({
     importsByFile: opts.importsByFile,
     knownFiles: opts.knownFiles,
     workspacePackages: [],
     goModulePath: opts.goModulePath ?? null,
+    rustCrateName: opts.rustCrateName ?? null,
   });
   const coveredByTest = new Set<string>();
   const importersByFile = new Map<string, Set<string>>();

@@ -127,6 +127,7 @@ import {
 import {
   loadEffectiveTsconfig,
   loadGoModulePath,
+  loadRustCrateName,
   loadWorkspacePackages,
   resolveImportEdges,
 } from "./import-resolution.js";
@@ -509,6 +510,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       workspacePackages,
       tsconfig: await loadEffectiveTsconfig(absRoot, workspacePackages),
       goModulePath: await loadGoModulePath(absRoot),
+      rustCrateName: await loadRustCrateName(absRoot),
     });
 
     // === Estágio 2: Identificação de módulos (heurística + optional LLM refine) ===

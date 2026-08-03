@@ -46,6 +46,21 @@
  *     directories — v1 resolves non-recursively); `<module>` alone maps to
  *     the root directory. Any import not prefixed by the module path — and
  *     every import when no go.mod exists — stays external.
+ *   - Rust (roadmap item 20): a `rust-use` path resolves by its leading
+ *     segment — `crate::` from the crate source root (`src/` when a known
+ *     `src/lib.rs`/`src/main.rs` exists, else the repo root), `self::`
+ *     relative to the current file's module directory, `super::` climbing
+ *     one module directory per `super`, and the package's own name from the
+ *     root `Cargo.toml` `[package] name` (`loadRustCrateName`, hyphens read
+ *     as underscores — the form integration tests use) as a `crate::`
+ *     alias. The remaining segments map to the module tree: the LONGEST
+ *     segment prefix that names a known `<path>.rs` or `<path>/mod.rs`
+ *     file wins (a trailing item name like `crate::server::Server` resolves
+ *     to the file owning `crate::server`). A `rust-mod` declaration
+ *     (`mod foo;`) resolves to `foo.rs` or `foo/mod.rs` under the current
+ *     file's module directory. Any other leading segment (external crates,
+ *     `std`, `core`, `alloc`) stays external. Cargo workspaces
+ *     (multi-crate repos) are OUT OF SCOPE for v1.
  *   - `tsconfig.paths` is explicitly DEFERRED (needs its full contract).
  *
  * Output is deduped and sorted deterministically (fromFile, toFile,
@@ -222,6 +237,14 @@ export function resolveImportEdges(opts: {
    * this path stay external; without it, EVERY go-import stays external.
    */
   goModulePath?: string | null | undefined;
+  /**
+   * The repo's Rust package name from the root `Cargo.toml` `[package]
+   * name` (`loadRustCrateName`), or null/undefined when there is no
+   * Cargo.toml. Only used to treat the crate's own name as a `crate::`
+   * alias (the form integration tests use); `crate::`/`self::`/`super::`
+   * resolution does not depend on it.
+   */
+  rustCrateName?: string | null | undefined;
 }): ResolvedImportEdge[] {
   // Longest name first: `@acme/core-utils` must win over `@acme/core` when
   // both are declared (node-style longest-prefix match), deterministically.
@@ -239,10 +262,12 @@ export function resolveImportEdges(opts: {
           ? resolvePythonSpecifier(fromFile, imp, opts.knownFiles)
           : imp.kind === "go-import"
             ? resolveGoSpecifier(spec, opts.knownFiles, opts.goModulePath ?? null)
-            : (() => {
-                const single = resolveSpecifier(fromFile, spec, packages, opts.tsconfig, opts.knownFiles);
-                return single === null ? [] : [single];
-              })();
+            : imp.kind === "rust-use" || imp.kind === "rust-mod"
+              ? resolveRustSpecifier(fromFile, imp, opts.knownFiles, opts.rustCrateName ?? null)
+              : (() => {
+                  const single = resolveSpecifier(fromFile, spec, packages, opts.tsconfig, opts.knownFiles);
+                  return single === null ? [] : [single];
+                })();
       for (const toFile of targets) {
         if (toFile === fromFile) continue;
         const key = `${fromFile}\0${toFile}\0${spec}`;
@@ -406,6 +431,133 @@ function resolveGoSpecifier(
     targets.push(file);
   }
   return targets.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Reads the package name declared by the repo's ROOT `Cargo.toml`
+ * (`[package]` section, `name = "..."` line; `#` comments tolerated).
+ * Returns null when Cargo.toml is missing, unreadable, or has no package
+ * name — in that case the crate's own name is not recognized as an
+ * internal path prefix (`crate::`/`self::`/`super::` resolution is
+ * unaffected). Cargo workspaces (multi-crate repos) are out of scope for
+ * v1.
+ */
+export async function loadRustCrateName(repoRoot: string): Promise<string | null> {
+  const text = await readTextIfExists(nodePath.join(nodePath.resolve(repoRoot), "Cargo.toml"));
+  if (text === null) return null;
+  let inPackage = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      inPackage = /^\[\s*package\s*\]\s*(?:#.*)?$/.test(line);
+      continue;
+    }
+    if (!inPackage) continue;
+    const match = line.match(/^name\s*=\s*"([^"]+)"\s*(?:#.*)?$/);
+    if (match) return match[1]!;
+  }
+  return null;
+}
+
+/**
+ * Resolves ONE Rust import occurrence (`rust-use` path or `rust-mod`
+ * declaration) to the module file that owns it. Deterministic v1 contract
+ * (see the module docblock): leading `crate`/`self`/`super`/own-name
+ * segments anchor the base directory; the remaining segments resolve
+ * longest-prefix-first against `<path>.rs` / `<path>/mod.rs`; anything
+ * else — external crates, `std`, `core`, `alloc`, or a path that maps to
+ * no known file — produces no edge (stays external).
+ */
+function resolveRustSpecifier(
+  fromFile: string,
+  imp: ExtractedImport,
+  knownFiles: ReadonlySet<string>,
+  rustCrateName: string | null,
+): string[] {
+  if (imp.kind === "rust-mod") {
+    const target = resolveRustModulePath(
+      joinRustPath(rustModuleDir(fromFile), imp.source),
+      knownFiles,
+    );
+    return target === null ? [] : [target];
+  }
+
+  const segments = imp.source.split("::").filter((s) => s.length > 0);
+  if (segments.length === 0) return [];
+  const head = segments[0]!;
+  let base: string;
+  let rest: string[];
+  if (head === "crate") {
+    base = rustCrateSourceRoot(knownFiles);
+    rest = segments.slice(1);
+  } else if (head === "self") {
+    base = rustModuleDir(fromFile);
+    rest = segments.slice(1);
+  } else if (head === "super") {
+    let ups = 0;
+    while (ups < segments.length && segments[ups] === "super") ups++;
+    const parts = rustModuleDir(fromFile).split("/").filter((s) => s.length > 0);
+    if (ups > parts.length) return []; // climbed above the repo root
+    base = parts.slice(0, parts.length - ups).join("/");
+    rest = segments.slice(ups);
+  } else if (rustCrateName !== null && head === rustCrateName.replace(/-/g, "_")) {
+    // The crate's own name (hyphens read as underscores) — the form
+    // integration tests and benches use to import the library crate.
+    base = rustCrateSourceRoot(knownFiles);
+    rest = segments.slice(1);
+  } else {
+    return []; // external crate (std, core, alloc, third-party)
+  }
+  if (rest.length === 0) return []; // `use crate;` — nothing to resolve
+  // The path may name a nested module (`crate::server::handler`) or an item
+  // inside one (`crate::server::Server`). The LONGEST segment prefix that
+  // maps to a known module file wins.
+  for (let i = rest.length; i >= 1; i--) {
+    const target = resolveRustModulePath(
+      joinRustPath(base, rest.slice(0, i).join("/")),
+      knownFiles,
+    );
+    if (target !== null) return [target];
+  }
+  return [];
+}
+
+/**
+ * The directory a Rust file's submodules live in: `main.rs`/`lib.rs`/
+ * `mod.rs` use their own directory; any other file (`src/server.rs`) uses
+ * a directory named after its stem (`src/server`).
+ */
+function rustModuleDir(file: string): string {
+  const slash = file.lastIndexOf("/");
+  const dir = slash === -1 ? "" : file.slice(0, slash);
+  const base = file.slice(slash + 1);
+  if (base === "mod.rs" || base === "main.rs" || base === "lib.rs") return dir;
+  const stem = base.replace(/\.rs$/, "");
+  return dir === "" ? stem : `${dir}/${stem}`;
+}
+
+/** Cargo convention: the crate root is src/lib.rs or src/main.rs. */
+function rustCrateSourceRoot(knownFiles: ReadonlySet<string>): string {
+  for (const file of knownFiles) {
+    if (file === "src/lib.rs" || file === "src/main.rs") return "src";
+  }
+  return "";
+}
+
+/** `<path>` → `<path>.rs` or `<path>/mod.rs`, whichever is a known file. */
+function resolveRustModulePath(
+  pathNoExt: string,
+  knownFiles: ReadonlySet<string>,
+): string | null {
+  const asFile = `${pathNoExt}.rs`;
+  if (knownFiles.has(asFile)) return asFile;
+  const asMod = `${pathNoExt}/mod.rs`;
+  if (knownFiles.has(asMod)) return asMod;
+  return null;
+}
+
+function joinRustPath(base: string, rel: string): string {
+  return base === "" ? rel : `${base}/${rel}`;
 }
 
 /** Resolves ONE specifier occurrence; null means "stays external". */

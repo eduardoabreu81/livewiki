@@ -11,18 +11,20 @@ beforeEach(async () => {
 describe("parser", () => {
   it("listSupportedGrammars lista os .wasm disponíveis", () => {
     const grammars = listSupportedGrammars();
-    expect(grammars.length).toBeGreaterThanOrEqual(5);
+    expect(grammars.length).toBeGreaterThanOrEqual(6);
     expect(grammars).toContain("typescript");
     expect(grammars).toContain("tsx");
     expect(grammars).toContain("javascript");
     expect(grammars).toContain("python");
     expect(grammars).toContain("go");
+    expect(grammars).toContain("rust");
   });
 
   it("grammarForExtension retorna o nome da gramática", () => {
     expect(grammarForExtension(".ts")).toBe("typescript");
     expect(grammarForExtension(".PY")).toBe("python"); // case insensitive
     expect(grammarForExtension(".go")).toBe("go");
+    expect(grammarForExtension(".rs")).toBe("rust");
     expect(grammarForExtension(".xyz")).toBeUndefined();
   });
 
@@ -45,6 +47,17 @@ describe("parser", () => {
     expect(tree.rootNode.type).toBe("source_file");
     expect(tree.rootNode.descendantsOfType("function_declaration").length).toBe(1);
     expect(tree.rootNode.descendantsOfType("method_declaration").length).toBe(1);
+  });
+
+  it("parseSource parseia Rust e reconhece function_item + impl_item + trait_item", async () => {
+    const tree = await parseSource(
+      ".rs",
+      "fn main() {}\n\nstruct Server;\n\nimpl Server {\n    fn start(&self) {}\n}\n\ntrait Runner {\n    fn run(&self);\n}\n",
+    );
+    expect(tree.rootNode.type).toBe("source_file");
+    expect(tree.rootNode.descendantsOfType("function_item").length).toBe(2);
+    expect(tree.rootNode.descendantsOfType("impl_item").length).toBe(1);
+    expect(tree.rootNode.descendantsOfType("trait_item").length).toBe(1);
   });
 
   it("parseSource lança erro para extensão sem gramática", async () => {

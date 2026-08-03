@@ -42,7 +42,7 @@ import { openIndex, type FileRow } from "./db.js";
 import { previewWorkingTreeDebt } from "./diff-preview.js";
 import { run as runStatus } from "./status.js";
 import { collectImportsForFiles } from "./imports.js";
-import { loadGoModulePath, resolveImportEdges } from "./import-resolution.js";
+import { loadGoModulePath, loadRustCrateName, resolveImportEdges } from "./import-resolution.js";
 import { derivePathFromSymbolKey } from "./risk.js";
 import { EXTENSION_LANG } from "./walker.js";
 import { snippetForSymbol, SNIPPET_WINDOW, type DebtSnippet } from "./update.js";
@@ -308,6 +308,7 @@ async function computeDirectImporters(
       knownFiles: new Set(allPaths),
       workspacePackages: [],
       goModulePath: await loadGoModulePath(absRoot),
+      rustCrateName: await loadRustCrateName(absRoot),
     });
     const importers = new Set<string>();
     for (const edge of edges) {

@@ -27,7 +27,7 @@ import {
   scoreDebtItem,
   type RiskScore,
 } from "./risk.js";
-import { loadGoModulePath } from "./import-resolution.js";
+import { loadGoModulePath, loadRustCrateName } from "./import-resolution.js";
 
 /** Coverage tier of a language (SPEC §"Coverage ladder"). */
 export type LangTier = "anchored" | "prose";
@@ -329,6 +329,7 @@ async function applyRiskRanking(
     importsByFile,
     knownFiles: new Set(allPaths),
     goModulePath: await loadGoModulePath(absRoot),
+    rustCrateName: await loadRustCrateName(absRoot),
   });
 
   const churnWindow = config.riskChurnCommits ?? CONFIG_DEFAULTS.riskChurnCommits;

@@ -16,6 +16,11 @@
  *     single form (`import "fmt"`) and the grouped form (`import ( ... )`);
  *     the path is the spec's `interpreted_string_literal`, aliases and blank
  *     imports (`_`) share the same path field.
+ *   - Rust (roadmap item 20): use_declaration → the imported path
+ *     (`use std::fmt`, braces `use a::{b, c}` record the shared prefix `a`,
+ *     aliases `use a::b as c` record `a::b`, wildcards `use a::b::*` record
+ *     `a::b`); `mod foo;` declarations (no body) record the module name as
+ *     kind rust-mod. Inline `mod foo { ... }` (with body) is not an import.
  *
  * Limitação: NÃO resolve imports dinâmicos (require() variável, import() com
  * expressão). Esses viram "unknown" no grafo. Aceitável pro MVP — LLM pode
@@ -27,7 +32,14 @@ import * as nodePath from "node:path";
 import type { Tree, Node } from "web-tree-sitter";
 import { initParser, parseSource } from "./parser.js";
 
-export type ImportKind = "ts-import" | "ts-export" | "py-import" | "py-from" | "go-import";
+export type ImportKind =
+  | "ts-import"
+  | "ts-export"
+  | "py-import"
+  | "py-from"
+  | "go-import"
+  | "rust-use"
+  | "rust-mod";
 
 export interface ExtractedImport {
   /** String literal do source (ex: "./auth", "express", "../utils") */
@@ -123,6 +135,22 @@ export function extractImportsFromTree(tree: Tree, lang: string): ExtractedImpor
         }
         break;
       }
+      case "use_declaration": {
+        // Rust: use std::fmt;  /  use a::{b, c};  /  use a::b as c;  /
+        // use a::b::*; — every shape records the module PATH (never the
+        // imported item names or the alias).
+        pushRustUsePath(node.childForFieldName("argument"), out);
+        break;
+      }
+      case "mod_item": {
+        // Rust: `mod foo;` (no body) declares an external module file;
+        // `mod foo { ... }` (body field) is inline and not an import.
+        if (!node.childForFieldName("body")) {
+          const name = node.childForFieldName("name")?.text;
+          if (name) out.push({ source: name, kind: "rust-mod" });
+        }
+        break;
+      }
     }
 
     if (cursor.gotoFirstChild()) {
@@ -149,6 +177,37 @@ function pushGoImportSpec(spec: Node, out: ExtractedImport[]): void {
   const cleaned = pathNode.text.replace(/^["`]|["`]$/g, "");
   if (cleaned.length === 0) return;
   out.push({ source: cleaned, kind: "go-import" });
+}
+
+/**
+ * Rust use_declaration argument → ExtractedImport (kind rust-use). The
+ * recorded source is always the module path:
+ *   - scoped_identifier / identifier (`use std::fmt`) → the full path text;
+ *   - scoped_use_list (`use a::{b, c}`) → the shared `path` prefix `a`;
+ *   - use_as_clause (`use a::b as c`) → the `path` field `a::b` (alias
+ *     dropped — resolution targets the module, not the local name);
+ *   - use_wildcard (`use a::b::*`) → the path with the `::*` suffix stripped.
+ */
+function pushRustUsePath(argument: Node | null, out: ExtractedImport[]): void {
+  if (!argument) return;
+  let path: string | null = null;
+  switch (argument.type) {
+    case "identifier":
+    case "scoped_identifier":
+      path = argument.text;
+      break;
+    case "scoped_use_list":
+    case "use_as_clause":
+      path = argument.childForFieldName("path")?.text ?? null;
+      break;
+    case "use_wildcard":
+      path = argument.text.replace(/::\*$/, "");
+      break;
+    default:
+      return; // use_list without a prefix and exotic shapes: not a path
+  }
+  if (path === null || path.length === 0) return;
+  out.push({ source: path, kind: "rust-use" });
 }
 
 /**

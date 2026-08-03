@@ -482,6 +482,62 @@ Same shape as item 19 (grammar + extractor + import resolution — Rust
 `mod`/`use`/crate resolution) after the Go pilot proves the pattern.
 Acceptance: batch run on a real Rust repo (paid, approved at the time).
 
+Result (implementation, 2026-08-03, uncommitted — coordinator reviews):
+`tree-sitter-rust.wasm` vendored in `packages/core/grammars/` (built with
+tree-sitter-cli 0.26.10 + auto-downloaded wasi-sdk from tree-sitter-rust
+77a3747; loads verified by parsing a probe file with web-tree-sitter
+0.26.10 before vendoring). `.rs` mapped in `parser.ts`/`walker.ts`.
+`symbols.ts`: `function_item` → function; inside an `impl_item` body →
+method keyed `path#Type.name` for BOTH `impl T` and `impl Trait for T`
+(decision: trait-impl members are callable on T, so they share the key
+space; generic `impl<T> Vec<T>` keys under the base `Vec`, scoped
+`impl a::B` under `B`); `struct_item` → `class`; `enum_item` → `class`
+(least invasive — variants are not citable symbols); `trait_item` →
+`interface` with member signatures NOT extracted (same policy as Go
+interfaces); items inside function bodies skipped (local-class policy);
+nested `fn` keeps the plain key (same as TS). Calls: `call_expression`
+with bare identifier → `extracted`, `generic_function` (bare `foo::<T>()`)
+→ `extracted`, `field_expression` (`x.m()`) and `scoped_identifier`
+(`path::f()`, `Type::assoc()`) right-most name → `inferred`; macro
+invocations (`println!`) are not call_expressions and are skipped.
+Rationales: Rust comment nodes are `line_comment`/`block_comment` (added
+alongside `comment`); `///` outer and `//!` inner doc comments (and `/**`
+blocks) count as docstrings (≥20 normalized chars; `////` excluded);
+tagged WHY/NOTE/HACK/TODO/FIXME comments work unchanged. One extractor
+fix the Rust grammar forced: `line_comment` nodes INCLUDE the trailing
+newline, so the positional attribution line range is clamped to a single
+line. Imports: `imports.ts` extracts `use_declaration` as `rust-use`
+(braces `use a::{b, c}` record the shared prefix `a`, aliases `as` record
+the original path, wildcards drop `::*`, `pub use` identical) and
+bodiless `mod foo;` as `rust-mod` (inline `mod { }` ignored).
+`import-resolution.ts`: `loadRustCrateName` reads the root `Cargo.toml`
+`[package] name` (comment-tolerant; null without it); resolution v1 —
+`crate::` from the crate source root (`src/` when a known
+`src/lib.rs`/`src/main.rs` exists, else repo root), `self::` relative to
+the current file's module dir, one `super::` per module-dir climb, the
+crate's own name (hyphens read as underscores — the integration-test
+form) as a `crate::` alias; remaining segments resolve longest-prefix-
+first against `<path>.rs` / `<path>/mod.rs`; `mod foo;` resolves under
+the current file's module dir (stem dir for non-mod/main/lib files);
+external crates (`std`, `core`, third-party) and unknown paths stay
+external. Cargo workspaces (multi-crate) OUT OF SCOPE for v1. Wired into
+batch.ts, init.ts, status.ts (risk), change-impact.ts. Fixture
+`test/fixtures/sample-rust-repo` (Cargo.toml + src/{main,models,server}.rs).
+Tests: parser (2), walker (1 new + grammar-less example moved .rs → .kt),
+symbols (10 Rust extraction + 6 Rust rationales), calls (8 Rust), imports
+(6 Rust), import-resolution (12 Rust + 4 loadRustCrateName), indexer
+fixture integration (3: tiers/key shapes, calls+rationales). Prose-tier
+tests that used `.rs` as the grammar-less example switched to `.rb`
+(indexer) and `.kt` (walker, CLI prose-tier E2E). Also fixed a latent
+defect exposed while validating: the committed Go fixture had picked up
+a stale `.livewiki/` cache from the item-19 live smoke (gitignored,
+invisible to git), which made its indexer test report `filesAdded: 0` —
+cache deleted, Go test green again. Gate: `pnpm -r build` clean; core
+1719 / CLI 125 / MCP 56; live CLI smoke on a fixture copy: 13 symbols
+(4 functions, 3 classes, 5 methods, 1 interface), `rust: anchored`
+tier. The paid `init --batch` acceptance run on a real Rust repo
+remains open (maintainer approval).
+
 ### 21. Tier-1 anchored support: Java (PRE-BETA)
 
 Same shape as item 19 (grammar + extractor + package/import resolution)

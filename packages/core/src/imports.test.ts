@@ -129,6 +129,56 @@ import (
   });
 });
 
+describe("imports.collectImports (Rust, roadmap item 20)", () => {
+  it("extrai use simples e com path scoped", async () => {
+    const imps = await collectImports(
+      "src/main.rs",
+      "use std::fmt;\nuse crate::server::Server;\n\nfn main() {}\n",
+    );
+    expect(imps).toEqual([
+      { source: "std::fmt", kind: "rust-use" },
+      { source: "crate::server::Server", kind: "rust-use" },
+    ]);
+  });
+
+  it("extrai use com chaves registrando o prefixo compartilhado", async () => {
+    const imps = await collectImports(
+      "src/main.rs",
+      "use std::collections::{HashMap, BTreeMap};\n",
+    );
+    expect(imps).toEqual([{ source: "std::collections", kind: "rust-use" }]);
+  });
+
+  it("extrai use com alias registrando o path original", async () => {
+    const imps = await collectImports(
+      "src/main.rs",
+      "use crate::server::Server as Srv;\n",
+    );
+    expect(imps).toEqual([{ source: "crate::server::Server", kind: "rust-use" }]);
+  });
+
+  it("extrai use wildcard sem o sufixo ::*", async () => {
+    const imps = await collectImports("src/main.rs", "use super::models::*;\n");
+    expect(imps).toEqual([{ source: "super::models", kind: "rust-use" }]);
+  });
+
+  it("extrai pub use da mesma forma", async () => {
+    const imps = await collectImports(
+      "src/lib.rs",
+      "pub use crate::server::Server;\n",
+    );
+    expect(imps).toEqual([{ source: "crate::server::Server", kind: "rust-use" }]);
+  });
+
+  it("extrai mod foo; como rust-mod e ignora mod inline com corpo", async () => {
+    const imps = await collectImports(
+      "src/main.rs",
+      "mod server;\nmod inline {\n    pub fn x() {}\n}\n",
+    );
+    expect(imps).toEqual([{ source: "server", kind: "rust-mod" }]);
+  });
+});
+
 describe("imports.collectImports (edge cases)", () => {
   it("arquivo não-parseável retorna [] (graceful)", async () => {
     const imps = await collectImports("src/foo.ts", "this is not { valid ts");

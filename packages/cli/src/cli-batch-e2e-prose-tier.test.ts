@@ -2,7 +2,7 @@
  * CLI E2E — Etapa 1: tier-2 universal prose floor (SPEC §"Coverage ladder").
  *
  * Scenario: a repository mixing grammar-mapped sources (.ts — tier 1,
- * anchored) and grammar-less sources (.rb, .rs — tier 2, prose). The walker
+ * anchored) and grammar-less sources (.rb, .kt — tier 2, prose). The walker
  * indexes every text file; the indexer records prose files with
  * `symbolCount: 0`; stage 4 emits zero-key pages (`anchors: []`, no markers)
  * for prose modules via the existing zero-key prompt contract.
@@ -236,7 +236,7 @@ async function expectVerifyClean(): Promise<void> {
 }
 
 describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", () => {
-  it("init --batch on a .ts + .rb + .rs repo completes, verify clean, tiers reported", async () => {
+  it("init --batch on a .ts + .rb + .kt repo completes, verify clean, tiers reported", async () => {
     await writeCode(
       "src/api/handler.ts",
       "export function handleRequest(input: string): string { return input.trim(); }\n",
@@ -246,8 +246,8 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       "def serve\nend\n",
     );
     await writeCode(
-      "src/engine/lib.rs",
-      "pub fn render(frame: u32) -> u32 { frame + 1 }\n",
+      "src/engine/lib.kt",
+      "fun render(frame: Int): Int = frame + 1\n",
     );
     // D1: a root README feeds the quickstart orientation block. It is also a
     // tier-2 prose file, so the batch documents it through the zero-key
@@ -259,7 +259,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
         "",
         "[![CI](https://img.shields.io/badge/ci-passing-green)](https://ci.example)",
         "",
-        "This fixture repository renders short media clips by wiring an API handler, a Ruby server, and a Rust engine into one local pipeline.",
+        "This fixture repository renders short media clips by wiring an API handler, a Ruby server, and a Kotlin engine into one local pipeline.",
         "",
         "## Getting Started",
         "",
@@ -341,10 +341,10 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       const statusReport = JSON.parse(statusR.stdout);
       expect(statusReport.files.byLang.typescript).toBe(1);
       expect(statusReport.files.byLang.rb).toBe(1);
-      expect(statusReport.files.byLang.rs).toBe(1);
+      expect(statusReport.files.byLang.kt).toBe(1);
       expect(statusReport.files.tiers.typescript).toBe("anchored");
       expect(statusReport.files.tiers.rb).toBe("prose");
-      expect(statusReport.files.tiers.rs).toBe("prose");
+      expect(statusReport.files.tiers.kt).toBe("prose");
     } finally {
       delete process.env.OPENAI_API_KEY;
     }

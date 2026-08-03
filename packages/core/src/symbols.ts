@@ -24,6 +24,22 @@
  *     - type_declaration/interface_type → kind: "interface"
  *     - call_expression              → callee identifier (extracted) or
  *                                      selector_expression field (inferred)
+ *   Rust (roadmap item 20 — replicates the Go pilot pattern):
+ *     - function_item                → kind: "function"; inside an impl_item
+ *                                      body → kind: "method" keyed
+ *                                      `Type.name` (both `impl T` and
+ *                                      `impl Trait for T` qualify under T —
+ *                                      those members are callable on T)
+ *     - struct_item                  → kind: "class"
+ *     - enum_item                    → kind: "class" (least invasive; variants
+ *                                      are not citable symbols)
+ *     - trait_item                   → kind: "interface" (member signatures
+ *                                      are NOT extracted — same policy as Go
+ *                                      interfaces)
+ *     - call_expression              → callee identifier (extracted),
+ *                                      generic_function (extracted), or
+ *                                      field_expression / scoped_identifier
+ *                                      right-most name (inferred)
  *
  * Chave do símbolo (SPEC §"Frontmatter"):
  *   - top-level: `caminho/relativo.ext#Nome`
@@ -148,6 +164,7 @@ function walkNode(
     node.type === "generator_function_declaration" ||
     node.type === "method_definition" ||
     node.type === "method_declaration" ||
+    node.type === "function_item" ||
     node.type === "function_definition"
       ? true
       : insideFunctionBody;
@@ -315,6 +332,61 @@ function walkNode(
       }
       break;
     }
+
+    case "function_item": {
+      // Rust — top-level `fn name(...)` is a function; inside an impl block
+      // (parentClassName set by the impl_item case) it is an associated
+      // function / method keyed `Type.name`, mirroring the Go receiver
+      // convention. A nested `fn` inside a function body keeps the plain key
+      // (same policy as nested TS function declarations).
+      const name = node.childForFieldName("name")?.text;
+      if (name) {
+        const qualified = parentClassName ? `${parentClassName}.${name}` : name;
+        const kind: SymbolKind = parentClassName ? "method" : "function";
+        out.push(makeRecord(node, source, relPath, qualified, kind));
+      }
+      break;
+    }
+
+    case "impl_item": {
+      // Rust — `impl T { ... }` and `impl Trait for T { ... }` both qualify
+      // their members under T (the `type` field; the `trait` field only names
+      // the implemented trait — those members are callable on T, so they
+      // share the key space). Descends into the declaration_list with
+      // parentClassName = T. impl blocks inside a function body are local
+      // implementation details, same skip policy as local classes.
+      if (insideFunctionBody) return;
+      const typeName = rustImplTypeName(node.childForFieldName("type"));
+      const body = node.childForFieldName("body");
+      if (body) {
+        for (let i = 0; i < body.namedChildCount; i++) {
+          const child = body.namedChild(i);
+          if (child) walkNode(child, source, relPath, typeName, out, insideFunctionBody);
+        }
+      }
+      return; // already descended manually
+    }
+
+    case "struct_item":
+    case "enum_item": {
+      // Rust — struct is the class analog; enum gets "class" too (least
+      // invasive — it is a named data type, and class diagrams only match
+      // "class"). Fields/variants are not citable symbols, so no descent.
+      if (insideFunctionBody) return;
+      const name = node.childForFieldName("name")?.text;
+      if (name) out.push(makeRecord(node, source, relPath, name, "class"));
+      return;
+    }
+
+    case "trait_item": {
+      // Rust — trait gets kind "interface" (same decision as Go interfaces).
+      // Member signatures (function_signature_item) and default bodies are
+      // NOT extracted — the trait itself is the citable symbol.
+      if (insideFunctionBody) return;
+      const name = node.childForFieldName("name")?.text;
+      if (name) out.push(makeRecord(node, source, relPath, name, "interface"));
+      return;
+    }
   }
 
   // Default: desce nos filhos (exceto quando já tratamos acima).
@@ -388,6 +460,29 @@ function goReceiverTypeName(receiver: Node | null): string | null {
   if (typeNode.type === "generic_type") {
     const base = typeNode.childForFieldName("type") ?? typeNode.firstNamedChild;
     if (base?.type === "type_identifier") return base.text;
+  }
+  return null;
+}
+
+/**
+ * Rust impl-block receiver type name for qualifying member keys. The
+ * impl_item `type` field is a `type_identifier` (`impl Server`), a
+ * `generic_type` (`impl<T> Vec<T>` — the base type_identifier wins, so
+ * `Vec<T>` and `Vec<U>` impl blocks share the `Vec.` key prefix), or a
+ * `scoped_type_identifier` (`impl a::B` — the right-most name). Returns
+ * null when the shape is unexpected (e.g. `impl Trait for dyn X`); members
+ * then fall back to unqualified keys, same policy as TS methods outside a
+ * class.
+ */
+function rustImplTypeName(typeNode: Node | null): string | null {
+  if (!typeNode) return null;
+  if (typeNode.type === "type_identifier") return typeNode.text;
+  if (typeNode.type === "generic_type") {
+    const base = typeNode.childForFieldName("type") ?? typeNode.firstNamedChild;
+    if (base?.type === "type_identifier") return base.text;
+  }
+  if (typeNode.type === "scoped_type_identifier") {
+    return typeNode.childForFieldName("name")?.text ?? null;
   }
   return null;
 }
@@ -488,6 +583,23 @@ function walkForCalls(
       }
       break;
     }
+    case "function_item": {
+      // Rust — qualifies as Type.method when nested under an impl block,
+      // same key shape as the symbol extractor.
+      const name = node.childForFieldName("name")?.text;
+      if (name) {
+        nextCallerKey = parentClassName
+          ? `${relPath}#${parentClassName}.${name}`
+          : `${relPath}#${name}`;
+      }
+      break;
+    }
+    case "impl_item": {
+      // Rust — both `impl T` and `impl Trait for T` qualify members under T.
+      const typeName = rustImplTypeName(node.childForFieldName("type"));
+      if (typeName) nextParentClassName = typeName;
+      break;
+    }
     case "class_declaration":
     case "class":
     case "class_definition": {
@@ -545,6 +657,23 @@ function extractCalleeName(node: Node | null): { name: string; confidence: CallC
     // the callee name; the operand (package or receiver) is unknown here.
     const name = node.childForFieldName("field")?.text;
     return name ? { name, confidence: "inferred" } : null;
+  }
+  if (node.type === "field_expression") {
+    // Rust — `x.m()`: the right-most field_identifier is the callee name;
+    // the receiver value is unknown here.
+    const name = node.childForFieldName("field")?.text;
+    return name ? { name, confidence: "inferred" } : null;
+  }
+  if (node.type === "scoped_identifier") {
+    // Rust — `path::f()` / `Type::assoc()`: the right-most `name` identifier
+    // is the callee; the path segments are unknown here.
+    const name = node.childForFieldName("name")?.text;
+    return name ? { name, confidence: "inferred" } : null;
+  }
+  if (node.type === "generic_function") {
+    // Rust — `foo::<T>()`: a bare generic call keeps the underlying
+    // identifier's confidence (extracted for a bare name).
+    return extractCalleeName(node.childForFieldName("function"));
   }
   return null;
 }
@@ -629,7 +758,8 @@ interface RawRationaleCandidate {
  *   - Tagged comments: stripped text starts with WHY:/NOTE:/HACK:/TODO:/
  *     FIXME: (case-insensitive) — kind = lowercased tag.
  *   - Docstrings: Python first-statement strings of module/class/function
- *     bodies; TS/JS/TSX block comments opening with `/**`. Minimum 20
+ *     bodies; TS/JS/TSX block comments opening with `/**`; Rust doc comments
+ *     (`///` outer, `//!` inner line comments, `/**` blocks). Minimum 20
  *     normalized chars.
  *
  * Attribution is positional (comments are tree-sitter extras): a comment
@@ -656,7 +786,11 @@ export function extractRationales(
     if (normalized === "") continue;
 
     let kind: RationaleKind;
-    if (candidate.pythonDocstring || isTsDocstringComment(candidate.rawText)) {
+    if (
+      candidate.pythonDocstring ||
+      isTsDocstringComment(candidate.rawText) ||
+      isRustDocComment(candidate.rawText)
+    ) {
       if (normalized.length < MIN_DOCSTRING_CHARS) continue;
       kind = "docstring";
     } else {
@@ -679,10 +813,16 @@ export function extractRationales(
 
 /** Collects comment nodes and Python docstrings from the named-children stream. */
 function collectRationaleCandidates(node: Node, out: RawRationaleCandidate[]): void {
-  if (node.type === "comment") {
+  // "comment" covers TS/JS/TSX/Go/Python; Rust names them line_comment /
+  // block_comment (doc comments `///` and `//!` are line_comment nodes).
+  if (node.type === "comment" || node.type === "line_comment" || node.type === "block_comment") {
+    const startLine = node.startPosition.row + 1;
     out.push({
-      startLine: node.startPosition.row + 1,
-      endLine: node.endPosition.row + 1,
+      startLine,
+      // Rust line_comment nodes INCLUDE the trailing newline, which shifts
+      // endPosition to the next row — a line comment logically spans ONE
+      // line, so clamp the end line or positional attribution breaks.
+      endLine: node.type === "line_comment" ? startLine : node.endPosition.row + 1,
       rawText: node.text,
       pythonDocstring: false,
     });
@@ -719,6 +859,16 @@ function isTsDocstringComment(rawText: string): boolean {
 }
 
 /**
+ * True for a Rust doc line comment: `///` outer (but NOT `////`, which is a
+ * plain comment by convention) or `//!` inner. Rust `/**` blocks are already
+ * covered by `isTsDocstringComment`.
+ */
+function isRustDocComment(rawText: string): boolean {
+  if (rawText.startsWith("///")) return !rawText.startsWith("////");
+  return rawText.startsWith("//!");
+}
+
+/**
  * Normalizes comment/docstring text: strips comment markers and string
  * quotes, drops decorative leading `*` on block-comment lines, collapses
  * all whitespace to single spaces.
@@ -729,6 +879,9 @@ function normalizeRationaleText(rawText: string, pythonDocstring: boolean): stri
     // Strip optional string prefix (r/b/f/u combos) and the quote pair.
     text = text.replace(/^[rubfRUBF]{0,3}("""|'''|"|')/, "");
     text = text.replace(/("""|'''|"|')$/, "");
+  } else if (text.startsWith("///") || text.startsWith("//!")) {
+    // Rust doc line comments — strip the three-char marker.
+    text = text.slice(3);
   } else if (text.startsWith("//")) {
     text = text.slice(2);
   } else if (text.startsWith("#")) {

@@ -6,6 +6,7 @@ import {
   loadEffectiveTsconfig,
   loadGoModulePath,
   loadPackageTsconfig,
+  loadRustCrateName,
   loadWorkspacePackages,
   resolveImportEdges,
   type PackageTsconfig,
@@ -702,5 +703,208 @@ describe("import-resolution.loadGoModulePath (roadmap item 19)", () => {
   it("returns null when go.mod has no module directive", async () => {
     await nodeFs.writeFile(nodePath.join(repoRoot, "go.mod"), "go 1.22\n");
     expect(await loadGoModulePath(repoRoot)).toBeNull();
+  });
+});
+
+describe("import-resolution.resolveImportEdges (Rust, roadmap item 20)", () => {
+  const RS_FILES = new Set([
+    "src/main.rs",
+    "src/server.rs",
+    "src/models.rs",
+    "src/server/handler.rs",
+    "src/legacy/mod.rs",
+    "tests/api.rs",
+  ]);
+
+  function rsEdges(
+    importsByFile: Map<string, ExtractedImport[]>,
+    knownFiles: ReadonlySet<string> = RS_FILES,
+    rustCrateName: string | null = "fixture",
+  ): ResolvedImportEdge[] {
+    return resolveImportEdges({
+      importsByFile, knownFiles, workspacePackages: [], rustCrateName,
+    });
+  }
+
+  it("mod foo; resolves to foo.rs under the current file's module dir", () => {
+    const edges = rsEdges(new Map([
+      ["src/main.rs", [{ source: "server", kind: "rust-mod" }]],
+    ]));
+    expect(edges).toEqual([
+      { fromFile: "src/main.rs", toFile: "src/server.rs", source: "server" },
+    ]);
+  });
+
+  it("mod foo; resolves to foo/mod.rs when only that form exists", () => {
+    const edges = rsEdges(new Map([
+      ["src/main.rs", [{ source: "legacy", kind: "rust-mod" }]],
+    ]));
+    expect(edges).toEqual([
+      { fromFile: "src/main.rs", toFile: "src/legacy/mod.rs", source: "legacy" },
+    ]);
+  });
+
+  it("mod foo; inside src/server.rs resolves under src/server/ (stem dir)", () => {
+    const edges = rsEdges(new Map([
+      ["src/server.rs", [{ source: "handler", kind: "rust-mod" }]],
+    ]));
+    expect(edges).toEqual([
+      { fromFile: "src/server.rs", toFile: "src/server/handler.rs", source: "handler" },
+    ]);
+  });
+
+  it("crate::a::Item resolves to the file owning the longest module prefix", () => {
+    const edges = rsEdges(new Map([
+      ["src/main.rs", [
+        { source: "crate::server::Server", kind: "rust-use" },
+        { source: "crate::server::handler::run", kind: "rust-use" },
+      ]],
+    ]));
+    expect(edges).toEqual([
+      { fromFile: "src/main.rs", toFile: "src/server.rs", source: "crate::server::Server" },
+      { fromFile: "src/main.rs", toFile: "src/server/handler.rs", source: "crate::server::handler::run" },
+    ]);
+  });
+
+  it("self:: resolves relative to the current file's module dir", () => {
+    const edges = rsEdges(new Map([
+      ["src/server.rs", [{ source: "self::handler::run", kind: "rust-use" }]],
+    ]));
+    expect(edges).toEqual([
+      { fromFile: "src/server.rs", toFile: "src/server/handler.rs", source: "self::handler::run" },
+    ]);
+  });
+
+  it("super:: climbs one module dir per super segment", () => {
+    const edges = rsEdges(new Map([
+      ["src/server/handler.rs", [
+        { source: "super::models::Request", kind: "rust-use" },
+        { source: "super::super::models::Request", kind: "rust-use" },
+      ]],
+    ]));
+    // super:: from src/server/handler.rs climbs to src/ (moduleDir is
+    // src/server/handler; one super → src/server — models is NOT there, so
+    // only the two-super form reaching src/ resolves).
+    expect(edges).toEqual([
+      { fromFile: "src/server/handler.rs", toFile: "src/models.rs", source: "super::super::models::Request" },
+    ]);
+  });
+
+  it("the crate's own name resolves like crate:: (integration-test form)", () => {
+    const edges = rsEdges(new Map([
+      ["tests/api.rs", [{ source: "fixture::server::Server", kind: "rust-use" }]],
+    ]));
+    expect(edges).toEqual([
+      { fromFile: "tests/api.rs", toFile: "src/server.rs", source: "fixture::server::Server" },
+    ]);
+  });
+
+  it("a hyphenated package name matches its underscored use path", () => {
+    const edges = rsEdges(new Map([
+      ["tests/api.rs", [{ source: "my_fixture::server::Server", kind: "rust-use" }]],
+    ]), RS_FILES, "my-fixture");
+    expect(edges).toEqual([
+      { fromFile: "tests/api.rs", toFile: "src/server.rs", source: "my_fixture::server::Server" },
+    ]);
+  });
+
+  it("external crates (std, third-party) stay external; unknown paths too", () => {
+    const edges = rsEdges(new Map([
+      ["src/main.rs", [
+        { source: "std::fmt", kind: "rust-use" },
+        { source: "tokio::runtime::Runtime", kind: "rust-use" },
+        { source: "crate::nonexistent::Thing", kind: "rust-use" },
+      ]],
+    ]));
+    expect(edges).toEqual([]);
+  });
+
+  it("without Cargo.toml the own-name form stays external but crate/self/super still resolve", () => {
+    const edges = rsEdges(new Map([
+      ["src/main.rs", [
+        { source: "fixture::server::Server", kind: "rust-use" },
+        { source: "crate::server::Server", kind: "rust-use" },
+      ]],
+    ]), RS_FILES, null);
+    expect(edges).toEqual([
+      { fromFile: "src/main.rs", toFile: "src/server.rs", source: "crate::server::Server" },
+    ]);
+    // and the option is optional — omitting it behaves like "no Cargo.toml"
+    expect(
+      resolveImportEdges({
+        importsByFile: new Map([
+          ["src/main.rs", [{ source: "crate::server::Server", kind: "rust-use" }]],
+        ]),
+        knownFiles: RS_FILES, workspacePackages: [],
+      }),
+    ).toEqual([
+      { fromFile: "src/main.rs", toFile: "src/server.rs", source: "crate::server::Server" },
+    ]);
+  });
+
+  it("crate:: falls back to the repo root when no src/lib.rs or src/main.rs exists", () => {
+    const files = new Set(["lib.rs", "server.rs"]);
+    const edges = rsEdges(new Map([
+      ["lib.rs", [{ source: "crate::server::Server", kind: "rust-use" }]],
+    ]), files, null);
+    expect(edges).toEqual([
+      { fromFile: "lib.rs", toFile: "server.rs", source: "crate::server::Server" },
+    ]);
+  });
+
+  it("modules.resolveModuleEdges groups Rust file edges into module edges", () => {
+    const modules: Module[] = [
+      { id: "main", paths: ["src/main.rs"], symbolCount: 1 },
+      { id: "server", paths: ["src/server.rs"], symbolCount: 3 },
+    ];
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["src/main.rs", [
+        { source: "server", kind: "rust-mod" },
+        { source: "crate::server::Server", kind: "rust-use" },
+      ]],
+    ]);
+    const fileEdges = resolveImportEdges({
+      importsByFile, knownFiles: RS_FILES, workspacePackages: [], rustCrateName: "fixture",
+    });
+    const moduleEdges = resolveModuleEdges(modules, importsByFile, RS_FILES, fileEdges);
+    expect(moduleEdges).toEqual([{ from: "main", to: "server" }]);
+  });
+});
+
+describe("import-resolution.loadRustCrateName (roadmap item 20)", () => {
+  let repoRoot: string;
+  beforeEach(async () => {
+    repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-cargo-"));
+  });
+  afterEach(async () => {
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("reads the package name from a root Cargo.toml", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "Cargo.toml"),
+      '[package]\nname = "fixture"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n',
+    );
+    expect(await loadRustCrateName(repoRoot)).toBe("fixture");
+  });
+
+  it("tolerates comments and ignores name keys outside [package]", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "Cargo.toml"),
+      '# top comment\n[package] # the package section\nname = "fixture" # pinned\n\n[lib]\nname = "other"\n',
+    );
+    expect(await loadRustCrateName(repoRoot)).toBe("fixture");
+  });
+
+  it("returns null when Cargo.toml is missing", async () => {
+    expect(await loadRustCrateName(repoRoot)).toBeNull();
+  });
+
+  it("returns null when [package] has no name", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "Cargo.toml"),
+      '[package]\nversion = "0.1.0"\n',
+    );
+    expect(await loadRustCrateName(repoRoot)).toBeNull();
   });
 });

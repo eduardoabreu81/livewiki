@@ -11,6 +11,7 @@
  *   - javascript (.js, .mjs, .cjs)
  *   - python (.py)
  *   - go (.go)
+ *   - rust (.rs)
  *
  * `initParser()` é global, idempotente e deve ser chamado uma vez no startup
  * do CLI antes do primeiro `parseFile()`. Mais de uma chamada é segura
@@ -84,6 +85,7 @@ const EXT_TO_GRAMMAR: Record<string, string> = {
   ".cjs": "javascript",
   ".py": "python",
   ".go": "go",
+  ".rs": "rust",
 };
 
 const GRAMMAR_TO_EXT = new Map<string, string>(
