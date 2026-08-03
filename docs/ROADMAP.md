@@ -476,7 +476,7 @@ orientation pulls the real README purpose, 1 flow accepted / 3 skipped
 on overlap. Clone preserved locally at `/c/tmp/cobra` (evidence, not
 in the repo).
 
-### 20. Tier-1 anchored support: Rust (PRE-BETA)
+### 20. Tier-1 anchored support: Rust (PRE-BETA) ✅ DONE 2026-08-03
 
 Same shape as item 19 (grammar + extractor + import resolution — Rust
 `mod`/`use`/crate resolution) after the Go pilot proves the pattern.
@@ -535,8 +535,14 @@ invisible to git), which made its indexer test report `filesAdded: 0` —
 cache deleted, Go test green again. Gate: `pnpm -r build` clean; core
 1719 / CLI 125 / MCP 56; live CLI smoke on a fixture copy: 13 symbols
 (4 functions, 3 classes, 5 methods, 1 interface), `rust: anchored`
-tier. The paid `init --batch` acceptance run on a real Rust repo
-remains open (maintainer approval).
+tier. **Acceptance run (2026-08-03, approved paid):** `init --batch
+--no-refine` on `ajeetdsouza/zoxide` (25 .rs files) via MiniMax-M3
+proxy — run #1 `completed`, 15 tasks done / 0 failed, exit 0, verify
+OK (19 pages, zero issues), checkpoint 148,633 tokens == proxy
+EXACTLY (no smoke ping this run). Real Rust anchors confirmed
+(`src/db/dir.rs#Dir`, `#Dir.score`, `#DirDisplay.fmt` — impl method
+keys live). Clone preserved locally at `/c/tmp/zoxide` (evidence, not
+in the repo).
 
 ### 21. Tier-1 anchored support: Java (PRE-BETA)
 
