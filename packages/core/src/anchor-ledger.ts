@@ -519,7 +519,7 @@ async function orchestrate(
       if (anchorId !== null && hasOpenDebt(db, anchorId, "deleted")) {
         // dedup — não recriar dívida já aberta
       } else {
-        createDebt(db, anchorId, "deleted", assignee, null, ca.symbolKey);
+        createDebt(db, anchorId, "deleted", assignee, null, ca.symbolKey, ca.docPageId);
         result.debtCreated++;
         result.debtByEvent.deleted++;
       }
@@ -529,7 +529,7 @@ async function orchestrate(
     // symbol existe — checa hash
     if (prev && prev.symbol_hash_at_doc !== sym.content_hash) {
       if (!hasOpenDebt(db, prev.id, "changed")) {
-        createDebt(db, prev.id, "changed", assignee, null, ca.symbolKey);
+        createDebt(db, prev.id, "changed", assignee, null, ca.symbolKey, ca.docPageId);
         result.debtCreated++;
         result.debtByEvent.changed++;
       }
@@ -567,7 +567,7 @@ async function orchestrate(
       if (hasOpenDebt(db, canonicalId, "moved")) continue;
       const assignee = assigneeFor(info.owner, info.inManualBlock);
       const detail = JSON.stringify({ from: oldKey, to: newKey });
-      createDebt(db, canonicalId, "moved", assignee, detail, newKey);
+      createDebt(db, canonicalId, "moved", assignee, detail, newKey, info.docPageId);
       result.debtCreated++;
       result.debtByEvent.moved++;
     }
@@ -711,12 +711,17 @@ function createDebt(
   assignee: Assignee,
   detail: string | null,
   symbolKey: string,
+  docPageId: number | null,
 ): void {
   // Fix E (achado revisão Fase 2): symbol_key gravado em coluna própria.
   // Sobrevive ao anchor ser removida, evitando dívida órfã sem referência.
+  // Schema v8 (revisão externa 2026-08-03): doc_page_id é a referência de
+  // página igualmente durável — sem ela, as superfícies de dívida (CLI e
+  // MCP) perdiam symbol_key/wiki_path via LEFT JOIN assim que o anchor sumia.
   db.prepare(
-    "INSERT INTO debt (anchor_id, event, assignee, symbol_key, detail, detected_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(anchorId, event, assignee, symbolKey, detail, Date.now());
+    "INSERT INTO debt (anchor_id, event, assignee, symbol_key, detail, detected_at, doc_page_id) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(anchorId, event, assignee, symbolKey, detail, Date.now(), docPageId);
 }
 
 /**

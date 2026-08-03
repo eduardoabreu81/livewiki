@@ -10,3 +10,10 @@ coverage/
 AGENTS.md
 docs/PROJECT_LOG.md
 docs/PROJECT_CONTEXT.md
+
+# Local pre-launch evidence and tool artifacts (never tracked, never indexed)
+docs/benchmarks/
+docs/tasks/
+docs/handoffs/
+.playwright-mcp/
+view-quickstart.jpg

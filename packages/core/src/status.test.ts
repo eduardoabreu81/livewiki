@@ -514,3 +514,76 @@ describe("status index freshness (backlog #3)", () => {
     expect(formatHuman(report)).not.toContain("index is stale");
   });
 });
+
+/**
+ * Debt identity durability (schema v8, external review 2026-08-03): the
+ * status debt report must keep symbol_key and wiki_path actionable AFTER
+ * the anchor row is gone — via the durable debt.symbol_key and
+ * debt.doc_page_id columns, not only the live anchors join.
+ */
+describe("status debt identity durability (schema v8)", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), "livewiki-status-durable-"));
+    await mkdir(join(repoRoot, ".livewiki"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  async function writeRepoFile(rel: string, content: string): Promise<void> {
+    const abs = join(repoRoot, rel);
+    await mkdir(join(abs, ".."), { recursive: true });
+    await writeFile(abs, content);
+  }
+
+  const ANCHORED_PAGE = `---\ntitle: a\nowner: generated\nanchors:\n  - src/a.ts#alpha\n---\n\n# a\n\nDocumentation.\n`;
+
+  async function setupDeletedDebt(): Promise<void> {
+    await writeRepoFile("src/a.ts", "export function alpha() { return 1; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    await writeRepoFile("livewiki/a.md", ANCHORED_PAGE);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    // Symbol disappears from the code → `deleted` debt (anchor row exists).
+    await writeRepoFile("src/a.ts", "export function other() { return 2; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+  }
+
+  it("page alive, anchor edited out: symbol_key AND wiki_path stay actionable", async () => {
+    await setupDeletedDebt();
+    // The anchor is edited out of the page (page stays) — the ledger drops
+    // the anchor row; only the durable debt columns keep the identity.
+    await writeRepoFile(
+      "livewiki/a.md",
+      `---\ntitle: a\nowner: generated\n---\n\n# a\n\nDocumentation.\n`,
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const report = await runStatus(repoRoot);
+    const row = report.debt.items.find((i) => i.event === "deleted");
+    expect(row).toBeDefined();
+    expect(row!.symbol_key).toBe("src/a.ts#alpha");
+    expect(row!.wiki_path).toBe("livewiki/a.md");
+  });
+
+  it("page deleted: symbol_key survives (durable column), wiki_path is null", async () => {
+    await setupDeletedDebt();
+    // The whole page goes away — there is genuinely no page to pay, so a
+    // null wiki_path is CORRECT; the symbol identity must still survive.
+    await rm(join(repoRoot, "livewiki", "a.md"));
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const report = await runStatus(repoRoot);
+    const row = report.debt.items.find((i) => i.event === "deleted");
+    expect(row).toBeDefined();
+    expect(row!.symbol_key).toBe("src/a.ts#alpha");
+    expect(row!.wiki_path).toBeNull();
+  });
+});

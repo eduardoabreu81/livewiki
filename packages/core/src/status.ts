@@ -203,13 +203,19 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
     .sort((a, b) => b.symbols - a.symbols)
     .slice(0, topN);
 
-  // Debt
+  // Debt. Identity comes from the DURABLE debt columns first-classed with
+  // the live anchor joins: symbol_key/wiki_path must survive anchor
+  // removal (page deleted or anchor edited out) — the LEFT JOINs alone
+  // return NULL there, which left CLI and MCP debt rows unactionable
+  // (external review 2026-08-03: 24 of 52 open items had null identity).
   const debtRows = db
     .prepare(
       "SELECT d.id, d.anchor_id, d.event, d.assignee, d.detail, d.detected_at, " +
-        "a.symbol_key, dp.wiki_path " +
+        "COALESCE(a.symbol_key, d.symbol_key) AS symbol_key, " +
+        "COALESCE(dp.wiki_path, dp2.wiki_path) AS wiki_path " +
         "FROM debt d LEFT JOIN anchors a ON a.id = d.anchor_id " +
         "LEFT JOIN doc_pages dp ON dp.id = a.doc_page_id " +
+        "LEFT JOIN doc_pages dp2 ON dp2.id = d.doc_page_id " +
         "WHERE d.resolved_at IS NULL " +
         "ORDER BY d.detected_at ASC",
     )

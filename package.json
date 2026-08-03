@@ -22,5 +22,11 @@
   "dependencies": {
     "@livewiki/cli": "workspace:*"
   },
-  "packageManager": "pnpm@10.34.0"
+  "packageManager": "pnpm@10.34.0",
+  "pnpm": {
+    "overrides": {
+      "fast-uri": "^3.1.5",
+      "@hono/node-server": "^2.0.12"
+    }
+  }
 }

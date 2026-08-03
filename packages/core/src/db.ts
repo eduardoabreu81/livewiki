@@ -15,7 +15,7 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS debt (
   symbol_key TEXT,
   detail TEXT,
   detected_at INTEGER NOT NULL,
-  resolved_at INTEGER
+  resolved_at INTEGER,
+  doc_page_id INTEGER
 );
 
 -- Dedup de dívida aberta por (anchor_id, event). Partial index WHERE
@@ -329,6 +330,25 @@ export function migrateV6ToV7(db: Database.Database): void {
 }
 
 /**
+ * v8: debt.doc_page_id — the durable page reference for a debt row. Like
+ * debt.symbol_key (Fix E), it survives anchor removal: the LEFT JOIN to
+ * anchors/doc_pages in status's debt report returns NULLs for debts whose
+ * anchor row is gone (page deleted or anchor edited out), leaving CLI and
+ * MCP debt surfaces with unactionable rows (external review 2026-08-03).
+ */
+export function migrateV7ToV8(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(debt)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "doc_page_id")) {
+    db.exec("ALTER TABLE debt ADD COLUMN doc_page_id INTEGER");
+  }
+  // Backfill from the anchor rows that still exist.
+  db.exec(
+    "UPDATE debt SET doc_page_id = (SELECT a.doc_page_id FROM anchors a WHERE a.id = debt.anchor_id) " +
+      "WHERE doc_page_id IS NULL AND anchor_id IS NOT NULL",
+  );
+}
+
+/**
  * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
  * Cada entry é o SQL (string) OU a função (db) => void pra aplicar quando o
  * DB está em uma versão menor.
@@ -356,6 +376,7 @@ export function postV3Migrations(
   if (fromVersion < 5 && toVersion >= 5) out.push(migrateV4ToV5);
   if (fromVersion < 6 && toVersion >= 6) out.push(migrateV5ToV6);
   if (fromVersion < 7 && toVersion >= 7) out.push(migrateV6ToV7);
+  if (fromVersion < 8 && toVersion >= 8) out.push(migrateV7ToV8);
   return out;
 }
 

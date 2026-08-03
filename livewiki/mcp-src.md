@@ -168,7 +168,7 @@ function isWatchDenied(filename: string): boolean {
 function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
 ```
 
-`startWatcher` installs a recursive `fs.watch` on the repo root with a 1.5 s debounce. Each event is filtered through `isWatchDenied`. Watch-creation failures and runtime watcher errors are caught and logged as a single `console.error` line — the server continues with startup-rebuild semantics rather than crashing. The returned `WatcherHandle.stop()` releases the OS handle and awaits any in-flight sync, which is what makes the subsequent `search.db` close + temp-dir removal EBUSY-safe on Windows.
+`startWatcher` installs a recursive `fs.watch` on the repo root with a 1.5 s debounce; the watched path is canonicalized with `realpathSync.native` first (the Windows 8.3 vs long-name mismatch was the prime suspect for a libuv fs-event assert on CI), falling back to the lexical path on any failure. Each event is filtered through `isWatchDenied`. Watch-creation failures and runtime watcher errors are caught and logged as a single `console.error` line — the server continues with startup-rebuild semantics rather than crashing. The returned `WatcherHandle.stop()` releases the OS handle and awaits any in-flight sync, which is what makes the subsequent `search.db` close + temp-dir removal EBUSY-safe on Windows.
 
 ```ts
 function schedule(): void {
@@ -186,7 +186,7 @@ async function syncBatch(): Promise<void> {
 async function stop(): Promise<void> {
 ```
 
-`stop` clears the pending debounce timer, closes the watcher, and awaits the in-flight sync. It is the EBUSY-safe teardown path.
+`stop` clears the pending debounce timer, closes the watcher — awaiting the OS-level `'close'` event before returning, so no events reach a dying handle while the repo is being cleaned up (the Windows EBUSY/assert class) — and awaits the in-flight sync. It is the EBUSY-safe teardown path.
 
 ## Search test fixtures and helpers
 

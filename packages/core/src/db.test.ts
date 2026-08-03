@@ -404,4 +404,63 @@ describe("db.openIndex", () => {
       db.close();
     }
   });
+
+  it("migra v7 → v8: debt ganha doc_page_id, com backfill a partir dos anchors", () => {
+    // Simula DB v7: debt SEM doc_page_id, mas com um anchor ligando a debt
+    // a uma doc_page. O backfill deve preencher a referência durável.
+    const Database = require("better-sqlite3");
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '7');
+      CREATE TABLE doc_pages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wiki_path TEXT NOT NULL UNIQUE,
+        owner TEXT NOT NULL,
+        title TEXT
+      );
+      INSERT INTO doc_pages (wiki_path, owner, title) VALUES ('livewiki/a.md', 'generated', 'a');
+      CREATE TABLE anchors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_page_id INTEGER NOT NULL,
+        section_slug TEXT,
+        symbol_key TEXT NOT NULL,
+        symbol_hash_at_doc TEXT NOT NULL
+      );
+      INSERT INTO anchors (doc_page_id, symbol_key, symbol_hash_at_doc) VALUES (1, 'src/a.ts#alpha', 'h');
+      CREATE TABLE debt (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        anchor_id INTEGER,
+        event TEXT NOT NULL,
+        assignee TEXT NOT NULL,
+        symbol_key TEXT,
+        detail TEXT,
+        detected_at INTEGER NOT NULL,
+        resolved_at INTEGER
+      );
+      INSERT INTO debt (anchor_id, event, assignee, symbol_key, detected_at)
+        VALUES (1, 'deleted', 'agent', 'src/a.ts#alpha', 1);
+      INSERT INTO debt (anchor_id, event, assignee, symbol_key, detected_at)
+        VALUES (NULL, 'deleted', 'agent', 'src/b.ts#beta', 1);
+    `);
+    legacyDb.close();
+
+    const db = openIndex(dbPath);
+    try {
+      const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
+      const cols = (db.prepare("PRAGMA table_info(debt)").all() as Array<{ name: string }>)
+        .map((c) => c.name);
+      expect(cols.filter((c) => c === "doc_page_id")).toHaveLength(1);
+      const rows = db
+        .prepare("SELECT id, doc_page_id FROM debt ORDER BY id")
+        .all() as Array<{ id: number; doc_page_id: number | null }>;
+      expect(rows[0]!.doc_page_id).toBe(1); // backfilled from the anchor
+      expect(rows[1]!.doc_page_id).toBeNull(); // no anchor — stays null
+    } finally {
+      db.close();
+    }
+  });
 });
