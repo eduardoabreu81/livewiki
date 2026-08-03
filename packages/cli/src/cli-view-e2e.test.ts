@@ -7,7 +7,8 @@
  *   - `--template docs` switches the theme shell;
  *   - `--badge-days` is accepted (0 disables the freshness badges);
  *   - missing wiki exits 1 with a clear message (human and JSON modes);
- *   - `--out` inside livewiki/ is rejected with exit 1.
+ *   - `--out` inside livewiki/ is rejected with exit 1;
+ *   - `--ref <ref>` with an unresolvable ref exits 1 with `invalid_ref`.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -198,5 +199,38 @@ describe("CLI E2E — livewiki view", () => {
     ]);
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("invalid_badge_days");
+  });
+
+  it("--ref with an unresolvable ref exits 1 with invalid_ref (human and JSON)", async () => {
+    await writeFixtureWiki();
+    // The tmp repo is not a git repository — any ref is unresolvable.
+    const human = runCli([
+      "--repo",
+      repoRoot,
+      "view",
+      "--no-open",
+      "--out",
+      nodePath.join(repoRoot, "site-ref"),
+      "--ref",
+      "v9.9",
+    ]);
+    expect(human.status, `stdout=${human.stdout}\nstderr=${human.stderr}`).toBe(1);
+    expect(human.stdout).toContain("invalid_ref");
+
+    const json = runCli([
+      "--json",
+      "--repo",
+      repoRoot,
+      "view",
+      "--no-open",
+      "--out",
+      nodePath.join(repoRoot, "site-ref"),
+      "--ref",
+      "v9.9",
+    ]);
+    expect(json.status).toBe(1);
+    const payload = JSON.parse(json.stdout) as { ok: boolean; error: { code: string } };
+    expect(payload.ok).toBe(false);
+    expect(payload.error.code).toBe("invalid_ref");
   });
 });

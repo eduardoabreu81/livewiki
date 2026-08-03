@@ -17,6 +17,7 @@ interface ViewCliOptions {
   /** commander `--no-open` → `open: false`; default true. */
   open?: boolean;
   badgeDays?: string;
+  ref?: string;
 }
 
 /**
@@ -25,9 +26,13 @@ interface ViewCliOptions {
  * <dir>` to publish elsewhere) and opens it in the browser unless
  * `--no-open`. The path is always printed. `--badge-days <n>` sets the
  * git-history freshness window for the new/updated badges (0 disables).
+ * `--ref <tag|sha>` builds the site from the wiki AS OF that git ref
+ * (read-only — no checkout, the working tree is never touched); combine
+ * with `--out` to keep two versions side by side (e.g.
+ * `--ref v0.1 --out .livewiki/site-v0.1` next to the current build).
  *
  * Exit codes: 0 = site built, 1 = failure (missing wiki, invalid
- * template/out dir). Uses `process.exitCode`, never `process.exit`
+ * template/out dir/ref). Uses `process.exitCode`, never `process.exit`
  * (FIX L rev2).
  */
 export function registerView(program: Command): void {
@@ -39,6 +44,7 @@ export function registerView(program: Command): void {
     .option("--template <name>", "visual template: 'agent' (dense, technical) or 'docs' (clean)", "agent")
     .option("--out <dir>", "output directory to publish (default: .livewiki/site/)")
     .option("--badge-days <n>", "days window for the new/updated freshness badges (0 disables)", "7")
+    .option("--ref <ref>", "build the site from the wiki as of this git ref (tag or sha; read-only, no checkout)")
     .option("--no-open", "build the site without opening the browser")
     .action(async (_options: ViewCliOptions, command: Command) => {
       const opts = command.optsWithGlobals<ViewCliOptions>();
@@ -63,6 +69,7 @@ export function registerView(program: Command): void {
           ...(opts.out !== undefined ? { outDir: opts.out } : {}),
           template: (opts.template ?? "agent") as ViewTemplate,
           badgeDays,
+          ...(opts.ref !== undefined ? { ref: opts.ref } : {}),
         });
         const indexHtml = nodePath.join(result.outDir, "index.html");
         let opened = false;

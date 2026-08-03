@@ -48,6 +48,25 @@
  *   - Every page head carries static OG/social meta tags (description
  *     from the search excerpt, og:title/type/site_name, twitter:card) —
  *     no og:url (unknown at build time), no og:image (offline posture).
+ *   - Version stamp (roadmap item 17): ONE bounded
+ *     `git log -1 --format=%H%n%cI -- livewiki/` learns the newest commit
+ *     touching the wiki; the chrome stamps `Updated on <date> · Commit
+ *     <short-sha>` under the brand. Deterministic (git state only, never
+ *     Date.now()); no git / any spawn failure ⇒ no stamp, never an error.
+ *   - Source deep-links (roadmap item 17): when `git remote get-url
+ *     origin` normalizes to a GitHub repo (https and git@ forms) AND the
+ *     stamp commit is known, pages render a compact `Sources:` line after
+ *     the H1 (one file-level blob link per unique path in the page's
+ *     frontmatter `anchors:`, deduped and sorted) and each
+ *     `<!-- lw:anchors ... -->` marker becomes a `source: <path>` blob
+ *     link instead of being stripped. No remote ⇒ no links anywhere
+ *     (offline posture preserved).
+ *   - `--ref <tag|sha>` (roadmap item 18): the site is built from the
+ *     wiki AS OF that ref — artifacts enumerated with `git ls-tree` and
+ *     read with `git show`, read-only (the working tree is never
+ *     touched). Freshness badges are OFF in ref mode; the stamp uses the
+ *     ref's own newest wiki commit and deep links use its sha. An
+ *     unresolvable ref is a ViewError("invalid_ref"), not a degrade.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -58,7 +77,7 @@ import { spawn } from "node:child_process";
 import { Marked } from "marked";
 import * as safeIo from "./safe-io.js";
 import { collectWikiArtifactPaths, resolveWikiLink, isInsideWiki } from "./verify.js";
-import { parseFrontmatter, type Frontmatter } from "./frontmatter.js";
+import { parseFrontmatter, getAnchors, type Frontmatter } from "./frontmatter.js";
 import { slugify } from "./anchors.js";
 import { maskCodeSpans, maskCodeSpansPreservingLength } from "./markdown-mask.js";
 import { listUpdateMetrics } from "./update-metrics.js";
@@ -75,7 +94,8 @@ export type ViewErrorCode =
   | "missing_wiki"        // no livewiki/ directory or no .md pages in it
   | "invalid_template"    // --template outside VIEW_TEMPLATES
   | "invalid_out_dir"     // --out inside/containing livewiki/, repo root, fs root
-  | "missing_mermaid_asset"; // node_modules/mermaid/dist/mermaid.min.js not found
+  | "missing_mermaid_asset" // node_modules/mermaid/dist/mermaid.min.js not found
+  | "invalid_ref";        // --ref does not resolve to a git ref with a wiki
 
 export class ViewError extends Error {
   public readonly code: ViewErrorCode;
@@ -94,7 +114,13 @@ export interface BuildSiteOptions {
   template?: ViewTemplate;
   /** Days window for the git-history new/updated badges. Default 7; 0 disables badges. */
   badgeDays?: number;
-  /** Injectable spawn for the git-log freshness probe (tests substitute a fake). */
+  /**
+   * Build the site from the wiki AS OF this git ref (tag or sha),
+   * read-only via `git ls-tree`/`git show` — the working tree is never
+   * touched. Badges are off; the version stamp uses the ref's own commit.
+   */
+  ref?: string;
+  /** Injectable spawn for every git probe (tests substitute a fake). */
   spawnImpl?: SpawnImpl;
 }
 
@@ -172,34 +198,57 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
   }
 
   const out = resolveOutDir(absRoot, opts.outDir);
+  const spawnImpl = opts.spawnImpl ?? spawn;
 
-  const livewikiAbs = nodePath.join(absRoot, "livewiki");
-  if (!nodeFsSync.existsSync(livewikiAbs) || !nodeFsSync.statSync(livewikiAbs).isDirectory()) {
-    throw new ViewError(
-      "missing_wiki",
-      `no livewiki/ wiki found at ${livewikiAbs} — run \`livewiki init\` first`,
-    );
+  // Wiki source: the working tree (default) or a git ref (`--ref`,
+  // read-only — ls-tree/git show, the working tree is never touched).
+  const ref = normalizeRefOption(opts.ref);
+  let source: WikiSource;
+  if (ref !== null) {
+    source = createGitRefWikiSource(absRoot, ref, spawnImpl);
+  } else {
+    const livewikiAbs = nodePath.join(absRoot, "livewiki");
+    if (!nodeFsSync.existsSync(livewikiAbs) || !nodeFsSync.statSync(livewikiAbs).isDirectory()) {
+      throw new ViewError(
+        "missing_wiki",
+        `no livewiki/ wiki found at ${livewikiAbs} — run \`livewiki init\` first`,
+      );
+    }
+    source = createDiskWikiSource(absRoot);
   }
 
   // Same canonical artifact set verify checks (dot-directories skipped,
   // dot-prefixed pages included, `.md` + `.mmd`).
-  const artifactPaths = await collectWikiArtifactPaths(absRoot);
-  const wikiPaths = [...artifactPaths].sort((a, b) => a.localeCompare(b));
+  const wikiPaths = (await source.listArtifacts()).sort((a, b) => a.localeCompare(b));
   if (!wikiPaths.some((p) => p.endsWith(".md"))) {
     throw new ViewError(
       "missing_wiki",
-      `no Markdown pages found under ${livewikiAbs} — run \`livewiki init\` first`,
+      ref !== null
+        ? `no Markdown pages found under livewiki/ at ref "${ref}"`
+        : `no Markdown pages found under ${nodePath.join(absRoot, "livewiki")} — run \`livewiki init\` first`,
     );
   }
+  const artifactPaths = new Set(wikiPaths);
 
   // Site identity: the repository name is the repoRoot basename
   // (deterministic — no git/config probing).
   const repoName = nodePath.basename(absRoot);
 
+  // Version stamp (roadmap item 17): newest commit touching livewiki/ —
+  // in ref mode, the newest such commit AT the ref. Null on any failure.
+  const stamp = await probeWikiStamp(absRoot, ref, spawnImpl);
+  // Source deep-links need BOTH the stamp commit (link target ref) and a
+  // GitHub remote (link base). No remote ⇒ no links (offline posture).
+  const remoteBase = await probeGitHubRemoteBase(absRoot, spawnImpl);
+  const deepLinks: DeepLinks | null =
+    stamp !== null && remoteBase !== null
+      ? { blobBase: `${remoteBase}/blob/${stamp.sha}/` }
+      : null;
+
   // Implementation-reference grouping: read the canonical tasks.md back
   // instead of re-deriving clusters (no second information architecture).
   const tasksSource = artifactPaths.has("livewiki/tasks.md")
-    ? await safeIo.readText(absRoot, "livewiki/tasks.md").catch(() => null)
+    ? await source.read("livewiki/tasks.md").catch(() => null)
     : null;
   const tasksGrouping = parseTasksGrouping(tasksSource);
 
@@ -210,26 +259,30 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
   const mmdSources = new Map<string, string>();
   for (const wikiPath of wikiPaths) {
     if (wikiPath.endsWith(".mmd")) {
-      mmdSources.set(wikiPath, await safeIo.readText(absRoot, wikiPath));
+      mmdSources.set(wikiPath, await source.read(wikiPath));
     }
   }
   const md = createMarkdownRenderer();
   const pages: PageRecord[] = [];
   for (const wikiPath of wikiPaths) {
-    const source = wikiPath.endsWith(".mmd")
+    const sourceText = wikiPath.endsWith(".mmd")
       ? mmdSources.get(wikiPath)!
-      : await safeIo.readText(absRoot, wikiPath);
-    pages.push(await renderPage(md, wikiPath, source, artifactPaths, tasksGrouping, mmdSources));
+      : await source.read(wikiPath);
+    pages.push(await renderPage(md, wikiPath, sourceText, artifactPaths, tasksGrouping, mmdSources, deepLinks));
   }
 
   // Freshness badges from git history (deterministic: epochs are compared
-  // against the newest commit in the log, never Date.now()).
-  await applyFreshnessBadges(
-    pages,
-    absRoot,
-    opts.badgeDays ?? DEFAULT_BADGE_DAYS,
-    opts.spawnImpl ?? spawn,
-  );
+  // against the newest commit in the log, never Date.now()). OFF in ref
+  // mode — the badges compare against the working-tree log, which says
+  // nothing about a historical wiki.
+  if (ref === null) {
+    await applyFreshnessBadges(
+      pages,
+      absRoot,
+      opts.badgeDays ?? DEFAULT_BADGE_DAYS,
+      spawnImpl,
+    );
+  }
 
   // Roadmap item 15: synthetic Activity dashboard from the local metrics
   // ledger (derived data, never a wiki page — rule #3). Added AFTER the
@@ -282,6 +335,7 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
       sidebarHtml: buildSidebar(pages, page.outRel),
       rootPrefix: rootPrefixFor(page.outRel),
       repoName,
+      stamp: stamp === null ? null : { date: stamp.date, shortSha: stamp.sha.slice(0, 7) },
     });
     await write(page.outRel, shell);
   }
@@ -339,6 +393,191 @@ function resolveOutDir(absRoot: string, outDirOpt: string | undefined): Resolved
   return { abs, viaSafeIo: false };
 }
 
+// ── Wiki source (working tree vs git ref) ───────────────────────────────────
+
+/**
+ * Where the wiki artifacts come from. The disk path is the default; the
+ * git-ref path (`--ref`) serves the same artifact set from `git ls-tree` /
+ * `git show` without touching the working tree.
+ */
+interface WikiSource {
+  /** Canonical artifact paths (`livewiki/x.md` / `.mmd`), unsorted. */
+  listArtifacts(): Promise<string[]>;
+  read(wikiPath: string): Promise<string>;
+}
+
+function createDiskWikiSource(absRoot: string): WikiSource {
+  return {
+    async listArtifacts(): Promise<string[]> {
+      return [...(await collectWikiArtifactPaths(absRoot))];
+    },
+    read(wikiPath: string): Promise<string> {
+      return safeIo.readText(absRoot, wikiPath);
+    },
+  };
+}
+
+/** Validates the `--ref` option: present ⇒ non-empty and never flag-like. */
+function normalizeRefOption(ref: string | undefined): string | null {
+  if (ref === undefined) return null;
+  const trimmed = ref.trim();
+  if (trimmed === "" || trimmed.startsWith("-")) {
+    throw new ViewError("invalid_ref", `--ref must be a git tag or commit sha, got "${ref}"`);
+  }
+  return trimmed;
+}
+
+/**
+ * The same canonical artifact filter as `collectWikiArtifactPaths`
+ * (dot-directories skipped, dot-prefixed pages included, `.md` + `.mmd`)
+ * applied to `git ls-tree` output.
+ */
+export function filterWikiArtifactPaths(paths: string[]): string[] {
+  return paths.filter((p) => {
+    if (!p.startsWith("livewiki/")) return false;
+    if (!p.endsWith(".md") && !p.endsWith(".mmd")) return false;
+    const segments = p.split("/").slice(1, -1); // directories below livewiki/
+    return !segments.some((s) => s.startsWith("."));
+  });
+}
+
+function createGitRefWikiSource(absRoot: string, ref: string, spawnImpl: SpawnImpl): WikiSource {
+  return {
+    async listArtifacts(): Promise<string[]> {
+      const result = await runGitCaptured(
+        absRoot,
+        ["ls-tree", "-r", "--name-only", ref, "--", "livewiki/"],
+        spawnImpl,
+      );
+      if (result === null || result.code !== 0) {
+        throw new ViewError(
+          "invalid_ref",
+          `cannot resolve git ref "${ref}" — ${firstStderrLine(result) ?? "not a git repository or git unavailable"}`,
+        );
+      }
+      return filterWikiArtifactPaths(
+        result.stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== ""),
+      );
+    },
+    async read(wikiPath: string): Promise<string> {
+      const result = await runGitCaptured(absRoot, ["show", `${ref}:${wikiPath}`], spawnImpl);
+      if (result === null || result.code !== 0) {
+        throw new ViewError(
+          "invalid_ref",
+          `cannot read ${wikiPath} at ref "${ref}" — ${firstStderrLine(result) ?? "git show failed"}`,
+        );
+      }
+      return result.stdout;
+    },
+  };
+}
+
+function firstStderrLine(result: GitCaptured | null): string | null {
+  const line = result?.stderr.split(/\r?\n/).find((l) => l.trim() !== "");
+  return line?.trim() ?? null;
+}
+
+// ── Git probes (bounded, graceful-degrading) ────────────────────────────────
+
+interface GitCaptured {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * One bounded git spawn; never throws. `code` is null when the process
+ * could not be spawned at all (missing git, ENOENT).
+ */
+function runGitCaptured(absRoot: string, args: string[], spawnImpl: SpawnImpl): Promise<GitCaptured | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<SpawnImpl>;
+    try {
+      child = spawnImpl("git", args, { cwd: absRoot, shell: false });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    const done = (value: GitCaptured | null): void => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: unknown) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on("data", (chunk: unknown) => {
+      stderr += String(chunk);
+    });
+    child.on("error", () => done(null));
+    child.on("close", (code: number | null) => done({ code, stdout, stderr }));
+  });
+}
+
+export interface WikiStamp {
+  /** Full sha of the newest commit touching livewiki/. */
+  sha: string;
+  /** Commit date, YYYY-MM-DD (from the committer ISO date). */
+  date: string;
+}
+
+/**
+ * Parses `git log -1 --format=%H%n%cI` output. Pure; returns null when the
+ * output does not carry a 40-hex sha followed by an ISO date (empty log,
+ * unexpected format).
+ */
+export function parseWikiStamp(text: string): WikiStamp | null {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+  const sha = lines[0] ?? "";
+  const iso = lines[1] ?? "";
+  if (!/^[0-9a-f]{40}$/i.test(sha)) return null;
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(iso)) return null;
+  return { sha, date: iso.slice(0, 10) };
+}
+
+/**
+ * Newest commit touching livewiki/ (at `ref` when building from a ref).
+ * ONE bounded git call; null on ANY failure — no stamp, never an error.
+ */
+async function probeWikiStamp(
+  absRoot: string,
+  ref: string | null,
+  spawnImpl: SpawnImpl,
+): Promise<WikiStamp | null> {
+  const args = ref === null
+    ? ["log", "-1", "--format=%H%n%cI", "--", "livewiki/"]
+    : ["log", "-1", "--format=%H%n%cI", ref, "--", "livewiki/"];
+  const result = await runGitCaptured(absRoot, args, spawnImpl);
+  if (result === null || result.code !== 0) return null;
+  return parseWikiStamp(result.stdout);
+}
+
+/**
+ * Normalizes a git remote URL to a GitHub repository base URL
+ * (`https://github.com/<owner>/<repo>`), accepting the
+ * `https://github.com/owner/repo(.git)` and `git@github.com:owner/repo(.git)`
+ * forms. Non-GitHub remotes yield null — deep links stay off.
+ */
+export function normalizeGitHubRemote(url: string): string | null {
+  const trimmed = url.trim();
+  const https = trimmed.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  if (https) return `https://github.com/${https[1]}/${https[2]}`;
+  const ssh = trimmed.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  if (ssh) return `https://github.com/${ssh[1]}/${ssh[2]}`;
+  return null;
+}
+
+/** `git remote get-url origin`, normalized; null on ANY failure. */
+async function probeGitHubRemoteBase(absRoot: string, spawnImpl: SpawnImpl): Promise<string | null> {
+  const result = await runGitCaptured(absRoot, ["remote", "get-url", "origin"], spawnImpl);
+  if (result === null || result.code !== 0) return null;
+  return normalizeGitHubRemote(result.stdout);
+}
+
 // ── Page rendering ──────────────────────────────────────────────────────────
 
 function createMarkdownRenderer(): Marked {
@@ -357,6 +596,15 @@ function createMarkdownRenderer(): Marked {
   return md;
 }
 
+/**
+ * GitHub blob link base for source deep-links (roadmap item 17). Present
+ * only when BOTH a GitHub remote and the stamp commit are known.
+ * `blobBase` ends with `/` — a file URL is `blobBase + <repo-rel path>`.
+ */
+interface DeepLinks {
+  blobBase: string;
+}
+
 async function renderPage(
   md: Marked,
   wikiPath: string,
@@ -364,6 +612,7 @@ async function renderPage(
   artifactPaths: Set<string>,
   tasksGrouping: TasksGrouping,
   mmdSources: Map<string, string>,
+  deepLinks: DeepLinks | null,
 ): Promise<PageRecord> {
   const outRel = outRelFor(wikiPath);
   const group = classifyGroup(wikiPath);
@@ -400,10 +649,28 @@ async function renderPage(
 
   const title = deriveTitle(fm, body, wikiPath);
   const cleaned = inlineMermaidPlaceholders(
-    rewriteLinks(stripControlMarkers(body), wikiPath, artifactPaths),
+    rewriteLinks(
+      stripControlMarkers(
+        body,
+        deepLinks === null ? undefined : (keys) => sourceRefHtml(keys, deepLinks.blobBase),
+      ),
+      wikiPath,
+      artifactPaths,
+    ),
     mmdSources,
   );
-  const contentHtml = await md.parse(cleaned);
+  let contentHtml = await md.parse(cleaned);
+  // Roadmap item 17: compact `Sources:` line after the H1 — one file-level
+  // blob link per unique path in the page's frontmatter anchors.
+  if (deepLinks !== null && fm !== null) {
+    const paths = uniqueAnchorFilePaths(getAnchors(fm));
+    if (paths.length > 0) {
+      const links = paths
+        .map((p) => `<a href="${escapeHtml(deepLinks.blobBase + p)}"><code>${escapeHtml(p)}</code></a>`)
+        .join(" · ");
+      contentHtml = insertAfterFirstH1(contentHtml, `<p class="lw-sources">Sources: ${links}</p>\n`);
+    }
+  }
   const grouping = tasksGrouping.byPage.get(wikiPath);
 
   return {
@@ -455,22 +722,65 @@ function deriveTitle(fm: Frontmatter | null, body: string, wikiPath: string): st
  * code or inline code spans (a page may legitimately document the marker
  * syntax itself). Markers stripped:
  *   - `<!-- livewiki:... -->` (navigate/topics/generated markers)
- *   - `<!-- lw:anchors ... -->`
+ *   - `<!-- lw:anchors ... -->` — stripped, OR replaced with a small
+ *     `source: <path>` blob link when `anchorMarkerReplacement` is given
+ *     (roadmap item 17 deep links; absent ⇒ stripped, offline posture)
  *   - `<!-- lw:manual -->` / `<!-- /lw:manual -->` — the CONTENT between
  *     them is kept (rule #6).
  * Frontmatter is removed earlier by `parseFrontmatter`.
  */
-function stripControlMarkers(body: string): string {
+function stripControlMarkers(
+  body: string,
+  anchorMarkerReplacement?: (anchorKeys: string[]) => string,
+): string {
   const masked = maskCodeSpansPreservingLength(body);
   const re = /<!--\s*(?:livewiki:[^>]*?|lw:anchors\s+[^>]*?|lw:manual|\/lw:manual)\s*-->/g;
   let out = "";
   let last = 0;
   for (const m of masked.matchAll(re)) {
     if (m.index === undefined) continue;
-    out += body.slice(last, m.index);
+    let replacement = "";
+    if (anchorMarkerReplacement !== undefined) {
+      const keys = m[0].match(/^<!--\s*lw:anchors\s+([^>]*?)\s*-->$/)?.[1];
+      if (keys !== undefined) {
+        replacement = anchorMarkerReplacement(keys.split(/\s+/).filter((k) => k !== ""));
+      }
+    }
+    out += body.slice(last, m.index) + replacement;
     last = m.index + m[0].length;
   }
   return out + body.slice(last);
+}
+
+/**
+ * Unique repo-relative file paths behind a list of anchor keys
+ * (`path#symbol` or bare `path`), sorted. Pure.
+ */
+function uniqueAnchorFilePaths(anchorKeys: string[]): string[] {
+  const paths = new Set<string>();
+  for (const key of anchorKeys) {
+    const path = key.split("#")[0]?.trim() ?? "";
+    if (path !== "") paths.add(path);
+  }
+  return [...paths].sort((a, b) => a.localeCompare(b));
+}
+
+/** The `source: <path>` HTML fragment replacing one lw:anchors marker. */
+function sourceRefHtml(anchorKeys: string[], blobBase: string): string {
+  const paths = uniqueAnchorFilePaths(anchorKeys);
+  if (paths.length === 0) return "";
+  const links = paths
+    .map((p) => `<a href="${escapeHtml(blobBase + p)}">source: ${escapeHtml(p)}</a>`)
+    .join(" · ");
+  return `<p class="lw-source-ref">${links}</p>`;
+}
+
+/** Insert an HTML fragment right after the first `<h1>` (or prepend when the page has none). */
+function insertAfterFirstH1(html: string, fragment: string): string {
+  const idx = html.indexOf("</h1>");
+  if (idx === -1) return fragment + html;
+  const after = idx + "</h1>".length;
+  return html.slice(0, after) + "\n" + fragment + html.slice(after);
 }
 
 /**
@@ -673,42 +983,22 @@ async function collectFreshnessLog(absRoot: string, spawnImpl: SpawnImpl): Promi
   return text === null ? null : parseGitFreshnessLog(text);
 }
 
-function runGitLog(absRoot: string, spawnImpl: SpawnImpl): Promise<string | null> {
-  return new Promise((resolve) => {
-    let child: ReturnType<SpawnImpl>;
-    try {
-      child = spawnImpl(
-        "git",
-        // core.quotepath=false: without it, git C-quotes paths containing
-        // non-ASCII bytes, which would never match the wiki page keys.
-        [
-          "-c", "core.quotepath=false",
-          "log", "--no-merges",
-          "--format=COMMIT:%ct",
-          "--name-only",
-          `--max-count=${FRESHNESS_LOG_MAX_COMMITS}`,
-          "--", "livewiki",
-        ],
-        { cwd: absRoot, shell: false },
-      );
-    } catch {
-      resolve(null);
-      return;
-    }
-    let settled = false;
-    const done = (value: string | null): void => {
-      if (!settled) {
-        settled = true;
-        resolve(value);
-      }
-    };
-    let out = "";
-    child.stdout?.on("data", (chunk: unknown) => {
-      out += String(chunk);
-    });
-    child.on("error", () => done(null));
-    child.on("close", (code: number | null) => done(code === 0 ? out : null));
-  });
+async function runGitLog(absRoot: string, spawnImpl: SpawnImpl): Promise<string | null> {
+  const result = await runGitCaptured(
+    absRoot,
+    // core.quotepath=false: without it, git C-quotes paths containing
+    // non-ASCII bytes, which would never match the wiki page keys.
+    [
+      "-c", "core.quotepath=false",
+      "log", "--no-merges",
+      "--format=COMMIT:%ct",
+      "--name-only",
+      `--max-count=${FRESHNESS_LOG_MAX_COMMITS}`,
+      "--", "livewiki",
+    ],
+    spawnImpl,
+  );
+  return result !== null && result.code === 0 ? result.stdout : null;
 }
 
 // ── Shell, sidebar, search index ────────────────────────────────────────────
@@ -719,8 +1009,10 @@ function renderShell(opts: {
   sidebarHtml: string;
   rootPrefix: string;
   repoName: string;
+  /** Version stamp (roadmap item 17); null when no git data is available. */
+  stamp: { date: string; shortSha: string } | null;
 }): string {
-  const { template, page, sidebarHtml, rootPrefix, repoName } = opts;
+  const { template, page, sidebarHtml, rootPrefix, repoName, stamp } = opts;
   const siteTitle = `${repoName} — livewiki docs`;
   const pageTitle = `${page.title} — ${siteTitle}`;
   // Static social/OG meta: no og:url (unknown at build time), no og:image
@@ -733,6 +1025,11 @@ function renderShell(opts: {
     ? `<h1 class="brand">${brandLink}</h1>`
     : `<div class="brand">${brandLink}</div>`;
   const headerBadge = page.badge === undefined ? "" : `<div class="page-badges">${badgeSpan(page)}</div>\n`;
+  // Version stamp under the brand (roadmap item 17): newest commit
+  // touching the wiki. Absent without git data — never an error.
+  const stampLine = stamp === null
+    ? ""
+    : `<div class="site-stamp">Updated on ${escapeHtml(stamp.date)} · Commit ${escapeHtml(stamp.shortSha)}</div>\n`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -753,7 +1050,7 @@ function renderShell(opts: {
 <nav class="sidebar">
 <div class="sidebar-header">
 ${brand}
-<div class="sidebar-tools">
+${stampLine}<div class="sidebar-tools">
 <input id="search-input" type="search" placeholder="Search…" aria-label="Search the wiki">
 <button id="theme-toggle" type="button" aria-label="Toggle light/dark mode" aria-pressed="false">Theme</button>
 </div>
@@ -1054,6 +1351,14 @@ body {
 }
 .page-badges { margin: 0 0 0.5rem; }
 .page-badges .lw-badge { margin-left: 0; }
+/* Version stamp under the brand (roadmap item 17) + source deep-links. */
+.site-stamp {
+  margin: -0.25rem 0 0.6rem;
+  font-size: var(--lw-text-sm); color: var(--lw-muted);
+}
+.lw-sources, .lw-source-ref { font-size: var(--lw-text-sm); color: var(--lw-muted); }
+.lw-sources a, .lw-source-ref a { color: var(--lw-link); text-decoration: none; }
+.lw-sources a:hover, .lw-source-ref a:hover { text-decoration: underline; }
 /* Activity dashboard (roadmap item 15): stat cards, chart sizing, legend.
    Chart series colors come from the per-palette --lw-chart-a/-b variables
    below; everything else rides the shared palette like the badges. */

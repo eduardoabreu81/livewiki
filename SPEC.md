@@ -1159,6 +1159,22 @@ error. Window: `--badge-days <n>` (default `7`, `0` disables). Every page
 head carries static social/OG meta tags (description from the page excerpt,
 `og:title`/`og:type`/`og:site_name`, `twitter:card`) — no `og:url`, no
 `og:image`, preserving the offline/no-asset posture.
+Roadmap items 17–18 (2026-08-03): the chrome stamps `Updated on
+<YYYY-MM-DD> · Commit <short-sha>` under the brand from ONE bounded
+`git log -1 --format=%H%n%cI -- livewiki/` (git state only, never wall
+clock; no git ⇒ no stamp, never an error). When `git remote get-url
+origin` normalizes to a GitHub repo (https/git@ forms) AND the stamp
+commit is known, each page renders a compact `Sources:` line after its H1
+(one file-level blob link per unique path in the frontmatter `anchors:`,
+deduped and sorted) and each `<!-- lw:anchors ... -->` marker becomes a
+`source: <path>` blob link instead of being stripped; no remote ⇒ no
+links anywhere (offline posture preserved). `livewiki view --ref
+<tag|sha>` builds the site from the wiki AS OF that ref — artifacts
+enumerated with `git ls-tree` and read with `git show`, read-only (the
+working tree is never touched); freshness badges are off, the stamp uses
+the ref's own newest wiki commit, deep links use its sha, and an
+unresolvable ref fails with `invalid_ref` (exit 1). Default output stays
+`.livewiki/site/`; `--out` keeps two versions side by side.
 Roadmap item 15 (activity dashboard, 2026-08-02): when
 `.livewiki/update_metrics.json` holds at least one entry, the site gains a
 synthetic Activity page (`activity.html`, its own sidebar group, included

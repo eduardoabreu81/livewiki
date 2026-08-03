@@ -21,6 +21,11 @@
  *   - diagrams render at natural size with horizontal scroll;
  *   - default output under `.livewiki/site/` (safe-io allowlist);
  *   - missing wiki / invalid --out → ViewError.
+ *   - roadmap item 17: version stamp from one bounded git log; source
+ *     deep-links (frontmatter `anchors:` Sources line + lw:anchors marker
+ *     replacement) when a GitHub remote is known;
+ *   - roadmap item 18: `--ref` builds from `git ls-tree`/`git show`
+ *     (read-only), badges off, invalid ref → ViewError("invalid_ref").
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -28,7 +33,15 @@ import { EventEmitter } from "node:events";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
-import { buildSite, ViewError, THEME_STORAGE_KEY, type BuildSiteResult } from "./view.js";
+import {
+  buildSite,
+  ViewError,
+  THEME_STORAGE_KEY,
+  parseWikiStamp,
+  normalizeGitHubRemote,
+  filterWikiArtifactPaths,
+  type BuildSiteResult,
+} from "./view.js";
 import { recordUpdateMetric } from "./update-metrics.js";
 import type { SpawnImpl } from "./risk.js";
 
@@ -671,7 +684,7 @@ describe("view.buildSite freshness badges", () => {
     }
   });
 
-  it("badgeDays: 0 disables badges entirely and never spawns git", async () => {
+  it("badgeDays: 0 disables badges entirely (and a sync-throwing spawn breaks nothing)", async () => {
     await writeFixtureWiki();
     const outDir = nodePath.join(repoRoot, "site-out");
     const spawnThatThrows = (() => {
@@ -680,6 +693,8 @@ describe("view.buildSite freshness badges", () => {
     await buildSite({ repoRoot, outDir, badgeDays: 0, spawnImpl: spawnThatThrows });
     const html = (await readSite(outDir, "index.html"))!;
     expect(html).not.toContain("lw-badge");
+    // Every git probe tolerates a sync-throwing spawn: no stamp either.
+    expect(html).not.toContain("site-stamp");
   });
 
   it("a shorter window reclassifies updated→no-badge; a wider one keeps it", async () => {
@@ -829,5 +844,302 @@ describe("view.buildSite Activity dashboard", () => {
     expect(index).not.toContain("<h2>Activity</h2>");
     const search = (await readSite(outDir, "assets/search-index.js"))!;
     expect(search).not.toContain("activity.html");
+  });
+});
+
+// ── Version stamp + source deep-links (roadmap item 17) ────────────────────
+
+const STAMP_SHA = "a".repeat(40);
+const STAMP_LOG = `${STAMP_SHA}\n2026-08-01T12:34:56+00:00\n`;
+
+interface FakeGitRoute {
+  match: (args: string[]) => boolean;
+  stdout?: string;
+  stderr?: string;
+  code?: number;
+  error?: boolean;
+}
+
+/**
+ * Routing fake spawn: dispatches on the git args. Unmatched routes (or
+ * `error: true`) emit a spawn `error`. Calls are recorded in `calls`.
+ */
+function fakeGitRouter(routes: FakeGitRoute[], calls?: string[][]): SpawnImpl {
+  return ((_cmd: string, args: string[]) => {
+    calls?.push(args);
+    const route = routes.find((r) => r.match(args));
+    const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    process.nextTick(() => {
+      if (route === undefined || route.error === true) {
+        child.emit("error", new Error("spawn git ENOENT"));
+        return;
+      }
+      if (route.stdout) child.stdout.emit("data", Buffer.from(route.stdout));
+      if (route.stderr) child.stderr.emit("data", Buffer.from(route.stderr));
+      child.emit("close", route.code ?? 0);
+    });
+    return child;
+  }) as unknown as SpawnImpl;
+}
+
+const isBadgeLog = (args: string[]): boolean => args.includes("--no-merges");
+const isStampLog = (args: string[]): boolean => args.includes("-1") && args.includes("log");
+const isRemoteProbe = (args: string[]): boolean => args.includes("remote");
+
+/** Standard routes: no badges, stamp present, GitHub remote (https form). */
+function stampRoutes(remoteUrl = "https://github.com/acme/widgets.git\n"): FakeGitRoute[] {
+  return [
+    { match: isBadgeLog, stdout: "" },
+    { match: isStampLog, stdout: STAMP_LOG },
+    { match: isRemoteProbe, stdout: remoteUrl },
+  ];
+}
+
+async function writeDeepLinkWiki(): Promise<void> {
+  await writeWiki("livewiki/quickstart.md", "# Quickstart\n\nStart here.\n");
+  await writeWiki(
+    "livewiki/auth.md",
+    [
+      "---",
+      "title: Authentication",
+      "anchors:",
+      "  - src/auth/session.ts#createSession",
+      "  - src/auth/login.ts#validateToken",
+      "  - src/auth/login.ts#login",
+      "---",
+      "",
+      "# Authentication",
+      "",
+      "Handles login.",
+      "",
+      "## Token validation",
+      "<!-- lw:anchors src/auth/login.ts#validateToken -->",
+      "Text about validation.",
+      "",
+    ].join("\n"),
+  );
+}
+
+describe("view.buildSite version stamp (roadmap item 17)", () => {
+  it("renders 'Updated on <date> · Commit <short-sha>' under the brand from one git log call", async () => {
+    await writeDeepLinkWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir, spawnImpl: fakeGitRouter(stampRoutes()) });
+
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).toContain(
+      `<div class="site-stamp">Updated on 2026-08-01 · Commit ${STAMP_SHA.slice(0, 7)}</div>`,
+    );
+    const auth = (await readSite(outDir, "pages/auth.html"))!;
+    expect(auth).toContain("Updated on 2026-08-01");
+  });
+
+  it("no stamp when the git log probe fails (spawn error / non-zero exit / garbage)", async () => {
+    await writeDeepLinkWiki();
+    for (const [name, impl] of [
+      ["error", fakeSpawnError()],
+      ["exit128", fakeSpawnOk("fatal: not a git repository\n", 128)],
+      ["garbage", fakeSpawnOk("COMMIT:1800000000\n\nlivewiki/auth.md\n")],
+    ] as const) {
+      const outDir = nodePath.join(repoRoot, `site-${name}`);
+      await buildSite({ repoRoot, outDir, spawnImpl: impl });
+      const html = (await readSite(outDir, "index.html"))!;
+      expect(html, name).not.toContain("site-stamp");
+    }
+  });
+});
+
+describe("view.buildSite source deep-links (roadmap item 17)", () => {
+  it("renders a deduped sorted Sources line after the H1 with GitHub blob URLs (https remote)", async () => {
+    await writeDeepLinkWiki();
+    const outDir = nodePath.join(repoRoot, "site-out");
+    await buildSite({ repoRoot, outDir, spawnImpl: fakeGitRouter(stampRoutes()) });
+
+    const auth = (await readSite(outDir, "pages/auth.html"))!;
+    const blob = `https://github.com/acme/widgets/blob/${STAMP_SHA}`;
+    // Unique file paths (symbol suffix dropped), sorted, right after the H1.
+    expect(auth).toContain(
+      `</h1>\n<p class="lw-sources">Sources: ` +
+        `<a href="${blob}/src/auth/login.ts"><code>src/auth/login.ts</code></a> · ` +
+        `<a href="${blob}/src/auth/session.ts"><code>src/auth/session.ts</code></a></p>`,
+    );
+    // The lw:anchors marker becomes a source link instead of being stripped.
+    expect(auth).toContain(
+      `<p class="lw-source-ref"><a href="${blob}/src/auth/login.ts">source: src/auth/login.ts</a></p>`,
+    );
+    expect(auth).not.toContain("lw:anchors");
+    // The quickstart has no frontmatter anchors → no Sources line there.
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).not.toContain("lw-sources");
+  });
+
+  it("normalizes the git@ remote form (and .git-less https) to the same blob base", async () => {
+    await writeDeepLinkWiki();
+    for (const [name, remote] of [
+      ["ssh", "git@github.com:acme/widgets.git\n"],
+      ["https-no-suffix", "https://github.com/acme/widgets\n"],
+    ] as const) {
+      const outDir = nodePath.join(repoRoot, `site-${name}`);
+      await buildSite({ repoRoot, outDir, spawnImpl: fakeGitRouter(stampRoutes(remote)) });
+      const auth = (await readSite(outDir, "pages/auth.html"))!;
+      expect(auth, name).toContain(
+        `https://github.com/acme/widgets/blob/${STAMP_SHA}/src/auth/login.ts`,
+      );
+    }
+  });
+
+  it("no deep links without a GitHub remote (stamp still rendered, markers stripped as before)", async () => {
+    await writeDeepLinkWiki();
+    for (const [name, remote] of [
+      ["non-github", "https://gitlab.com/acme/widgets.git\n"],
+      ["no-remote", ""],
+    ] as const) {
+      const outDir = nodePath.join(repoRoot, `site-${name}`);
+      await buildSite({ repoRoot, outDir, spawnImpl: fakeGitRouter(stampRoutes(remote)) });
+      const auth = (await readSite(outDir, "pages/auth.html"))!;
+      expect(auth, name).not.toContain("lw-sources");
+      expect(auth, name).not.toContain("lw-source-ref");
+      expect(auth, name).not.toContain("github.com");
+      expect(auth, name).not.toContain("lw:anchors");
+      expect(auth, name).toContain("site-stamp");
+    }
+  });
+
+  it("pure helpers: parseWikiStamp and normalizeGitHubRemote", async () => {
+    expect(parseWikiStamp(STAMP_LOG)).toEqual({ sha: STAMP_SHA, date: "2026-08-01" });
+    expect(parseWikiStamp("")).toBeNull();
+    expect(parseWikiStamp("not-a-sha\n2026-08-01T00:00:00Z\n")).toBeNull();
+    expect(parseWikiStamp(`${STAMP_SHA}\nnot-a-date\n`)).toBeNull();
+
+    expect(normalizeGitHubRemote("https://github.com/o/r.git")).toBe("https://github.com/o/r");
+    expect(normalizeGitHubRemote("https://github.com/o/r")).toBe("https://github.com/o/r");
+    expect(normalizeGitHubRemote("git@github.com:o/r.git")).toBe("https://github.com/o/r");
+    expect(normalizeGitHubRemote("git@github.com:o/r")).toBe("https://github.com/o/r");
+    expect(normalizeGitHubRemote("https://gitlab.com/o/r.git")).toBeNull();
+    expect(normalizeGitHubRemote("")).toBeNull();
+  });
+});
+
+// ── `view --ref` (roadmap item 18) ──────────────────────────────────────────
+
+describe("view.buildSite --ref", () => {
+  const REF = "v0.1";
+  const REF_SHA = "b".repeat(40);
+  const REF_FILES: Record<string, string> = {
+    "livewiki/quickstart.md": "# Quickstart\n\nRef version quickstart.\n",
+    "livewiki/auth.md": [
+      "---",
+      "title: Authentication",
+      "anchors:",
+      "  - src/auth/login.ts",
+      "---",
+      "",
+      "# Authentication",
+      "",
+      "REF CONTENT handles login.",
+      "",
+    ].join("\n"),
+    "livewiki/diagrams/flow.mmd": "graph TD\n  R --> S\n",
+  };
+
+  function refRoutes(calls?: string[][]): SpawnImpl {
+    return fakeGitRouter(
+      [
+        {
+          match: (args) => args.includes("ls-tree"),
+          // The dot-directory entry must be filtered out like the disk walker.
+          stdout:
+            "livewiki/quickstart.md\nlivewiki/auth.md\nlivewiki/diagrams/flow.mmd\n" +
+            "livewiki/.hidden/secret.md\nlivewiki/notes.txt\n",
+        },
+        { match: isStampLog, stdout: `${REF_SHA}\n2026-07-01T00:00:00+00:00\n` },
+        { match: isRemoteProbe, stdout: "git@github.com:acme/widgets.git\n" },
+        { match: isBadgeLog, stdout: "" },
+      ],
+      calls,
+    );
+  }
+
+  /** Same routes, but serving per-path content for `git show <ref>:<path>`. */
+  function refSpawn(calls?: string[][]): SpawnImpl {
+    return ((cmd: string, args: string[]) => {
+      if (args[0] === "show") {
+        const path = String(args[1]).slice(REF.length + 1);
+        const content = REF_FILES[path];
+        return fakeGitRouter([
+          content === undefined
+            ? { match: () => true, code: 128, stderr: `fatal: path '${path}' does not exist in '${REF}'\n` }
+            : { match: () => true, stdout: content },
+        ])(cmd, args);
+      }
+      return refRoutes(calls)(cmd, args);
+    }) as unknown as SpawnImpl;
+  }
+
+  it("builds the site from the ref (ls-tree + git show), never from the working tree", async () => {
+    // The working tree carries a DIFFERENT wiki — the ref content must win.
+    await writeWiki("livewiki/quickstart.md", "# Quickstart\n\nDISK CONTENT.\n");
+    await writeWiki("livewiki/auth.md", "# Authentication\n\nDISK CONTENT handles login.\n");
+    const calls: string[][] = [];
+    const outDir = nodePath.join(repoRoot, "site-ref");
+    const result = await buildSite({ repoRoot, outDir, ref: REF, spawnImpl: refSpawn(calls) });
+
+    expect(result.pagesWritten).toBe(3); // .hidden/ dir and notes.txt filtered
+    const index = (await readSite(outDir, "index.html"))!;
+    expect(index).toContain("Ref version quickstart.");
+    expect(index).not.toContain("DISK CONTENT");
+    const auth = (await readSite(outDir, "pages/auth.html"))!;
+    expect(auth).toContain("REF CONTENT handles login.");
+    // Exactly one ls-tree enumeration; every artifact came through git show.
+    expect(calls.filter((a) => a.includes("ls-tree")).length).toBe(1);
+  });
+
+  it("badges are OFF in ref mode; the stamp and deep links use the ref's commit", async () => {
+    const calls: string[][] = [];
+    const outDir = nodePath.join(repoRoot, "site-ref");
+    await buildSite({ repoRoot, outDir, ref: REF, spawnImpl: refSpawn(calls) });
+
+    // The working-tree badge probe is never spawned in ref mode.
+    expect(calls.some((a) => a.includes("--no-merges"))).toBe(false);
+    const auth = (await readSite(outDir, "pages/auth.html"))!;
+    expect(auth).not.toContain("lw-badge");
+    expect(auth).toContain(`Updated on 2026-07-01 · Commit ${REF_SHA.slice(0, 7)}`);
+    expect(auth).toContain(`https://github.com/acme/widgets/blob/${REF_SHA}/src/auth/login.ts`);
+  });
+
+  it("an unresolvable ref throws ViewError invalid_ref with the git detail", async () => {
+    const outDir = nodePath.join(repoRoot, "site-ref");
+    const failing = fakeGitRouter([
+      { match: (args) => args.includes("ls-tree"), code: 128, stderr: "fatal: Not a valid object name: 'bogus'\n" },
+    ]);
+    await expect(buildSite({ repoRoot, outDir, ref: "bogus", spawnImpl: failing })).rejects.toMatchObject({
+      code: "invalid_ref",
+    });
+    await expect(buildSite({ repoRoot, outDir, ref: "bogus", spawnImpl: failing })).rejects.toThrow(
+      /bogus/,
+    );
+    // Flag-like refs are rejected before any spawn.
+    await expect(buildSite({ repoRoot, outDir, ref: "--help", spawnImpl: failing })).rejects.toMatchObject({
+      code: "invalid_ref",
+    });
+  });
+
+  it("filterWikiArtifactPaths mirrors the disk walker rules", async () => {
+    expect(
+      filterWikiArtifactPaths([
+        "livewiki/quickstart.md",
+        "livewiki/.github.md",
+        "livewiki/.hidden/secret.md",
+        "livewiki/notes.txt",
+        "src/index.ts",
+        "livewiki/diagrams/flow.mmd",
+      ]),
+    ).toEqual([
+      "livewiki/quickstart.md",
+      "livewiki/.github.md",
+      "livewiki/diagrams/flow.mmd",
+    ]);
   });
 });

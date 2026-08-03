@@ -7,14 +7,13 @@
 
 ## Current execution order (see AGENTS.md)
 
-> **Reconciled 2026-08-02** (maintainer decision; supersedes the 2026-07-26
-> reconciliation below, kept for history): the queue is now **#16 dogfood
-> batch (paid, on approval) → cross-platform CI green (macOS realpath +
-> workflow smoke step) → #6 GitHub Actions "docs-debt on merge" template →
-> beta launch (npm publish)**. Items 1–5 and 7–15 are DONE (#15 activity
-> dashboard + viewer mermaid fixes + bounded LR structure graph shipped
-> 2026-08-02, uncommitted). No "cross-platform validated" claim until the
-> matrix is green on all three OS hosts.
+> **Reconciled 2026-08-03** (maintainer decision; supersedes 2026-08-02):
+> #16 dogfood batch DONE, cross-platform CI DONE (matrix green twice),
+> #6 v1 DONE. The remaining pre-beta queue is **#17 viewer version
+> stamp + source deep-links → #18 `view --ref` → #19 Go / #20 Rust /
+> #21 Java tier-1 (Go pilot first) → beta launch (npm publish, with the
+> naming/domain decision before it)**. #6 v2 (pay-variant) and the
+> optional hardening list stay post-beta.
 > items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
 > dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
 > ~6% of its token cost; R11-A validated and kept; commit/push done).
@@ -356,6 +355,100 @@ candidates skipped on seed-key overlap, `flowMaxOverlap` working as
 designed). Zero degraded pages. The 208 stale `changed` debt rows
 dangled after the rewrite and were closed (`resolved_at`) with a
 `debt_resolved` ×208 ledger entry; `status` now reports debt 0.
+
+### 17. Viewer version stamp + source deep-links (PRE-BETA)
+
+Source: CodeWiki review 2026-08-03 (Google's codewiki.google — hosted,
+Gemini-generated; its strongest mechanic is pinning every code mention
+to the generating commit). Maintainer decision 2026-08-03: pre-launch,
+not post-beta. livewiki already versions the wiki in git; ship the
+surface: the viewer stamps `Updated on / Commit <sha>` (one bounded git
+call, freshness-badge discipline — no git ⇒ no stamp, never an error)
+and renders per-anchor source links (local file offline; GitHub blob URL
+when a remote is detected — optional surface, graceful degrade). Zero
+LLM, no generation-contract change.
+
+**Result (2026-08-03, implemented, uncommitted):** the chrome stamps
+`Updated on <date> · Commit <short-sha>` under the brand from one bounded
+`git log -1 --format=%H%n%cI -- livewiki/` probe (`probeWikiStamp` /
+`parseWikiStamp`; git state only, any failure ⇒ no stamp). Source
+deep-links are gated on BOTH a GitHub remote (`git remote get-url origin`
+normalized by `normalizeGitHubRemote`, https/git@ forms) and the stamp
+commit: a compact `Sources:` line after the page H1 (unique file paths
+from the frontmatter `anchors:`, deduped and sorted, file-level blob
+links) and each `<!-- lw:anchors ... -->` marker replaced with a
+`source: <path>` blob link. All probes share the new `runGitCaptured`
+bounded-spawn helper (shell:false, injectable); no remote ⇒ no links
+(offline posture preserved). Final gate numbers: (coordinator to fill
+after review).
+
+### 18. `livewiki view --ref <tag|sha>` (PRE-BETA)
+
+Source: maintainer request 2026-08-03 — "version the wikis so the user
+can compare 0.1 vs 0.2"; pre-launch per the same decision. Build the
+site from `livewiki/` as it existed at any git ref via `git show`
+(read-only, no checkout, working tree untouched). Two builds side by
+side (e.g. `--out .livewiki/site-v0.1` vs current) give the real version
+comparison; combined with item 17's stamp the user always knows which
+version they are reading.
+
+**Result (2026-08-03, implemented, uncommitted):** `livewiki view --ref
+<tag|sha>` builds the site from the wiki as of the ref via a small
+`WikiSource` abstraction (disk vs git-ref) inside `buildSite` — artifacts
+enumerated with `git ls-tree -r --name-only <ref> -- livewiki/` (filtered
+by the same canonical rules as the disk walker, exported as
+`filterWikiArtifactPaths`) and read with `git show <ref>:<path>`; the
+working tree is never touched. Freshness badges are off in ref mode (they
+compare against the working-tree log); the item-17 stamp uses the ref's
+own newest wiki commit and deep links use its sha. An unresolvable,
+empty, or flag-like ref throws `ViewError("invalid_ref")` → CLI exit 1
+with the git detail (human and JSON). Default output stays
+`.livewiki/site/`; `--out` is the documented way to keep two versions
+side by side. Final gate numbers: (coordinator to fill after review).
+
+### 19. Tier-1 anchored support: Go (PRE-BETA)
+
+Source: maintainer decision 2026-08-03 — tier-1 language expansion moves
+from "usage-driven post-beta" to PRE-LAUNCH, starting with Go, Rust, and
+Java (one item each). Per language: vendor/download the tree-sitter WASM
+grammar (rule #4 one-time download exception), write the symbol extractor
+in `symbols.ts` (function/class/method rules with the same anchor-quality
+bar as TS/Python — this machinery is the anti-hallucination core, so
+extraction fidelity is the acceptance bar), extend import resolution in
+`modules.ts` (Go package paths), and add unit + stub-E2E coverage.
+Pilot language: do Go FIRST to prove the extractor pattern before
+replicating to Rust and Java. Validation: one `init --batch` acceptance
+run on a real Go repo (paid, requires approval at execution time).
+
+### 20. Tier-1 anchored support: Rust (PRE-BETA)
+
+Same shape as item 19 (grammar + extractor + import resolution — Rust
+`mod`/`use`/crate resolution) after the Go pilot proves the pattern.
+Acceptance: batch run on a real Rust repo (paid, approved at the time).
+
+### 21. Tier-1 anchored support: Java (PRE-BETA)
+
+Same shape as item 19 (grammar + extractor + package/import resolution)
+after the Go pilot. Acceptance: batch run on a real Java repo (paid,
+approved at the time).
+
+### 22. CodeWiki-grade output format (post-beta, needs design)
+
+Source: CodeWiki review 2026-08-03 — the maintainer's first reaction to
+Google's codewiki.google was "o wiki final está muito bom; a formatação
+está excelente". Two gaps vs our corpus, both generation-contract
+changes (LLM prompts + artifact validation + repair contract, so NOT
+free like #17): (a) **one Mermaid diagram per section** — CodeWiki
+opens every H2/H3 section with a diagram; our pages have diagrams only
+for flows and class inventories; (b) **deeper concept hierarchy** —
+their pages run H2 sections with H3 subsections (e.g. "Building MCP
+Servers" → "Advanced OAuth 2.0 Implementation"); our module pages are
+flatter. Design questions before implementation: diagram budget per
+page (stage-5 flow budgets are the precedent), diagram validity gate
+(mermaid-validator already exists), and whether this ships as a page-
+kind variant or a prompt-contract revision. Evaluate on the A/B harness
+before adopting — CodeWiki's static text quality was impressive but
+unmeasured against our corpus.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
