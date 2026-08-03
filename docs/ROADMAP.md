@@ -646,7 +646,7 @@ kind variant or a prompt-contract revision. Evaluate on the A/B harness
 before adopting — CodeWiki's static text quality was impressive but
 unmeasured against our corpus.
 
-### 23. Repository understanding layer (PRE-BETA, after #19–#21)
+### 23. Repository understanding layer (PRE-BETA) ✅ DONE 2026-08-03
 
 Source: maintainer 2026-08-03 — the quickstart orientation proved the
 gap on this very repo: with no README, the deterministic fallback
@@ -689,9 +689,15 @@ as evidence) → README purpose → digest fallback, byte-exact without a
 synthesis; `export readme` prefers the synthesis. Tests:
 `understanding.test.ts` (12), `batch-understanding.test.ts` (7, stub
 LLM), plus blocks in `navigation.test.ts` and `readme-export.test.ts`.
-Gate: `pnpm -r build` clean; core 1783 / CLI 125 / MCP 56. The
-no-README/bad-README acceptance validation (paid batch) is the remaining
-step.
+Gate: `pnpm -r build` clean; core 1783 / CLI 125 / MCP 56. **Acceptance
+(2026-08-03, approved paid):** batch on a no-README zoxide copy — the
+quickstart opened with a correct synthesized purpose (provenance:
+"Synthesized from the verified wiki pages") with zero human edits;
+then a sabotaged README (badges + lorem) was added and a free `init`
+regen kept the synthesis primary, demoting the junk README to a quoted
+evidence line ("one evidence input, not the authority"). Both design
+cases PASS. Run: 16 tasks done / 0 failed, exit 0, verify OK (20
+pages), checkpoint 116,975 + 35,855 = 152,830 tokens == proxy EXACTLY.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
