@@ -1,9 +1,0 @@
-{
-  "label": "openwiki",
-  "calls": 157,
-  "promptTokens": 13668064,
-  "completionTokens": 38724,
-  "totalTokens": 13706788,
-  "callsWithoutUsage": 0,
-  "updatedAt": "2026-07-10T13:18:18.916Z"
-}

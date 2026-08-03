@@ -1,1 +1,0 @@
-{"ok":true,"pagesChecked":14,"issues":[{"severity":"warning","code":"broken_internal_link","wikiPath":"livewiki/core-src-04.md","detail":"link para livewiki/page.md aponta para página inexistente"},{"severity":"warning","code":"broken_internal_link","wikiPath":"livewiki/core-src-04.md","detail":"link para livewiki/page.md#section aponta para página inexistente"}]}

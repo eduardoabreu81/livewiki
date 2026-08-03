@@ -297,5 +297,5 @@ async function runVerify(repoRoot: string): Promise<VerifyOutput> {
 - [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md) — dependency
 - [Livewiki core src 07](core-src-07.md) — dependency
 
-> Coverage note: this module's source (6 files, ~99k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (6 files, ~100k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

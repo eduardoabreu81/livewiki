@@ -41,14 +41,15 @@ Choose an end-to-end behavior or a product area. Auxiliary repository roles are 
 - [claude-code hook template](claude-code.md)
 - [livewiki CLI package](cli.md)
 - [document-as-you-go (livewiki skill)](document-as-you-go.md)
+- Github actions module — page unavailable: `livewiki/github-actions.md` has not been generated yet.
 - [Livewiki hook templates (Fase 5)](templates.md)
 
 ### Other modules
 
 - [Claude local settings](.claude.md)
 - [Playwright MCP snapshots](.playwright-mcp.md)
-- [Cross-platform CI workflow](github-workflows.md)
 - [livewiki repository root](root.md)
+- Workflows module — page unavailable: `livewiki/workflows.md` has not been generated yet.
 
 ## Auxiliary work
 

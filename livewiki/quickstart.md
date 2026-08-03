@@ -46,6 +46,6 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 ## Repository facts
 
-- **613 files** indexed
-- **1160 symbols** extracted
-- **135 modules** identified
+- **219 files** indexed
+- **1079 symbols** extracted
+- **47 modules** identified

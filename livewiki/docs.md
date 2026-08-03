@@ -22,6 +22,4 @@ This module spans 5 files classified as repository documentation. It exists so i
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-
-> Coverage note: this module's source (5 files, ~71k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

@@ -275,5 +275,5 @@ function candidate(overrides: Partial<FlowCandidate> & { moduleIds: string[] }):
 - [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md) — dependency and dependent
 - [core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)](core-src-06.md) — dependency and dependent
 
-> Coverage note: this module's source (10 files, ~211k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (10 files, ~213k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->
