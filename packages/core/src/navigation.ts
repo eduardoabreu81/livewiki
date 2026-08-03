@@ -9,6 +9,10 @@ import {
 } from "./modules.js";
 import { clipSentence, type RepoOrientation } from "./orientation.js";
 import { maskCodeSpansPreservingLength } from "./markdown-mask.js";
+// Type-only import (erased at runtime): understanding.ts imports the
+// loaders below at runtime, so a value import here would create a cycle.
+// The page path string is intentionally repeated in buildOrientationBlock.
+import type { UnderstandingSynthesis } from "./understanding.js";
 
 export interface ModulePresentation {
   moduleId: string;
@@ -390,10 +394,18 @@ export function generateQuickstart(opts: {  totalFiles: number;
   hasAuxiliary: boolean;
   orientation?: RepoOrientation | null;
   moduleDigests?: ModuleDigest[];
+  /**
+   * Roadmap item 23: the stage-5c repository understanding synthesis (read
+   * back from `livewiki/understanding.md`). When present it is the PRIMARY
+   * `## What this repository is` content; the README purpose becomes
+   * provenance-marked evidence. Absent ⇒ the pre-existing chain (README
+   * purpose → digest synthesis) applies byte-for-byte.
+   */
+  understanding?: UnderstandingSynthesis | null;
 }): string {
   const topicPresentations = opts.topicPresentations ?? new Map<string, TopicPresentation>();
   const moduleDigests = opts.moduleDigests ?? [];
-  const orientationBlock = buildOrientationBlock(opts.orientation ?? null, moduleDigests);
+  const orientationBlock = buildOrientationBlock(opts.orientation ?? null, moduleDigests, opts.understanding ?? null);
   const digestBlock = buildModuleDigestBlock(moduleDigests);
   const workByIntent = [
     "- **Change product behavior:** start with [Tasks](tasks.md).",
@@ -474,12 +486,48 @@ export function generateQuickstart(opts: {  totalFiles: number;
  * the purpose is synthesized deterministically from the module digests (up
  * to 3, Oxford comma) and marked with its own provenance line. A README
  * purpose always wins over the synthesis.
+ *
+ * Item 23: when the stage-5c understanding synthesis exists it is the
+ * PRIMARY content (with its own provenance line); the README purpose is
+ * quoted as provenance-marked evidence, never the authority. The synthesis
+ * surfaces win over the deterministic orientation surfaces when it carries
+ * its own. Without a synthesis the block is byte-identical to before.
  */
 function buildOrientationBlock(
   orientation: RepoOrientation | null,
   moduleDigests: ModuleDigest[] = [],
+  understanding: UnderstandingSynthesis | null = null,
 ): string[] {
   const purpose = orientation?.purpose ?? null;
+  if (understanding !== null) {
+    const block = ["## What this repository is", ""];
+    block.push(understanding.purpose, "");
+    // The path string intentionally duplicates understanding.ts's
+    // UNDERSTANDING_REL_PATH — a value import would create a module cycle.
+    block.push("*(Synthesized from the verified wiki pages — see `livewiki/understanding.md`.)*", "");
+    if (purpose !== null) {
+      block.push(`The repository README also states: ${purpose}`, "");
+      const source = orientation?.readmePath ?? "README";
+      block.push(
+        `*(Purpose excerpt from the repository README: \`${source}\` — one evidence input, not the authority.)*`,
+        "",
+      );
+    }
+    const surfaces =
+      understanding.surfaces.length > 0 ? understanding.surfaces : (orientation?.surfaces ?? []);
+    if (surfaces.length > 0) {
+      block.push("**Entry points and surfaces**", "");
+      for (const surface of surfaces) block.push(`- ${surface}`);
+      block.push("");
+    }
+    if (orientation !== null && orientation.fastPathSection !== null && orientation.readmePath !== null) {
+      block.push(
+        `**Fastest local path:** see the "${orientation.fastPathSection}" section of \`${orientation.readmePath}\`.`,
+        "",
+      );
+    }
+    return block;
+  }
   const synthesizedPurpose = purpose === null
     ? synthesizePurposeFromDigests(moduleDigests)
     : null;

@@ -12,9 +12,10 @@
 > #6 v1 DONE. The remaining pre-beta queue is **#17 viewer version
 > stamp + source deep-links → #18 `view --ref` → #19 Go / #20 Rust /
 > #21 Java tier-1 (Go pilot first) → #23 repository understanding
-> layer → beta launch (npm publish, with the naming/domain decision
-> before it)**. #6 v2 (pay-variant), #22 (CodeWiki-grade output format)
-> and the optional hardening list stay post-beta.
+> layer → #22 CodeWiki-grade output format (promoted pre-beta
+> 2026-08-03) → beta launch (npm publish, with the naming/domain
+> decision before it)**. #6 v2 (pay-variant) and the optional
+> hardening list stay post-beta.
 > items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
 > dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
 > ~6% of its token cost; R11-A validated and kept; commit/push done).
@@ -625,11 +626,13 @@ preserved locally at `/c/tmp/gson` (evidence, not in the repo). The
 no-recovery autonomous bar was NOT met (one disclosed retry) — same
 standing caveat as previous acceptances.
 
-### 22. CodeWiki-grade output format (post-beta, needs design)
+### 22. CodeWiki-grade output format (PRE-BETA, needs design)
 
 Source: CodeWiki review 2026-08-03 — the maintainer's first reaction to
 Google's codewiki.google was "o wiki final está muito bom; a formatação
-está excelente". Two gaps vs our corpus, both generation-contract
+está excelente". **Maintainer decision 2026-08-03: promoted from
+post-beta to PRE-BETA (after #23, before publish).** Two gaps vs our
+corpus, both generation-contract
 changes (LLM prompts + artifact validation + repair contract, so NOT
 free like #17): (a) **one Mermaid diagram per section** — CodeWiki
 opens every H2/H3 section with a diagram; our pages have diagrams only
@@ -665,6 +668,30 @@ lives. Cost: one LLM call per batch, always — detection stays zero-token,
 writing stays minimal. Acceptance: on a no-README repo AND on a
 bad-README repo, the quickstart states the product's purpose correctly
 without human edits.
+
+Result (implementation, 2026-08-03 — uncommitted): implemented as stage
+5c. ONE bounded `understanding:<evidenceHash>` task after topics
+(`runUnderstandingStage` in `batch.ts`) synthesizes
+`livewiki/understanding.md` from the closed inventory (accepted module
+digests, flows, topics, entry surfaces, README purpose). Persistence form:
+option (a) — a real wiki page, read back by the deterministic quickstart
+regeneration exactly like module digests (rule #3 stays clean). The
+artifact carries no anchors and follows a dedicated strict contract in the
+new `packages/core/src/understanding.ts` (single 40–600-char purpose
+paragraph, optional ≤10-bullet `Key surfaces`, no code spans/links/TODO);
+deliberately NO new `ArtifactPageKind`/`ArtifactValidationCode` (the Etapa
+2a exhaustiveness test pins both) and no surgical/relaxed round (the
+artifact is one paragraph). Checkpoint reuse on unchanged evidence ⇒ zero
+LLM calls; `--only understanding` reruns; ownership mirrors topics
+(`refused_owned_understanding`); `understandingSynthesis` config (default
+true). Quickstart priority: synthesis (provenance-marked, README quoted
+as evidence) → README purpose → digest fallback, byte-exact without a
+synthesis; `export readme` prefers the synthesis. Tests:
+`understanding.test.ts` (12), `batch-understanding.test.ts` (7, stub
+LLM), plus blocks in `navigation.test.ts` and `readme-export.test.ts`.
+Gate: `pnpm -r build` clean; core 1783 / CLI 125 / MCP 56. The
+no-README/bad-README acceptance validation (paid batch) is the remaining
+step.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 

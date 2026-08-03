@@ -111,8 +111,35 @@ function closedKeysFromPrompt(user: string): string[] {
   return keys;
 }
 
+/**
+ * Stage 5c (roadmap item 23): the mandatory understanding task. Its prompt
+ * carries `# Output: livewiki/understanding.md`; answer with a strict-contract
+ * page (owner: generated, one H1, one 40–600-char purpose paragraph, no
+ * anchors, no inline code, no links).
+ */
+const UNDERSTANDING_PAGE = `---
+title: Test repository
+owner: generated
+kind: understanding
+---
+
+# Test repository
+
+This test repository exercises the batch pipeline with a small product surface.
+`;
+
 /** Valid stage-4 module page (same response strategy as cli-batch-e2e). */
 function modulePageHandler(req: { system: string; user: string }): StubResponse {
+  if (req.user.includes("# Output: livewiki/understanding.md")) {
+    return {
+      status: 200,
+      body: {
+        content: [{ type: "text", text: UNDERSTANDING_PAGE }],
+        model: "claude-test-mock",
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    };
+  }
   const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
   const closedKeys = closedKeysFromPrompt(req.user);
   const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
@@ -539,10 +566,11 @@ describe("CLI E2E stage 5 — semantic product flows with stub LLM", () => {
     const initReport = JSON.parse(initR.stdout) as { batchSummary: { status: string } };
     expect(initReport.batchSummary.status).toBe("completed");
 
-    // Stage 5 never ran: no flow prompt, no stage-5 task rows.
+    // Stage 5 never ran: no flow prompt, no flow task rows. Stage 5c's
+    // understanding task (roadmap item 23) is stage 5 too — exclude it.
     expect(flowCalls).toBe(0);
     const report = await readStatus();
-    expect(report.tasks.filter((t) => t.stage === 5)).toEqual([]);
+    expect(report.tasks.filter((t) => t.stage === 5 && t.target.startsWith("flow:"))).toEqual([]);
 
     // No flow artifacts on disk.
     expect(await pathExists("livewiki/flows")).toBe(false);

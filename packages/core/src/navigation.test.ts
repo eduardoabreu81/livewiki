@@ -992,3 +992,125 @@ describe("deterministic navigation", () => {
     expect(await safeIo.readText(repoRoot, hubPath)).toContain("### [Alpha flow](a-flow.md)");
   });
 });
+
+// ── Item 23: repository understanding synthesis in the quickstart ──────────
+
+describe("generateQuickstart — understanding synthesis priority (item 23)", () => {
+  const baseOpts = {
+    totalFiles: 8,
+    totalSymbols: 21,
+    moduleCount: 4,
+    flowPresentations: new Map(),
+    hasAuxiliary: false,
+  };
+  const synthesis = {
+    title: "Flow Repo",
+    purpose: "Flow Repo is a small command line application that parses invocations and persists records for its users.",
+    surfaces: ["Command line interface entry point", "Persistence layer in the core module"],
+  };
+
+  it("prefers the synthesis over the README purpose, which becomes marked evidence", () => {
+    const quickstart = generateQuickstart({
+      ...baseOpts,
+      orientation: {
+        purpose: "Flow Repo is a small CLI that turns invocations into stored records.",
+        surfaces: ["Python entry point: `main.py`"],
+        readmePath: "README.md",
+        fastPathSection: "Quick Start",
+      },
+      understanding: synthesis,
+    });
+    const headings = [...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+    expect(headings[0]).toBe("What this repository is");
+    // The synthesis leads the block, with its own provenance line.
+    expect(quickstart).toContain(synthesis.purpose);
+    expect(quickstart).toContain("*(Synthesized from the verified wiki pages — see `livewiki/understanding.md`.)*");
+    // The README purpose is quoted as evidence, never the authority.
+    expect(quickstart).toContain(
+      "The repository README also states: Flow Repo is a small CLI that turns invocations into stored records.",
+    );
+    expect(quickstart).toContain("*(Purpose excerpt from the repository README: `README.md` — one evidence input, not the authority.)*");
+    // The synthesis surfaces win over the deterministic orientation surfaces.
+    expect(quickstart).toContain("- Command line interface entry point");
+    expect(quickstart).not.toContain("- Python entry point: `main.py`");
+    // The deterministic fast-path pointer is preserved.
+    expect(quickstart).toContain('**Fastest local path:** see the "Quick Start" section of `README.md`.');
+    // The synthesis purpose leads the section (before the README evidence).
+    expect(quickstart.indexOf(synthesis.purpose)).toBeLessThan(
+      quickstart.indexOf("The repository README also states"),
+    );
+  });
+
+  it("a bad README does not poison the orientation when the synthesis exists", () => {
+    const junk = "A porcaria of random scripts glued together with badges and no clear purpose whatsoever.";
+    const quickstart = generateQuickstart({
+      ...baseOpts,
+      orientation: {
+        purpose: junk,
+        surfaces: [],
+        readmePath: "README.md",
+        fastPathSection: null,
+      },
+      understanding: synthesis,
+    });
+    const section = quickstart.slice(
+      quickstart.indexOf("## What this repository is"),
+      quickstart.indexOf("## Work by intent"),
+    );
+    // The FIRST paragraph of the block is the synthesis, not the junk.
+    const firstParagraph = section.split("\n\n")[1]!;
+    expect(firstParagraph).toBe(synthesis.purpose);
+    // The junk survives only as provenance-marked evidence.
+    expect(section).toContain(`The repository README also states: ${junk}`);
+    expect(section).toContain("one evidence input, not the authority");
+  });
+
+  it("renders the synthesis without a README and falls back to orientation surfaces", () => {
+    const quickstart = generateQuickstart({
+      ...baseOpts,
+      orientation: {
+        purpose: null,
+        surfaces: ["Go module definition: `go.mod`"],
+        readmePath: null,
+        fastPathSection: null,
+      },
+      understanding: { title: "Flow Repo", purpose: synthesis.purpose, surfaces: [] },
+    });
+    expect(quickstart).toContain(synthesis.purpose);
+    expect(quickstart).toContain("*(Synthesized from the verified wiki pages — see `livewiki/understanding.md`.)*");
+    expect(quickstart).not.toContain("The repository README also states");
+    expect(quickstart).toContain("- Go module definition: `go.mod`");
+  });
+
+  it("is byte-exact with the pre-synthesis chain when no synthesis exists", () => {
+    const orientation = {
+      purpose: "MoneyPrinterTurbo-Plus turns a short topic brief into a fully rendered short video.",
+      surfaces: ["Python entry point: `main.py`"],
+      readmePath: "README.md",
+      fastPathSection: "Quick Start",
+    };
+    const digests = [
+      { id: "core", title: "Core pipeline", responsibility: "Renders the video end to end." },
+    ];
+    const omitted = generateQuickstart({ ...baseOpts, orientation, moduleDigests: digests });
+    const explicitNull = generateQuickstart({
+      ...baseOpts,
+      orientation,
+      moduleDigests: digests,
+      understanding: null,
+    });
+    expect(explicitNull).toBe(omitted);
+    // The README-purpose branch is untouched (same provenance line as before).
+    expect(omitted).toContain("*(Purpose excerpt from the repository README: `README.md`.)*");
+    expect(omitted).not.toContain("one evidence input");
+    // Same for the no-README digest-synthesis branch.
+    const noReadme = generateQuickstart({
+      ...baseOpts,
+      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null },
+      moduleDigests: digests,
+      understanding: null,
+    });
+    expect(noReadme).toContain("*(Synthesized from the generated module pages.)*");
+    expect(noReadme).not.toContain("Synthesized from the verified wiki pages");
+  });
+});

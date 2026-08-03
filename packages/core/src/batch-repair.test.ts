@@ -47,6 +47,20 @@ import {
  * in that call — useful to assert that the repair prompt was built
  * correctly.
  */
+/** Valid stage-5c understanding page returned outside mock instrumentation. */
+const VALID_UNDERSTANDING_PAGE = [
+  "---",
+  "title: Test repository",
+  "owner: generated",
+  "kind: understanding",
+  "---",
+  "",
+  "# Test repository",
+  "",
+  "This test repository exercises the batch pipeline with a small product surface.",
+  "",
+].join("\n");
+
 class ProgrammableMockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
@@ -64,6 +78,16 @@ class ProgrammableMockLlm implements LlmClient {
   public autoPageFromPrompt = false;
 
   async generate(req: import("./llm/types.js").GenerateRequest): Promise<GenerateResult> {
+    // Stage 5c (item 23): answer the understanding task with a valid page
+    // OUTSIDE this mock's instrumentation (callCount/callLog/response
+    // queue stay stage-4-only) — stage 5c has its own dedicated suite
+    // (batch-understanding.test.ts).
+    if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+      return {
+        content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
     this.callLog.push({ system: req.system, user: req.user });
     const idx = this.callCount;
     this.callCount++;
@@ -511,8 +535,9 @@ describe("batch X — repair success (Criterion #6)", () => {
     expect(result.failures).toHaveLength(0);
     expect(result.circuitBreakerTriggered).toBe(false);
     // Totals include the usage of the 2 calls (200 input + 100 output)
-    expect(result.totals.inputTokens).toBe(200);
-    expect(result.totals.outputTokens).toBe(100);
+    // +100/+50: the stage-5c understanding task succeeds with one call.
+    expect(result.totals.inputTokens).toBe(300);
+    expect(result.totals.outputTokens).toBe(150);
 
     const checkpoint = await readStage4Checkpoint(repoRoot);
     expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
@@ -1348,8 +1373,8 @@ describe("batch D3 — guard-rails under the new oversized-candidate gate", () =
     // accounting.
     const { buildStatusReport } = await import("./batch-status.js");
     const report = await buildStatusReport(repoRoot);
-    expect(report.totals.inputTokens).toBe(300);
-    expect(report.totals.outputTokens).toBe(150);
+    expect(report.totals.inputTokens).toBe(400);
+    expect(report.totals.outputTokens).toBe(200);
   });
 });
 
@@ -1573,7 +1598,8 @@ describe("batch X W — unique module IDs before stage 4", () => {
     // Status: completed (5 tasks done, 0 fails)
     expect(result.failures).toEqual([]);
     expect(result.status).toBe("completed");
-    expect(result.byModule).toHaveLength(5);
+    // 5 module tasks + the stage-5c understanding task.
+    expect(result.byModule).toHaveLength(6);
     expect(result.failures).toHaveLength(0);
 
     // 5 distinct pages (not 1!) — no overwrite
@@ -1637,8 +1663,8 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
       db.close();
     }
 
-    // Run totals = sum of usageHistory = 2 * 100 = 200 input
-    expect(result.totals.inputTokens).toBe(200);
+    // Run totals = sum of usageHistory = 2 * 100 + 100 understanding = 300 input
+    expect(result.totals.inputTokens).toBe(300);
   });
 
   it("LLM call failed → ZERO-usage entry preserved (1x), no duplicate after real response", async () => {
@@ -1737,6 +1763,13 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
     // First stage-4 module times out; second succeeds (order depends on prioritize).
     let n = 0;
     llm.generate = async (req) => {
+      // Stage 5c (item 23): valid page outside this override's counting.
+      if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+        return {
+          content: VALID_UNDERSTANDING_PAGE,
+          usage: { inputTokens: 100, outputTokens: 50, model: llm.model },
+        };
+      }
       llm.callLog.push({ system: req.system, user: req.user });
       const idx = n++;
       llm.callCount = n;
@@ -1828,8 +1861,9 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
 
     // Totals incomplete when timeout present
     expect(result.totals.usageIncomplete).toBe(true);
-    expect(result.totals.inputTokens).toBe(100); // only known success
-    expect(result.totals.outputTokens).toBe(50);
+    // known module success + the stage-5c understanding call
+    expect(result.totals.inputTokens).toBe(200);
+    expect(result.totals.outputTokens).toBe(100);
     expect(result.totals.models).not.toContain("(no usage)");
     expect(result.totals.models).not.toContain("(call failed)");
 
@@ -1846,7 +1880,8 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
     // Successful module still has known tokens
     const doneTask = report.tasks.find((t) => t.status === "done" && t.stage === 4);
     expect(doneTask!.inputTokens).toBe(100);
-    expect(report.totals.inputTokens).toBe(100);
+    // +100: the stage-5c understanding task succeeds with one call.
+    expect(report.totals.inputTokens).toBe(200);
   });
 
   it("network failure without usage → usage null / usageKnown false / incomplete", async () => {
@@ -2435,8 +2470,9 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       undefined,
       undefined,
     ]);
-    expect(result.totals.inputTokens).toBe(300);
-    expect(result.totals.outputTokens).toBe(150);
+    // +100/+50: the stage-5c understanding task succeeds with one call.
+    expect(result.totals.inputTokens).toBe(400);
+    expect(result.totals.outputTokens).toBe(200);
     expectJoinedAttempts(checkpoint);
   });
 
@@ -2945,13 +2981,15 @@ describe("batch recovery tier — relaxed completion round (Component 2)", () =>
     // Done, NOT a failure — the exit code stays 0 for a degraded-only run.
     expect(result.status).toBe("completed");
     expect(result.failures).toEqual([]);
-    expect(result.tasksDone).toBe(1);
+    // The relaxed module task + the stage-5c understanding task.
+    expect(result.tasksDone).toBe(2);
     expect(result.tasksFailed).toBe(0);
     expect(llm.callCount).toBe(4); // 1 initial + 2 repairs + 1 relaxed
     expect(result.degradedPages).toEqual(["livewiki/auth.md"]);
     // Exact accounting: the relaxed attempt is a normal billed attempt.
-    expect(result.totals.inputTokens).toBe(400);
-    expect(result.totals.outputTokens).toBe(200);
+    // +100/+50: the stage-5c understanding task succeeds with one call.
+    expect(result.totals.inputTokens).toBe(500);
+    expect(result.totals.outputTokens).toBe(250);
 
     // The page on disk carries the frontmatter flag + the reader notice
     // as the FIRST body line.

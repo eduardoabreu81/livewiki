@@ -295,6 +295,20 @@ function expectJoinedAttempts(checkpoint: TaskCheckpoint): void {
 const SURGICAL_CONTRACT_MARKER = "SURGICAL REPAIR";
 const FULL_REPAIR_CONTEXT_MARKER = "# Closed list of canonical keys";
 
+/** Valid stage-5c understanding page returned outside mock instrumentation. */
+const VALID_UNDERSTANDING_PAGE = [
+  "---",
+  "title: Test repository",
+  "owner: generated",
+  "kind: understanding",
+  "---",
+  "",
+  "# Test repository",
+  "",
+  "This test repository exercises the batch pipeline with a small product surface.",
+  "",
+].join("\n");
+
 // === Stage 4 (module) harness ===
 
 /**
@@ -309,6 +323,15 @@ class SurgicalModuleMockLlm implements LlmClient {
   public callLog: Array<{ system: string; user: string }> = [];
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
+    // Stage 5c (item 23): answer the understanding task with a valid page
+    // OUTSIDE this mock's instrumentation — stage 5c has its own dedicated
+    // suite (batch-understanding.test.ts).
+    if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+      return {
+        content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
     this.callLog.push({ system: req.system, user: req.user });
     const idx = this.callCount;
     this.callCount++;
@@ -500,6 +523,15 @@ class SurgicalFlowMockLlm implements LlmClient {
   private lastFlowCtx: FlowPromptCtx | null = null;
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
+    // Stage 5c (item 23): answer the understanding task with a valid page
+    // OUTSIDE this mock's instrumentation — stage 5c has its own dedicated
+    // suite (batch-understanding.test.ts).
+    if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+      return {
+        content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
     this.callLog.push({ system: req.system, user: req.user });
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
     if (/^# Flow: \S+$/m.test(req.user)) {
@@ -582,6 +614,15 @@ class SurgicalTopicMockLlm implements LlmClient {
   private lastTopicUser: string | null = null;
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
+    // Stage 5c (item 23): answer the understanding task with a valid page
+    // OUTSIDE this mock's instrumentation — stage 5c has its own dedicated
+    // suite (batch-understanding.test.ts).
+    if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+      return {
+        content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
     this.callLog.push({ system: req.system, user: req.user });
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
     if (/^# Flow: \S+$/m.test(req.user)) {

@@ -12,8 +12,8 @@ import type { GenerateRequest, GenerateResult } from "./llm/types.js";
  *
  * Same MockLlm shape as batch.test.ts: deterministic pages, fixed usage
  * (100 input / 50 output per call), no paid calls. Stage 5 is disabled in
- * the fixture config (maxFlows/maxTopics = 0) so these tests exercise the
- * stage-4 pool in isolation.
+ * the fixture config (maxFlows/maxTopics = 0, understandingSynthesis:
+ * false) so these tests exercise the stage-4 pool in isolation.
  */
 
 /** Valid page generator; tracks in-flight parallelism for pool assertions. */
@@ -164,7 +164,7 @@ async function createRepo(moduleIds: string[]): Promise<string> {
   await nodeFs.mkdir(nodePath.join(root, ".livewiki"), { recursive: true });
   await nodeFs.writeFile(
     nodePath.join(root, ".livewiki", "config.json"),
-    JSON.stringify({ maxFlows: 0, maxTopics: 0 }),
+    JSON.stringify({ maxFlows: 0, maxTopics: 0, understandingSynthesis: false }),
     "utf8",
   );
   return root;
@@ -332,7 +332,7 @@ describe("batchConcurrency — stage-4 worker pool (roadmap item 7)", () => {
     const repo = await makeRepo(MODULE_IDS.slice(0, 5));
     await nodeFs.writeFile(
       nodePath.join(repo, ".livewiki", "config.json"),
-      JSON.stringify({ maxFlows: 0, maxTopics: 0, batchConcurrency: 2 }),
+      JSON.stringify({ maxFlows: 0, maxTopics: 0, batchConcurrency: 2, understandingSynthesis: false }),
       "utf8",
     );
     const llm = new ValidMockLlm();

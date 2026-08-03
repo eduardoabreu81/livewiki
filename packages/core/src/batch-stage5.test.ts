@@ -201,6 +201,20 @@ function makeFlowPage(ctx: FlowPromptCtx, _diagramSource: string): string {
   ].join("\n");
 }
 
+/** Valid stage-5c understanding page returned outside mock instrumentation. */
+const VALID_UNDERSTANDING_PAGE = [
+  "---",
+  "title: Test repository",
+  "owner: generated",
+  "kind: understanding",
+  "---",
+  "",
+  "# Test repository",
+  "",
+  "This test repository exercises the batch pipeline with a small product surface.",
+  "",
+].join("\n");
+
 /**
  * Programmable stage-4 + stage-5 stub. Stage-4 module pages are generated
  * from the prompt's closed key list; stage-5 calls are detected by the
@@ -221,6 +235,15 @@ class Stage5MockLlm implements LlmClient {
   public onBeforeFlowResponse: ((flowCallIndex: number) => Promise<void> | void) | null = null;
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
+    // Stage 5c (item 23): answer the understanding task with a valid page
+    // OUTSIDE this mock's instrumentation — stage 5c has its own dedicated
+    // suite (batch-understanding.test.ts).
+    if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+      return {
+        content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
     this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
     this.callCount++;
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
@@ -309,8 +332,10 @@ async function countStage5Tasks(root: string): Promise<number> {
     readonly: true,
   });
   try {
+    // Stage-5c (item 23) understanding rows also carry stage = 5
+    // (`understanding:<hash>`); this helper counts the FLOW tasks only.
     const row = db
-      .prepare("SELECT COUNT(*) AS n FROM batch_tasks WHERE stage = 5")
+      .prepare("SELECT COUNT(*) AS n FROM batch_tasks WHERE stage = 5 AND target NOT LIKE 'understanding:%'")
       .get() as { n: number };
     return row.n;
   } finally {
@@ -1874,6 +1899,15 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
     public refineTransform: ((plan: { topics: Array<Record<string, unknown>> }) => void) | null = null;
 
     async generate(req: GenerateRequest): Promise<GenerateResult> {
+      // Stage 5c (item 23): answer the understanding task with a valid page
+      // OUTSIDE this mock's instrumentation — stage 5c has its own dedicated
+      // suite (batch-understanding.test.ts).
+      if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+        return {
+          content: VALID_UNDERSTANDING_PAGE,
+          usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+        };
+      }
       const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
       if (/^# Flow: \S+$/m.test(req.user)) {
         return { content: makeFlowPage(parseFlowPrompt(req.user), "flowchart LR\n  cli --> core"), usage };
@@ -2370,6 +2404,15 @@ describe("batch stage 5 — flow candidate skipped when a participating module f
     public flowCallCount = 0;
 
     async generate(req: GenerateRequest): Promise<GenerateResult> {
+      // Stage 5c (item 23): answer the understanding task with a valid page
+      // (a normal, non-truncated result) before the truncation logic below —
+      // stage 5c has its own dedicated suite (batch-understanding.test.ts).
+      if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+        return {
+          content: VALID_UNDERSTANDING_PAGE,
+          usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+        };
+      }
       const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
       if (/^# Flow: \S+$/m.test(req.user)) {
         this.flowCallCount++;

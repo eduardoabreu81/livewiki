@@ -118,6 +118,10 @@
       "types": "./dist/topics.d.ts",
       "import": "./dist/topics.js"
     },
+    "./understanding": {
+      "types": "./dist/understanding.d.ts",
+      "import": "./dist/understanding.js"
+    },
     "./import-resolution": {
       "types": "./dist/import-resolution.d.ts",
       "import": "./dist/import-resolution.js"

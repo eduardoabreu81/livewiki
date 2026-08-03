@@ -100,8 +100,39 @@ function closedKeysFromPrompt(user: string, fallbackModuleId: string): string[] 
   return keys.length > 0 ? keys : [`${fallbackModuleId}.ts#placeholder`];
 }
 
+/**
+ * Stage 5c (roadmap item 23): the mandatory understanding task. Its prompt
+ * carries `# Output: livewiki/understanding.md`; answer with a strict-contract
+ * page (owner: generated, one H1, one 40–600-char purpose paragraph, no
+ * anchors, no inline code, no links).
+ */
+const UNDERSTANDING_PAGE = `---
+title: Test repository
+owner: generated
+kind: understanding
+---
+
+# Test repository
+
+This test repository exercises the batch pipeline with a small product surface.
+`;
+
+function understandingResponse(req: { system: string; user: string }): StubResponse | null {
+  if (!req.user.includes("# Output: livewiki/understanding.md")) return null;
+  return {
+    status: 200,
+    body: {
+      choices: [{ message: { role: "assistant", content: UNDERSTANDING_PAGE } }],
+      usage: { prompt_tokens: 1000, completion_tokens: 200 },
+      model: "gpt-test-mock",
+    },
+  };
+}
+
 /** Gera doc Markdown válido pra qualquer módulo (mesmo formato do E2E da Fase 3). */
 function defaultHandler(req: { system: string; user: string }): StubResponse | null {
+  const understanding = understandingResponse(req);
+  if (understanding) return understanding;
   const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
   const closedKeys = closedKeysFromPrompt(req.user, moduleId);
   const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");

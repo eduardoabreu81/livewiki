@@ -461,6 +461,35 @@ two topics that cite them. Hubs contain title+link only. Auxiliary module pages
 retain exact anchor coverage but use the compact Reference/H3 contract; role
 classification changes depth and prominence, never inventory membership.
 
+### Repository understanding layer
+
+After topics, stage 5 runs ONE bounded `understanding:<evidence-hash>` task
+that synthesizes `livewiki/understanding.md` — what the repository is, for
+whom, and its key surfaces — from a closed evidence inventory (accepted
+product module pages' opening digests, flow pages, topic pages,
+deterministic entry-point surfaces, and the README purpose excerpt when
+present). The README is ONE evidence input, never the authority: a missing
+or bad README cannot poison the orientation, because every other claim
+traces to verify-gated wiki pages. The page carries NO anchors (it
+synthesizes purpose, it does not document symbols) and follows a dedicated
+strict contract: frontmatter with `owner: generated` and `kind:
+understanding`, one H1, exactly one 40–600 character purpose paragraph, and
+at most one `Key surfaces` bullet section (≤ 10 bullets, ≤ 160 characters
+each); inline code, fenced code, Markdown links, images, and TODO-style
+placeholders are rejected. Generation reuses the flows/topics machinery:
+bounded repair, monotonic usage accounting, safe-io, an any-severity
+page-scoped verify gate, transactional rollback, checkpoint reuse on
+unchanged evidence (zero LLM calls), and preservation of
+human/mixed/untrusted pages (`refused_owned_understanding`). The task
+target embeds the evidence hash, so changed evidence regenerates once per
+batch; `understandingSynthesis` (default true) disables it when false, and
+`--only understanding` reruns it. In the quickstart the synthesis is the
+PRIMARY `## What this repository is` content with provenance marking, the
+README purpose becoming provenance-marked evidence; without a synthesis
+the pre-existing chain (README purpose, then the digest synthesis)
+applies unchanged. `export readme` uses the synthesis as its purpose
+paragraph when present.
+
 ## SQLite schema (`.livewiki/index.db`)
 
 ```sql

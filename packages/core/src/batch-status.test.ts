@@ -23,7 +23,21 @@ import { runBatch } from "./batch.js";
 import { buildStatusReport } from "./batch-status.js";
 import { openIndex } from "./db.js";
 import type { LlmClient } from "./llm/index.js";
-import type { GenerateResult } from "./llm/types.js";
+import type { GenerateRequest, GenerateResult } from "./llm/types.js";
+
+/** Valid stage-5c understanding page returned outside mock instrumentation. */
+const VALID_UNDERSTANDING_PAGE = [
+  "---",
+  "title: Test repository",
+  "owner: generated",
+  "kind: understanding",
+  "---",
+  "",
+  "# Test repository",
+  "",
+  "This test repository exercises the batch pipeline with a small product surface.",
+  "",
+].join("\n");
 
 class OneShotMockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
@@ -142,7 +156,17 @@ describe("batch-status — H6 backward compatibility (no diagnosticHistory)", ()
       public readonly provider = "anthropic" as const;
       public readonly model = "claude-test-mock";
 
-      async generate(): Promise<GenerateResult> {
+      async generate(req: GenerateRequest): Promise<GenerateResult> {
+        // Stage 5c (item 23): answer the understanding task with a valid
+        // page — stage 5c has its own dedicated suite
+        // (batch-understanding.test.ts).
+        if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+          return {
+            content: VALID_UNDERSTANDING_PAGE,
+            usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+            stopReason: "complete",
+          };
+        }
         return {
           content: [
             "---",
@@ -334,7 +358,17 @@ describe("batch-status — JSON shape guard (additive field only)", () => {
       public readonly provider = "anthropic" as const;
       public readonly model = "claude-test-mock";
 
-      async generate(): Promise<GenerateResult> {
+      async generate(req: GenerateRequest): Promise<GenerateResult> {
+        // Stage 5c (item 23): answer the understanding task with a valid
+        // page — stage 5c has its own dedicated suite
+        // (batch-understanding.test.ts).
+        if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+          return {
+            content: VALID_UNDERSTANDING_PAGE,
+            usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+            stopReason: "complete",
+          };
+        }
         return {
           content: [
             "---",

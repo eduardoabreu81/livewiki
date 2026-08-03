@@ -25,6 +25,7 @@ import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { loadConfig, type LivewikiConfig } from "./config.js";
+import { loadUnderstandingSynthesis } from "./understanding.js";
 
 /** Marker block — stable; external parsers may depend on it. */
 export const README_START = "<!-- livewiki:readme:start -->";
@@ -304,7 +305,12 @@ async function buildReadme(
 
   const repoName = nodePath.basename(absRoot);
   const digests = extractDigests(quickstartBody);
+  // Item 23: the stage-5c understanding synthesis (when present) is the
+  // purpose paragraph; the README is one evidence input, never the
+  // authority. The fallback chain is unchanged.
+  const understanding = await loadUnderstandingSynthesis(absRoot);
   const purpose =
+    understanding?.purpose ??
     extractPurpose(quickstartBody) ??
     synthesizePurposeFromDigests(digests) ??
     `This is the \`${repoName}\` repository.`;

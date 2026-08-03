@@ -95,10 +95,37 @@ function closedKeysFromPrompt(user: string, fallbackModuleId: string): string[] 
 }
 
 /**
+ * Stage 5c (roadmap item 23): the mandatory understanding task. Its prompt
+ * carries `# Output: livewiki/understanding.md`; answer with a strict-contract
+ * page (owner: generated, one H1, one 40–600-char purpose paragraph, no
+ * anchors, no inline code, no links).
+ */
+const UNDERSTANDING_PAGE = `---
+title: Test repository
+owner: generated
+kind: understanding
+---
+
+# Test repository
+
+This test repository exercises the batch pipeline with a small product surface.
+`;
+
+/**
  * Stage-4 handler aware of the zero-key contract: prose modules (empty closed
  * list) get an unanchored page; grammar-backed modules get an anchored page.
  */
 function proseTierHandler(req: { system: string; user: string }): StubResponse | null {
+  if (req.user.includes("# Output: livewiki/understanding.md")) {
+    return {
+      status: 200,
+      body: {
+        choices: [{ message: { role: "assistant", content: UNDERSTANDING_PAGE } }],
+        usage: { prompt_tokens: 1000, completion_tokens: 200 },
+        model: "gpt-test-mock",
+      },
+    };
+  }
   const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
   const displayTitle = `${moduleId.replace(/-/g, " ")} responsibilities`;
 
@@ -300,7 +327,11 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       expect(quickstart).toContain(
         "This fixture repository renders short media clips by wiring an API handler",
       );
-      expect(quickstart).toContain("*(Purpose excerpt from the repository README: `README.md`.)*");
+      // Stage 5c: with the understanding synthesis present, the README
+      // purpose is demoted to secondary evidence (not the authority).
+      expect(quickstart).toContain(
+        "*(Purpose excerpt from the repository README: `README.md` — one evidence input, not the authority.)*",
+      );
       expect(quickstart).toContain(
         '**Fastest local path:** see the "Getting Started" section of `README.md`.',
       );
@@ -309,8 +340,9 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       );
 
       // D1.5: the reader digest follows the orientation block with at least
-      // one responsibility sentence extracted from an accepted module page;
-      // the README purpose wins, so no synthesized purpose is emitted.
+      // one responsibility sentence extracted from an accepted module page.
+      // Stage 5c: the purpose comes from the understanding synthesis (the
+      // README excerpt is rendered as secondary evidence above).
       expect(headings[1], "reader digest follows the orientation block").toBe(
         "What you'll find in this wiki",
       );

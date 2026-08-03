@@ -82,6 +82,8 @@ import {
   buildTopicPrompt,
   buildTopicRepairPrompt,
   buildSurgicalRepairPrompt,
+  buildUnderstandingPrompt,
+  buildUnderstandingRepairPrompt,
   type FlowDiagramBudget,
   type Language,
   type ArtifactValidationError,
@@ -147,6 +149,17 @@ import {
   TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS,
   type OutputBudgetSignals,
 } from "./output-budget.js";
+import {
+  buildUnderstandingEvidence,
+  computeUnderstandingEvidenceHash,
+  hasUnderstandingBasis,
+  renderUnderstandingEvidence,
+  validateUnderstandingArtifact,
+  UNDERSTANDING_MAX_OUTPUT_TOKENS,
+  UNDERSTANDING_ONLY_TARGET,
+  UNDERSTANDING_REL_PATH,
+  UNDERSTANDING_TASK_PREFIX,
+} from "./understanding.js";
 import type {
   BatchStage,
   BatchStatusReport,
@@ -209,6 +222,14 @@ export interface BatchOptions {
    * one `testing` concern-grouped candidate after the import clusters.
    */
   concernTopics?: boolean;
+  /**
+   * Roadmap item 23: override of `understandingSynthesis` (default = config
+   * or true). When on, stage 5 runs ONE bounded understanding task after
+   * topics, synthesizing `livewiki/understanding.md` from the closed
+   * evidence inventory (accepted module/flow/topic pages, entry points,
+   * README purpose when present).
+   */
+  understandingSynthesis?: boolean;
   /**
    * Roadmap item 9: override of `communityDetection` (default = config or
    * true). When on, the stage-2 heuristic partition is cross-checked
@@ -396,6 +417,10 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // D2: concern-grouped topic candidates toggle (opts > config > default true).
     const concernTopics =
       opts.concernTopics ?? resolvedConfig.concernTopics ?? true;
+    // Roadmap item 23: repository understanding synthesis toggle
+    // (opts > config > default true).
+    const understandingSynthesis =
+      opts.understandingSynthesis ?? resolvedConfig.understandingSynthesis ?? true;
     // Roadmap item 9: community-detection cross-check toggle
     // (opts > config > default true). Diagnostic-only.
     const communityDetection =
@@ -726,13 +751,15 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       opts.onlyTarget !== undefined && opts.onlyTarget.startsWith("topic:")
         ? opts.onlyTarget.slice("topic:".length)
         : null;
+    // Stage 5c (item 23): `--only understanding` targets the understanding task.
+    const onlyUnderstanding = opts.onlyTarget === UNDERSTANDING_ONLY_TARGET;
     const tasksToRun = opts.onlyTarget
-      ? onlyFlowSlug !== null || onlyTopicIdentity !== null
+      ? onlyFlowSlug !== null || onlyTopicIdentity !== null || onlyUnderstanding
         ? []
         : ordered.filter((m) => m.id === opts.onlyTarget)
       : ordered;
 
-    if (opts.onlyTarget && onlyFlowSlug === null && onlyTopicIdentity === null && tasksToRun.length === 0) {
+    if (opts.onlyTarget && onlyFlowSlug === null && onlyTopicIdentity === null && !onlyUnderstanding && tasksToRun.length === 0) {
       throw new Error(`module "${opts.onlyTarget}" not found in this run`);
     }
 
@@ -2198,6 +2225,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     if (opts.mode === "only" && onlyTopicIdentity !== null && maxTopics <= 0) {
       throw new Error("topic generation is disabled by maxTopics: 0");
     }
+    if (opts.mode === "only" && onlyUnderstanding && !understandingSynthesis) {
+      throw new Error("understanding synthesis is disabled by understandingSynthesis: false");
+    }
     if (topicStageGateOpen) {
       const topicStage = await runSemanticTopicStage({
         db,
@@ -2278,6 +2308,67 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         });
         await drainPendingMetrics();
         const aborted = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, combinedCircuitBreaker, cb.done, cb.fails));
+        if (skippedFlowCandidates.length > 0) aborted.skippedFlowCandidates = skippedFlowCandidates;
+        if (skippedTopicPlan) aborted.skippedTopicPlan = skippedTopicPlan;
+        return aborted;
+      }
+    }
+
+    // === Stage 5c: repository understanding (roadmap item 23) ===
+    // ONE bounded task after topics, synthesizing
+    // `livewiki/understanding.md` from the closed evidence inventory
+    // (accepted module/flow/topic pages, entry points, README purpose when
+    // present). Same machinery shape as flows/topics: bounded repair slots,
+    // transactional write with rollback, identical checkpoint semantics.
+    // Failures follow the same policy — the task is marked, the run
+    // continues. Being the terminal stage, no circuit-breaker check follows
+    // (a single task can never trip it); a failure surfaces as
+    // `completed_with_failures` exactly like a flow/topic failure would.
+    const understandingGateOpen =
+      understandingSynthesis &&
+      !runAbortedByRollback &&
+      (opts.mode !== "only" || onlyUnderstanding);
+    if (understandingGateOpen) {
+      const understandingStage = await runUnderstandingStage({
+        db,
+        runId,
+        absRoot,
+        modules,
+        ordered,
+        pathRoleConfig: resolvedConfig.pathRoles,
+        llmClient: llmClient!,
+        language,
+        pricing: resolvedConfig.pricing,
+        thinking: thinkingMode,
+        maxRepairAttempts,
+        mode: opts.mode,
+      });
+      stage5UsageTotals = aggregateTotals(stage5UsageTotals, understandingStage.usage);
+      stage5TaskCount += understandingStage.taskCount;
+      stage5Done += understandingStage.done;
+      stage5Fails += understandingStage.fails;
+      cb.done += understandingStage.done;
+      cb.fails += understandingStage.fails;
+      failures.push(...understandingStage.failures);
+      moduleUsage.push(...understandingStage.usageByTask);
+      runAbortedByRollback ||= understandingStage.rollbackFailed;
+      if (understandingStage.rollbackFailed) {
+        byStageAcc["5"] = stage5UsageTotals;
+        finalizeRun(db, absRoot, runId, "aborted", {
+          totals: aggregateTotals(stage2UsageAcc, aggregateTotals(stageUsageTotals, stage5UsageTotals)),
+          byStage: byStageAcc,
+          byModule: moduleUsage,
+          modulesRefined: modules.map((module) => ({
+            id: module.id,
+            paths: module.paths,
+            ...(module.displayTitle ? { displayTitle: module.displayTitle } : {}),
+          })),
+          tasksDone: cb.done,
+          tasksFailed: cb.fails,
+          degradedPages,
+        });
+        await drainPendingMetrics();
+        const aborted = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, false, cb.done, cb.fails));
         if (skippedFlowCandidates.length > 0) aborted.skippedFlowCandidates = skippedFlowCandidates;
         if (skippedTopicPlan) aborted.skippedTopicPlan = skippedTopicPlan;
         return aborted;
@@ -2915,6 +3006,479 @@ async function runSemanticTopicStage(opts: {
     }
   }
   return result;
+}
+
+// === Stage 5c: repository understanding (roadmap item 23) ===
+
+interface UnderstandingStageResult {
+  usage: StageUsage;
+  taskCount: number;
+  done: number;
+  fails: number;
+  failures: BatchRunResult["failures"];
+  usageByTask: BatchRunResult["byModule"];
+  rollbackFailed: boolean;
+}
+
+/**
+ * Error shape shared by the dedicated understanding validator
+ * (UnderstandingValidationError is structurally assignable) and by verify
+ * issues mapped at the write gate. Deliberately NOT ArtifactValidationError:
+ * the understanding contract is anchor-free and its codes stay out of the
+ * Etapa 2a closed repair contract.
+ */
+interface UnderstandingAttemptError {
+  code: string;
+  message: string;
+  location: "frontmatter" | "body" | "global";
+  offending?: string;
+}
+
+interface UnderstandingAttemptResult {
+  usageEntry: UsageAttempt;
+  normalizedRaw: string;
+  diagnosticCandidate: string | null;
+  diagnosticOutcome: DiagnosticOutcome | null;
+  artifact: string | null;
+  validationErrors: UnderstandingAttemptError[];
+  llmError: { code: string; message: string } | null;
+}
+
+/**
+ * ONE understanding LLM call: build the prompt over the rendered closed
+ * evidence inventory, generate, and run normalize → dedicated strict
+ * validation. The caller orchestrates the bounded loop; this is one turn.
+ * No surgical repair and no relaxed round (decision, item 23): the
+ * artifact is a single paragraph plus an optional bullet list — a
+ * section-scoped splice or a relaxed contract buys nothing at this size.
+ */
+async function attemptUnderstandingGeneration(opts: {
+  attemptNumber: number;
+  evidenceBlock: string;
+  language: Language;
+  llmClient: LlmClient;
+  promptKind: "initial" | "repair";
+  priorCandidate: string;
+  priorErrors: UnderstandingAttemptError[];
+  pricing: import("./pricing.js").PricingOverride | undefined;
+  thinking?: "disabled" | "adaptive" | "omit" | undefined;
+  repairAttemptContext?: { attempt: number; total: number };
+}): Promise<UnderstandingAttemptResult> {
+  const prompt =
+    opts.promptKind === "repair"
+      ? buildUnderstandingRepairPrompt(
+          opts.evidenceBlock,
+          opts.priorCandidate,
+          opts.priorErrors,
+          8_000,
+          opts.language,
+          opts.repairAttemptContext ?? { attempt: 1, total: 1 },
+        )
+      : buildUnderstandingPrompt(opts.evidenceBlock, opts.language);
+
+  let raw: string;
+  let usage: { inputTokens: number; outputTokens: number; model: string };
+  let stopReason: StopReason = "unknown";
+  let rawStopReason: string | undefined;
+  try {
+    const result = await opts.llmClient.generate({
+      system: prompt.system,
+      user: prompt.user,
+      maxTokens: UNDERSTANDING_MAX_OUTPUT_TOKENS,
+      ...(opts.thinking ? { thinking: opts.thinking } : {}),
+    });
+    raw = result.content;
+    usage = result.usage;
+    stopReason = result.stopReason ?? "unknown";
+    rawStopReason = result.rawStopReason;
+  } catch (err) {
+    if (err instanceof LlmTimeoutError) {
+      return {
+        usageEntry: {
+          attempt: opts.attemptNumber,
+          usage: null,
+          usageKnown: false,
+          costUsd: null,
+          finishedAt: Date.now(),
+        },
+        normalizedRaw: "",
+        diagnosticCandidate: null,
+        diagnosticOutcome: "llm_error",
+        artifact: null,
+        validationErrors: [],
+        llmError: { code: "llm_timeout", message: err.message },
+      };
+    }
+    const e = err as Error;
+    return {
+      usageEntry: {
+        attempt: opts.attemptNumber,
+        usage: null,
+        usageKnown: false,
+        costUsd: null,
+        finishedAt: Date.now(),
+      },
+      normalizedRaw: "",
+      diagnosticCandidate: null,
+      diagnosticOutcome: "llm_error",
+      artifact: null,
+      validationErrors: [],
+      llmError: { code: "llm_call_failed", message: e.message },
+    };
+  }
+
+  const cost = computeCostFromUsage(usage, opts.pricing);
+  const usageEntry: UsageAttempt = {
+    attempt: opts.attemptNumber,
+    usage,
+    usageKnown: true,
+    costUsd: cost,
+    finishedAt: Date.now(),
+    stopReason,
+    ...(rawStopReason !== undefined ? { rawStopReason } : {}),
+  };
+
+  if (stopReason === "length" || stopReason === "incomplete") {
+    const code =
+      stopReason === "length" ? "truncated_by_token_limit" : "incomplete_generation";
+    const reasonDetail = rawStopReason ? ` (provider reason: ${rawStopReason})` : "";
+    return {
+      usageEntry,
+      normalizedRaw: raw,
+      diagnosticCandidate: raw,
+      diagnosticOutcome: code,
+      artifact: null,
+      validationErrors: [
+        {
+          code,
+          message:
+            stopReason === "length"
+              ? `provider stopped at the output-token limit${reasonDetail}`
+              : `provider stopped before a normal text completion${reasonDetail}`,
+          location: "global",
+        },
+      ],
+      llmError: null,
+    };
+  }
+
+  const normalize = normalizeStage4Artifact(raw);
+  if (!normalize.ok) {
+    return {
+      usageEntry,
+      normalizedRaw: raw,
+      diagnosticCandidate: raw,
+      diagnosticOutcome: "normalization_failed",
+      artifact: null,
+      validationErrors: normalize.errors.map((error) => ({
+        code: error.code,
+        message: error.message,
+        location: error.location === "section" ? "body" : error.location,
+        ...(error.offending !== undefined ? { offending: error.offending } : {}),
+      })),
+      llmError: null,
+    };
+  }
+
+  const validation = validateUnderstandingArtifact(normalize.content);
+  if (validation.length > 0) {
+    return {
+      usageEntry,
+      normalizedRaw: raw,
+      diagnosticCandidate: normalize.content,
+      diagnosticOutcome: "artifact_validation_failed",
+      artifact: null,
+      validationErrors: validation.map((error): UnderstandingAttemptError => ({
+        code: error.code,
+        message: error.message,
+        location: error.location,
+        ...(error.offending !== undefined ? { offending: error.offending } : {}),
+      })),
+      llmError: null,
+    };
+  }
+
+  return {
+    usageEntry,
+    normalizedRaw: raw,
+    diagnosticCandidate: normalize.content,
+    diagnosticOutcome: null,
+    artifact: normalize.content,
+    validationErrors: [],
+    llmError: null,
+  };
+}
+
+function understandingAttemptDiagnostic(
+  attempt: number,
+  promptKind: "initial" | "repair",
+  result: UnderstandingAttemptResult,
+): DiagnosticAttempt {
+  const summaries = result.validationErrors.slice(0, DIAGNOSTIC_MAX_ERRORS).map((error) => ({
+    code: error.code,
+    location: error.location,
+    message: error.message.slice(0, DIAGNOSTIC_TEXT_CAP),
+  }));
+  return {
+    attempt,
+    ...(result.usageEntry.stopReason !== undefined
+      ? { stopReason: result.usageEntry.stopReason }
+      : {}),
+    ...(result.usageEntry.rawStopReason !== undefined
+      ? { rawStopReason: result.usageEntry.rawStopReason }
+      : {}),
+    outcome: result.diagnosticOutcome ?? "success",
+    promptKind,
+    errors: summaries,
+    truncatedErrorCount: Math.max(0, result.validationErrors.length - summaries.length),
+    ...(result.diagnosticCandidate !== null
+      ? {
+          candidateChars: result.diagnosticCandidate.length,
+          candidateSha256: sha256(result.diagnosticCandidate),
+        }
+      : {}),
+    finishedAt: Date.now(),
+  };
+}
+
+/**
+ * The ONE understanding task of a batch run (stage 5c, after topics). The
+ * task target embeds the evidence hash (`understanding:<hash>`): on a
+ * run/resume, an already-done task for the CURRENT evidence is reused with
+ * zero LLM calls (the same checkpoint-reuse idempotence as the topic
+ * planner); changed evidence yields a new task and one regeneration.
+ * `--only understanding` always reruns with monotonic usage.
+ *
+ * Ownership mirrors the topics' rule: a human/mixed/untrusted/unparseable
+ * `livewiki/understanding.md` is preserved and the task fails with
+ * `refused_owned_understanding` (rule #6) — the page is fully synthesized,
+ * so there is no manual-block preservation path.
+ */
+async function runUnderstandingStage(opts: {
+  db: import("better-sqlite3").Database;
+  runId: number;
+  absRoot: string;
+  modules: Module[];
+  ordered: Module[];
+  pathRoleConfig: import("./modules.js").PathRoleConfig | undefined;
+  llmClient: LlmClient;
+  language: Language;
+  pricing: import("./pricing.js").PricingOverride | undefined;
+  thinking: "disabled" | "adaptive" | "omit" | undefined;
+  maxRepairAttempts: number;
+  mode: "run" | "resume" | "only";
+}): Promise<UnderstandingStageResult> {
+  const result: UnderstandingStageResult = {
+    usage: emptyUsage(),
+    taskCount: 0,
+    done: 0,
+    fails: 0,
+    failures: [],
+    usageByTask: [],
+    rollbackFailed: false,
+  };
+
+  const evidence = await buildUnderstandingEvidence({
+    repoRoot: opts.absRoot,
+    modules: opts.modules,
+    ordered: opts.ordered,
+    ...(opts.pathRoleConfig !== undefined ? { pathRoleConfig: opts.pathRoleConfig } : {}),
+  });
+  if (!hasUnderstandingBasis(evidence)) {
+    if (opts.mode === "only") {
+      throw new Error(
+        "no understanding evidence available (no accepted module/flow/topic pages and no README purpose) — run the batch first",
+      );
+    }
+    // Small or weakly documented repositories are a deterministic no-op,
+    // not a paid failure (mirrors the topics' small-repo guard).
+    return result;
+  }
+  const evidenceHash = computeUnderstandingEvidenceHash(evidence);
+  const target = `${UNDERSTANDING_TASK_PREFIX}${evidenceHash}`;
+
+  let task: { id: number; attempt: number; checkpoint_json: string | null };
+  if (opts.mode === "only") {
+    // `--only understanding` reruns the synthesis for the CURRENT evidence,
+    // creating the task row when the hash drifted since the original run.
+    task = getOrCreateTask(opts.db, opts.runId, 5, target);
+    resetTaskToPending(opts.db, task.id);
+  } else {
+    const existing = opts.db
+      .prepare(
+        "SELECT id, checkpoint_json FROM batch_tasks WHERE run_id = ? AND stage = 5 AND target = ?",
+      )
+      .get(opts.runId, target) as { id: number; checkpoint_json: string | null } | undefined;
+    if (existing !== undefined) {
+      const checkpoint = existing.checkpoint_json
+        ? safeJsonParse<TaskCheckpoint>(existing.checkpoint_json)
+        : null;
+      if (checkpoint?.status === "done") {
+        // Evidence unchanged since the task completed: zero LLM calls.
+        return result;
+      }
+      task = { id: existing.id, attempt: checkpoint?.attempt ?? 0, checkpoint_json: existing.checkpoint_json };
+    } else {
+      task = getOrCreateTask(opts.db, opts.runId, 5, target);
+    }
+  }
+
+  result.taskCount++;
+  const startedAt = Date.now();
+  let attempt = task.attempt;
+  const priorCheckpoint = task.checkpoint_json
+    ? safeJsonParse<TaskCheckpoint>(task.checkpoint_json)
+    : null;
+  const usageHistory = [...(priorCheckpoint?.usageHistory ?? [])];
+  const diagnosticHistory = [...(priorCheckpoint?.diagnosticHistory ?? [])];
+  let taskUsage = emptyUsage();
+  const wikiPath = UNDERSTANDING_REL_PATH;
+  const existing = await safeIo.readText(opts.absRoot, wikiPath).catch(() => null);
+  const owner = readOwnerFromFrontmatter(existing);
+  let taskError: TaskCheckpoint["error"] | undefined;
+  let artifacts: TaskCheckpoint["artifacts"] | undefined;
+  if (owner === "human" || owner === "mixed" || owner === "untrusted" || owner === "unparseable") {
+    taskError = {
+      code: "refused_owned_understanding",
+      message: `understanding page ${wikiPath} is not automation-owned; human/mixed/untrusted content is preserved (rule #6)`,
+      failedAt: 5,
+    };
+  } else {
+    const evidenceBlock = renderUnderstandingEvidence(evidence);
+    let priorCandidate = "";
+    let priorErrors: UnderstandingAttemptError[] = [];
+    for (let slot = 0; slot < 1 + opts.maxRepairAttempts; slot++) {
+      const promptKind = slot === 0 || priorCandidate === "" ? "initial" : "repair";
+      attempt++;
+      const attemptResult = await attemptUnderstandingGeneration({
+        attemptNumber: attempt,
+        evidenceBlock,
+        language: opts.language,
+        llmClient: opts.llmClient,
+        promptKind,
+        priorCandidate,
+        priorErrors,
+        pricing: opts.pricing,
+        ...(opts.thinking ? { thinking: opts.thinking } : {}),
+        ...(promptKind === "repair"
+          ? { repairAttemptContext: { attempt: slot, total: opts.maxRepairAttempts } }
+          : {}),
+      });
+      usageHistory.push(attemptResult.usageEntry);
+      taskUsage = accumulateUsage(taskUsage, attemptResult.usageEntry, opts.pricing);
+      result.usage = accumulateUsage(result.usage, attemptResult.usageEntry, opts.pricing);
+      priorCandidate = attemptResult.normalizedRaw || priorCandidate;
+      priorErrors = attemptResult.validationErrors;
+      diagnosticHistory.push(understandingAttemptDiagnostic(attempt, promptKind, attemptResult));
+      if (attemptResult.llmError) {
+        priorErrors = [
+          { code: "llm_error", message: attemptResult.llmError.message, location: "global" },
+        ];
+        priorCandidate = "";
+        if (attemptResult.llmError.code === "llm_timeout") {
+          taskError = { code: "llm_timeout", message: attemptResult.llmError.message, failedAt: 5 };
+          break;
+        }
+        continue;
+      }
+      if (
+        attemptResult.diagnosticOutcome === "incomplete_generation" ||
+        attemptResult.diagnosticOutcome === "truncated_by_token_limit"
+      ) {
+        priorCandidate = "";
+        priorErrors = [];
+        continue;
+      }
+      if (attemptResult.artifact === null) continue;
+      const write = await tryWriteAndVerify(opts.absRoot, wikiPath, attemptResult.artifact, existing, true);
+      if (write.rollbackFailed) {
+        taskError = { code: "rollback_failed", message: write.rollbackFailed.reason, failedAt: 5 };
+        result.rollbackFailed = true;
+        break;
+      }
+      if (write.exception) {
+        // Mirrors the topics' short-circuit: the write/verify step threw
+        // and the candidate was already rolled back inside
+        // tryWriteAndVerify. Not model-repairable, so the task fails
+        // WITHOUT burning further repair slots.
+        taskError = {
+          code: "write_verify_exception",
+          message:
+            `write/verify step threw for ${wikiPath}: ${write.exception.message}. ` +
+            `The candidate was rolled back; no repair retry because the failure is not model-fixable.`,
+          failedAt: 5,
+        };
+        break;
+      }
+      if (write.issues) {
+        priorCandidate = attemptResult.normalizedRaw || priorCandidate;
+        priorErrors = write.issues.map((issue) => ({
+          code: issue.code,
+          message: issue.detail,
+          location: issue.code === "broken_anchor" ? ("frontmatter" as const) : ("body" as const),
+          ...(issue.wikiPath ? { offending: issue.wikiPath } : {}),
+        }));
+        continue;
+      }
+      artifacts = write.artifacts;
+      break;
+    }
+    if (!artifacts && !taskError) {
+      taskError = {
+        code: "repair_exhausted",
+        message: `task "${target}" exhausted its bounded generation/repair attempts`,
+        failedAt: 5,
+      };
+    }
+  }
+
+  if (taskError) {
+    const checkpoint: TaskCheckpoint = {
+      stage: 5,
+      status: "failed",
+      attempt,
+      startedAt,
+      finishedAt: Date.now(),
+      usageHistory,
+      diagnosticHistory,
+      error: taskError,
+    };
+    opts.db
+      .prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
+      .run("failed", JSON.stringify(checkpoint), Date.now(), task.id);
+    result.fails++;
+    result.failures.push({
+      taskId: task.id,
+      module: target,
+      error: taskError,
+      retryCommand: `livewiki batch --only ${UNDERSTANDING_ONLY_TARGET} ${opts.runId}`,
+    });
+  } else {
+    const checkpoint: TaskCheckpoint = {
+      stage: 5,
+      status: "done",
+      attempt,
+      startedAt,
+      finishedAt: Date.now(),
+      usageHistory,
+      diagnosticHistory,
+      ...(artifacts ? { artifacts } : {}),
+    };
+    opts.db
+      .prepare("UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?")
+      .run("done", JSON.stringify(checkpoint), Date.now(), task.id);
+    result.done++;
+  }
+  result.usageByTask.push({ module: target, ...taskUsage });
+  return result;
+}
+
+/** Resets a task row to pending for an explicit `--only` rerun (checkpoint preserved for monotonic usage). */
+function resetTaskToPending(db: import("better-sqlite3").Database, taskId: number): void {
+  db.prepare("UPDATE batch_tasks SET status = 'pending', updated_at = ? WHERE id = ?").run(
+    Date.now(),
+    taskId,
+  );
 }
 
 function topicPlanDiagnostic(

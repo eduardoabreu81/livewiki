@@ -220,6 +220,15 @@ export interface LivewikiConfig {
    */
   concernTopics?: boolean;
   /**
+   * Repository understanding synthesis (roadmap item 23): ONE bounded
+   * stage-5 task after topics that writes `livewiki/understanding.md` from
+   * the closed evidence inventory (accepted module/flow/topic pages, entry
+   * points, README purpose when present). Default true; set false to skip
+   * the synthesis (the quickstart keeps the deterministic orientation
+   * fallback chain).
+   */
+  understandingSynthesis?: boolean;
+  /**
    * Community-detection cross-check of the stage-2 heuristic module
    * partition (roadmap item 9). Default true; diagnostic-only — the
    * report is persisted in the stage-2 task checkpoint and NEVER changes
@@ -324,6 +333,8 @@ export const CONFIG_DEFAULTS = {
   relaxedRound: true,
   /** Concern-grouped topic candidates (D2: deployment/testing). */
   concernTopics: true,
+  /** Stage-5c repository understanding synthesis (roadmap item 23). */
+  understandingSynthesis: true,
   /** Community-detection cross-check of the stage-2 partition (diagnostic-only). */
   communityDetection: true,
   /** Stage-4 module-task worker pool size; 1 keeps sequential behavior. */
@@ -432,6 +443,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     surgicalRepair: CONFIG_DEFAULTS.surgicalRepair,
     relaxedRound: CONFIG_DEFAULTS.relaxedRound,
     concernTopics: CONFIG_DEFAULTS.concernTopics,
+    understandingSynthesis: CONFIG_DEFAULTS.understandingSynthesis,
     communityDetection: CONFIG_DEFAULTS.communityDetection,
     batchConcurrency: CONFIG_DEFAULTS.batchConcurrency,
     ...config,
@@ -722,6 +734,13 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error(`invalid concernTopics: must be a boolean, got ${JSON.stringify(v)}`);
     }
     out.concernTopics = v;
+  }
+  if (obj["understandingSynthesis"] !== undefined) {
+    const v = obj["understandingSynthesis"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid understandingSynthesis: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.understandingSynthesis = v;
   }
   if (obj["communityDetection"] !== undefined) {
     const v = obj["communityDetection"];

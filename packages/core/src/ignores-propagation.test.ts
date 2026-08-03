@@ -28,6 +28,20 @@ import { runBatch } from "./batch.js";
 import type { LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult } from "./llm/types.js";
 
+/** Valid stage-5c understanding page returned outside mock instrumentation. */
+const VALID_UNDERSTANDING_PAGE = [
+  "---",
+  "title: Test repository",
+  "owner: generated",
+  "kind: understanding",
+  "---",
+  "",
+  "# Test repository",
+  "",
+  "This test repository exercises the batch pipeline with a small product surface.",
+  "",
+].join("\n");
+
 /**
  * Mock LLM that returns a page covering every closed-list key in both
  * the frontmatter anchors list AND a single section marker (the
@@ -41,6 +55,15 @@ class FullMockLlm implements LlmClient {
   public readonly documentedModules: string[] = [];
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
+    // Stage 5c (item 23): answer the understanding task with a valid page
+    // OUTSIDE this mock's instrumentation — stage 5c has its own dedicated
+    // suite (batch-understanding.test.ts).
+    if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+      return {
+        content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
     const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
     this.documentedModules.push(moduleId);
     const closedKeys: string[] = [];

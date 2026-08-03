@@ -84,6 +84,7 @@ import {
   type ModulePresentation,
 } from "./navigation.js";
 import { extractRepoOrientation } from "./orientation.js";
+import { loadUnderstandingSynthesis } from "./understanding.js";
 
 export interface InitOptions {
   repoRoot: string;
@@ -281,6 +282,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     hasAuxiliary: modules.some((module) => classifyModuleRole(module, pathRoleConfig) !== "product"),
     orientation: await extractRepoOrientation(absRoot),
     moduleDigests,
+    understanding: await loadUnderstandingSynthesis(absRoot),
   });
   await safeIo.writeText(absRoot, "livewiki/quickstart.md", quickstart);
   filesWritten.push("livewiki/quickstart.md");
@@ -723,6 +725,7 @@ export async function regenerateArchitectureOverview(
     hasAuxiliary: modules.some((module) => classifyModuleRole(module, pathRoleConfig) !== "product"),
     orientation: await extractRepoOrientation(absRoot),
     moduleDigests,
+    understanding: await loadUnderstandingSynthesis(absRoot),
   }));
   await safeIo.writeText(absRoot, "livewiki/tasks.md", generateTasksPage({
     modules,

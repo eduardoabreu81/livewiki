@@ -53,6 +53,20 @@ function makeCompactAuxiliaryPage(closedKeys: string[]): string {
   ].join("\n");
 }
 
+/** Valid stage-5c understanding page returned outside mock instrumentation. */
+const VALID_UNDERSTANDING_PAGE = [
+  "---",
+  "title: Test repository",
+  "owner: generated",
+  "kind: understanding",
+  "---",
+  "",
+  "# Test repository",
+  "",
+  "This test repository exercises the batch pipeline with a small product surface.",
+  "",
+].join("\n");
+
 class MockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
@@ -61,6 +75,15 @@ class MockLlm implements LlmClient {
   public costInputs: Array<{ inputTokens: number; outputTokens: number; model: string }> = [];
 
   async generate(req: import("./llm/types.js").GenerateRequest): Promise<GenerateResult> {
+    // Stage 5c (item 23): answer the understanding task with a valid page
+    // OUTSIDE this mock's instrumentation — stage 5c has its own dedicated
+    // suite (batch-understanding.test.ts).
+    if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+      return {
+        content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
     this.callCount++;
     // Extract the closed key list from the user prompt (format "- <key>")
     const closedKeys: string[] = [];
@@ -1445,9 +1468,16 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     // === Collect IDs from each FINAL surface ===
 
     // 1. Pages on disk: livewiki/<id>.md
+    // (understanding.md is the stage-5c page — not a module page, excluded
+    // like quickstart/tasks)
     const livewikiDir = nodePath.join(repoRoot, "livewiki");
     const pageFiles = (await nodeFs.readdir(livewikiDir)).filter(
-      (f) => f.endsWith(".md") && f !== "quickstart.md" && f !== "tasks.md" && f !== ".manifest.json",
+      (f) =>
+        f.endsWith(".md") &&
+        f !== "quickstart.md" &&
+        f !== "tasks.md" &&
+        f !== "understanding.md" &&
+        f !== ".manifest.json",
     );
     const pageIds = new Set(pageFiles.map((f) => f.replace(/\.md$/, "")));
 

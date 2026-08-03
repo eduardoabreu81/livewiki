@@ -275,3 +275,46 @@ describe("exportReadme", () => {
     expect(await readOrNull("README.md")).toBeNull();
   });
 });
+
+// ── Item 23: the understanding synthesis is the purpose paragraph ──────────
+
+describe("generateReadmeContent — understanding synthesis (item 23)", () => {
+  const UNDERSTANDING_PAGE = [
+    "---",
+    "title: WidgetKit",
+    "owner: generated",
+    "kind: understanding",
+    "updated: 2026-08-03",
+    "---",
+    "",
+    "# WidgetKit",
+    "",
+    "WidgetKit is a small engine that turns declarative configs into rendered dashboard widgets for product teams.",
+    "",
+    "## Key surfaces",
+    "",
+    "- Declarative widget configs",
+    "- Dashboard rendering pipeline",
+    "",
+  ].join("\n");
+
+  it("prefers the synthesis over the quickstart purpose paragraph", async () => {
+    await writeFixtureWiki();
+    await write("livewiki/understanding.md", UNDERSTANDING_PAGE);
+    const content = await generateReadmeContent(repoRoot);
+    expect(content).toContain(
+      "WidgetKit is a small engine that turns declarative configs into rendered dashboard widgets for product teams.",
+    );
+    // The quickstart-extracted purpose loses to the synthesis.
+    expect(content).not.toContain("WidgetKit is a toolkit for rendering dashboard widgets");
+  });
+
+  it("falls back to the quickstart purpose when the synthesis is absent or unrecognizable", async () => {
+    await writeFixtureWiki();
+    const without = await generateReadmeContent(repoRoot);
+    expect(without).toContain("WidgetKit is a toolkit for rendering dashboard widgets");
+    await write("livewiki/understanding.md", "not a page at all\n");
+    const garbage = await generateReadmeContent(repoRoot);
+    expect(garbage).toContain("WidgetKit is a toolkit for rendering dashboard widgets");
+  });
+});
