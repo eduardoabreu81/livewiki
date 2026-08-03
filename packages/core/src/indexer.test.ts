@@ -535,6 +535,150 @@ describe("indexer — Rust fixture repo (roadmap item 20)", () => {
   });
 });
 
+describe("indexer — Java fixture repo (roadmap item 21)", () => {
+  let javaRoot: string;
+
+  beforeEach(async () => {
+    const fixture = nodePath.resolve(process.cwd(), "test/fixtures/sample-java-repo");
+    javaRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-indexer-java-"));
+    await nodeFs.cp(fixture, javaRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(javaRoot, { recursive: true, force: true });
+  });
+
+  it("indexes .java files with symbols (tier 1, not prose-zero)", async () => {
+    const result = await runIndexer(javaRoot, { quiet: true });
+    expect(result.filesAdded).toBe(5);
+    expect(result.symbolsAdded).toBeGreaterThan(0);
+
+    const report = await runStatus(javaRoot);
+    expect(report.files.tiers.java).toBe("anchored");
+    expect(report.files.byLang.java).toBe(5);
+    expect(report.symbols.byKind.class).toBe(4); // Main, Server, Mode (enum), Item (record)
+    expect(report.symbols.byKind.interface).toBe(1); // Handler
+    // Main.{main,logStartup}; Server.{Server,start,addr,handle,dispatch,listen,process};
+    // Handler.handle; Item.describe
+    expect(report.symbols.byKind.method).toBe(11);
+  });
+
+  it("method/constructor keys are qualified by the enclosing type", async () => {
+    await runIndexer(javaRoot, { quiet: true });
+    const ctor = await activeSymbolsForKeyIn(
+      javaRoot,
+      "src/main/java/com/fixture/server/Server.java#Server.Server",
+    );
+    expect(ctor).toHaveLength(1);
+    expect(ctor[0]).toMatchObject({ kind: "method" });
+    const addr = await activeSymbolsForKeyIn(
+      javaRoot,
+      "src/main/java/com/fixture/server/Server.java#Server.addr",
+    );
+    expect(addr).toHaveLength(1);
+    const ifaceMethod = await activeSymbolsForKeyIn(
+      javaRoot,
+      "src/main/java/com/fixture/server/Handler.java#Handler.handle",
+    );
+    expect(ifaceMethod).toHaveLength(1);
+    expect(ifaceMethod[0]).toMatchObject({ kind: "method" });
+    const recordMethod = await activeSymbolsForKeyIn(
+      javaRoot,
+      "src/main/java/com/fixture/model/Item.java#Item.describe",
+    );
+    expect(recordMethod).toHaveLength(1);
+  });
+
+  it("extracts calls with confidence tags and Javadoc/tagged rationale comments", async () => {
+    await runIndexer(javaRoot, { quiet: true });
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(javaRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const calls = db
+        .prepare(
+          `SELECT c.caller_key, c.callee_name, c.confidence FROM calls c
+           JOIN files f ON f.id = c.file_id WHERE f.path LIKE '%/Main.java'
+           ORDER BY c.line, c.callee_name`,
+        )
+        .all() as Array<{ caller_key: string; callee_name: string; confidence: string }>;
+      // logStartup() is bare → extracted; new Server()/new Item() →
+      // extracted; server.start()/server.handle()/server.addr() and
+      // List.of()/System.out.println() have receivers → inferred.
+      expect(calls).toContainEqual({
+        caller_key: "src/main/java/com/fixture/Main.java#Main.main",
+        callee_name: "logStartup", confidence: "extracted",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "src/main/java/com/fixture/Main.java#Main.main",
+        callee_name: "Server", confidence: "extracted",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "src/main/java/com/fixture/Main.java#Main.main",
+        callee_name: "Item", confidence: "extracted",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "src/main/java/com/fixture/Main.java#Main.main",
+        callee_name: "start", confidence: "inferred",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "src/main/java/com/fixture/Main.java#Main.main",
+        callee_name: "of", confidence: "inferred",
+      });
+
+      // Server.java: bare calls inside methods are extracted and qualified
+      // by the enclosing class.
+      const serverCalls = db
+        .prepare(
+          `SELECT c.caller_key, c.callee_name, c.confidence FROM calls c
+           JOIN files f ON f.id = c.file_id WHERE f.path LIKE '%/Server.java'
+           ORDER BY c.line, c.callee_name`,
+        )
+        .all() as Array<{ caller_key: string; callee_name: string; confidence: string }>;
+      expect(serverCalls).toContainEqual({
+        caller_key: "src/main/java/com/fixture/server/Server.java#Server.handle",
+        callee_name: "dispatch", confidence: "extracted",
+      });
+      expect(serverCalls).toContainEqual({
+        caller_key: "src/main/java/com/fixture/server/Server.java#Server.start",
+        callee_name: "listen", confidence: "extracted",
+      });
+    } finally {
+      db.close();
+    }
+
+    const db2 = new Database(nodePath.join(javaRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const rationales = db2
+        .prepare(
+          `SELECT r.symbol_key, r.kind FROM rationales r
+           JOIN files f ON f.id = r.file_id WHERE f.lang = 'java'
+           ORDER BY f.path, r.start_line`,
+        )
+        .all() as Array<{ symbol_key: string | null; kind: string }>;
+      // Javadoc above the class (rule 2: block ends immediately above).
+      expect(rationales).toContainEqual({
+        symbol_key: "src/main/java/com/fixture/server/Server.java#Server", kind: "docstring",
+      });
+      expect(rationales).toContainEqual({
+        symbol_key: "src/main/java/com/fixture/model/Item.java#Item", kind: "docstring",
+      });
+      // WHY comment above main() sits inside the class body → rule 1
+      // attributes it to the enclosing class (pinned cross-language
+      // contract, same as a TS method-leading comment).
+      expect(rationales).toContainEqual({
+        symbol_key: "src/main/java/com/fixture/Main.java#Main", kind: "why",
+      });
+      // HACK tagged comment inside Server.handle's body.
+      expect(rationales).toContainEqual({
+        symbol_key: "src/main/java/com/fixture/server/Server.java#Server.handle", kind: "hack",
+      });
+    } finally {
+      db2.close();
+    }
+  });
+});
+
 async function activeSymbolsForKeyIn(root: string, key: string): Promise<ActiveSymbolRow[]> {
   const Database = (await import("better-sqlite3")).default;
   const db = new Database(nodePath.join(root, ".livewiki", "index.db"), { readonly: true });

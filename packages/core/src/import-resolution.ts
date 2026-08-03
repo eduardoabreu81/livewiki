@@ -61,6 +61,18 @@
  *     file's module directory. Any other leading segment (external crates,
  *     `std`, `core`, `alloc`) stays external. Cargo workspaces
  *     (multi-crate repos) are OUT OF SCOPE for v1.
+ *   - Java (roadmap item 21): a `java-import` dotted path resolves purely
+ *     by DIRECTORY — a Java package is a directory, so no manifest is read
+ *     (no loader at all; pom.xml/gradle parsing is OUT OF SCOPE for v1).
+ *     The FIRST candidate source root containing a known `.java` file wins
+ *     (`src/main/java`, then `src/`, then the repo root); under it the
+ *     LONGEST segment prefix that names a directory directly holding
+ *     `.java` files is the target package, and the edge targets that
+ *     package's direct `.java` files (non-recursive). The longest-prefix
+ *     walk uniformly drops a plain import's trailing type name
+ *     (`a.b.C` → `a/b`), a static import's member (`a.b.C.m` → `a/b`),
+ *     and matches a wildcard import (`a.b` → `a/b`). `java.*`/`javax.*`
+ *     and anything mapping to no repo package directory stays external.
  *   - `tsconfig.paths` is explicitly DEFERRED (needs its full contract).
  *
  * Output is deduped and sorted deterministically (fromFile, toFile,
@@ -264,10 +276,12 @@ export function resolveImportEdges(opts: {
             ? resolveGoSpecifier(spec, opts.knownFiles, opts.goModulePath ?? null)
             : imp.kind === "rust-use" || imp.kind === "rust-mod"
               ? resolveRustSpecifier(fromFile, imp, opts.knownFiles, opts.rustCrateName ?? null)
-              : (() => {
-                  const single = resolveSpecifier(fromFile, spec, packages, opts.tsconfig, opts.knownFiles);
-                  return single === null ? [] : [single];
-                })();
+              : imp.kind === "java-import"
+                ? resolveJavaSpecifier(spec, opts.knownFiles)
+                : (() => {
+                    const single = resolveSpecifier(fromFile, spec, packages, opts.tsconfig, opts.knownFiles);
+                    return single === null ? [] : [single];
+                  })();
       for (const toFile of targets) {
         if (toFile === fromFile) continue;
         const key = `${fromFile}\0${toFile}\0${spec}`;
@@ -426,6 +440,77 @@ function resolveGoSpecifier(
   const targets: string[] = [];
   for (const file of knownFiles) {
     if (!file.endsWith(".go")) continue;
+    if (!file.startsWith(prefix)) continue;
+    if (file.slice(prefix.length).includes("/")) continue; // nested package
+    targets.push(file);
+  }
+  return targets.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Candidate Java source roots, in deterministic priority order (Maven/
+ * Gradle convention first, then plain `src/`, then the repo root). The
+ * FIRST root that actually contains a known `.java` file is the base for
+ * every import in the run.
+ */
+const JAVA_SOURCE_ROOTS = ["src/main/java", "src", ""] as const;
+
+/**
+ * Resolves ONE Java import occurrence to the direct `.java` files of the
+ * imported package. Deterministic v1 contract (see the module docblock): a
+ * package IS a directory, so no manifest is read (there is no
+ * `loadJavaXxx` loader — Java differs from Go/Rust precisely here: go.mod
+ * and Cargo.toml exist because those languages name modules by manifest
+ * strings, while a Java import's dotted path is already a repo-relative
+ * directory path under the source root).
+ *
+ * The FIRST candidate source root (`src/main/java`, then `src/`, then the
+ * repo root) containing a known `.java` file wins; under it, the LONGEST
+ * dotted-segment prefix that names a directory directly holding at least
+ * one `.java` file is the target package — this drops the trailing type
+ * name of a plain import (`a.b.C` → `a/b`), the member of a static import
+ * (`a.b.C.m` → `a/b`), and matches a wildcard import (`a.b` → `a/b`)
+ * through the same walk. The edge targets the direct `.java` files of
+ * that package directory (non-recursive, like Go). `java.*`/`javax.*`
+ * and anything mapping to no repo package directory produce no edge
+ * (they stay external).
+ */
+function resolveJavaSpecifier(spec: string, knownFiles: ReadonlySet<string>): string[] {
+  const javaFiles: string[] = [];
+  for (const file of knownFiles) {
+    if (file.endsWith(".java")) javaFiles.push(file);
+  }
+  if (javaFiles.length === 0) return [];
+  const segments = spec.split(".").filter((s) => s.length > 0);
+  if (segments.length === 0) return [];
+
+  let base: string | null = null;
+  for (const root of JAVA_SOURCE_ROOTS) {
+    const prefix = root === "" ? "" : `${root}/`;
+    if (javaFiles.some((f) => f.startsWith(prefix))) {
+      base = root;
+      break;
+    }
+  }
+  if (base === null) return [];
+
+  for (let i = segments.length; i >= 1; i--) {
+    const dir = (base === "" ? "" : `${base}/`) + segments.slice(0, i).join("/");
+    const targets = directJavaFilesOf(dir, javaFiles);
+    if (targets.length > 0) return targets;
+  }
+  // A single-segment import (`import Foo;`) names a type in the DEFAULT
+  // package — its package directory is the source root itself. Anything
+  // longer that matched no prefix stays external (e.g. `java.util.List`).
+  if (segments.length === 1) return directJavaFilesOf(base, javaFiles);
+  return [];
+}
+
+/** Direct `.java` files of a package directory (non-recursive), sorted. */
+function directJavaFilesOf(dir: string, javaFiles: string[]): string[] {
+  const prefix = dir === "" ? "" : `${dir}/`;
+  const targets: string[] = [];
+  for (const file of javaFiles) {
     if (!file.startsWith(prefix)) continue;
     if (file.slice(prefix.length).includes("/")) continue; // nested package
     targets.push(file);

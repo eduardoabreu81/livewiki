@@ -40,6 +40,37 @@
  *                                      generic_function (extracted), or
  *                                      field_expression / scoped_identifier
  *                                      right-most name (inferred)
+ *   Java (roadmap item 21 — replicates the same pattern):
+ *     - class_declaration            → kind: "class" (handled by the shared
+ *                                      TS case — same node type name)
+ *     - interface_declaration        → kind: "interface"
+ *     - enum_declaration             → kind: "class" (mirrors the Rust enum
+ *                                      decision: a named data type; constants
+ *                                      are not citable symbols)
+ *     - record_declaration           → kind: "class" (a record IS a final
+ *                                      data class in Java)
+ *     - method_declaration           → kind: "method" keyed `Type.name`
+ *                                      (parent = the innermost enclosing
+ *                                      type; Go's receiver field is absent,
+ *                                      so the enclosing-type qualifier wins).
+ *                                      Interface member signatures ARE
+ *                                      extracted (`Interface.name`) — a delta
+ *                                      from the Go/Rust "no member
+ *                                      signatures" policy, kept because Java
+ *                                      interfaces carry default/static
+ *                                      bodies and the members are the
+ *                                      callable surface.
+ *     - constructor_declaration      → kind: "method" keyed `Type.Type`
+ *                                      (the name field IS the class name)
+ *     - method_invocation            → bare `name()` (no object field) =
+ *                                      extracted; any receiver form
+ *                                      (`x.m()`, `Type.m()`, `a.b.m()`) =
+ *                                      inferred
+ *     - object_creation_expression   → `new X()` = extracted (same policy
+ *                                      as TS new_expression), right-most
+ *                                      type_identifier of the type field
+ *     - annotation_type_declaration  → NOT extracted v1 (rare; no kind
+ *                                      assigned)
  *
  * Chave do símbolo (SPEC §"Frontmatter"):
  *   - top-level: `caminho/relativo.ext#Nome`
@@ -164,6 +195,7 @@ function walkNode(
     node.type === "generator_function_declaration" ||
     node.type === "method_definition" ||
     node.type === "method_declaration" ||
+    node.type === "constructor_declaration" ||
     node.type === "function_item" ||
     node.type === "function_definition"
       ? true
@@ -293,14 +325,79 @@ function walkNode(
       // holds exactly one parameter_declaration whose type child names the
       // receiver type (`pointer_type` wraps `*T` — strip to `T`). The key
       // mirrors the TS `Class.method` convention: `path#Type.Name`.
+      // Java — `Type name(...)` inside a type body has NO receiver field;
+      // the innermost enclosing type (parentClassName) qualifies the key.
       const name = node.childForFieldName("name")?.text;
-      const receiverType = goReceiverTypeName(node.childForFieldName("receiver"));
-      if (name && receiverType) {
-        out.push(makeRecord(node, source, relPath, `${receiverType}.${name}`, "method"));
+      const qualifier =
+        goReceiverTypeName(node.childForFieldName("receiver")) ?? parentClassName;
+      if (name && qualifier) {
+        out.push(makeRecord(node, source, relPath, `${qualifier}.${name}`, "method"));
       } else if (name) {
-        // receiver type unreadable (shouldn't happen on a valid parse) —
-        // emit unqualified, same policy as TS method outside a class.
+        // No qualifier (receiver unreadable on a Go parse; a Java method
+        // outside any type — shouldn't happen on valid Java) — emit
+        // unqualified, same policy as TS method outside a class.
         out.push(makeRecord(node, source, relPath, name, "method"));
+      }
+      break;
+    }
+
+    case "constructor_declaration": {
+      // Java — `ClassName(...)`. The name field IS the class name, so the
+      // key is `Type.Type` under the innermost enclosing type.
+      const name = node.childForFieldName("name")?.text;
+      if (name) {
+        const qualified = parentClassName ? `${parentClassName}.${name}` : name;
+        out.push(makeRecord(node, source, relPath, qualified, "method"));
+      }
+      break;
+    }
+
+    case "interface_declaration": {
+      // Java — kind "interface" (same decision as Go interfaces and Rust
+      // traits). Member method declarations ARE extracted (delta from the
+      // Go/Rust no-signatures policy — see the module docblock). Nested
+      // types inside the interface body key under the interface name.
+      // Java-ONLY: TypeScript names its interfaces `interface_declaration`
+      // too, and TS interfaces were never extracted before item 21 —
+      // changing that is out of scope here.
+      if (!relPath.endsWith(".java")) break;
+      if (insideFunctionBody) return;
+      const name = node.childForFieldName("name")?.text;
+      if (name) {
+        out.push(makeRecord(node, source, relPath, name, "interface"));
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (let i = 0; i < body.namedChildCount; i++) {
+            const child = body.namedChild(i);
+            if (child) walkNode(child, source, relPath, name, out, insideFunctionBody);
+          }
+        }
+        return; // already descended manually
+      }
+      break;
+    }
+
+    case "enum_declaration":
+    case "record_declaration": {
+      // Java — both map to "class" (mirrors the Rust enum decision: named
+      // data types; class diagrams only match "class"). Enum constants and
+      // record components are not citable symbols, but member methods (enum
+      // body declarations / record body) key under the type name.
+      // Java-ONLY: TypeScript also has `enum_declaration`, and TS enums
+      // were never extracted before item 21 — out of scope here.
+      if (!relPath.endsWith(".java")) break;
+      if (insideFunctionBody) return;
+      const name = node.childForFieldName("name")?.text;
+      if (name) {
+        out.push(makeRecord(node, source, relPath, name, "class"));
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (let i = 0; i < body.namedChildCount; i++) {
+            const child = body.namedChild(i);
+            if (child) walkNode(child, source, relPath, name, out, insideFunctionBody);
+          }
+        }
+        return; // already descended manually
       }
       break;
     }
@@ -487,6 +584,26 @@ function rustImplTypeName(typeNode: Node | null): string | null {
   return null;
 }
 
+/**
+ * Java `object_creation_expression` type → the created class name: the
+ * right-most type_identifier (`new Server()` → Server; `new a.b.C()` → C;
+ * `new ArrayList<String>()` → ArrayList — the generic_type's FIRST named
+ * child is the base type, so type arguments are never descended into).
+ * Returns null for shapes without a class name (anonymous bodies keep the
+ * same type field, so they still resolve).
+ */
+function javaCreationTypeName(typeNode: Node | null): string | null {
+  if (!typeNode) return null;
+  if (typeNode.type === "type_identifier") return typeNode.text;
+  if (typeNode.type === "scoped_type_identifier") {
+    return javaCreationTypeName(typeNode.lastNamedChild);
+  }
+  if (typeNode.type === "generic_type") {
+    return javaCreationTypeName(typeNode.firstNamedChild);
+  }
+  return null;
+}
+
 // === Phase 3: raw call-site extraction (symbol call graph) ===
 
 /**
@@ -574,12 +691,56 @@ function walkForCalls(
     case "method_declaration": {
       // Go — qualifies as ReceiverType.method (pointer receivers stripped),
       // same key shape as the symbol extractor.
+      // Java — no receiver field; the innermost enclosing type qualifies.
       const name = node.childForFieldName("name")?.text;
-      const receiverType = goReceiverTypeName(node.childForFieldName("receiver"));
+      const qualifier =
+        goReceiverTypeName(node.childForFieldName("receiver")) ?? parentClassName;
       if (name) {
-        nextCallerKey = receiverType
-          ? `${relPath}#${receiverType}.${name}`
+        nextCallerKey = qualifier
+          ? `${relPath}#${qualifier}.${name}`
           : `${relPath}#${name}`;
+      }
+      break;
+    }
+    case "constructor_declaration": {
+      // Java — caller key `Type.Type`, same key shape as the symbol extractor.
+      const name = node.childForFieldName("name")?.text;
+      if (name) {
+        nextCallerKey = parentClassName
+          ? `${relPath}#${parentClassName}.${name}`
+          : `${relPath}#${name}`;
+      }
+      break;
+    }
+    case "method_invocation": {
+      // Java — the callee is the `name` identifier; the `object` field is
+      // present only for receiver forms. Bare `name()` is "extracted" (the
+      // name IS the callee); `x.m()` / `Type.m()` / `a.b.m()` / `this.m()`
+      // are "inferred" (the receiver is unknown here).
+      const name = node.childForFieldName("name")?.text;
+      if (name && callerKey) {
+        out.push({
+          caller_key: callerKey,
+          callee_name: name,
+          line: node.startPosition.row + 1,
+          confidence: node.childForFieldName("object") ? "inferred" : "extracted",
+        });
+      }
+      break;
+    }
+    case "object_creation_expression": {
+      // Java — `new X(...)` is explicit about the symbol it targets, even
+      // with a scoped or generic type (`new java.util.ArrayList<String>()`)
+      // — always "extracted" (same policy as TS new_expression). The callee
+      // name is the right-most type_identifier of the type field.
+      const name = javaCreationTypeName(node.childForFieldName("type"));
+      if (name && callerKey) {
+        out.push({
+          caller_key: callerKey,
+          callee_name: name,
+          line: node.startPosition.row + 1,
+          confidence: "extracted",
+        });
       }
       break;
     }
@@ -602,7 +763,11 @@ function walkForCalls(
     }
     case "class_declaration":
     case "class":
-    case "class_definition": {
+    case "class_definition":
+    case "interface_declaration":
+    case "enum_declaration":
+    case "record_declaration": {
+      // The last three are Java types — members key under the type name.
       const name = node.childForFieldName("name")?.text;
       if (name) nextParentClassName = name;
       break;
@@ -759,7 +924,8 @@ interface RawRationaleCandidate {
  *     FIXME: (case-insensitive) — kind = lowercased tag.
  *   - Docstrings: Python first-statement strings of module/class/function
  *     bodies; TS/JS/TSX block comments opening with `/**`; Rust doc comments
- *     (`///` outer, `//!` inner line comments, `/**` blocks). Minimum 20
+ *     (`///` outer, `//!` inner line comments, `/**` blocks); Java Javadoc
+ *     (`/**` block comments — same detection as TS). Minimum 20
  *     normalized chars.
  *
  * Attribution is positional (comments are tree-sitter extras): a comment
@@ -813,8 +979,9 @@ export function extractRationales(
 
 /** Collects comment nodes and Python docstrings from the named-children stream. */
 function collectRationaleCandidates(node: Node, out: RawRationaleCandidate[]): void {
-  // "comment" covers TS/JS/TSX/Go/Python; Rust names them line_comment /
-  // block_comment (doc comments `///` and `//!` are line_comment nodes).
+  // "comment" covers TS/JS/TSX/Go/Python; Rust and Java name them
+  // line_comment / block_comment (Rust doc comments `///` and `//!` are
+  // line_comment nodes; Java Javadoc is a block_comment).
   if (node.type === "comment" || node.type === "line_comment" || node.type === "block_comment") {
     const startLine = node.startPosition.row + 1;
     out.push({

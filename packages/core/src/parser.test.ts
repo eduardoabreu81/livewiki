@@ -18,6 +18,7 @@ describe("parser", () => {
     expect(grammars).toContain("python");
     expect(grammars).toContain("go");
     expect(grammars).toContain("rust");
+    expect(grammars).toContain("java");
   });
 
   it("grammarForExtension retorna o nome da gramática", () => {
@@ -25,6 +26,7 @@ describe("parser", () => {
     expect(grammarForExtension(".PY")).toBe("python"); // case insensitive
     expect(grammarForExtension(".go")).toBe("go");
     expect(grammarForExtension(".rs")).toBe("rust");
+    expect(grammarForExtension(".java")).toBe("java");
     expect(grammarForExtension(".xyz")).toBeUndefined();
   });
 
@@ -58,6 +60,18 @@ describe("parser", () => {
     expect(tree.rootNode.descendantsOfType("function_item").length).toBe(2);
     expect(tree.rootNode.descendantsOfType("impl_item").length).toBe(1);
     expect(tree.rootNode.descendantsOfType("trait_item").length).toBe(1);
+  });
+
+  it("parseSource parseia Java e reconhece class/interface/method/constructor declarations", async () => {
+    const tree = await parseSource(
+      ".java",
+      "interface Handler {\n    void handle();\n}\n\nclass Server implements Handler {\n    Server(int port) {}\n    public void handle() {}\n    void start() {}\n}\n",
+    );
+    expect(tree.rootNode.type).toBe("program");
+    expect(tree.rootNode.descendantsOfType("class_declaration").length).toBe(1);
+    expect(tree.rootNode.descendantsOfType("interface_declaration").length).toBe(1);
+    expect(tree.rootNode.descendantsOfType("method_declaration").length).toBe(3);
+    expect(tree.rootNode.descendantsOfType("constructor_declaration").length).toBe(1);
   });
 
   it("parseSource lança erro para extensão sem gramática", async () => {

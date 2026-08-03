@@ -908,3 +908,149 @@ describe("import-resolution.loadRustCrateName (roadmap item 20)", () => {
     expect(await loadRustCrateName(repoRoot)).toBeNull();
   });
 });
+
+describe("import-resolution.resolveImportEdges (Java, roadmap item 21)", () => {
+  const JAVA_FILES = new Set([
+    "src/main/java/com/fixture/Main.java",
+    "src/main/java/com/fixture/server/Server.java",
+    "src/main/java/com/fixture/server/Handler.java",
+    "src/main/java/com/fixture/server/Mode.java",
+    "src/main/java/com/fixture/model/Item.java",
+  ]);
+
+  it("resolves a plain import to the direct .java files of the package dir", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["src/main/java/com/fixture/Main.java", [{ source: "com.fixture.server.Server", kind: "java-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: JAVA_FILES, workspacePackages: [],
+    });
+    expect(edges.map((e) => e.toFile)).toEqual([
+      "src/main/java/com/fixture/server/Handler.java",
+      "src/main/java/com/fixture/server/Mode.java",
+      "src/main/java/com/fixture/server/Server.java",
+    ]);
+    expect(edges.every((e) => e.fromFile === "src/main/java/com/fixture/Main.java")).toBe(true);
+  });
+
+  it("resolves a wildcard import to the package dir itself", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["src/main/java/com/fixture/Main.java", [{ source: "com.fixture.model", kind: "java-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: JAVA_FILES, workspacePackages: [],
+    });
+    expect(edges.map((e) => e.toFile)).toEqual(["src/main/java/com/fixture/model/Item.java"]);
+  });
+
+  it("resolves a static import dropping the member via the longest-prefix walk", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["src/main/java/com/fixture/Main.java", [{ source: "com.fixture.server.Server.create", kind: "java-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: JAVA_FILES, workspacePackages: [],
+    });
+    expect(edges.map((e) => e.toFile)).toEqual([
+      "src/main/java/com/fixture/server/Handler.java",
+      "src/main/java/com/fixture/server/Mode.java",
+      "src/main/java/com/fixture/server/Server.java",
+    ]);
+  });
+
+  it("java.* and unknown packages stay external (no edge)", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      [
+        "src/main/java/com/fixture/Main.java",
+        [
+          { source: "java.util.List", kind: "java-import" },
+          { source: "javax.net.ssl.SSLSocket", kind: "java-import" },
+          { source: "com.fixture.missing.Thing", kind: "java-import" },
+          { source: "org.springframework.boot.SpringApplication", kind: "java-import" },
+        ],
+      ],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: JAVA_FILES, workspacePackages: [],
+    });
+    expect(edges).toEqual([]);
+  });
+
+  it("does NOT resolve into nested subdirectories (an import names exactly one package)", () => {
+    const files = new Set([
+      "src/main/java/com/acme/Main.java",
+      "src/main/java/com/acme/server/internal/Hidden.java",
+    ]);
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      // importing the PARENT package must not pull files from child dirs
+      ["src/main/java/com/acme/Main.java", [{ source: "com.acme.server", kind: "java-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: files, workspacePackages: [],
+    });
+    expect(edges).toEqual([]);
+  });
+
+  it("drops the self-edge when a file imports its own package", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["src/main/java/com/fixture/server/Server.java", [{ source: "com.fixture.server.Handler", kind: "java-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: JAVA_FILES, workspacePackages: [],
+    });
+    expect(edges.map((e) => e.toFile)).toEqual([
+      "src/main/java/com/fixture/server/Handler.java",
+      "src/main/java/com/fixture/server/Mode.java",
+    ]);
+  });
+
+  it("source-root order: src/main/java wins over src/ and the repo root", () => {
+    const files = new Set([
+      "src/main/java/com/acme/server/FromMaven.java",
+      "src/com/acme/server/FromSrc.java",
+      "com/acme/server/FromRoot.java",
+    ]);
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["src/main/java/com/acme/Main.java", [{ source: "com.acme.server.Server", kind: "java-import" }]],
+    ]);
+    // Main.java itself is only a path in the map; knownFiles drives the root
+    // pick and the package walk.
+    const known = new Set([...files, "src/main/java/com/acme/Main.java"]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: known, workspacePackages: [],
+    });
+    expect(edges.map((e) => e.toFile)).toEqual(["src/main/java/com/acme/server/FromMaven.java"]);
+  });
+
+  it("falls back to src/ when no src/main/java file exists, then to the repo root", () => {
+    const srcFiles = new Set(["src/com/acme/Main.java", "src/com/acme/server/Server.java"]);
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["src/com/acme/Main.java", [{ source: "com.acme.server.Server", kind: "java-import" }]],
+    ]);
+    expect(
+      resolveImportEdges({ importsByFile, knownFiles: srcFiles, workspacePackages: [] }).map((e) => e.toFile),
+    ).toEqual(["src/com/acme/server/Server.java"]);
+
+    const rootFiles = new Set(["com/acme/Main.java", "com/acme/server/Server.java"]);
+    const rootImports = new Map<string, ExtractedImport[]>([
+      ["com/acme/Main.java", [{ source: "com.acme.server.Server", kind: "java-import" }]],
+    ]);
+    expect(
+      resolveImportEdges({ importsByFile: rootImports, knownFiles: rootFiles, workspacePackages: [] }).map((e) => e.toFile),
+    ).toEqual(["com/acme/server/Server.java"]);
+  });
+
+  it("modules.resolveModuleEdges groups Java package edges into module edges", () => {
+    const modules: Module[] = [
+      { id: "app", paths: ["src/main/java/com/fixture/Main.java"], symbolCount: 1 },
+      { id: "server", paths: ["src/main/java/com/fixture/server/Server.java"], symbolCount: 3 },
+    ];
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["src/main/java/com/fixture/Main.java", [{ source: "com.fixture.server.Server", kind: "java-import" }]],
+    ]);
+    const fileEdges = resolveImportEdges({
+      importsByFile, knownFiles: JAVA_FILES, workspacePackages: [],
+    });
+    const moduleEdges = resolveModuleEdges(modules, importsByFile, JAVA_FILES, fileEdges);
+    expect(moduleEdges).toEqual([{ from: "app", to: "server" }]);
+  });
+});

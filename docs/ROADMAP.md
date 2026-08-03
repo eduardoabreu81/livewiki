@@ -550,6 +550,68 @@ Same shape as item 19 (grammar + extractor + package/import resolution)
 after the Go pilot. Acceptance: batch run on a real Java repo (paid,
 approved at the time).
 
+Result (implementation, 2026-08-03, uncommitted — coordinator reviews;
+gate numbers filled: `pnpm -r build` clean, core 1758 / CLI 124+1
+EBUSY load-flake (isolated 21/21 + 5/5 green) / MCP 56; smoke on a
+fixture copy: 16 symbols — 4 class / 1 interface / 11 method,
+`java (anchored)` tier): `tree-sitter-java.wasm`
+vendored in `packages/core/grammars/` (built with tree-sitter-cli
+0.26.10 + auto-downloaded wasi-sdk from tree-sitter-java e10607b; loads
+verified by parsing a probe file with web-tree-sitter 0.26.10 before
+vendoring). `.java` mapped in `parser.ts`/`walker.ts`. `symbols.ts`:
+`class_declaration` → `class` via the EXISTING shared TS case (same node
+type name); `interface_declaration` → `interface`; `enum_declaration` and
+`record_declaration` → `class` (mirrors the Rust enum decision — named
+data types; constants/components are not citable); `method_declaration` →
+method keyed `path#Type.name` under the innermost enclosing type (one
+shared case with Go: qualifier = `receiver ?? parentClassName` — Go's
+node always has a receiver, Java's never does); interface member
+signatures ARE extracted as `Interface.name` (documented delta from the
+Go/Rust no-signatures policy — Java interfaces carry default/static
+bodies and their members are the callable surface); the
+interface/enum/record cases are GATED to `.java` — TypeScript shares the
+`interface_declaration`/`enum_declaration` node type names and TS
+interfaces/enums were never extracted before item 21 (a scope leak
+caught in self-review, closed with a guard test);
+`constructor_declaration` → method keyed `Type.Type`; local classes
+inside method bodies skipped (existing local-class policy);
+`annotation_type_declaration` not extracted v1. Calls: `method_invocation`
+confidence from the PRESENCE of the `object` field — bare `m()` →
+`extracted`, `x.m()`/`Type.m()`/`a.b.m()`/`this.m()` → `inferred`;
+`object_creation_expression` (`new X()`, scoped `new a.b.C()`, generic
+`new ArrayList<String>()`) → always `extracted` with the right-most
+type_identifier as the callee (same policy as TS `new_expression`).
+Rationales: Java uses the `line_comment`/`block_comment` nodes added for
+Rust; Javadoc `/** */` counts as a docstring via the shared TS branch
+(≥20 normalized chars); tagged comments unchanged. One behavior worth
+noting: Javadoc above a method attributes to the ENCLOSING CLASS (rule 1
+of the pinned positional-attribution contract — the comment sits inside
+the class's line range; same as TS, regression-tested).
+Imports: `imports.ts` extracts `import_declaration` as `java-import`
+(shares the Go node type — disambiguated by child shapes:
+`import_spec`/`import_spec_list` = Go, `scoped_identifier`/`identifier` =
+Java); plain/static/wildcard forms all record the full dotted path (the
+wildcard's `*` is a separate asterisk child; a static import's member
+stays in the path). `import-resolution.ts`: NO loader — a Java package
+IS a directory, so pom.xml/gradle parsing is out of scope v1 and the
+five `resolveImportEdges` call sites stay untouched (Java differs from
+Go/Rust precisely here: their manifests name modules by string, Java's
+dotted path is already a repo-relative directory path). Resolution v1:
+the FIRST candidate source root containing a known `.java` file wins
+(`src/main/java`, then `src/`, then the repo root); under it the LONGEST
+segment prefix naming a directory that directly holds `.java` files is
+the target package (drops the plain import's type name, the static
+import's member, matches the wildcard's package through one walk); the
+edge targets that package's direct `.java` files (non-recursive);
+`java.*`/`javax.*`/unknown packages stay external. Fixture
+`test/fixtures/sample-java-repo` (Maven layout:
+src/main/java/com/fixture/{Main,server/{Server,Handler,Mode},model/Item}.java).
+Tests: parser (2), walker (1 new + grammar-less example dropped `.java`,
+now `.kt`/`.rb`/`.zig`), symbols (8 Java extraction + 5 Java rationales),
+calls (7 Java), imports (4 Java), import-resolution (9 Java), indexer
+fixture integration (3: tiers/key shapes, calls+rationales). Acceptance
+batch on a real Java repo remains open (paid, approval).
+
 ### 22. CodeWiki-grade output format (post-beta, needs design)
 
 Source: CodeWiki review 2026-08-03 — the maintainer's first reaction to

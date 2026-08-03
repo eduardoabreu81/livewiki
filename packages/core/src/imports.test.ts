@@ -179,6 +179,43 @@ describe("imports.collectImports (Rust, roadmap item 20)", () => {
   });
 });
 
+describe("imports.collectImports (Java, roadmap item 21)", () => {
+  it("extrai import simples com o path completo", async () => {
+    const imps = await collectImports(
+      "src/main/java/com/fixture/Main.java",
+      "package com.fixture;\n\nimport com.fixture.server.Server;\n\nclass Main {}\n",
+    );
+    expect(imps).toEqual([{ source: "com.fixture.server.Server", kind: "java-import" }]);
+  });
+
+  it("extrai import estático mantendo o membro no path", async () => {
+    const imps = await collectImports(
+      "src/main/java/com/fixture/Main.java",
+      "import static com.fixture.server.Server.create;\n",
+    );
+    expect(imps).toEqual([{ source: "com.fixture.server.Server.create", kind: "java-import" }]);
+  });
+
+  it("extrai import wildcard sem o sufixo .*", async () => {
+    const imps = await collectImports(
+      "src/main/java/com/fixture/Main.java",
+      "import com.fixture.model.*;\n",
+    );
+    expect(imps).toEqual([{ source: "com.fixture.model", kind: "java-import" }]);
+  });
+
+  it("extrai vários imports em ordem (java.* fica registrado; resolução decide)", async () => {
+    const imps = await collectImports(
+      "src/main/java/com/fixture/Main.java",
+      "import java.util.List;\nimport com.fixture.model.Item;\n",
+    );
+    expect(imps).toEqual([
+      { source: "java.util.List", kind: "java-import" },
+      { source: "com.fixture.model.Item", kind: "java-import" },
+    ]);
+  });
+});
+
 describe("imports.collectImports (edge cases)", () => {
   it("arquivo não-parseável retorna [] (graceful)", async () => {
     const imps = await collectImports("src/foo.ts", "this is not { valid ts");

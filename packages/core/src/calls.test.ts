@@ -242,6 +242,80 @@ describe("extractCalls — Rust (roadmap item 20)", () => {
   });
 });
 
+describe("extractCalls — Java (roadmap item 21)", () => {
+  it("attributes a bare method_invocation to its enclosing method (extracted)", async () => {
+    const src = "class A {\n    void outer() {\n        helper();\n    }\n}\n";
+    const tree = await parse(".java", src);
+    const calls = extractCalls(tree, "x.java", src);
+    expect(calls).toEqual([
+      { caller_key: "x.java#A.outer", callee_name: "helper", line: 3, confidence: "extracted" },
+    ]);
+  });
+
+  it("tags a receiver call x.m() / this.m() as inferred (object field present)", async () => {
+    const src = "class A {\n    void run(Server s) {\n        s.start();\n        this.help();\n    }\n    private void help() {}\n}\n";
+    const tree = await parse(".java", src);
+    const calls = extractCalls(tree, "x.java", src);
+    expect(calls).toEqual([
+      { caller_key: "x.java#A.run", callee_name: "start", line: 3, confidence: "inferred" },
+      { caller_key: "x.java#A.run", callee_name: "help", line: 4, confidence: "inferred" },
+    ]);
+  });
+
+  it("tags a static/scoped call Type.m() / a.b.m() as inferred", async () => {
+    const src = "class A {\n    void run() {\n        Server.create();\n        some.path.work();\n    }\n}\n";
+    const tree = await parse(".java", src);
+    const calls = extractCalls(tree, "x.java", src);
+    expect(calls).toEqual([
+      { caller_key: "x.java#A.run", callee_name: "create", line: 3, confidence: "inferred" },
+      { caller_key: "x.java#A.run", callee_name: "work", line: 4, confidence: "inferred" },
+    ]);
+  });
+
+  it("tags new X() as extracted, including scoped and generic types", async () => {
+    const src =
+      "class A {\n" +
+      "    void run() {\n" +
+      "        Server s = new Server(8080);\n" +
+      "        Object l = new java.util.ArrayList<String>();\n" +
+      "    }\n" +
+      "}\n";
+    const tree = await parse(".java", src);
+    const calls = extractCalls(tree, "x.java", src);
+    expect(calls).toEqual([
+      { caller_key: "x.java#A.run", callee_name: "Server", line: 3, confidence: "extracted" },
+      { caller_key: "x.java#A.run", callee_name: "ArrayList", line: 4, confidence: "extracted" },
+    ]);
+  });
+
+  it("attributes a call inside a constructor with caller key Type.Type", async () => {
+    const src = "class Server {\n    Server(int port) {\n        listen(port);\n    }\n    private void listen(int port) {}\n}\n";
+    const tree = await parse(".java", src);
+    const calls = extractCalls(tree, "x.java", src);
+    expect(calls).toEqual([
+      { caller_key: "x.java#Server.Server", callee_name: "listen", line: 3, confidence: "extracted" },
+    ]);
+  });
+
+  it("attributes a call inside an interface default method with Interface.method", async () => {
+    const src = "interface Handler {\n    default void close() {\n        release();\n    }\n    void release();\n}\n";
+    const tree = await parse(".java", src);
+    const calls = extractCalls(tree, "x.java", src);
+    expect(calls).toEqual([
+      { caller_key: "x.java#Handler.close", callee_name: "release", line: 3, confidence: "extracted" },
+    ]);
+  });
+
+  it("attributes a call inside a nested class method with the innermost type", async () => {
+    const src = "class Outer {\n    static class Inner {\n        void work() {\n            go();\n        }\n    }\n}\n";
+    const tree = await parse(".java", src);
+    const calls = extractCalls(tree, "x.java", src);
+    expect(calls).toEqual([
+      { caller_key: "x.java#Inner.work", callee_name: "go", line: 4, confidence: "extracted" },
+    ]);
+  });
+});
+
 describe("extractCalls — confidence tags per callee shape", () => {
   it("tags a bare function call as extracted", async () => {
     const src = "function outer() { helper(); }";

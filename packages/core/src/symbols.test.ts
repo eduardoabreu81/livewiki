@@ -446,6 +446,123 @@ describe("symbols — Rust (roadmap item 20)", () => {
   });
 });
 
+describe("symbols — Java (roadmap item 21)", () => {
+  it("extrai class_declaration como kind=class", async () => {
+    const src = "public class Server {\n    private int port;\n}\n";
+    const tree = await parse(".java", src);
+    const symbols = extractSymbols(tree, "x.java", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Server"]);
+    expect(symbols[0]?.kind).toBe("class");
+    expect(symbols[0]?.key).toBe("x.java#Server");
+  });
+
+  it("extrai métodos e construtor qualificados Type.name / Type.Type", async () => {
+    const src =
+      "class Server {\n" +
+      "    Server(int port) {}\n" +
+      "    public void start() {}\n" +
+      "    String addr() { return \":\" + 1; }\n" +
+      "}\n";
+    const tree = await parse(".java", src);
+    const symbols = extractSymbols(tree, "x.java", src);
+    expect(symbols.map((s) => [s.name, s.kind])).toEqual([
+      ["Server", "class"],
+      ["Server.Server", "method"],
+      ["Server.start", "method"],
+      ["Server.addr", "method"],
+    ]);
+    expect(symbols[1]?.key).toBe("x.java#Server.Server");
+  });
+
+  it("extrai interface_declaration como kind=interface e extrai suas assinaturas (delta vs Go/Rust)", async () => {
+    const src =
+      "interface Handler {\n" +
+      "    void handle(String item);\n" +
+      "    default void close() {}\n" +
+      "}\n";
+    const tree = await parse(".java", src);
+    const symbols = extractSymbols(tree, "x.java", src);
+    expect(symbols.map((s) => [s.name, s.kind])).toEqual([
+      ["Handler", "interface"],
+      ["Handler.handle", "method"],
+      ["Handler.close", "method"],
+    ]);
+    expect(symbols[0]?.key).toBe("x.java#Handler");
+  });
+
+  it("extrai enum_declaration como kind=class (espelha a decisão do Rust)", async () => {
+    const src = "enum Mode {\n    FAST,\n    SLOW\n}\n";
+    const tree = await parse(".java", src);
+    const symbols = extractSymbols(tree, "x.java", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Mode"]);
+    expect(symbols[0]?.kind).toBe("class");
+  });
+
+  it("extrai record_declaration como kind=class e membros qualificados", async () => {
+    const src =
+      "record Item(String name, int qty) {\n" +
+      "    public String describe() { return name; }\n" +
+      "}\n";
+    const tree = await parse(".java", src);
+    const symbols = extractSymbols(tree, "x.java", src);
+    expect(symbols.map((s) => [s.name, s.kind])).toEqual([
+      ["Item", "class"],
+      ["Item.describe", "method"],
+    ]);
+  });
+
+  it("tipo aninhado usa o tipo MAIS INTERNO como qualificador", async () => {
+    const src =
+      "class Outer {\n" +
+      "    void outerMethod() {}\n" +
+      "    static class Inner {\n" +
+      "        void innerMethod() {}\n" +
+      "    }\n" +
+      "}\n";
+    const tree = await parse(".java", src);
+    const symbols = extractSymbols(tree, "x.java", src);
+    expect(symbols.map((s) => [s.name, s.kind])).toEqual([
+      ["Outer", "class"],
+      ["Outer.outerMethod", "method"],
+      ["Inner", "class"],
+      ["Inner.innerMethod", "method"],
+    ]);
+  });
+
+  it("enum com corpo de métodos qualifica os membros sob o enum", async () => {
+    const src =
+      "enum Mode {\n" +
+      "    FAST,\n" +
+      "    SLOW;\n" +
+      "    public String label() { return name(); }\n" +
+      "}\n";
+    const tree = await parse(".java", src);
+    const symbols = extractSymbols(tree, "x.java", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Mode", "Mode.label"]);
+  });
+
+  it("NÃO extrai classe local dentro de método", async () => {
+    const src =
+      "class Server {\n" +
+      "    void run() {\n" +
+      "        class Local {\n" +
+      "            void work() {}\n" +
+      "        }\n" +
+      "    }\n" +
+      "}\n";
+    const tree = await parse(".java", src);
+    const symbols = extractSymbols(tree, "x.java", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Server", "Server.run"]);
+  });
+
+  it("guarda de colisão: interface/enum do TS NÃO são extraídos (o caso é Java-only)", async () => {
+    const src = "interface Handler {\n    handle(): void;\n}\n\nenum Mode {\n    Fast,\n    Slow,\n}\n";
+    const tree = await parse(".ts", src);
+    const symbols = extractSymbols(tree, "x.ts", src);
+    expect(symbols).toEqual([]);
+  });
+});
+
 // === Etapa 2b: rationale extraction (intent evidence) ===
 
 describe("extractRationales — tagged comments", () => {
@@ -689,6 +806,79 @@ fn backoff() {}
     expect(rationales).toHaveLength(1);
     expect(rationales[0]?.kind).toBe("docstring");
     expect(rationales[0]?.symbol_key).toBe("x.rs#backoff");
+  });
+});
+
+describe("extractRationales — Java (roadmap item 21)", () => {
+  it("captures Javadoc above a class as docstring with positional attribution", async () => {
+    const src = `/**
+ * Server accepts inbound items and dispatches them to the handler.
+ */
+public class Server {
+    private int port;
+}
+`;
+    const tree = await parse(".java", src);
+    const rationales = extractRationales(tree, "x.java", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("docstring");
+    expect(rationales[0]?.symbol_key).toBe("x.java#Server");
+    expect(rationales[0]?.text).toBe(
+      "Server accepts inbound items and dispatches them to the handler.",
+    );
+  });
+
+  it("Javadoc above a method attributes to the enclosing class (rule 1: inside the class range — the pinned cross-language contract, same as TS)", async () => {
+    const src = `class Server {
+    /**
+     * Creates a server bound to the given port.
+     */
+    Server(int port) {}
+}
+`;
+    const tree = await parse(".java", src);
+    const rationales = extractRationales(tree, "x.java", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("docstring");
+    expect(rationales[0]?.symbol_key).toBe("x.java#Server");
+  });
+
+  it("rejects Javadoc shorter than 20 normalized chars", async () => {
+    const src = `/** Short. */
+class A {}
+`;
+    const tree = await parse(".java", src);
+    expect(extractRationales(tree, "x.java", src)).toEqual([]);
+  });
+
+  it("captures a tagged // comment inside a method body (line_comment nodes)", async () => {
+    const src = `class Server {
+    void handle() {
+        // HACK: the dispatch ignores backpressure until the queue lands
+        dispatch();
+    }
+}
+`;
+    const tree = await parse(".java", src);
+    const rationales = extractRationales(tree, "x.java", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("hack");
+    expect(rationales[0]?.symbol_key).toBe("x.java#Server.handle");
+  });
+
+  it("captures a tagged /* block comment */ (block_comment nodes)", async () => {
+    const src = `class Server {
+    void spin() {
+        /* TODO: replace the busy wait with a proper condition variable */
+        wait();
+    }
+}
+`;
+    const tree = await parse(".java", src);
+    const rationales = extractRationales(tree, "x.java", src);
+    expect(rationales).toHaveLength(1);
+    expect(rationales[0]?.kind).toBe("todo");
+    expect(rationales[0]?.symbol_key).toBe("x.java#Server.spin");
   });
 });
 

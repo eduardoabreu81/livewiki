@@ -120,15 +120,13 @@ describe("walkRepo", () => {
     expect(result.find((r) => r.path === "config.json")?.lang).toBe("json");
   });
 
-  it("walks code extensions without a grammar (.kt .java .rb .zig)", async () => {
+  it("walks code extensions without a grammar (.kt .rb .zig)", async () => {
     await write("src/lib.kt", "fun main() {}");
-    await write("App.java", "class App {}");
     await write("app.rb", "puts 1");
     await write("build.zig", "pub fn build() void {}");
     const result = await walkRepo(repoRoot);
     const byPath = new Map(result.map((r) => [r.path, r.lang]));
     expect(byPath.get("src/lib.kt")).toBe("kt");
-    expect(byPath.get("App.java")).toBe("java");
     expect(byPath.get("app.rb")).toBe("rb");
     expect(byPath.get("build.zig")).toBe("zig");
   });
@@ -143,6 +141,12 @@ describe("walkRepo", () => {
     await write("src/lib.rs", "fn main() {}");
     const result = await walkRepo(repoRoot);
     expect(result.find((r) => r.path === "src/lib.rs")?.lang).toBe("rust");
+  });
+
+  it("maps .java to the tier-1 java grammar (roadmap item 21)", async () => {
+    await write("src/App.java", "class App {}");
+    const result = await walkRepo(repoRoot);
+    expect(result.find((r) => r.path === "src/App.java")?.lang).toBe("java");
   });
 
   it("skips denylist extensions (archives, binaries, media, fonts, maps)", async () => {

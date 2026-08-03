@@ -21,6 +21,11 @@
  *     aliases `use a::b as c` record `a::b`, wildcards `use a::b::*` record
  *     `a::b`); `mod foo;` declarations (no body) record the module name as
  *     kind rust-mod. Inline `mod foo { ... }` (with body) is not an import.
+ *   - Java (roadmap item 21): import_declaration (shares the Go node type;
+ *     disambiguated by child shapes) — plain `import a.b.C;`, `import
+ *     static a.b.C.m;` (the member stays in the recorded path), and
+ *     wildcard `import a.b.*;` (the `*` is an asterisk child; the recorded
+ *     path is `a.b`).
  *
  * Limitação: NÃO resolve imports dinâmicos (require() variável, import() com
  * expressão). Esses viram "unknown" no grafo. Aceitável pro MVP — LLM pode
@@ -39,7 +44,8 @@ export type ImportKind =
   | "py-from"
   | "go-import"
   | "rust-use"
-  | "rust-mod";
+  | "rust-mod"
+  | "java-import";
 
 export interface ExtractedImport {
   /** String literal do source (ex: "./auth", "express", "../utils") */
@@ -122,14 +128,32 @@ export function extractImportsFromTree(tree: Tree, lang: string): ExtractedImpor
         // Go: import "fmt"  OR  import ( "fmt"\n alias "x/y"\n _ "z" )
         // Every import_spec (direct child or under import_spec_list) carries
         // its path as an interpreted/raw string literal.
+        // Java (roadmap item 21) SHARES this node type: plain
+        // `import a.b.C;`, `import static a.b.C.m;`, and wildcard
+        // `import a.b.*;` all carry the path as a scoped_identifier (the
+        // wildcard's `*` is a separate asterisk child — the recorded source
+        // never includes `.*`; static members stay in the path and the
+        // resolver's longest-prefix walk drops them).
+        let handledAsGo = false;
         for (let i = 0; i < node.namedChildCount; i++) {
           const child = node.namedChild(i);
           if (child?.type === "import_spec") {
             pushGoImportSpec(child, out);
+            handledAsGo = true;
           } else if (child?.type === "import_spec_list") {
             for (let j = 0; j < child.namedChildCount; j++) {
               const spec = child.namedChild(j);
               if (spec?.type === "import_spec") pushGoImportSpec(spec, out);
+            }
+            handledAsGo = true;
+          }
+        }
+        if (!handledAsGo) {
+          for (let i = 0; i < node.namedChildCount; i++) {
+            const child = node.namedChild(i);
+            if (child?.type === "scoped_identifier" || child?.type === "identifier") {
+              out.push({ source: child.text, kind: "java-import" });
+              break; // exactly one path per import_declaration
             }
           }
         }
