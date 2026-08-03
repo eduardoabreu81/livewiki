@@ -2,9 +2,11 @@
 
 ## What this repository is
 
-This repository is organized around Core Repair, Status, Sectioning, Symbols, and Risk Pipeline (This module page describes the livewiki core's mid-stack pipeline: safe filesystem I/O, symbol and rationale extraction from source, deterministic debt risk scoring, surgical H2-section repair, the closed repair contract, and the status…), Core runtime config, schema, diagrams, diff preview, and export (This module groups the livewiki core runtime surfaces that operate below the LLM: per-repo config loading, the SQLite index schema and migrations, deterministic Mermaid generators, a read-only working-tree debt preview, and the…), and Core module identification, manifest I/O, and Markdown mask helpers (This page documents the core package's responsibilities for batch-stage 2 module identification and partitioning, the cross-machine manifest ledger under `livewiki/`, the deterministic Markdown code mask used by structural scans, and the…).
+livewiki is an agent-first living documentation tool: a Markdown wiki that lives inside your repository, is written by an LLM, and is kept honest by deterministic machinery that never calls a model — every page anchors to real code symbols, staleness is computed from tree-sitter hashes with zero tokens, and `verify` rejects any claim that does not resolve to the code.
 
-*(Synthesized from the generated module pages.)*
+*(Purpose excerpt from the repository README: `README.md`.)*
+
+**Fastest local path:** see the "Quick start" section of `README.md`.
 
 ## What you'll find in this wiki
 
@@ -46,6 +48,6 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 ## Repository facts
 
-- **219 files** indexed
-- **1079 symbols** extracted
-- **47 modules** identified
+- **218 files** indexed
+- **1099 symbols** extracted
+- **48 modules** identified

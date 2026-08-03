@@ -225,9 +225,9 @@ These anchors identify indexed symbols whose implementation is part of this modu
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md) — dependency and dependent
+- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md) — dependency
 - [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md) — dependency
 - [core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)](core-src-06.md) — dependency
 
-> Coverage note: this module's source (5 files, ~125k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (4 files, ~144k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

@@ -138,5 +138,5 @@ These anchors identify indexed symbols in this module that were not assigned to 
 - Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
 - [CLI command handlers](commands.md) — dependency and dependent
 
-> Coverage note: this module's source (12 files, ~174k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (12 files, ~175k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

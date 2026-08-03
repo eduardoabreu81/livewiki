@@ -27,8 +27,9 @@ Choose an end-to-end behavior or a product area. Auxiliary repository roles are 
 - [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md)
 - [Stage 4 artifact validator and auxiliary page assembly](core-src-02.md)
 - [Batch stage 5, status aggregation, and surgical repair fixtures](core-src-03.md)
-- [Static site builder, walker, and Activity dashboard](core-src-13.md)
 - [LLM client and adapters](llm.md)
+- Core source — part 14 of 14 — page unavailable: `livewiki/core-src-14.md` has not been generated yet.
+- [Static site builder, walker, and Activity dashboard](core-src-13.md)
 - ["@livewiki/mcp — MCP server, stdio entry, and FTS5 search index"](mcp-src.md)
 - ["@livewiki/core package"](core.md)
 - ["@livewiki/mcp package configuration"](mcp.md)

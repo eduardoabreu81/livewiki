@@ -110,5 +110,5 @@ Working-tree hygiene is part of the contract: `git clean -fdx` is forbidden beca
 ## Navigate
 
 
-> Coverage note: this module's source (6 files, ~179k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (6 files, ~99k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->
