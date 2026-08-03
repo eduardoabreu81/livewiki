@@ -420,7 +420,7 @@ side by side. Shipped in `be9c8c4`; gate core 1631 / CLI 125 / MCP 56;
 matrix green run 30784207402; smoke: `--ref HEAD~5` built 158 pages vs
 62 current.
 
-### 19. Tier-1 anchored support: Go (PRE-BETA)
+### 19. Tier-1 anchored support: Go (PRE-BETA) ✅ DONE 2026-08-03
 
 Source: maintainer decision 2026-08-03 — tier-1 language expansion moves
 from "usage-driven post-beta" to PRE-LAUNCH, starting with Go, Rust, and
@@ -465,8 +465,16 @@ calls, rationales). Existing prose-tier tests that used `.go` as the
 grammar-less example switched to `.rb`/`.rs` (walker, indexer, CLI
 prose-tier E2E). Gate: `pnpm -r build` clean; core 1668 / CLI 125 / MCP
 56; live CLI smoke on the fixture: 7 symbols (3 functions, 1 class, 1
-interface, 2 methods), `go: anchored` tier. The paid
-`init --batch` acceptance run on a real Go repo remains open.
+interface, 2 methods), `go: anchored` tier. **Acceptance run
+(2026-08-03, approved paid):** `init --batch --no-refine` on
+`spf13/cobra` (36 .go files) via MiniMax-M3 proxy — run #1 `completed`,
+17 tasks done / 0 failed, exit 0, verify OK (21 pages, zero issues),
+checkpoint 342,905 in + 98,129 out = 441,034 tokens == proxy
+(441,076 − 42 smoke). Real Go anchors confirmed
+(`command.go#Command.Execute`, `bash_completions.go#Command.GenBashCompletion`),
+orientation pulls the real README purpose, 1 flow accepted / 3 skipped
+on overlap. Clone preserved locally at `/c/tmp/cobra` (evidence, not
+in the repo).
 
 ### 20. Tier-1 anchored support: Rust (PRE-BETA)
 
