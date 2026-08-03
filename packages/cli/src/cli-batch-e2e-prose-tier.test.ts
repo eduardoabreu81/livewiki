@@ -2,7 +2,7 @@
  * CLI E2E — Etapa 1: tier-2 universal prose floor (SPEC §"Coverage ladder").
  *
  * Scenario: a repository mixing grammar-mapped sources (.ts — tier 1,
- * anchored) and grammar-less sources (.go, .rs — tier 2, prose). The walker
+ * anchored) and grammar-less sources (.rb, .rs — tier 2, prose). The walker
  * indexes every text file; the indexer records prose files with
  * `symbolCount: 0`; stage 4 emits zero-key pages (`anchors: []`, no markers)
  * for prose modules via the existing zero-key prompt contract.
@@ -236,14 +236,14 @@ async function expectVerifyClean(): Promise<void> {
 }
 
 describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", () => {
-  it("init --batch on a .ts + .go + .rs repo completes, verify clean, tiers reported", async () => {
+  it("init --batch on a .ts + .rb + .rs repo completes, verify clean, tiers reported", async () => {
     await writeCode(
       "src/api/handler.ts",
       "export function handleRequest(input: string): string { return input.trim(); }\n",
     );
     await writeCode(
-      "src/server/main.go",
-      "package main\n\nfunc main() { serve() }\n\nfunc serve() {}\n",
+      "src/server/main.rb",
+      "def serve\nend\n",
     );
     await writeCode(
       "src/engine/lib.rs",
@@ -259,7 +259,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
         "",
         "[![CI](https://img.shields.io/badge/ci-passing-green)](https://ci.example)",
         "",
-        "This fixture repository renders short media clips by wiring an API handler, a Go server, and a Rust engine into one local pipeline.",
+        "This fixture repository renders short media clips by wiring an API handler, a Ruby server, and a Rust engine into one local pipeline.",
         "",
         "## Getting Started",
         "",
@@ -340,10 +340,10 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       expect(statusR.status).toBe(0);
       const statusReport = JSON.parse(statusR.stdout);
       expect(statusReport.files.byLang.typescript).toBe(1);
-      expect(statusReport.files.byLang.go).toBe(1);
+      expect(statusReport.files.byLang.rb).toBe(1);
       expect(statusReport.files.byLang.rs).toBe(1);
       expect(statusReport.files.tiers.typescript).toBe("anchored");
-      expect(statusReport.files.tiers.go).toBe("prose");
+      expect(statusReport.files.tiers.rb).toBe("prose");
       expect(statusReport.files.tiers.rs).toBe("prose");
     } finally {
       delete process.env.OPENAI_API_KEY;
@@ -352,12 +352,12 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
 
   it("a repo with no grammar-mapped file still completes with a non-empty wiki", async () => {
     await writeCode(
-      "src/server/main.go",
-      "package main\n\nfunc main() { serve() }\n\nfunc serve() {}\n",
+      "src/server/main.rb",
+      "def serve\nend\n",
     );
     await writeCode(
-      "src/server/routes.go",
-      "package main\n\nfunc route(path string) string { return path }\n",
+      "src/server/routes.rb",
+      "def route(path)\n  path\nend\n",
     );
 
     stub.setHandler(proseTierHandler);
@@ -378,7 +378,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
 
       const statusR = await runCli(["--json", "--repo", repoRoot, "status"]);
       const statusReport = JSON.parse(statusR.stdout);
-      expect(statusReport.files.tiers.go).toBe("prose");
+      expect(statusReport.files.tiers.rb).toBe("prose");
       expect(statusReport.symbols.total).toBe(0);
     } finally {
       delete process.env.OPENAI_API_KEY;

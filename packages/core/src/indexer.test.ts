@@ -222,8 +222,8 @@ const secondClient = {
 
   it("indexes a grammar-less file with 0 symbols and no parse warning (tier 2)", async () => {
     await nodeFs.writeFile(
-      nodePath.join(repoRoot, "main.go"),
-      "package main\n\nfunc main() {}\n",
+      nodePath.join(repoRoot, "main.rs"),
+      "fn main() {}\n",
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let result;
@@ -240,9 +240,9 @@ const secondClient = {
     const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
     try {
       const row = db
-        .prepare("SELECT id, lang FROM files WHERE path = 'main.go' AND status = 'active'")
+        .prepare("SELECT id, lang FROM files WHERE path = 'main.rs' AND status = 'active'")
         .get() as { id: number; lang: string } | undefined;
-      expect(row?.lang).toBe("go");
+      expect(row?.lang).toBe("rs");
       const syms = db
         .prepare("SELECT COUNT(*) AS n FROM symbols WHERE file_id = ?")
         .get(row!.id) as { n: number };
@@ -295,25 +295,142 @@ const secondClient = {
   });
 
   it("incremental run treats prose files as unchanged by hash", async () => {
-    await nodeFs.writeFile(nodePath.join(repoRoot, "main.go"), "package main\n");
+    await nodeFs.writeFile(nodePath.join(repoRoot, "main.rs"), "fn main() {}\n");
     await runIndexer(repoRoot, { quiet: true });
     const r2 = await runIndexer(repoRoot, { quiet: true });
     expect(r2.filesAdded).toBe(0);
     expect(r2.filesUpdated).toBe(0);
-    expect(r2.filesUnchanged).toBe(3); // auth.ts + calc.py + main.go
+    expect(r2.filesUnchanged).toBe(3); // auth.ts + calc.py + main.rs
   });
 
   it("status classifies each language by coverage tier", async () => {
-    await nodeFs.writeFile(nodePath.join(repoRoot, "main.go"), "package main\n");
+    await nodeFs.writeFile(nodePath.join(repoRoot, "main.rs"), "fn main() {}\n");
     await runIndexer(repoRoot, { quiet: true });
     const report = await runStatus(repoRoot);
     expect(report.files.tiers.typescript).toBe("anchored");
     expect(report.files.tiers.python).toBe("anchored");
-    expect(report.files.tiers.go).toBe("prose");
+    expect(report.files.tiers.rs).toBe("prose");
   });
 });
 
-// === Etapa 2b: rationale persistence ===
+// === Roadmap item 19: Go tier-1 anchored indexing ===
+
+describe("indexer — Go fixture repo (roadmap item 19)", () => {
+  let goRoot: string;
+
+  beforeEach(async () => {
+    const fixture = nodePath.resolve(process.cwd(), "test/fixtures/sample-go-repo");
+    goRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-indexer-go-"));
+    await nodeFs.cp(fixture, goRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(goRoot, { recursive: true, force: true });
+  });
+
+  it("indexes .go files with symbols (tier 1, not prose-zero)", async () => {
+    const result = await runIndexer(goRoot, { quiet: true });
+    // go.mod has no .go symbols; cmd/main.go + server/server.go carry them.
+    expect(result.filesAdded).toBe(3);
+    expect(result.symbolsAdded).toBeGreaterThan(0);
+
+    const report = await runStatus(goRoot);
+    expect(report.files.tiers.go).toBe("anchored");
+    expect(report.files.byLang.go).toBe(2);
+    expect(report.symbols.byKind.function).toBe(3); // main, NewServer, listen
+    expect(report.symbols.byKind.class).toBe(1); // Server struct
+    expect(report.symbols.byKind.interface).toBe(1); // Runner
+    expect(report.symbols.byKind.method).toBe(2); // Server.Addr, Server.Start
+  });
+
+  it("method keys are qualified by receiver type (pointer stripped)", async () => {
+    await runIndexer(goRoot, { quiet: true });
+    const addr = await activeSymbolsForKeyIn(goRoot, "server/server.go#Server.Addr");
+    expect(addr).toHaveLength(1);
+    expect(addr[0]).toMatchObject({ kind: "method" });
+    const start = await activeSymbolsForKeyIn(goRoot, "server/server.go#Server.Start");
+    expect(start).toHaveLength(1);
+  });
+
+  it("extracts calls with confidence tags and WHY/HACK rationale comments", async () => {
+    await runIndexer(goRoot, { quiet: true });
+
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(goRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const calls = db
+        .prepare(
+          `SELECT c.caller_key, c.callee_name, c.confidence FROM calls c
+           JOIN files f ON f.id = c.file_id WHERE f.path = 'cmd/main.go'
+           ORDER BY c.line, c.callee_name`,
+        )
+        .all() as Array<{ caller_key: string; callee_name: string; confidence: string }>;
+      // server.NewServer / fmt.Println / srv.Addr / srv.Start are selector
+      // calls → inferred; nothing bare in main.go.
+      expect(calls).toContainEqual({
+        caller_key: "cmd/main.go#main", callee_name: "NewServer", confidence: "inferred",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "cmd/main.go#main", callee_name: "Println", confidence: "inferred",
+      });
+      expect(calls).toContainEqual({
+        caller_key: "cmd/main.go#main", callee_name: "Start", confidence: "inferred",
+      });
+
+      // server/server.go: the bare `listen(...)` call inside Server.Start is
+      // extracted; fmt.Sprintf inside Addr is inferred.
+      const serverCalls = db
+        .prepare(
+          `SELECT c.caller_key, c.callee_name, c.confidence FROM calls c
+           JOIN files f ON f.id = c.file_id WHERE f.path = 'server/server.go'
+           ORDER BY c.line, c.callee_name`,
+        )
+        .all() as Array<{ caller_key: string; callee_name: string; confidence: string }>;
+      expect(serverCalls).toContainEqual({
+        caller_key: "server/server.go#Server.Start", callee_name: "listen", confidence: "extracted",
+      });
+      expect(serverCalls).toContainEqual({
+        caller_key: "server/server.go#Server.Addr", callee_name: "Sprintf", confidence: "inferred",
+      });
+    } finally {
+      db.close();
+    }
+
+    const rationales = await (async () => {
+      const db2 = new (await import("better-sqlite3")).default(
+        nodePath.join(goRoot, ".livewiki", "index.db"), { readonly: true },
+      );
+      try {
+        return db2
+          .prepare(
+            `SELECT r.symbol_key, r.kind FROM rationales r
+             JOIN files f ON f.id = r.file_id WHERE f.lang = 'go'
+             ORDER BY f.path, r.start_line`,
+          )
+          .all() as Array<{ symbol_key: string | null; kind: string }>;
+      } finally {
+        db2.close();
+      }
+    })();
+    expect(rationales).toContainEqual({ symbol_key: "cmd/main.go#main", kind: "why" });
+    expect(rationales).toContainEqual({ symbol_key: "server/server.go#Server.Start", kind: "hack" });
+  });
+});
+
+async function activeSymbolsForKeyIn(root: string, key: string): Promise<ActiveSymbolRow[]> {
+  const Database = (await import("better-sqlite3")).default;
+  const db = new Database(nodePath.join(root, ".livewiki", "index.db"), { readonly: true });
+  try {
+    return db
+      .prepare(
+        "SELECT key, kind, signature, start_line FROM symbols WHERE key = ? AND status = 'active'",
+      )
+      .all(key) as ActiveSymbolRow[];
+  } finally {
+    db.close();
+  }
+}
+
 
 interface RationaleQueryRow {
   symbol_key: string | null;

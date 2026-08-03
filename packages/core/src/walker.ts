@@ -17,7 +17,7 @@
  * minified bundles, and known lockfiles are skipped. Files without an
  * extension are skipped (no meaningful language name). Extensions without a
  * tree-sitter grammar get `lang` = extension without the dot, lowercased
- * (`.go` → `go`) — tier-2 prose files, indexed with zero symbols.
+ * (`.rs` → `rs`) — tier-2 prose files, indexed with zero symbols.
  *
  * Output: paths RELATIVE to repoRoot with forward slashes (cross-platform).
  *
@@ -39,6 +39,7 @@ export const EXTENSION_LANG: Record<string, string> = {
   ".mjs": "javascript",
   ".cjs": "javascript",
   ".py": "python",
+  ".go": "go",
 };
 
 /**

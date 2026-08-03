@@ -51,7 +51,8 @@
   (if it simplifies things, starting single-package and extracting later is
   acceptable; document the choice)
 - **Parsing**: `web-tree-sitter` (WASM). MVP grammars: TypeScript/JavaScript (tsx
-  included), Python
+  included), Python. Post-MVP tier-1 additions: Go (roadmap item 19 — pilot of
+  the extension pattern for Rust/Java)
 - **Coverage ladder (two tiers)**: grammars are a precision upgrade, not a gate.
   Files whose extension maps to a tree-sitter grammar are tier 1 (anchored):
   symbol extraction, anchors, and debt apply. Every other indexed text file is
@@ -1015,8 +1016,11 @@ skeleton with all commands registered (stubs), `safe-io` implemented **first and
 with tests** (it's rule 1).
 
 ### Phase 1 — Indexer ✅ criterion: `livewiki index && livewiki status` on a real TS repo lists the correct files/symbols
-web-tree-sitter + TS/JS/Python grammars, symbol extraction (functions, classes,
-methods, exports), hashes, SQLite schema, `.gitignore` respect. Performance
+web-tree-sitter + TS/JS/Python grammars (+ Go since roadmap item 19), symbol
+extraction (functions, classes, methods, exports — Go: functions, struct types
+as `class`, interface types as `interface`, receiver-qualified methods
+`Type.method` with the pointer `*` stripped), hashes, SQLite schema,
+`.gitignore` respect. Performance
 target: a 50k LOC repo indexed in < 30s on the first run, < 2s incremental.
 All content hashing is EOL-insensitive (roadmap item 12): file text is
 normalized CRLF→LF once at read time and feeds the file `content_hash`,

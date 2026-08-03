@@ -87,6 +87,48 @@ describe("imports.collectImports (Python)", () => {
   });
 });
 
+describe("imports.collectImports (Go)", () => {
+  it("extrai import simples", async () => {
+    const imps = await collectImports(
+      "main.go",
+      `package main\n\nimport "fmt"\n\nfunc main() { fmt.Println() }\n`,
+    );
+    expect(imps).toEqual([{ source: "fmt", kind: "go-import" }]);
+  });
+
+  it("extrai import agrupado, com alias e blank import", async () => {
+    const imps = await collectImports(
+      "cmd/main.go",
+      `package main
+
+import (
+	"fmt"
+
+	"example.com/mod/server"
+	alias "example.com/mod/other"
+	_ "example.com/mod/sideeffect"
+)
+`,
+    );
+    expect(imps.map((i) => i.source)).toEqual([
+      "fmt",
+      "example.com/mod/server",
+      "example.com/mod/other",
+      "example.com/mod/sideeffect",
+    ]);
+    expect(imps.every((i) => i.kind === "go-import")).toBe(true);
+  });
+
+  it("strip aspas/backticks do path", async () => {
+    const imps = await collectImports(
+      "main.go",
+      "package main\n\nimport `fmt`\n",
+    );
+    expect(imps[0]?.source).toBe("fmt");
+    expect(imps[0]?.source).not.toMatch(/["`]/);
+  });
+});
+
 describe("imports.collectImports (edge cases)", () => {
   it("arquivo não-parseável retorna [] (graceful)", async () => {
     const imps = await collectImports("src/foo.ts", "this is not { valid ts");

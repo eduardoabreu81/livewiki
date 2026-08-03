@@ -380,8 +380,8 @@ from the frontmatter `anchors:`, deduped and sorted, file-level blob
 links) and each `<!-- lw:anchors ... -->` marker replaced with a
 `source: <path>` blob link. All probes share the new `runGitCaptured`
 bounded-spawn helper (shell:false, injectable); no remote ⇒ no links
-(offline posture preserved). Final gate numbers: (coordinator to fill
-after review).
+(offline posture preserved). Shipped in `be9c8c4`; gate core 1631 /
+CLI 125 / MCP 56; matrix green run 30784207402.
 
 ### 18. `livewiki view --ref <tag|sha>` (PRE-BETA)
 
@@ -405,7 +405,9 @@ own newest wiki commit and deep links use its sha. An unresolvable,
 empty, or flag-like ref throws `ViewError("invalid_ref")` → CLI exit 1
 with the git detail (human and JSON). Default output stays
 `.livewiki/site/`; `--out` is the documented way to keep two versions
-side by side. Final gate numbers: (coordinator to fill after review).
+side by side. Shipped in `be9c8c4`; gate core 1631 / CLI 125 / MCP 56;
+matrix green run 30784207402; smoke: `--ref HEAD~5` built 158 pages vs
+62 current.
 
 ### 19. Tier-1 anchored support: Go (PRE-BETA)
 
@@ -420,6 +422,40 @@ extraction fidelity is the acceptance bar), extend import resolution in
 Pilot language: do Go FIRST to prove the extractor pattern before
 replicating to Rust and Java. Validation: one `init --batch` acceptance
 run on a real Go repo (paid, requires approval at execution time).
+
+Result (implementation, 2026-08-03, uncommitted — coordinator reviews):
+`tree-sitter-go.wasm` vendored in `packages/core/grammars/` (built with
+tree-sitter-cli 0.26.10 + auto-downloaded wasi-sdk from tree-sitter-go
+2346a3a; the `tree-sitter-wasms` npm build was rejected — legacy `dylink`
+section, web-tree-sitter 0.26 requires `dylink.0`). `.go` mapped in
+`parser.ts`/`walker.ts`. `symbols.ts`: `function_declaration` → function,
+`method_declaration` → method keyed `path#Type.method` (pointer receivers
+stripped: `*T` → `T`, value/pointer share the key), `type_declaration` →
+`class` for `struct_type`, new `SymbolKind` `"interface"` for
+`interface_type` (additive; class diagrams only match `class`; DB column
+is free-text), local type declarations inside function bodies skipped
+(same policy as local classes), grouped `type ( ... )` handled, aliases
+to non-struct/iface types skipped. Calls: `call_expression` with bare
+identifier → `extracted`, `selector_expression` field → `inferred`.
+Rationales: tagged `comment` nodes work unchanged (Go has no docstrings).
+Imports: `imports.ts` extracts `import_declaration`/`import_spec` (single,
+grouped, aliased, blank, raw-string paths) as `go-import`;
+`import-resolution.ts` gains `loadGoModulePath` (root `go.mod` module
+directive) + `resolveGoSpecifier` — an import `<module>/<sub>` produces
+one edge per direct `.go` file of directory `<sub>` (Go packages are
+directories; nested dirs excluded, `_test.go` included); stdlib /
+third-party / no-go.mod ⇒ external. Wired into batch.ts, init.ts,
+status.ts (risk), change-impact.ts. Fixture `test/fixtures/sample-go-repo`
+(go.mod + cmd/main.go + server/server.go). Tests: parser, walker,
+symbols (10 Go), calls (6 Go), imports (3 Go), import-resolution (10 Go:
+with/without go.mod, internal vs external, nested-dir exclusion, module
+edges, loadGoModulePath), indexer fixture integration (tiers, key shapes,
+calls, rationales). Existing prose-tier tests that used `.go` as the
+grammar-less example switched to `.rb`/`.rs` (walker, indexer, CLI
+prose-tier E2E). Gate: `pnpm -r build` clean; core 1668 / CLI 125 / MCP
+56; live CLI smoke on the fixture: 7 symbols (3 functions, 1 class, 1
+interface, 2 methods), `go: anchored` tier. The paid
+`init --batch` acceptance run on a real Go repo remains open.
 
 ### 20. Tier-1 anchored support: Rust (PRE-BETA)
 

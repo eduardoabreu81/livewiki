@@ -120,19 +120,23 @@ describe("walkRepo", () => {
     expect(result.find((r) => r.path === "config.json")?.lang).toBe("json");
   });
 
-  it("walks code extensions without a grammar (.go .rs .java .rb .zig)", async () => {
-    await write("cmd/main.go", "package main");
+  it("walks code extensions without a grammar (.rs .java .rb .zig)", async () => {
     await write("src/lib.rs", "fn main() {}");
     await write("App.java", "class App {}");
     await write("app.rb", "puts 1");
     await write("build.zig", "pub fn build() void {}");
     const result = await walkRepo(repoRoot);
     const byPath = new Map(result.map((r) => [r.path, r.lang]));
-    expect(byPath.get("cmd/main.go")).toBe("go");
     expect(byPath.get("src/lib.rs")).toBe("rs");
     expect(byPath.get("App.java")).toBe("java");
     expect(byPath.get("app.rb")).toBe("rb");
     expect(byPath.get("build.zig")).toBe("zig");
+  });
+
+  it("maps .go to the tier-1 go grammar (roadmap item 19)", async () => {
+    await write("cmd/main.go", "package main");
+    const result = await walkRepo(repoRoot);
+    expect(result.find((r) => r.path === "cmd/main.go")?.lang).toBe("go");
   });
 
   it("skips denylist extensions (archives, binaries, media, fonts, maps)", async () => {

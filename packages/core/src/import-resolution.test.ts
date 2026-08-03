@@ -4,6 +4,7 @@ import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
 import {
   loadEffectiveTsconfig,
+  loadGoModulePath,
   loadPackageTsconfig,
   loadWorkspacePackages,
   resolveImportEdges,
@@ -574,5 +575,132 @@ describe("import-resolution.resolveImportEdges (Python)", () => {
     const fileEdges = resolveImportEdges({ importsByFile, knownFiles: PY_FILES, workspacePackages: [] });
     const moduleEdges = resolveModuleEdges(modules, importsByFile, PY_FILES, fileEdges);
     expect(moduleEdges).toEqual([{ from: "services", to: "models" }]);
+  });
+});
+
+describe("import-resolution.resolveImportEdges (Go, roadmap item 19)", () => {
+  const GO_MODULE = "example.com/fixture";
+  const GO_FILES = new Set([
+    "cmd/main.go",
+    "server/server.go",
+    "server/server_test.go",
+    "server/internal/hidden/hidden.go",
+  ]);
+
+  it("resolves an intra-module import to every direct .go file of the package dir", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["cmd/main.go", [{ source: "example.com/fixture/server", kind: "go-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: GO_FILES, workspacePackages: [], goModulePath: GO_MODULE,
+    });
+    expect(edges.map((e) => e.toFile).sort()).toEqual([
+      "server/server.go",
+      "server/server_test.go",
+    ]);
+    expect(edges.every((e) => e.fromFile === "cmd/main.go")).toBe(true);
+  });
+
+  it("does NOT resolve into nested subdirectories (an import names exactly one dir)", () => {
+    const files = new Set(["cmd/main.go", "server/internal/hidden/hidden.go"]);
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      // importing the PARENT package must not pull files from child dirs
+      ["cmd/main.go", [{ source: "example.com/fixture/server/internal", kind: "go-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: files, workspacePackages: [], goModulePath: GO_MODULE,
+    });
+    expect(edges).toEqual([]);
+  });
+
+  it("resolves the bare module path to root-directory .go files", () => {
+    const files = new Set(["main.go", "util.go", "cmd/tool/main.go"]);
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["cmd/tool/main.go", [{ source: "example.com/fixture", kind: "go-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: files, workspacePackages: [], goModulePath: GO_MODULE,
+    });
+    expect(edges.map((e) => e.toFile)).toEqual(["main.go", "util.go"]);
+  });
+
+  it("stdlib and third-party imports stay external (no edge)", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      [
+        "cmd/main.go",
+        [
+          { source: "fmt", kind: "go-import" },
+          { source: "github.com/other/lib", kind: "go-import" },
+        ],
+      ],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: GO_FILES, workspacePackages: [], goModulePath: GO_MODULE,
+    });
+    expect(edges).toEqual([]);
+  });
+
+  it("without a go.mod every import stays external", () => {
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["cmd/main.go", [{ source: "example.com/fixture/server", kind: "go-import" }]],
+    ]);
+    const edges = resolveImportEdges({
+      importsByFile, knownFiles: GO_FILES, workspacePackages: [], goModulePath: null,
+    });
+    expect(edges).toEqual([]);
+    // and the option is optional — omitting it behaves like "no go.mod"
+    expect(
+      resolveImportEdges({ importsByFile, knownFiles: GO_FILES, workspacePackages: [] }),
+    ).toEqual([]);
+  });
+
+  it("modules.resolveModuleEdges groups Go package edges into module edges", () => {
+    const modules: Module[] = [
+      { id: "cmd", paths: ["cmd/main.go"], symbolCount: 1 },
+      { id: "server", paths: ["server/server.go"], symbolCount: 3 },
+    ];
+    const importsByFile = new Map<string, ExtractedImport[]>([
+      ["cmd/main.go", [{ source: "example.com/fixture/server", kind: "go-import" }]],
+    ]);
+    const fileEdges = resolveImportEdges({
+      importsByFile, knownFiles: GO_FILES, workspacePackages: [], goModulePath: GO_MODULE,
+    });
+    const moduleEdges = resolveModuleEdges(modules, importsByFile, GO_FILES, fileEdges);
+    expect(moduleEdges).toEqual([{ from: "cmd", to: "server" }]);
+  });
+});
+
+describe("import-resolution.loadGoModulePath (roadmap item 19)", () => {
+  let repoRoot: string;
+  beforeEach(async () => {
+    repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-gomod-"));
+  });
+  afterEach(async () => {
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("reads the module directive from a root go.mod", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "go.mod"),
+      "module example.com/fixture\n\ngo 1.22\n\nrequire github.com/x/y v1.0.0\n",
+    );
+    expect(await loadGoModulePath(repoRoot)).toBe("example.com/fixture");
+  });
+
+  it("tolerates a trailing line comment on the module directive", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "go.mod"),
+      "module example.com/fixture // pinned\n",
+    );
+    expect(await loadGoModulePath(repoRoot)).toBe("example.com/fixture");
+  });
+
+  it("returns null when go.mod is missing", async () => {
+    expect(await loadGoModulePath(repoRoot)).toBeNull();
+  });
+
+  it("returns null when go.mod has no module directive", async () => {
+    await nodeFs.writeFile(nodePath.join(repoRoot, "go.mod"), "go 1.22\n");
+    expect(await loadGoModulePath(repoRoot)).toBeNull();
   });
 });

@@ -5,11 +5,12 @@
  * é resolvido relativo ao package.json do módulo, então funciona tanto em dev
  * (`src/`) quanto em build (`dist/`).
  *
- * Idiomas suportados no MVP:
+ * Idiomas suportados:
  *   - typescript (.ts)
  *   - tsx (.tsx, .jsx)
  *   - javascript (.js, .mjs, .cjs)
  *   - python (.py)
+ *   - go (.go)
  *
  * `initParser()` é global, idempotente e deve ser chamado uma vez no startup
  * do CLI antes do primeiro `parseFile()`. Mais de uma chamada é segura
@@ -82,6 +83,7 @@ const EXT_TO_GRAMMAR: Record<string, string> = {
   ".mjs": "javascript",
   ".cjs": "javascript",
   ".py": "python",
+  ".go": "go",
 };
 
 const GRAMMAR_TO_EXT = new Map<string, string>(

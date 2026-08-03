@@ -281,6 +281,84 @@ class RealModel:
   });
 });
 
+describe("symbols — Go (roadmap item 19)", () => {
+  it("extrai function_declaration top-level", async () => {
+    const src = "package main\n\nfunc greet(name string) string {\n\treturn name\n}\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols.map((s) => s.name)).toEqual(["greet"]);
+    expect(symbols[0]?.kind).toBe("function");
+    expect(symbols[0]?.key).toBe("x.go#greet");
+    expect(symbols[0]?.start_line).toBe(3);
+  });
+
+  it("extrai struct como kind=class", async () => {
+    const src = "package server\n\ntype Server struct {\n\tPort int\n}\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Server"]);
+    expect(symbols[0]?.kind).toBe("class");
+    expect(symbols[0]?.key).toBe("x.go#Server");
+  });
+
+  it("extrai interface como kind=interface", async () => {
+    const src = "package server\n\ntype Runner interface {\n\tStart() error\n}\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Runner"]);
+    expect(symbols[0]?.kind).toBe("interface");
+  });
+
+  it("extrai type declaration agrupada (type ( ... )) com um símbolo por spec", async () => {
+    const src = "package server\n\ntype (\n\tServer struct {\n\t\tPort int\n\t}\n\tRunner interface {\n\t\tStart() error\n\t}\n)\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols.map((s) => [s.name, s.kind])).toEqual([
+      ["Server", "class"],
+      ["Runner", "interface"],
+    ]);
+  });
+
+  it("ignora type alias para tipo não-struct/interface", async () => {
+    const src = "package server\n\ntype Port = int\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols).toEqual([]);
+  });
+
+  it("extrai método com receiver por valor qualificado Type.method", async () => {
+    const src = "package server\n\nfunc (s Server) Start() error {\n\treturn nil\n}\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Server.Start"]);
+    expect(symbols[0]?.kind).toBe("method");
+    expect(symbols[0]?.key).toBe("x.go#Server.Start");
+  });
+
+  it("extrai método com receiver ponteiro — *T colapsa para a mesma chave T.method", async () => {
+    const src = "package server\n\nfunc (s *Server) Addr() string {\n\treturn \"\"\n}\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols.map((s) => s.name)).toEqual(["Server.Addr"]);
+    expect(symbols[0]?.kind).toBe("method");
+  });
+
+  it("receiver por valor e por ponteiro do mesmo método NÃO duplicam a chave", async () => {
+    // Go forbids both, but the extractor must be robust on invalid input.
+    const src = "package server\n\nfunc (s Server) Start() error {\n\treturn nil\n}\n\nfunc (s *Server) Start() error {\n\treturn nil\n}\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols.filter((s) => s.key === "x.go#Server.Start")).toHaveLength(1);
+  });
+
+  it("NÃO extrai type declaration local dentro de função", async () => {
+    const src = "package main\n\nfunc run() {\n\ttype local struct {\n\t\tx int\n\t}\n\t_ = local{}\n}\n";
+    const tree = await parse(".go", src);
+    const symbols = extractSymbols(tree, "x.go", src);
+    expect(symbols.map((s) => s.name)).toEqual(["run"]);
+  });
+});
+
 // === Etapa 2b: rationale extraction (intent evidence) ===
 
 describe("extractRationales — tagged comments", () => {

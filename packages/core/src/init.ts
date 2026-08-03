@@ -48,6 +48,7 @@ import type { FlowCandidate } from "./flows.js";
 import type { TopicCandidate } from "./topics.js";
 import {
   loadEffectiveTsconfig,
+  loadGoModulePath,
   loadWorkspacePackages,
   resolveImportEdges,
 } from "./import-resolution.js";
@@ -654,6 +655,7 @@ async function buildPlan(
       knownFiles,
       workspacePackages,
       tsconfig: await loadEffectiveTsconfig(absRoot, workspacePackages),
+      goModulePath: await loadGoModulePath(absRoot),
     });
     const edges = resolveModuleEdges(modules, importsByFile, knownFiles, resolvedImportEdges);
     const ordered = prioritizeModules(modules, edges, cfg.pathRoles);

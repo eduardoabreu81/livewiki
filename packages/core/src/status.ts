@@ -27,6 +27,7 @@ import {
   scoreDebtItem,
   type RiskScore,
 } from "./risk.js";
+import { loadGoModulePath } from "./import-resolution.js";
 
 /** Coverage tier of a language (SPEC §"Coverage ladder"). */
 export type LangTier = "anchored" | "prose";
@@ -327,6 +328,7 @@ async function applyRiskRanking(
   const { coveredByTest, fanIn } = computeTestCoverageAndFanIn({
     importsByFile,
     knownFiles: new Set(allPaths),
+    goModulePath: await loadGoModulePath(absRoot),
   });
 
   const churnWindow = config.riskChurnCommits ?? CONFIG_DEFAULTS.riskChurnCommits;

@@ -39,6 +39,13 @@
  *     external.
  *   - `node:*` builtins, absolute paths, and undeclared third-party
  *     packages never produce edges.
+ *   - Go (roadmap item 19, pilot): a `go-import` specifier resolves ONLY via
+ *     the repo's root `go.mod` module path (`loadGoModulePath`). An import
+ *     equal to `<module>/<sub>` maps to the repo-relative directory `<sub>`
+ *     and produces one edge per direct `.go` file in it (Go packages are
+ *     directories — v1 resolves non-recursively); `<module>` alone maps to
+ *     the root directory. Any import not prefixed by the module path — and
+ *     every import when no go.mod exists — stays external.
  *   - `tsconfig.paths` is explicitly DEFERRED (needs its full contract).
  *
  * Output is deduped and sorted deterministically (fromFile, toFile,
@@ -209,6 +216,12 @@ export function resolveImportEdges(opts: {
    * single-layout form was removed in contract revision 4.)
    */
   tsconfig?: EffectiveTsconfigs | undefined;
+  /**
+   * The repo's Go module path from the root `go.mod` (`loadGoModulePath`),
+   * or null/undefined when there is no go.mod. Go imports not prefixed by
+   * this path stay external; without it, EVERY go-import stays external.
+   */
+  goModulePath?: string | null | undefined;
 }): ResolvedImportEdge[] {
   // Longest name first: `@acme/core-utils` must win over `@acme/core` when
   // both are declared (node-style longest-prefix match), deterministically.
@@ -224,10 +237,12 @@ export function resolveImportEdges(opts: {
       const targets =
         imp.kind === "py-from" || imp.kind === "py-import"
           ? resolvePythonSpecifier(fromFile, imp, opts.knownFiles)
-          : (() => {
-              const single = resolveSpecifier(fromFile, spec, packages, opts.tsconfig, opts.knownFiles);
-              return single === null ? [] : [single];
-            })();
+          : imp.kind === "go-import"
+            ? resolveGoSpecifier(spec, opts.knownFiles, opts.goModulePath ?? null)
+            : (() => {
+                const single = resolveSpecifier(fromFile, spec, packages, opts.tsconfig, opts.knownFiles);
+                return single === null ? [] : [single];
+              })();
       for (const toFile of targets) {
         if (toFile === fromFile) continue;
         const key = `${fromFile}\0${toFile}\0${spec}`;
@@ -334,6 +349,63 @@ function resolvePythonModulePath(dir: string, knownFiles: ReadonlySet<string>): 
   const asPackage = `${dir}/__init__.py`;
   if (knownFiles.has(asPackage)) return asPackage;
   return null;
+}
+
+/**
+ * Reads the module path declared by the repo's ROOT `go.mod` (`module
+ * <path>` line). Returns null when go.mod is missing, unreadable, or has no
+ * module directive — in that case every Go import resolves as external
+ * (strict, no guessing). Nested go.mod files (multi-module repos) are out
+ * of scope for v1.
+ */
+export async function loadGoModulePath(repoRoot: string): Promise<string | null> {
+  const text = await readTextIfExists(nodePath.join(nodePath.resolve(repoRoot), "go.mod"));
+  if (text === null) return null;
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/^module\s+(\S+)\s*(?:\/\/.*)?$/);
+    if (match) return match[1]!;
+  }
+  return null;
+}
+
+/**
+ * Resolves ONE Go import occurrence to the `.go` files of the imported
+ * package directory (Go packages are directories). Strict contract:
+ *
+ *   - `spec === goModulePath`          → every direct `.go` file of the
+ *                                        repo root directory.
+ *   - `spec === goModulePath + "/sub"` → every direct `.go` file of the
+ *                                        repo-relative directory `sub`.
+ *   - anything else (third-party module, stdlib like `fmt`, or a subpath
+ *     with no known .go files) → NO edge: the occurrence stays external.
+ *   - `goModulePath === null` (no go.mod) → every import stays external.
+ *
+ * `_test.go` files are included (they belong to the same package);
+ * nested subdirectories are NOT (an import names exactly one directory).
+ */
+function resolveGoSpecifier(
+  spec: string,
+  knownFiles: ReadonlySet<string>,
+  goModulePath: string | null,
+): string[] {
+  if (goModulePath === null || goModulePath.length === 0) return [];
+  let dir: string;
+  if (spec === goModulePath) {
+    dir = "";
+  } else if (spec.startsWith(goModulePath + "/")) {
+    dir = spec.slice(goModulePath.length + 1);
+  } else {
+    return [];
+  }
+  const prefix = dir === "" ? "" : `${dir}/`;
+  const targets: string[] = [];
+  for (const file of knownFiles) {
+    if (!file.endsWith(".go")) continue;
+    if (!file.startsWith(prefix)) continue;
+    if (file.slice(prefix.length).includes("/")) continue; // nested package
+    targets.push(file);
+  }
+  return targets.sort((a, b) => a.localeCompare(b));
 }
 
 /** Resolves ONE specifier occurrence; null means "stays external". */

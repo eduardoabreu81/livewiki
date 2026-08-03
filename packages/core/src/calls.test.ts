@@ -119,6 +119,58 @@ describe("extractCalls — Python", () => {
   });
 });
 
+describe("extractCalls — Go (roadmap item 19)", () => {
+  it("attributes a plain call to its enclosing function", async () => {
+    const src = "package main\n\nfunc outer() {\n\thelper()\n}\n";
+    const tree = await parse(".go", src);
+    const calls = extractCalls(tree, "x.go", src);
+    expect(calls).toEqual([
+      { caller_key: "x.go#outer", callee_name: "helper", line: 4, confidence: "extracted" },
+    ]);
+  });
+
+  it("tags a selector call pkg.Func() as inferred (right-most field)", async () => {
+    const src = "package main\n\nimport \"fmt\"\n\nfunc outer() {\n\tfmt.Println(\"hi\")\n}\n";
+    const tree = await parse(".go", src);
+    const calls = extractCalls(tree, "x.go", src);
+    expect(calls).toEqual([
+      { caller_key: "x.go#outer", callee_name: "Println", line: 6, confidence: "inferred" },
+    ]);
+  });
+
+  it("tags a receiver method call x.Method() as inferred", async () => {
+    const src = "package server\n\nfunc run(s *Server) {\n\ts.Start()\n}\n";
+    const tree = await parse(".go", src);
+    const calls = extractCalls(tree, "x.go", src);
+    expect(calls).toEqual([
+      { caller_key: "x.go#run", callee_name: "Start", line: 4, confidence: "inferred" },
+    ]);
+  });
+
+  it("qualifies a call inside a method with ReceiverType.method", async () => {
+    const src = "package server\n\nfunc (s *Server) Start() error {\n\tlisten(s.Port)\n\treturn nil\n}\n";
+    const tree = await parse(".go", src);
+    const calls = extractCalls(tree, "x.go", src);
+    expect(calls).toEqual([
+      { caller_key: "x.go#Server.Start", callee_name: "listen", line: 4, confidence: "extracted" },
+    ]);
+  });
+
+  it("value receiver qualifies the same as pointer receiver", async () => {
+    const src = "package server\n\nfunc (s Server) Start() error {\n\tlisten(s.Port)\n\treturn nil\n}\n";
+    const tree = await parse(".go", src);
+    const calls = extractCalls(tree, "x.go", src);
+    expect(calls[0]?.caller_key).toBe("x.go#Server.Start");
+  });
+
+  it("skips a call at package top level (no enclosing named symbol)", async () => {
+    const src = "package main\n\nvar x = compute()\n";
+    const tree = await parse(".go", src);
+    const calls = extractCalls(tree, "x.go", src);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("extractCalls — confidence tags per callee shape", () => {
   it("tags a bare function call as extracted", async () => {
     const src = "function outer() { helper(); }";

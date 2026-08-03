@@ -93,11 +93,14 @@ export function derivePathFromSymbolKey(key: string | null): string | null {
 export function computeTestCoverageAndFanIn(opts: {
   importsByFile: Map<string, ExtractedImport[]>;
   knownFiles: ReadonlySet<string>;
+  /** Go module path from the root go.mod (loadGoModulePath), when known. */
+  goModulePath?: string | null;
 }): { coveredByTest: Set<string>; fanIn: Map<string, number> } {
   const edges = resolveImportEdges({
     importsByFile: opts.importsByFile,
     knownFiles: opts.knownFiles,
     workspacePackages: [],
+    goModulePath: opts.goModulePath ?? null,
   });
   const coveredByTest = new Set<string>();
   const importersByFile = new Map<string, Set<string>>();

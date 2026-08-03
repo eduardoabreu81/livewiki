@@ -126,6 +126,7 @@ import {
 } from "./rationale-evidence.js";
 import {
   loadEffectiveTsconfig,
+  loadGoModulePath,
   loadWorkspacePackages,
   resolveImportEdges,
 } from "./import-resolution.js";
@@ -507,6 +508,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       knownFiles,
       workspacePackages,
       tsconfig: await loadEffectiveTsconfig(absRoot, workspacePackages),
+      goModulePath: await loadGoModulePath(absRoot),
     });
 
     // === Estágio 2: Identificação de módulos (heurística + optional LLM refine) ===

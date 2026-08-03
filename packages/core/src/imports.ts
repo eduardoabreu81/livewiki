@@ -12,6 +12,10 @@
  * Cobertura:
  *   - TypeScript/JavaScript: import_statement, export_statement (re-exports)
  *   - Python: import_statement, import_from_statement
+ *   - Go (roadmap item 19): import_declaration → import_spec(s), both the
+ *     single form (`import "fmt"`) and the grouped form (`import ( ... )`);
+ *     the path is the spec's `interpreted_string_literal`, aliases and blank
+ *     imports (`_`) share the same path field.
  *
  * Limitação: NÃO resolve imports dinâmicos (require() variável, import() com
  * expressão). Esses viram "unknown" no grafo. Aceitável pro MVP — LLM pode
@@ -20,10 +24,10 @@
 
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
-import type { Tree } from "web-tree-sitter";
+import type { Tree, Node } from "web-tree-sitter";
 import { initParser, parseSource } from "./parser.js";
 
-export type ImportKind = "ts-import" | "ts-export" | "py-import" | "py-from";
+export type ImportKind = "ts-import" | "ts-export" | "py-import" | "py-from" | "go-import";
 
 export interface ExtractedImport {
   /** String literal do source (ex: "./auth", "express", "../utils") */
@@ -102,6 +106,23 @@ export function extractImportsFromTree(tree: Tree, lang: string): ExtractedImpor
         }
         break;
       }
+      case "import_declaration": {
+        // Go: import "fmt"  OR  import ( "fmt"\n alias "x/y"\n _ "z" )
+        // Every import_spec (direct child or under import_spec_list) carries
+        // its path as an interpreted/raw string literal.
+        for (let i = 0; i < node.namedChildCount; i++) {
+          const child = node.namedChild(i);
+          if (child?.type === "import_spec") {
+            pushGoImportSpec(child, out);
+          } else if (child?.type === "import_spec_list") {
+            for (let j = 0; j < child.namedChildCount; j++) {
+              const spec = child.namedChild(j);
+              if (spec?.type === "import_spec") pushGoImportSpec(spec, out);
+            }
+          }
+        }
+        break;
+      }
     }
 
     if (cursor.gotoFirstChild()) {
@@ -114,6 +135,20 @@ export function extractImportsFromTree(tree: Tree, lang: string): ExtractedImpor
 
   visit();
   return out;
+}
+
+/**
+ * Go import_spec → ExtractedImport. The path field is an
+ * `interpreted_string_literal` ("...") or `raw_string_literal` (`...`);
+ * both are stripped of their delimiters. Aliased (`x "a/b"`), dot
+ * (`. "a/b"`), and blank (`_ "a/b"`) specs share the same path field.
+ */
+function pushGoImportSpec(spec: Node, out: ExtractedImport[]): void {
+  const pathNode = spec.childForFieldName("path");
+  if (!pathNode) return;
+  const cleaned = pathNode.text.replace(/^["`]|["`]$/g, "");
+  if (cleaned.length === 0) return;
+  out.push({ source: cleaned, kind: "go-import" });
 }
 
 /**

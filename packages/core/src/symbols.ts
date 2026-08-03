@@ -16,6 +16,14 @@
  *     - function_definition          → kind: "function"
  *     - class_definition             → kind: "class"
  *     - decorated_definition         → kind: decorador envolve fn/classe
+ *   Go (roadmap item 19 — pilot tier-1 extension):
+ *     - function_declaration         → kind: "function" (same node type as TS)
+ *     - method_declaration           → kind: "method" (parent = receiver type,
+ *                                      pointer receivers stripped: `*T` → `T`)
+ *     - type_declaration/struct_type    → kind: "class"
+ *     - type_declaration/interface_type → kind: "interface"
+ *     - call_expression              → callee identifier (extracted) or
+ *                                      selector_expression field (inferred)
  *
  * Chave do símbolo (SPEC §"Frontmatter"):
  *   - top-level: `caminho/relativo.ext#Nome`
@@ -42,7 +50,7 @@
 import type { Tree, Node } from "web-tree-sitter";
 import { sha256, sha256Slice } from "./hashes.js";
 
-export type SymbolKind = "function" | "class" | "method" | "export";
+export type SymbolKind = "function" | "class" | "method" | "export" | "interface";
 
 export interface SymbolRecord {
   /** Chave completa (path#name ou path#parent.name). UNIQUE por arquivo+path. */
@@ -139,6 +147,7 @@ function walkNode(
     node.type === "function_declaration" ||
     node.type === "generator_function_declaration" ||
     node.type === "method_definition" ||
+    node.type === "method_declaration" ||
     node.type === "function_definition"
       ? true
       : insideFunctionBody;
@@ -261,6 +270,51 @@ function walkNode(
       }
       return;
     }
+
+    case "method_declaration": {
+      // Go — `func (r ReceiverType) Name(...)`. The receiver parameter_list
+      // holds exactly one parameter_declaration whose type child names the
+      // receiver type (`pointer_type` wraps `*T` — strip to `T`). The key
+      // mirrors the TS `Class.method` convention: `path#Type.Name`.
+      const name = node.childForFieldName("name")?.text;
+      const receiverType = goReceiverTypeName(node.childForFieldName("receiver"));
+      if (name && receiverType) {
+        out.push(makeRecord(node, source, relPath, `${receiverType}.${name}`, "method"));
+      } else if (name) {
+        // receiver type unreadable (shouldn't happen on a valid parse) —
+        // emit unqualified, same policy as TS method outside a class.
+        out.push(makeRecord(node, source, relPath, name, "method"));
+      }
+      break;
+    }
+
+    case "type_declaration": {
+      // Go — `type Name struct {...}` / `type Name interface {...}` / grouped
+      // `type ( ... )`. Struct is the class analog (kind "class"); interface
+      // gets kind "interface" (additive — class diagrams only match "class").
+      // Local type declarations inside a function body are implementation
+      // details, same skip policy as local classes.
+      if (insideFunctionBody) return;
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (child?.type !== "type_spec" && child?.type !== "type_alias") continue;
+        const name = child.childForFieldName("name")?.text;
+        const typeNode = child.childForFieldName("type");
+        if (!name || !typeNode) continue;
+        const kind: SymbolKind | null =
+          typeNode.type === "struct_type"
+            ? "class"
+            : typeNode.type === "interface_type"
+              ? "interface"
+              : null;
+        if (kind === null) continue; // type aliases to non-struct/iface: not a citable construct
+        // Record spans the whole type_declaration for a single spec; for a
+        // grouped declaration the spec node keeps keys/lines honest.
+        const recordNode = node.namedChildCount === 1 ? node : child;
+        out.push(makeRecord(recordNode, source, relPath, name, kind));
+      }
+      break;
+    }
   }
 
   // Default: desce nos filhos (exceto quando já tratamos acima).
@@ -305,6 +359,37 @@ function toSymbolRecord(symbol: ExtractedSymbol): SymbolRecord {
     end_line: symbol.end_line,
     content_hash: symbol.content_hash,
   };
+}
+
+/**
+ * Go receiver type name for a `method_declaration`'s receiver parameter_list.
+ * The receiver list holds exactly one parameter_declaration; its type is a
+ * `type_identifier` (value receiver) or a `pointer_type` wrapping one
+ * (pointer receiver — the `*` is stripped so `*T` and `T` share the key
+ * prefix, matching the TS `Class.method` convention). Returns null when the
+ * shape is unexpected (generic receiver with type parameters keeps the base
+ * type identifier — `type_identifier` is still the first named child of the
+ * type node family we handle).
+ */
+function goReceiverTypeName(receiver: Node | null): string | null {
+  if (!receiver || receiver.type !== "parameter_list") return null;
+  const decl = receiver.firstNamedChild;
+  if (!decl || decl.type !== "parameter_declaration") return null;
+  const typeNode = decl.childForFieldName("type") ?? decl.firstNamedChild;
+  if (!typeNode) return null;
+  if (typeNode.type === "type_identifier") return typeNode.text;
+  if (typeNode.type === "pointer_type") {
+    const inner = typeNode.firstNamedChild;
+    if (inner?.type === "type_identifier") return inner.text;
+    // generic instantiation inside the pointer, e.g. *List[T] — use its base
+    const base = inner?.childForFieldName("type") ?? inner?.firstNamedChild;
+    if (base?.type === "type_identifier") return base.text;
+  }
+  if (typeNode.type === "generic_type") {
+    const base = typeNode.childForFieldName("type") ?? typeNode.firstNamedChild;
+    if (base?.type === "type_identifier") return base.text;
+  }
+  return null;
 }
 
 // === Phase 3: raw call-site extraction (symbol call graph) ===
@@ -391,6 +476,18 @@ function walkForCalls(
       }
       break;
     }
+    case "method_declaration": {
+      // Go — qualifies as ReceiverType.method (pointer receivers stripped),
+      // same key shape as the symbol extractor.
+      const name = node.childForFieldName("name")?.text;
+      const receiverType = goReceiverTypeName(node.childForFieldName("receiver"));
+      if (name) {
+        nextCallerKey = receiverType
+          ? `${relPath}#${receiverType}.${name}`
+          : `${relPath}#${name}`;
+      }
+      break;
+    }
     case "class_declaration":
     case "class":
     case "class_definition": {
@@ -441,6 +538,12 @@ function extractCalleeName(node: Node | null): { name: string; confidence: CallC
   if (node.type === "attribute") {
     // Python
     const name = node.childForFieldName("attribute")?.text;
+    return name ? { name, confidence: "inferred" } : null;
+  }
+  if (node.type === "selector_expression") {
+    // Go — `pkg.Func()` / `x.Method()`: the right-most field_identifier is
+    // the callee name; the operand (package or receiver) is unknown here.
+    const name = node.childForFieldName("field")?.text;
     return name ? { name, confidence: "inferred" } : null;
   }
   return null;
