@@ -544,7 +544,7 @@ EXACTLY (no smoke ping this run). Real Rust anchors confirmed
 keys live). Clone preserved locally at `/c/tmp/zoxide` (evidence, not
 in the repo).
 
-### 21. Tier-1 anchored support: Java (PRE-BETA)
+### 21. Tier-1 anchored support: Java (PRE-BETA) ✅ DONE 2026-08-03
 
 Same shape as item 19 (grammar + extractor + package/import resolution)
 after the Go pilot. Acceptance: batch run on a real Java repo (paid,
@@ -609,8 +609,21 @@ src/main/java/com/fixture/{Main,server/{Server,Handler,Mode},model/Item}.java).
 Tests: parser (2), walker (1 new + grammar-less example dropped `.java`,
 now `.kt`/`.rb`/`.zig`), symbols (8 Java extraction + 5 Java rationales),
 calls (7 Java), imports (4 Java), import-resolution (9 Java), indexer
-fixture integration (3: tiers/key shapes, calls+rationales). Acceptance
-batch on a real Java repo remains open (paid, approval).
+fixture integration (3: tiers/key shapes, calls+rationales). **Acceptance
+run (2026-08-03, approved paid):** `init --batch --no-refine` on
+`google/gson` main module (210 .java files) via MiniMax-M3 proxy — run
+`completed_with_failures` (71 done / 1 flow repair_exhausted: the model
+kept omitting the required lw:anchors marker in the "Ordered flow"
+section, same model-residual class as Etapa 3) then ONE disclosed
+`--only` retry on the failed flow → run #1 `completed`, 72/72 done, 0
+failed, exit 0, verify OK (76 pages, zero issues). Accounting:
+1,343,614 in + 533,034 out = 1,876,648 tokens == proxy EXACTLY
+(1,852,822 + 23,826 retry). Java anchors live incl. constructor and
+nested-type keys (`Gson.java#Gson.Gson`, `TypeAdapter.java#TypeAdapter.read`,
+`#NullSafeTypeAdapter.read`, `TypeToken.java#TypeToken`). Clone
+preserved locally at `/c/tmp/gson` (evidence, not in the repo). The
+no-recovery autonomous bar was NOT met (one disclosed retry) — same
+standing caveat as previous acceptances.
 
 ### 22. CodeWiki-grade output format (post-beta, needs design)
 
