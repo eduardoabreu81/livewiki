@@ -7,14 +7,17 @@
 
 ## Current execution order (see AGENTS.md)
 
-> **Reconciled 2026-08-03** (maintainer decision; supersedes 2026-08-02):
-> #16 dogfood batch DONE, cross-platform CI DONE (matrix green twice),
-> #6 v1 DONE. The remaining pre-beta queue is **#17 viewer version
-> stamp + source deep-links → #18 `view --ref` → #19 Go / #20 Rust /
-> #21 Java tier-1 (Go pilot first) → #23 repository understanding
-> layer → #22 CodeWiki-grade output format (promoted pre-beta
-> 2026-08-03) → beta launch (npm publish, with the naming/domain
-> decision before it)**. #6 v2 (pay-variant) and the optional
+> **Reconciled 2026-08-04** (maintainer decision; supersedes 2026-08-03):
+> the 2026-08-03 pre-beta queue (#17 viewer stamp+links, #18 `view
+> --ref`, #19 Go / #20 Rust / #21 Java tier-1, #23 understanding, #22
+> CodeWiki-grade format) is DONE, and the P1 grammar-relabel bug from the
+> external re-review is fixed and committed (`ef403aa` — grammar-state
+> tracking via `meta.grammar_state`: grammar added / removed / remapped /
+> version-bumped all direct one-run re-parses). The remaining pre-beta
+> queue is **#24 test-role classification → pay the repo's `changed` doc
+> debt via the MiniMax-M3 proxy (after #24 repartitions, never before) →
+> beta launch** (naming decided 2026-08-04: keep `@livewiki`, MIT, 0.1.0,
+> publish with `pnpm publish -r`). #6 v2 (pay-variant) and the optional
 > hardening list stay post-beta.
 > items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
 > dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
@@ -735,6 +738,34 @@ regen kept the synthesis primary, demoting the junk README to a quoted
 evidence line ("one evidence input, not the authority"). Both design
 cases PASS. Run: 16 tasks done / 0 failed, exit 0, verify OK (20
 pages), checkpoint 116,975 + 35,855 = 152,830 tokens == proxy EXACTLY.
+
+### 24. Test-role classification (PRE-BETA)
+
+Source: external re-review 2026-08-03 (finding P2, confirmed with live
+measurements on this repo's own index): `PathRole` has no "test" concept,
+so tests co-located with product code classify as product — 94 of 217
+anchored files (43%) here, splitting `packages/core/src` into
+`core-src-01…13` under `maxFiles: 12`, anchoring 321 test symbols in 17
+generated pages (`modules.test.ts#idFor` documented as public API), and
+burning ~40% of stage-4 tokens on content nobody reads. Design
+(maintainer-reviewed 2026-08-04):
+`docs/plans/2026-08-04-test-role-classification.md` — add `"test"` to
+`PathRole` + `pathRoles.testPatterns` with language-convention defaults
+(`.test.`/`.spec.`/`__tests__`, `test_*.py`/`*_test.py`/`*_test.go`,
+`*Test(s).java`, Maven/Gradle `src/test/{java,kotlin}/**`, prose-tier
+Kotlin/Scala/C#; bare `tests/` dirs and Cargo `tests/` stay opt-in/out of
+v1); per-file role split BEFORE directory grouping (the per-module
+majority vote cannot fix co-located tests); test modules ride the
+deterministic auxiliary channel (zero LLM tokens) WITHOUT leaving the
+index — anchors and `verify` keep working; a generated-only
+stale-module-page cleanup on every batch/init regen migrates existing
+wikis (human/mixed/untrusted pages preserved and reported, mirroring the
+flow/topic precedent). Acceptance: no product page contains a test-file
+anchor; no old-partition orphan page remains on disk; `verify` zero
+issues; `packages/core/src` fits one module again. Sequencing (2026-08-04):
+the repo's `changed` doc debt is paid AFTER #24 lands — repartition
+first, then pay, to avoid spending tokens on pages that will stop
+existing.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
