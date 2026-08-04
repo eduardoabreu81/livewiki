@@ -61,6 +61,11 @@ or install hooks/skills with `livewiki install`.
 - `docs/ROADMAP.md` — approved backlog and execution order
 - `livewiki/quickstart.md` — this repository's own livewiki
 
+## Requirements
+
+Node.js **24 or newer** (the only major line covered by the cross-platform
+CI matrix; `better-sqlite3` ships prebuilt Windows binaries for it).
+
 ## License
 
-TBD — chosen before the npm beta publish.
+MIT — see [LICENSE](LICENSE).

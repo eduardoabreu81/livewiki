@@ -90,7 +90,7 @@ import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 import { walkRepo } from "./walker.js";
 import { sha256, normalizeEol, expandEolToCrlf } from "./hashes.js";
-import { initParser, parseSource, listSupportedGrammars, grammarForExtension } from "./parser.js";
+import { initParser, parseSource, listSupportedGrammars, grammarForExtension, grammarState, type GrammarState } from "./parser.js";
 import { extractSymbolsWithRanges, extractCalls, extractRationales, isLikelyGenerated, type SymbolRecord, type SymbolRange, type CallRecord, type RationaleRecord } from "./symbols.js";
 import { openIndex, type FileRow, type SymbolRow } from "./db.js";
 import { resolveCalls } from "./call-resolution.js";
@@ -108,6 +108,11 @@ export interface IndexResult {
   filesUpdated: number;
   filesDeleted: number;
   filesUnchanged: number;
+  /** Re-parsed without content change because the grammar SET changed since
+   *  the file was indexed (P1): it was indexed before its grammar landed and
+   *  stayed prose-tier with zero symbols. Counted separately from unchanged
+   *  so the upgrade is visible, not silent. */
+  filesReprocessedGrammar: number;
   /** Skipped: NUL byte in the first 8 KiB (binary safety net — SPEC Phase 1). */
   filesSkippedBinary: number;
   /** Skipped: larger than 1 MiB (size cap — SPEC Phase 1). */
@@ -193,6 +198,53 @@ async function orchestrateIndex(
     existingFiles.set(row.path, row);
   }
 
+  // Grammar-set state (P1, external re-review 2026-08-03; widened
+  // 2026-08-04): the unchanged fast path below compares content hashes
+  // only, so a file whose grammar coverage changed AFTER it was indexed
+  // silently keeps a stale result — the exact class of lie the tool exists
+  // to prevent. Three change shapes, all detected from `meta.grammar_state`
+  // (JSON written at the end of every run):
+  //   - grammar ADDED: files indexed before it landed hold zero symbols
+  //     under a prose label while status reports the tier as anchored;
+  //   - grammar REMOVED/REMAPPED: `map[ext]` differs — symbols parsed with
+  //     the wrong grammar stay stale (remap) or must be dropped (removal);
+  //   - grammar VERSION BUMPED: the ext→grammar map is identical, only the
+  //     vendored .wasm identity (`artifacts`) moves.
+  // A database with no stored state is pre-feature: only the zero-symbol
+  // directed re-parse is safe there (files with symbols stay as indexed;
+  // precision starts with the NEXT change). Reprocessed files are re-parsed
+  // but never counted as "updated" — content is unchanged, so no phantom
+  // debt. On a version bump, symbols whose slice/hash genuinely moved take
+  // the ledger's normal `changed` path (truthful debt; unlike the EOL
+  // migration there is no deterministic transform that could prove an
+  // identical body, so no realignment is attempted); identical-hash
+  // symbols are silent.
+  const currentGrammarState = grammarState();
+  const storedGrammarStateRaw = (
+    db.prepare("SELECT value FROM meta WHERE key = 'grammar_state'").get() as
+      | { value: string }
+      | undefined
+  )?.value;
+  let storedGrammarState: GrammarState | null = null;
+  if (storedGrammarStateRaw !== undefined) {
+    try {
+      storedGrammarState = JSON.parse(storedGrammarStateRaw) as GrammarState;
+    } catch {
+      storedGrammarState = null; // corrupt state: treat as legacy
+    }
+  }
+  const grammarStateChanged =
+    storedGrammarState === null ||
+    !grammarStateEqual(storedGrammarState, currentGrammarState);
+  const filesWithActiveSymbols = new Set<number>();
+  if (grammarStateChanged) {
+    for (const row of db
+      .prepare("SELECT DISTINCT file_id FROM symbols WHERE status = 'active'")
+      .all() as Array<{ file_id: number }>) {
+      filesWithActiveSymbols.add(row.file_id);
+    }
+  }
+
   // ── Fase A: I/O async (read + parse) FORA da transaction.
   // better-sqlite3 transactions são síncronas e não podem conter await.
   interface FilePlan {
@@ -204,6 +256,9 @@ async function orchestrateIndex(
     /** True when only the hash ALGORITHM changed (legacy raw-bytes →
      *  normalized); the on-disk bytes are provably identical. */
     eolMigration: boolean;
+    /** True when the content is unchanged but the grammar set changed and
+     *  the file had zero symbols (P1 directed re-parse). */
+    grammarReprocess: boolean;
     symbols: Array<SymbolRecord & SymbolRange>;
     calls: CallRecord[];
     rationales: RationaleRecord[];
@@ -249,9 +304,37 @@ async function orchestrateIndex(
     const content = normalizeEol(rawContent);
     const hash = sha256(content);
     const prev = existingFiles.get(entry.path);
+    let grammarReprocess = false;
     if (prev && prev.content_hash === hash) {
-      filesUnchanged++;
-      continue;
+      // Directed re-parse: content unchanged, but the grammar state changed
+      // since this file was indexed (see above). Fall through to the normal
+      // parse path instead of skipping.
+      const ext = nodePath.extname(entry.path).toLowerCase();
+      const grammar = grammarForExtension(ext);
+      if (grammarStateChanged) {
+        if (storedGrammarState === null) {
+          // Legacy (pre-feature) database: only the zero-symbol case is
+          // safe to touch; precision starts with the next state change.
+          grammarReprocess =
+            grammar !== undefined && !filesWithActiveSymbols.has(prev.id);
+        } else {
+          const previousGrammar = storedGrammarState.map[ext];
+          const remapped = previousGrammar !== grammar; // add / remove / remap
+          const bumped =
+            grammar !== undefined &&
+            storedGrammarState.artifacts[grammar] !== currentGrammarState.artifacts[grammar];
+          const labelDrift = prev.lang !== entry.lang;
+          grammarReprocess =
+            (grammar !== undefined && !filesWithActiveSymbols.has(prev.id)) ||
+            remapped ||
+            bumped ||
+            labelDrift;
+        }
+      }
+      if (!grammarReprocess) {
+        filesUnchanged++;
+        continue;
+      }
     }
 
     // Legacy silent migration: a stored hash that matches the RAW BYTES of
@@ -259,16 +342,24 @@ async function orchestrateIndex(
     // pre-item-12 database — the bytes on disk are unchanged, only the hash
     // algorithm moved from raw to normalized. Migrated files are re-parsed
     // but count as unchanged and realign their anchors (write phase).
-    let eolMigration = prev !== undefined && prev.content_hash === sha256(rawContent);
-    // Flipped-EOL legacy corpus: the DB was indexed under the OTHER EOL
-    // convention (e.g. stored = raw CRLF bytes, disk now LF). The raw
-    // check above then fails; hash the CRLF-expanded variant and compare.
-    // Only attempted when the current bytes have zero `\r\n`, so the
-    // expansion cannot double-expand anything (see expandEolToCrlf). The
-    // reverse direction (legacy-LF DB, CRLF disk) needs no check: the
-    // normalized hash above IS the legacy raw hash there.
-    if (!eolMigration && prev !== undefined && !rawContent.includes("\r\n")) {
-      eolMigration = prev.content_hash === sha256(expandEolToCrlf(rawContent));
+    // Only evaluated when the normalized hash did NOT match — the fast path
+    // above absorbs matches, and a P1 grammar reprocess falls through WITH
+    // a matching hash and must not be misread as an EOL migration (for
+    // LF-only files sha256(rawContent) == content_hash, a false positive
+    // that would swallow the reprocess accounting).
+    let eolMigration = false;
+    if (prev !== undefined && prev.content_hash !== hash) {
+      eolMigration = prev.content_hash === sha256(rawContent);
+      // Flipped-EOL legacy corpus: the DB was indexed under the OTHER EOL
+      // convention (e.g. stored = raw CRLF bytes, disk now LF). The raw
+      // check above then fails; hash the CRLF-expanded variant and compare.
+      // Only attempted when the current bytes have zero `\r\n`, so the
+      // expansion cannot double-expand anything (see expandEolToCrlf). The
+      // reverse direction (legacy-LF DB, CRLF disk) needs no check: the
+      // normalized hash above IS the legacy raw hash there.
+      if (!eolMigration && !rawContent.includes("\r\n")) {
+        eolMigration = prev.content_hash === sha256(expandEolToCrlf(rawContent));
+      }
     }
 
     let symbols: Array<SymbolRecord & SymbolRange> = [];
@@ -301,6 +392,7 @@ async function orchestrateIndex(
       mtime: stat.mtimeMs,
       hash,
       eolMigration,
+      grammarReprocess,
       symbols,
       calls,
       rationales,
@@ -314,6 +406,7 @@ async function orchestrateIndex(
     filesUpdated: 0,
     filesUnchanged,
     filesDeleted: 0,
+    filesReprocessedGrammar: 0,
     symbolsAdded: 0,
     symbolsDeleted: 0,
   };
@@ -408,6 +501,22 @@ async function orchestrateIndex(
         // unchanged and its re-inserted symbols are not "added".
         if (plan.eolMigration) {
           result.filesUnchanged++;
+        } else if (plan.grammarReprocess) {
+          // Directed re-parse: not a content change either — counted
+          // separately so the grammar upgrade is visible, never as
+          // "updated" (no phantom debt). Capture the just-soft-deleted
+          // key → hash map so the symbol loop below can tell genuinely new
+          // anchors from re-inserted ones.
+          result.filesReprocessedGrammar++;
+          oldSymbolHashes = new Map(
+            (
+              db
+                .prepare(
+                  "SELECT key, content_hash FROM symbols WHERE file_id = ? AND status = 'deleted'",
+                )
+                .all(prev.id) as Array<{ key: string; content_hash: string }>
+            ).map((row) => [row.key, row.content_hash] as const),
+          );
         } else {
           result.filesUpdated++;
           if (legacyWindow) {
@@ -447,6 +556,16 @@ async function orchestrateIndex(
         );
         if (plan.eolMigration) {
           realignAnchorHash.run(sym.content_hash, sym.key);
+        } else if (plan.grammarReprocess) {
+          const oldHash = oldSymbolHashes?.get(sym.key);
+          if (oldHash === undefined) {
+            // Genuinely new anchor (grammar added or extraction widened).
+            result.symbolsAdded++;
+          }
+          // Old key + identical hash: silent — no debt, no count. Old key +
+          // different hash: a grammar bump moved the slice; the ledger's
+          // normal `changed` path owns that debt — never realigned (there
+          // is no deterministic transform that could prove body identity).
         } else {
           result.symbolsAdded++;
           // Per-symbol EOL realignment: if the old stored hash matches
@@ -518,6 +637,13 @@ async function orchestrateIndex(
     db.prepare(
       "INSERT OR REPLACE INTO meta (key, value) VALUES ('eol_hashes_normalized', '1')",
     ).run();
+
+    // Record the grammar state this run indexed under (see above). A future
+    // run diffs it to direct re-parses (grammar added / removed / remapped /
+    // version-bumped).
+    db.prepare(
+      "INSERT OR REPLACE INTO meta (key, value) VALUES ('grammar_state', ?)",
+    ).run(JSON.stringify(currentGrammarState));
   });
 
   writeAll();
@@ -528,6 +654,7 @@ async function orchestrateIndex(
     filesUpdated: result.filesUpdated,
     filesDeleted: result.filesDeleted,
     filesUnchanged: result.filesUnchanged,
+    filesReprocessedGrammar: result.filesReprocessedGrammar,
     filesSkippedBinary,
     filesSkippedTooLarge,
     symbolsAdded: result.symbolsAdded,
@@ -538,6 +665,24 @@ async function orchestrateIndex(
 
 /** Usado em erros pra dar dica de suporte. */
 export { listSupportedGrammars };
+
+/** Structural equality for GrammarState (key order in stored JSON is not
+ *  guaranteed to match a fresh build, so compare field by field). */
+function grammarStateEqual(a: GrammarState, b: GrammarState): boolean {
+  const mapA = Object.keys(a.map);
+  const mapB = Object.keys(b.map);
+  if (mapA.length !== mapB.length) return false;
+  for (const key of mapA) {
+    if (a.map[key] !== b.map[key]) return false;
+  }
+  const artA = Object.keys(a.artifacts);
+  const artB = Object.keys(b.artifacts);
+  if (artA.length !== artB.length) return false;
+  for (const key of artA) {
+    if (a.artifacts[key] !== b.artifacts[key]) return false;
+  }
+  return true;
+}
 
 export function formatHuman(result: IndexResult): string {
   const lines: string[] = [];
@@ -550,6 +695,11 @@ export function formatHuman(result: IndexResult): string {
   lines.push(
     `  symbols: +${result.symbolsAdded} extracted  -${result.symbolsDeleted} marked deleted`,
   );
+  if (result.filesReprocessedGrammar > 0) {
+    lines.push(
+      `  grammar upgrade: ${result.filesReprocessedGrammar} unchanged file(s) re-parsed (new grammar coverage)`,
+    );
+  }
   if (result.filesSkippedBinary > 0 || result.filesSkippedTooLarge > 0) {
     lines.push(
       `  skipped: ${result.filesSkippedBinary} binary (NUL byte)  ` +

@@ -1,8 +1,21 @@
 {
   "name": "@livewiki/core",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
+  "description": "Deterministic structural index and batch documentation engine for livewiki.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eduardoabreu81/livewiki.git",
+    "directory": "packages/core"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -160,7 +173,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "grammars"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

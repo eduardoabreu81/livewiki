@@ -369,7 +369,10 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
-  }, 10_000);
+    // No 10s override: it predates the 30s suite default (e2f345c) and had
+    // become a silent REDUCTION — the flake class that only hit the two
+    // tightest budgets under pnpm -r parallel load (2026-08-04).
+  });
 
   it("init --batch --no-refine skips stage-2 LLM (zero stage-2 tokens and stub calls)", async () => {
     // Regression: Commander maps --no-refine → opts.refine === false; CLI must
@@ -532,7 +535,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
-  }, 10_000);
+    // No 10s override (see the init --batch test above): inherits the 30s
+    // suite default.
+  });
 
   it("circuit breaker: falha 3x seguidas → abort", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");

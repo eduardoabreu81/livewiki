@@ -958,3 +958,161 @@ describe("indexer — EOL-insensitive hashing (roadmap item 12)", () => {
     expect(r.filesUpdated).toBe(1);
   });
 });
+
+describe("indexer — grammar-set state (P1 + follow-up, external re-review 2026-08-03/04)", () => {
+  // The unchanged fast path compares content hashes only: a file whose
+  // grammar coverage changed AFTER indexing kept a silently stale result.
+  // `meta.grammar_state` (ext→grammar map + per-grammar .wasm identity)
+  // drives directed one-run re-parses for all three change shapes.
+  let p1Root: string;
+
+  beforeEach(async () => {
+    // Never index inside the fixture itself — smoke on a COPY.
+    const fixture = nodePath.resolve(process.cwd(), "test/fixtures/sample-rust-repo");
+    p1Root = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-indexer-p1-"));
+    await nodeFs.cp(fixture, p1Root, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(p1Root, { recursive: true, force: true });
+  });
+
+  const dbPath = () => nodePath.join(p1Root, ".livewiki", "index.db");
+
+  /** Rewrites the DB into the exact pre-grammar (pre-feature) shape: prose
+   *  label, zero symbols/calls/rationales, NO stored grammar state.
+   *  Content hashes untouched (the files genuinely never changed). */
+  async function simulatePreGrammarIndex(): Promise<void> {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath());
+    try {
+      db.exec(`
+        DELETE FROM symbols;
+        DELETE FROM calls;
+        DELETE FROM rationales;
+        UPDATE files SET lang = 'rs' WHERE path LIKE '%.rs';
+        DELETE FROM meta WHERE key = 'grammar_state';
+      `);
+    } finally {
+      db.close();
+    }
+  }
+
+  /** Rewrites `meta.grammar_state` via `mutate`, keeping valid JSON. */
+  async function mutateStoredGrammarState(
+    mutate: (state: { map: Record<string, string>; artifacts: Record<string, string> }) => void,
+  ): Promise<void> {
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath());
+    try {
+      const row = db
+        .prepare("SELECT value FROM meta WHERE key = 'grammar_state'")
+        .get() as { value: string };
+      const state = JSON.parse(row.value) as { map: Record<string, string>; artifacts: Record<string, string> };
+      mutate(state);
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'grammar_state'").run(JSON.stringify(state));
+    } finally {
+      db.close();
+    }
+  }
+
+  it("grammar ADDED: re-parses unchanged zero-symbol files from a legacy DB", async () => {
+    const first = await runIndexer(p1Root, { quiet: true });
+    expect(first.filesAdded).toBe(4);
+    expect(first.filesReprocessedGrammar).toBe(0);
+
+    await simulatePreGrammarIndex();
+
+    const second = await runIndexer(p1Root, { quiet: true });
+    expect(second.filesAdded).toBe(0);
+    expect(second.filesUpdated).toBe(0);
+    expect(second.filesReprocessedGrammar).toBe(3); // the three .rs files
+    expect(second.symbolsAdded).toBeGreaterThan(0);
+
+    // Tier label tells the truth again: rust is anchored with symbols.
+    const report = await runStatus(p1Root);
+    expect(report.files.tiers.rust).toBe("anchored");
+    expect(report.files.byLang.rust).toBe(3);
+    expect(report.symbols.byKind.function).toBe(4);
+    expect(report.symbols.byKind.class).toBe(3);
+  });
+
+  it("is a one-run migration: steady state reprocesses nothing", async () => {
+    await runIndexer(p1Root, { quiet: true });
+    await simulatePreGrammarIndex();
+    await runIndexer(p1Root, { quiet: true });
+
+    const third = await runIndexer(p1Root, { quiet: true });
+    expect(third.filesAdded).toBe(0);
+    expect(third.filesUpdated).toBe(0);
+    expect(third.filesReprocessedGrammar).toBe(0);
+    expect(third.symbolsAdded).toBe(0);
+  });
+
+  it("unrelated state drift does not touch already-parsed files", async () => {
+    await runIndexer(p1Root, { quiet: true });
+    // An unrelated grammar landed (`.rb` appears in the stored map diff):
+    // rust files keep the same ext→grammar entry and the same artifact
+    // hash, so nothing about them is stale.
+    await mutateStoredGrammarState((state) => {
+      delete state.map[".java"];
+      delete state.artifacts.java;
+    });
+
+    const second = await runIndexer(p1Root, { quiet: true });
+    expect(second.filesAdded).toBe(0);
+    expect(second.filesUpdated).toBe(0);
+    expect(second.filesReprocessedGrammar).toBe(0);
+    expect(second.symbolsAdded).toBe(0);
+  });
+
+  it("grammar VERSION BUMP: re-parses files WITH symbols, identical hashes stay silent", async () => {
+    await runIndexer(p1Root, { quiet: true });
+    // A tree-sitter upgrade leaves the ext→grammar map untouched; only the
+    // .wasm identity moves. Simulate by corrupting the stored rust hash.
+    await mutateStoredGrammarState((state) => {
+      state.artifacts.rust = "0".repeat(64);
+    });
+
+    const second = await runIndexer(p1Root, { quiet: true });
+    expect(second.filesAdded).toBe(0);
+    expect(second.filesUpdated).toBe(0);
+    expect(second.filesReprocessedGrammar).toBe(3);
+    // Same grammar here ⇒ identical slices ⇒ identical hashes: nothing is
+    // "added" and no phantom debt appears.
+    expect(second.symbolsAdded).toBe(0);
+    expect(second.symbolsDeleted).toBe(0);
+
+    const report = await runStatus(p1Root);
+    expect(report.debt.total).toBe(0);
+  });
+
+  it("grammar REMAP: an extension moving grammars re-parses even with symbols", async () => {
+    await runIndexer(p1Root, { quiet: true });
+    // `.rs` was previously parsed by a DIFFERENT grammar.
+    await mutateStoredGrammarState((state) => {
+      state.map[".rs"] = "python";
+    });
+
+    const second = await runIndexer(p1Root, { quiet: true });
+    expect(second.filesAdded).toBe(0);
+    expect(second.filesUpdated).toBe(0);
+    expect(second.filesReprocessedGrammar).toBe(3);
+    expect(second.symbolsAdded).toBe(0);
+  });
+
+  it("writes the current grammar state into meta", async () => {
+    await runIndexer(p1Root, { quiet: true });
+    const { grammarState } = await import("./parser.js");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath(), { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT value FROM meta WHERE key = 'grammar_state'")
+        .get() as { value: string };
+      expect(JSON.parse(row.value)).toEqual(grammarState());
+    } finally {
+      db.close();
+    }
+  });
+});

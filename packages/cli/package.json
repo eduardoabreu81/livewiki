@@ -1,8 +1,21 @@
 {
   "name": "@livewiki/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
+  "description": "livewiki command-line interface — living documentation anchored to code, verifiable against hallucination.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eduardoabreu81/livewiki.git",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "livewiki": "dist/index.js"
   },

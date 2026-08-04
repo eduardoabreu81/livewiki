@@ -3,9 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Documentação viva de repositórios, ancorada no código e verificável. Veja VISION.md e SPEC.md.",
+  "description": "Living repository documentation anchored to code and verifiable against hallucination. See VISION.md and SPEC.md.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eduardoabreu81/livewiki.git"
+  },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "build": "pnpm -r build",

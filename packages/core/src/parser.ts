@@ -23,6 +23,7 @@ import { Parser, Language, Tree } from "web-tree-sitter";
 import { createRequire } from "node:module";
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs";
+import { sha256 } from "./hashes.js";
 
 let initPromise: Promise<void> | null = null;
 
@@ -97,6 +98,39 @@ const GRAMMAR_TO_EXT = new Map<string, string>(
 /** Tipo de linguagem dado uma extensão de arquivo. */
 export function grammarForExtension(ext: string): string | undefined {
   return EXT_TO_GRAMMAR[ext.toLowerCase()];
+}
+
+/**
+ * Rich grammar-set state (P1 + follow-up, external re-review 2026-08-04).
+ * The indexer stores this as JSON in `meta.grammar_state` and diffs it on
+ * every run to direct re-parses:
+ *   - `map` changes catch grammars being ADDED (zero-symbol files stuck in
+ *     prose tier), REMOVED, or REMAPPED (an extension moving between
+ *     grammars while its symbols stay stale);
+ *   - `artifacts` catches grammar VERSION bumps — the ext→grammar map is
+ *     untouched by a tree-sitter upgrade, so only the .wasm identity moves.
+ */
+export interface GrammarState {
+  /** Extension (with dot) → grammar name, as configured. */
+  map: Record<string, string>;
+  /** Grammar name → sha256 of its vendored .wasm ("missing" when absent). */
+  artifacts: Record<string, string>;
+}
+
+export function grammarState(): GrammarState {
+  const dir = grammarsDir();
+  const map: Record<string, string> = {};
+  for (const [ext, grammar] of Object.entries(EXT_TO_GRAMMAR)) {
+    map[ext] = grammar;
+  }
+  const artifacts: Record<string, string> = {};
+  for (const grammar of new Set(Object.values(EXT_TO_GRAMMAR))) {
+    const wasmPath = nodePath.join(dir, `tree-sitter-${grammar}.wasm`);
+    artifacts[grammar] = nodeFs.existsSync(wasmPath)
+      ? sha256(nodeFs.readFileSync(wasmPath))
+      : "missing";
+  }
+  return { map, artifacts };
 }
 
 /** Parseia source com a linguagem apropriada para a extensão. */
