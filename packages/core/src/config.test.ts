@@ -881,3 +881,42 @@ describe("config — batchConcurrency", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/batchConcurrency/);
   });
 });
+
+describe("config — roadmap item 22 module format keys", () => {
+  it("applyDefaults fills moduleDiagrams=false and deepHierarchy=false when absent", () => {
+    const cfg = applyDefaults({});
+    expect(cfg.moduleDiagrams).toBe(false);
+    expect(cfg.deepHierarchy).toBe(false);
+  });
+
+  it("applyDefaults does NOT overwrite explicit values", () => {
+    const cfg = applyDefaults({ moduleDiagrams: true, deepHierarchy: true });
+    expect(cfg.moduleDiagrams).toBe(true);
+    expect(cfg.deepHierarchy).toBe(true);
+  });
+
+  it("loadConfig accepts moduleDiagrams/deepHierarchy booleans", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ moduleDiagrams: true, deepHierarchy: true }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.moduleDiagrams).toBe(true);
+    expect(cfg.deepHierarchy).toBe(true);
+  });
+
+  it.each([
+    ["moduleDiagrams", "yes"],
+    ["moduleDiagrams", 1],
+    ["deepHierarchy", "yes"],
+    ["deepHierarchy", 0],
+  ])("rejects %s as %s", async (key, value) => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ [key]: value }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(new RegExp(key));
+  });
+});

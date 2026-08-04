@@ -212,6 +212,24 @@ export interface LivewikiConfig {
    */
   relaxedRound?: boolean;
   /**
+   * CodeWiki-grade module pages (roadmap item 22, D1/D2 hard contract):
+   * stage-4 module pages must carry ONE model-drawn `## Diagram` section
+   * whose inline mermaid block the orchestrator extracts to
+   * `livewiki/diagrams/<slug>.mmd`, leaving the exact
+   * `%% livewiki/diagrams/<slug>.mmd` placeholder in the page (the flow
+   * dual-artifact pattern; node/edge budgets reuse `flowMaxDiagramNodes` /
+   * `flowMaxDiagramEdges`). Default false — off keeps the byte-identical
+   * pre-#22 module page contract.
+   */
+  moduleDiagrams?: boolean;
+  /**
+   * CodeWiki-grade module pages (roadmap item 22, D2 soft contract):
+   * stage-4 prompt guidance to group a module with >= 8 symbols under
+   * concept-named H2 sections with H3 symbol subsections instead of a flat
+   * symbol list. Guidance only — no hard validation. Default false.
+   */
+  deepHierarchy?: boolean;
+  /**
    * Concern-grouped topic candidates (D2): at most one extra `deployment`
    * and one `testing` topic candidate per run, built deterministically
    * from the same closed inventory and validated by the same topic
@@ -331,6 +349,9 @@ export const CONFIG_DEFAULTS = {
   surgicalRepair: true,
   /** Relaxed completion round after strict exhaustion (recovery tier, Component 2). */
   relaxedRound: true,
+  /** CodeWiki-grade module page format (roadmap item 22); both default off. */
+  moduleDiagrams: false,
+  deepHierarchy: false,
   /** Concern-grouped topic candidates (D2: deployment/testing). */
   concernTopics: true,
   /** Stage-5c repository understanding synthesis (roadmap item 23). */
@@ -442,6 +463,8 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     riskChurnCommits: CONFIG_DEFAULTS.riskChurnCommits,
     surgicalRepair: CONFIG_DEFAULTS.surgicalRepair,
     relaxedRound: CONFIG_DEFAULTS.relaxedRound,
+    moduleDiagrams: CONFIG_DEFAULTS.moduleDiagrams,
+    deepHierarchy: CONFIG_DEFAULTS.deepHierarchy,
     concernTopics: CONFIG_DEFAULTS.concernTopics,
     understandingSynthesis: CONFIG_DEFAULTS.understandingSynthesis,
     communityDetection: CONFIG_DEFAULTS.communityDetection,
@@ -727,6 +750,20 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error(`invalid relaxedRound: must be a boolean, got ${JSON.stringify(v)}`);
     }
     out.relaxedRound = v;
+  }
+  if (obj["moduleDiagrams"] !== undefined) {
+    const v = obj["moduleDiagrams"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid moduleDiagrams: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.moduleDiagrams = v;
+  }
+  if (obj["deepHierarchy"] !== undefined) {
+    const v = obj["deepHierarchy"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid deepHierarchy: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.deepHierarchy = v;
   }
   if (obj["concernTopics"] !== undefined) {
     const v = obj["concernTopics"];

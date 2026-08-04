@@ -93,7 +93,11 @@ import {
   normalizeStage4Artifact,
   validateStage4Artifact,
   markDegradedArtifact,
+  extractInlineModuleDiagram,
+  countFlowDiagramElements,
+  FLOW_DIAGRAM_SOURCE_MAX_CHARS,
 } from "./artifact.js";
+import { moduleSlug } from "./diagrams.js";
 import {
   repairStage4ArtifactMechanically,
   repairUpperBoundArtifactMechanically,
@@ -216,6 +220,22 @@ export interface BatchOptions {
    * flagged `quality: degraded`.
    */
   relaxedRound?: boolean;
+  /**
+   * Roadmap item 22 (D1/D2 hard contract): override of `moduleDiagrams`
+   * (default = config or false). When on, stage-4 module pages must carry
+   * ONE model-drawn `## Diagram` section; the orchestrator extracts the
+   * inline mermaid block to `livewiki/diagrams/<slug>.mmd` and writes page +
+   * diagram transactionally (the flow dual-artifact pattern), gating on
+   * Mermaid syntax and the flowMaxDiagramNodes/flowMaxDiagramEdges budgets.
+   */
+  moduleDiagrams?: boolean;
+  /**
+   * Roadmap item 22 (D2 soft contract): override of `deepHierarchy`
+   * (default = config or false). When on, the stage-4 prompt asks for
+   * concept-named H2 sections with H3 symbol subsections on modules with
+   * >= 8 symbols. Guidance only — no hard validation.
+   */
+  deepHierarchy?: boolean;
   /**
    * D2: override of `concernTopics` (default = config or true). When on,
    * the deterministic topic planner may add at most one `deployment` and
@@ -414,6 +434,19 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // (opts > config > default true).
     const relaxedRound =
       opts.relaxedRound ?? resolvedConfig.relaxedRound ?? true;
+    // Roadmap item 22 (D3): module-page format flags (opts > config >
+    // default false — off keeps the byte-identical pre-#22 contract). The
+    // module diagram gate reuses the flow diagram node/edge budgets (D1).
+    const moduleDiagramsEnabled =
+      opts.moduleDiagrams ?? resolvedConfig.moduleDiagrams ?? false;
+    const deepHierarchy =
+      opts.deepHierarchy ?? resolvedConfig.deepHierarchy ?? false;
+    const moduleDiagramBudgets: FlowDiagramBudget | undefined = moduleDiagramsEnabled
+      ? {
+          maxNodes: resolvedConfig.flowMaxDiagramNodes ?? CONFIG_DEFAULTS.flowMaxDiagramNodes,
+          maxEdges: resolvedConfig.flowMaxDiagramEdges ?? CONFIG_DEFAULTS.flowMaxDiagramEdges,
+        }
+      : undefined;
     // D2: concern-grouped topic candidates toggle (opts > config > default true).
     const concernTopics =
       opts.concernTopics ?? resolvedConfig.concernTopics ?? true;
@@ -998,6 +1031,10 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             thinking: thinkingMode,
             pathRoleConfig: resolvedConfig.pathRoles,
             surgicalRepair,
+            ...(moduleDiagramBudgets !== undefined
+              ? { moduleDiagrams: moduleDiagramBudgets }
+              : {}),
+            deepHierarchy,
             // A local fallback is allowed only after the model has consumed
             // the final configured repair slot. It never adds or replaces an
             // LLM call and still must pass the complete artifact validator.
@@ -1110,14 +1147,25 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             continue;
           }
 
-          // Valid artifact → try write + verify
+          // Valid artifact → try write + verify. Roadmap item 22: with
+          // moduleDiagrams on, the page and its extracted diagram land (and
+          // roll back) as ONE transaction.
           consumedSlots++;
-          const writeResult = await tryWriteAndVerify(
-            absRoot,
-            wikiPath,
-            attemptResult.artifact,
-            existing,
-          );
+          const writeResult = attemptResult.moduleDiagramSource !== undefined
+            ? await tryWriteModuleDiagramAndVerify(
+                absRoot,
+                wikiPath,
+                `livewiki/diagrams/${moduleSlug(module.id)}.mmd`,
+                attemptResult.artifact,
+                attemptResult.moduleDiagramSource,
+                existing,
+              )
+            : await tryWriteAndVerify(
+                absRoot,
+                wikiPath,
+                attemptResult.artifact,
+                existing,
+              );
           if (writeResult.ok) {
             diagnosticHistory.push(
               diagnosticAttempt({
@@ -1193,7 +1241,12 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             // Verify failed → restore/remove the candidate (already done inside
             // tryWriteAndVerify). Prepare a repair only when the rejected
             // candidate fits the shared stage-4 character budget.
-            const candidate = attemptResult.artifact;
+            // Roadmap item 22: with moduleDiagrams on, the repair prompt must
+            // see the model-emitted INLINE diagram form, never the on-disk
+            // placeholder (same convention as the flow machinery).
+            const candidate = attemptResult.moduleDiagramSource !== undefined
+              ? attemptResult.normalizedRaw
+              : attemptResult.artifact;
             const repairErrors = verifyIssuesToValidationErrors(writeResult.issues ?? []);
             lastErrorsForReporting = repairErrors;
             if (candidate.length > charBudget) {
@@ -1249,6 +1302,10 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             surgicalRepair: false,
             allowMechanicalFallback: false,
             relaxed: true,
+            ...(moduleDiagramBudgets !== undefined
+              ? { moduleDiagrams: moduleDiagramBudgets }
+              : {}),
+            deepHierarchy,
           });
           relaxedResult.relaxedAttempt = true;
           usageHistory.push(relaxedResult.usageEntry);
@@ -1281,12 +1338,21 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
               }),
             );
           } else {
-            const writeResult = await tryWriteAndVerify(
-              absRoot,
-              wikiPath,
-              relaxedResult.artifact,
-              existing,
-            );
+            const writeResult = relaxedResult.moduleDiagramSource !== undefined
+              ? await tryWriteModuleDiagramAndVerify(
+                  absRoot,
+                  wikiPath,
+                  `livewiki/diagrams/${moduleSlug(module.id)}.mmd`,
+                  relaxedResult.artifact,
+                  relaxedResult.moduleDiagramSource,
+                  existing,
+                )
+              : await tryWriteAndVerify(
+                  absRoot,
+                  wikiPath,
+                  relaxedResult.artifact,
+                  existing,
+                );
             if (writeResult.ok) {
               diagnosticHistory.push(
                 diagnosticAttempt({
@@ -4244,6 +4310,123 @@ async function tryWriteAndVerify(
 }
 
 /**
+ * Roadmap item 22 (D1): stage-4 module dual-artifact variant of
+ * tryWriteAndVerify — writes the module page (carrying the diagram
+ * placeholder) AND the extracted model-drawn diagram in ONE transaction
+ * (the flow dual-artifact pattern, minus the flows-hub sync): ANY exception
+ * or ANY error-severity issue on EITHER written path rolls both artifacts
+ * back best-effort. The stage-4 error-only severity gate is preserved (the
+ * any-severity asymmetry of R10.1 item B stays flow-only).
+ */
+interface ModuleDiagramWriteResult {
+  ok: boolean;
+  artifacts?: {
+    wikiPath: string;
+    pageHash: string;
+    diagramPath: string;
+    diagramHash: string;
+  };
+  issues?: VerifyIssue[];
+  /** The write/verify step threw; both artifacts were rolled back. Terminal for the task. */
+  exception?: { message: string };
+  /** True when verify rejected AND the subsequent rollback failed. Terminal. */
+  rollbackFailed?: { reason: string };
+}
+
+async function tryWriteModuleDiagramAndVerify(
+  absRoot: string,
+  pagePath: string,
+  diagramPath: string,
+  pageContent: string,
+  diagramSource: string,
+  existingPage: string | null,
+): Promise<ModuleDiagramWriteResult> {
+  // 1. Manual blocks in the original position + `owner: mixed` restore —
+  //    byte-for-byte identical mechanism to tryWriteAndVerify (rule #6).
+  let finalContent = pageContent;
+  if (existingPage !== null) {
+    const positioned = injectManualBlocksBySection(existingPage, pageContent);
+    if (positioned !== null) {
+      finalContent = positioned;
+    }
+    if (readOwnerFromFrontmatter(existingPage) === "mixed") {
+      finalContent = forceOwnerInFrontmatter(finalContent, "mixed");
+    }
+  }
+
+  const pageSnapshot = existingPage;
+  const diagramSnapshot = await safeIo.readText(absRoot, diagramPath).catch(() => null);
+
+  // 2+3. Write both artifacts via safe-io (page first, diagram second),
+  //    then verify — ALL inside one try/catch: ANY exception (the diagram
+  //    write failing after the page landed, the verifier crashing) rolls
+  //    both artifacts back best-effort, exactly like a verify rejection.
+  let verifyResult: VerifyResult;
+  try {
+    await safeIo.writeText(absRoot, pagePath, finalContent);
+    await safeIo.writeText(
+      absRoot,
+      diagramPath,
+      diagramSource.endsWith("\n") ? diagramSource : diagramSource + "\n",
+    );
+    verifyResult = await runVerify(absRoot);
+  } catch (e) {
+    const reasons = await rollbackWrittenArtifacts(
+      absRoot,
+      [
+        { path: pagePath, snapshot: pageSnapshot },
+        { path: diagramPath, snapshot: diagramSnapshot },
+      ],
+      true,
+    );
+    if (reasons.length > 0) {
+      return { ok: false, rollbackFailed: { reason: reasons.join("; ") } };
+    }
+    return { ok: false, exception: { message: (e as Error).message } };
+  }
+
+  // 3b. Error-severity issues on EITHER written path reject the pair
+  //    (stage-4 gate; warnings never block). Issues on other paths never
+  //    block this gate.
+  const broken = verifyResult.issues.filter(
+    (i) =>
+      (i.wikiPath === pagePath || i.wikiPath === diagramPath) &&
+      i.severity === "error",
+  );
+
+  if (broken.length > 0) {
+    // 4. ROLLBACK MANDATORY for BOTH artifacts (same rule as stage 4): an
+    //    invalid candidate pair MUST NEVER persist on disk.
+    const reasons = await rollbackWrittenArtifacts(
+      absRoot,
+      [
+        { path: pagePath, snapshot: pageSnapshot },
+        { path: diagramPath, snapshot: diagramSnapshot },
+      ],
+      false,
+    );
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        issues: broken,
+        rollbackFailed: { reason: reasons.join("; ") },
+      };
+    }
+    return { ok: false, issues: broken };
+  }
+
+  return {
+    ok: true,
+    artifacts: {
+      wikiPath: pagePath,
+      pageHash: sha256(finalContent),
+      diagramPath,
+      diagramHash: sha256(diagramSource),
+    },
+  };
+}
+
+/**
  * Phase-5 plan (X): converts verify issues (with wikiPath, code, detail)
  * into ArtifactValidationError to feed the repair prompt. Keeps the
  * location "frontmatter" for `broken_anchor` and "body" for others.
@@ -4549,6 +4732,13 @@ interface Stage4AttemptResult {
   surgicalOutcome?: SurgicalOutcome;
   /** Set on the relaxed completion attempt (recovery tier, Component 2). */
   relaxedAttempt?: boolean;
+  /**
+   * Roadmap item 22 (D1): the extracted model-drawn module diagram source.
+   * Set only when `moduleDiagrams` is on AND artifact !== null; the caller
+   * then writes page + diagram transactionally. The page artifact carries
+   * the exact placeholder line, never the inline diagram.
+   */
+  moduleDiagramSource?: string;
 }
 
 interface AttemptOpts {
@@ -4583,6 +4773,15 @@ interface AttemptOpts {
   };
   /** Recovery tier (Component 1): allow the surgical repair path. */
   surgicalRepair: boolean;
+  /**
+   * Roadmap item 22 (D1/D2): when set, the module page must carry ONE inline
+   * `## Diagram` mermaid block within this node/edge budget; the orchestrator
+   * extracts it to `livewiki/diagrams/<slug>.mmd` and writes page + diagram
+   * transactionally. Undefined keeps the pre-#22 contract.
+   */
+  moduleDiagrams?: FlowDiagramBudget;
+  /** Roadmap item 22 (D2 soft contract): deep-hierarchy prompt guidance. */
+  deepHierarchy?: boolean;
   /**
    * Recovery tier (Component 2): run under the relaxed validation contract
    * and mark the artifact degraded (frontmatter `quality: degraded` +
@@ -4649,6 +4848,10 @@ async function attemptStage4Generation(
           attemptContext,
           classifyModuleRole(opts.module, opts.pathRoleConfig),
           ctx.rationaleEvidence,
+          {
+            ...(opts.moduleDiagrams !== undefined ? { moduleDiagrams: opts.moduleDiagrams } : {}),
+            ...(opts.deepHierarchy === true ? { deepHierarchy: true } : {}),
+          },
         );
   } else {
     prompt = buildStage4Prompt(
@@ -4659,6 +4862,10 @@ async function attemptStage4Generation(
       opts.language,
       classifyModuleRole(opts.module, opts.pathRoleConfig),
       ctx.rationaleEvidence,
+      {
+        ...(opts.moduleDiagrams !== undefined ? { moduleDiagrams: opts.moduleDiagrams } : {}),
+        ...(opts.deepHierarchy === true ? { deepHierarchy: true } : {}),
+      },
     );
   }
 
@@ -4821,9 +5028,74 @@ async function attemptStage4Generation(
   if (opts.relaxed === true) {
     candidateContent = markDegradedArtifact(candidateContent);
   }
+
+  // Roadmap item 22 (D1): when moduleDiagrams is on, the model emits the
+  // companion diagram INLINE in a `## Diagram` section (the stage-5 flow
+  // machinery). Extract it here: the on-disk page carries only the exact
+  // placeholder line, while repair prompts keep seeing the model-emitted
+  // inline form. The placeholder/mermaid/budget gates are model-repairable
+  // validation failures (repair-contract classifies all three codes for the
+  // module kind), never infra errors.
+  let moduleDiagramSource: string | undefined;
+  if (opts.moduleDiagrams !== undefined) {
+    const diagramSlug = moduleSlug(opts.module.id);
+    const extraction = extractInlineModuleDiagram(candidateContent, diagramSlug);
+    const invalidDiagram = (errors: ArtifactValidationError[]): Stage4AttemptResult => ({
+      usageEntry,
+      normalizedRaw: raw,
+      diagnosticCandidate: candidateContent,
+      diagnosticOutcome: "artifact_validation_failed",
+      artifact: null,
+      validationErrors: errors,
+      llmError: null,
+      ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
+    });
+    if (extraction === null) {
+      return invalidDiagram([
+        {
+          code: "module_diagram_placeholder",
+          message:
+            'the page carries no "Diagram" H2 section with a real inline mermaid block — emit ONE "Diagram" section after "How it fits" holding exactly one ```mermaid fence with the module-granularity diagram (never a %% placeholder comment)',
+          location: "body",
+        },
+      ]);
+    }
+    const diagramCounts = countFlowDiagramElements(extraction.diagramSource);
+    if (
+      extraction.sourceTooLarge ||
+      diagramCounts.nodes > opts.moduleDiagrams.maxNodes ||
+      diagramCounts.edges > opts.moduleDiagrams.maxEdges
+    ) {
+      return invalidDiagram([
+        {
+          code: "flow_diagram_too_large",
+          message: extraction.sourceTooLarge
+            ? `module diagram source exceeds ${FLOW_DIAGRAM_SOURCE_MAX_CHARS} chars — simplify to a focused module-granularity diagram`
+            : `module diagram has ~${diagramCounts.nodes} nodes / ~${diagramCounts.edges} edges, over the budget of ${opts.moduleDiagrams.maxNodes} nodes / ${opts.moduleDiagrams.maxEdges} edges`,
+          location: "body",
+        },
+      ]);
+    }
+    const moduleMermaidDiagnostic = await validateMermaidSyntax(extraction.diagramSource);
+    if (moduleMermaidDiagnostic !== null) {
+      return invalidDiagram([
+        {
+          code: "invalid_flow_diagram",
+          message: `module diagram failed Mermaid syntax validation: ${moduleMermaidDiagnostic}`,
+          location: "body",
+        },
+      ]);
+    }
+    candidateContent = extraction.pageContent;
+    moduleDiagramSource = extraction.diagramSource;
+  }
+
   const validation = validateStage4Artifact(candidateContent, ctx.closedKeyList, {
     moduleId: opts.module.id,
     moduleRole: classifyModuleRole(opts.module, opts.pathRoleConfig),
+    ...(opts.moduleDiagrams !== undefined
+      ? { expectedModuleDiagram: `livewiki/diagrams/${moduleSlug(opts.module.id)}.mmd` }
+      : {}),
     ...(opts.relaxed === true ? { relaxed: true } : {}),
   });
   if (!validation.ok) {
@@ -4848,6 +5120,7 @@ async function attemptStage4Generation(
           llmError: null,
           mechanicalRepairs: mechanical.repairs,
           ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
+          ...(moduleDiagramSource !== undefined ? { moduleDiagramSource } : {}),
         };
       }
     }
@@ -4872,6 +5145,7 @@ async function attemptStage4Generation(
     validationErrors: [],
     llmError: null,
     ...(surgicalOutcome !== undefined ? { surgicalOutcome } : {}),
+    ...(moduleDiagramSource !== undefined ? { moduleDiagramSource } : {}),
   };
 }
 

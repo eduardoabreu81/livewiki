@@ -10,6 +10,21 @@
 import type { SymbolRow } from "./db.js";
 import type { Module, ModuleGraphEdge } from "./modules.js";
 
+/**
+ * Exact placeholder line an on-disk module page carries inside its
+ * `## Diagram` mermaid fence when `moduleDiagrams` is on (roadmap item 22,
+ * D1). The slug is `moduleSlug(module.id)` — the same slug the deterministic
+ * class diagram uses. Naming distinction: the MODEL-DRAWN module diagram
+ * lives at `livewiki/diagrams/<slug>.mmd`; the DETERMINISTIC class diagram
+ * keeps the distinct `livewiki/diagrams/<slug>.classes.mmd` name
+ * (`generateClassDiagram`), and flow companion diagrams keep
+ * `livewiki/diagrams/flow-<slug>.mmd` (`flowDiagramPlaceholder` in
+ * artifact.ts) — the three namespaces never collide.
+ */
+export function moduleDiagramPlaceholder(slug: string): string {
+  return `%% livewiki/diagrams/${slug}.mmd`;
+}
+
 /** Returns a lowercase, filesystem-safe module slug. */
 export function moduleSlug(value: string): string {
   return value

@@ -93,6 +93,7 @@ export const ALL_ARTIFACT_VALIDATION_CODES = [
   "topic_insufficient_product_evidence",
   "topic_source_link",
   "auxiliary_page_not_compact",
+  "module_diagram_placeholder",
   "llm_error",
   "truncated_by_token_limit",
   "incomplete_generation",
@@ -197,6 +198,14 @@ const AUXILIARY_COMPACT: FixDirective = () =>
 const TITLE_EQUALS_MODULE_ID: FixDirective = () =>
   `replace the frontmatter title and H1 with a concise human responsibility title. Keep the stable module ID only for structural identity and the output path.`;
 
+/** Roadmap item 22: the module `## Diagram` section is absent or its fence lacks the exact placeholder. */
+const MODULE_DIAGRAM_PLACEHOLDER: FixDirective = (ctx) =>
+  `SPECIFIC FAILURE: ${ctx.detail}. Write ONE \`## Diagram\` H2 section immediately after \`How it fits\` and before the implementation sections, containing exactly one \`\`\`mermaid fenced block with the real module-granularity diagram inside (files, classes, or components as nodes) — never a \`%% livewiki/...\` placeholder comment: the orchestrator extracts your diagram and substitutes the on-disk placeholder itself.`;
+
+/** Roadmap item 22: the model-drawn module diagram broke the node/edge budget. */
+const MODULE_DIAGRAM_TOO_LARGE: FixDirective = () =>
+  `the companion diagram exceeds the configured node/edge budget. Simplify it: merge related nodes, drop secondary edges, and keep module granularity (files, classes, or components — never one node per symbol).`;
+
 // ---------------------------------------------------------------------------
 // SUPPORTED_FIXES — per-kind directive maps.
 // ---------------------------------------------------------------------------
@@ -225,6 +234,11 @@ const MODULE_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
     `remove the TODO/TBD text; write a concrete sentence about what is visible instead. If the module recognizes the literal token, write it as inline code (\`TODO\` / \`TBD\`).`,
   model_invented_manual: MODEL_INVENTED_MANUAL,
   auxiliary_page_not_compact: AUXILIARY_COMPACT,
+  // Roadmap item 22 (moduleDiagrams): the module diagram gate is LIVE for
+  // module pages — the model draws the diagram, so prompt repair applies.
+  module_diagram_placeholder: MODULE_DIAGRAM_PLACEHOLDER,
+  invalid_flow_diagram: INVALID_MERMAID,
+  flow_diagram_too_large: MODULE_DIAGRAM_TOO_LARGE,
   truncated_by_token_limit: REWRITE_COMPLETE_PAGE,
   incomplete_generation: REWRITE_COMPLETE_PAGE,
   verify_failed: VERIFY_FAILED_GENERIC,
@@ -376,9 +390,11 @@ const MANUAL_BLOCK_ALTERED_REASON =
 const MISSING_WIKI_PATH_REASON =
   `a page recorded in the index is missing from disk; this is repository state, not page prose, so no prompt repair applies.`;
 const DEAD_DIAGRAM_GATE_REASON =
-  `legacy stage-5 diagram-gate code; the companion diagram is now generated deterministically by the orchestrator, so the model cannot repair it.`;
+  `legacy stage-5 flow diagram-gate code; the flow companion diagram is generated deterministically by the orchestrator, so the model cannot repair it. (Module pages are different: under config moduleDiagrams the model DOES draw the diagram, so the module kind classifies these codes as supported fixes.)`;
 const FLOW_PLACEMENT_NOT_MODULE_REASON =
   `flow/topic anchor-placement code; the module validator never emits it.`;
+const MODULE_DIAGRAM_NOT_FLOW_TOPIC_REASON =
+  `module-page diagram contract code (roadmap item 22, config moduleDiagrams); the flow/topic validator never emits it.`;
 const TOPIC_CONTRACT_NOT_MODULE_REASON =
   `topic-page contract code; the module validator never emits it.`;
 const TOPIC_CONTRACT_NOT_FLOW_REASON =
@@ -394,8 +410,6 @@ export const UNCLASSIFIED: Record<
 > = {
   module: {
     llm_error: LLM_ERROR_REASON,
-    invalid_flow_diagram: DEAD_DIAGRAM_GATE_REASON,
-    flow_diagram_too_large: DEAD_DIAGRAM_GATE_REASON,
     anchor_in_disallowed_section: FLOW_PLACEMENT_NOT_MODULE_REASON,
     anchor_missing_in_required_section: FLOW_PLACEMENT_NOT_MODULE_REASON,
     anchor_missing_required_tier: FLOW_PLACEMENT_NOT_MODULE_REASON,
@@ -419,6 +433,7 @@ export const UNCLASSIFIED: Record<
     topic_insufficient_product_evidence: TOPIC_CONTRACT_NOT_FLOW_REASON,
     topic_source_link: TOPIC_CONTRACT_NOT_FLOW_REASON,
     auxiliary_page_not_compact: AUXILIARY_NOT_FLOW_REASON,
+    module_diagram_placeholder: MODULE_DIAGRAM_NOT_FLOW_TOPIC_REASON,
     manual_block_altered: MANUAL_BLOCK_ALTERED_REASON,
     missing_wiki_path: MISSING_WIKI_PATH_REASON,
   },
@@ -427,6 +442,7 @@ export const UNCLASSIFIED: Record<
     invalid_flow_diagram: DEAD_DIAGRAM_GATE_REASON,
     flow_diagram_too_large: DEAD_DIAGRAM_GATE_REASON,
     title_equals_module_id: TITLE_RULE_NOT_TOPIC_REASON,
+    module_diagram_placeholder: MODULE_DIAGRAM_NOT_FLOW_TOPIC_REASON,
     manual_block_altered: MANUAL_BLOCK_ALTERED_REASON,
     missing_wiki_path: MISSING_WIKI_PATH_REASON,
   },

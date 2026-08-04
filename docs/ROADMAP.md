@@ -626,7 +626,7 @@ preserved locally at `/c/tmp/gson` (evidence, not in the repo). The
 no-recovery autonomous bar was NOT met (one disclosed retry) — same
 standing caveat as previous acceptances.
 
-### 22. CodeWiki-grade output format (PRE-BETA, needs design)
+### 22. CodeWiki-grade output format (PRE-BETA, implemented — acceptance A/B pending)
 
 Source: CodeWiki review 2026-08-03 — the maintainer's first reaction to
 Google's codewiki.google was "o wiki final está muito bom; a formatação
@@ -645,6 +645,33 @@ page (stage-5 flow budgets are the precedent), diagram validity gate
 kind variant or a prompt-contract revision. Evaluate on the A/B harness
 before adopting — CodeWiki's static text quality was impressive but
 unmeasured against our corpus.
+
+**Result (implementation, 2026-08-03 — gate: `pnpm -r build` clean,
+core 1814 / CLI 125 / MCP 56):** implemented as a prompt-contract REVISION on the
+existing module page kind behind two config flags, both default off (D3 —
+flags off is byte-identical pre-#22 behavior, proven by the full
+deterministic suite). `moduleDiagrams` (D1/D2 hard contract): ONE diagram
+per module page (not per section) reusing the stage-5 flow machinery — the
+model emits the diagram INLINE in a new `## Diagram` section after `How it
+fits`, the orchestrator extracts it to `livewiki/diagrams/<slug>.mmd`, and
+the page keeps only the exact `%% livewiki/diagrams/<slug>.mmd` placeholder;
+page + diagram land in ONE transactional write (flow dual-artifact
+pattern), gated by `validateMermaidSyntax` and the reused
+`flowMaxDiagramNodes`/`flowMaxDiagramEdges` budgets. Naming: model-drawn
+module diagram `<slug>.mmd`; deterministic class diagram stays
+`<slug>.classes.mmd`; flow diagrams keep `flow-<slug>.mmd`. Validation: new
+`Stage4ValidationContext.expectedModuleDiagram` placeholder check with the
+new `module_diagram_placeholder` code; `invalid_flow_diagram` /
+`flow_diagram_too_large` move from report-only to supported module fixes
+(the module gate is LIVE — the model draws the diagram); every new/changed
+code classified in `repair-contract.ts` (exhaustiveness test green).
+`deepHierarchy` (D2 soft contract): prompt guidance only — ≥ 8 symbols ⇒
+concept-named H2 sections with H3 symbol subsections; no new validation
+code. Tests: `module-diagram-format.test.ts` (20 unit) +
+`batch-module-diagrams.test.ts` (4 stub E2E: extraction, placeholder, valid
+mermaid, verify zero, repair ACTION directive, monotonic `--only` rerun,
+flags-off byte-identical) + config key validation. The A/B acceptance
+evaluation comes later per D3 — not in this pass.
 
 ### 23. Repository understanding layer (PRE-BETA) ✅ DONE 2026-08-03
 

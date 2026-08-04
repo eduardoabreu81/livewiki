@@ -101,6 +101,49 @@ export interface FlowDiagramBudget {
   maxEdges: number;
 }
 
+/**
+ * Roadmap item 22 format flags for the stage-4 module prompt builders
+ * (D3: both default off — absent means the byte-identical pre-#22 contract).
+ */
+export interface Stage4FormatOptions {
+  /**
+   * Hard contract (D1/D2): require ONE inline `## Diagram` mermaid block and
+   * state the node/edge budget (reuses flowMaxDiagramNodes/flowMaxDiagramEdges).
+   */
+  moduleDiagrams?: FlowDiagramBudget;
+  /** Soft contract (D2): concept-grouped H2/H3 hierarchy guidance for large modules. */
+  deepHierarchy?: boolean;
+}
+
+/**
+ * Roadmap item 22 (D1/D2): module-page diagram contract, gated by config
+ * `moduleDiagrams` (default false). The model emits ONE `## Diagram` section
+ * with the diagram INLINE as a single ```mermaid fence; the orchestrator
+ * extracts the fence body to `livewiki/diagrams/<slug>.mmd` and substitutes
+ * the exact `%% livewiki/diagrams/<slug>.mmd` placeholder on disk (the flow
+ * dual-artifact pattern — the placeholder exists only on disk; the model
+ * always writes the real diagram). Initial and repair prompts must not
+ * drift. The budget numbers are interpolated from the resolved config
+ * (they reuse `flowMaxDiagramNodes` / `flowMaxDiagramEdges`).
+ */
+export function buildModuleDiagramPromptRules(budget: FlowDiagramBudget): readonly string[] {
+  return [
+    `- After the \`How it fits\` opening section and before the first implementation section, emit ONE H2 \`Diagram\` section containing exactly one \`\`\`mermaid fenced block and nothing else. Draw the module's internal structure at MODULE granularity: files, classes, or components as nodes and their real dependency or call direction as edges — never one node per symbol, per function, or per line.`,
+    `- The diagram must fit the budget: at most ${budget.maxNodes} nodes and ${budget.maxEdges} edges. Merge or drop detail until it fits; a focused small diagram beats a complete large one.`,
+    `- Write the real Mermaid source inside the fence. NEVER write a \`%% livewiki/...\` placeholder comment — the orchestrator extracts your diagram and substitutes the on-disk placeholder itself.`,
+    `- The \`Diagram\` section carries no \`lw:anchors\` marker and no anchor citations — closed keys live only in the frontmatter anchors list and the implementation section markers.`,
+  ] as const;
+}
+
+/**
+ * Roadmap item 22 (D2 soft contract): deep-hierarchy guidance, gated by
+ * config `deepHierarchy` (default false). Prompt guidance ONLY — there is
+ * no hard validation code; the marker/prose/primary-section rules are
+ * unchanged.
+ */
+export const DEEP_HIERARCHY_PROMPT_RULE =
+  `- When the module has 8 or more symbols, group them under concept-named H2 sections (for example "Parsing", "Scheduling", "Persistence") with H3 subsections per symbol or tight symbol cluster, instead of one flat symbol list. Each concept H2 carries exactly one \`lw:anchors\` marker listing the keys its subsections document, followed by real prose — the one-marker-per-section, primary-section, and prose-after-marker rules are unchanged.`;
+
 export const LITERAL_SIGNATURE_PROMPT_RULE =
   `- When a section asserts behavior of a named function or method and the symbols table supplies a non-empty signature, copy that signature byte-for-byte from the symbols table into inline code or a fenced code block in the same section before the behavioral explanation. Do not reconstruct, normalize, shorten, or "improve" it. One literal signature covers subsequent claims about that symbol within the section. If the table has no signature, do not invent one; limit the prose to facts visible in the supplied source and identify the symbol by its exact closed-list key.`;
 
@@ -328,6 +371,7 @@ export function buildStage4Prompt(
   language: Language = "en",
   moduleRoleOverride?: PathRole,
   rationaleEvidence?: string,
+  formatOptions?: Stage4FormatOptions,
 ): PromptPair {
   const moduleRole = moduleRoleOverride ?? classifyModuleRole(module);
   const compactAuxiliaryRules = moduleRole === "product"
@@ -356,6 +400,8 @@ export function buildStage4Prompt(
     EXCEPTION_BRANCH_PROMPT_RULE,
     INVENTORY_AUTHORITY_PROMPT_RULE,
     BRANCH_PRECISION_PROMPT_RULE,
+    ...(formatOptions?.moduleDiagrams !== undefined ? buildModuleDiagramPromptRules(formatOptions.moduleDiagrams) : []),
+    ...(formatOptions?.deepHierarchy === true ? [DEEP_HIERARCHY_PROMPT_RULE] : []),
     `- AUTHORITATIVE KEY SOURCE: the closed list in the user message is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line (the text after "- ").`,
     RATIONALE_UNTRUSTED_SYSTEM_RULE,
     `- NEVER invent a key. Anchor keys MUST be copied byte-for-byte from the closed list ONLY; NEVER use a placeholder or example token as a key — even when the documented source itself contains marker-like examples.`,
@@ -389,6 +435,9 @@ export function buildStage4Prompt(
     `- The page contains an lw:manual block (reserved for human content — only the orchestrator can re-inject existing ones).`,
     `- The required page opening is missing or out of order.`,
     `- A product page's frontmatter title exactly equals its stable module ID.`,
+    ...(formatOptions?.moduleDiagrams !== undefined
+      ? [`- The required \`Diagram\` section is missing, holds no mermaid fence, or its diagram fails the node/edge budget or the Mermaid syntax gate.`]
+      : []),
   ].join("\n");
 
   const userParts: string[] = [
@@ -478,6 +527,7 @@ export function buildRepairPrompt(
   attemptContext: RepairAttemptContext = { attempt: 1, total: 1 },
   moduleRoleOverride?: PathRole,
   rationaleEvidence?: string,
+  formatOptions?: Stage4FormatOptions,
 ): PromptPair {
   const moduleRole = moduleRoleOverride ?? classifyModuleRole(module);
   const compactAuxiliaryRepairRules = moduleRole === "product"
@@ -511,6 +561,8 @@ export function buildRepairPrompt(
     EXCEPTION_BRANCH_PROMPT_RULE,
     INVENTORY_AUTHORITY_PROMPT_RULE,
     BRANCH_PRECISION_PROMPT_RULE,
+    ...(formatOptions?.moduleDiagrams !== undefined ? buildModuleDiagramPromptRules(formatOptions.moduleDiagrams) : []),
+    ...(formatOptions?.deepHierarchy === true ? [DEEP_HIERARCHY_PROMPT_RULE] : []),
     `- AUTHORITATIVE KEY SOURCE: the closed list is the ONLY valid set of anchor keys. Copy each key byte-for-byte from a closed-list line.`,
     RATIONALE_UNTRUSTED_SYSTEM_RULE,
     `- Every anchor key in the page MUST be in the closed list. NEVER invent a key. NEVER keep placeholder tokens as keys.`,
@@ -683,11 +735,13 @@ export type ArtifactValidationCode =
   | "unclosed_markdown"             // unbalanced code fence or inline-code backtick run — cut mid-token
   | "todo_marker_present"           // literal TODO/TBD in prose, outside code spans/fences and outside lw:manual
   | "model_invented_manual"         // LLM wrote a <!-- lw:manual --> block (forbidden)
-  // Stage-5 flow artifacts (SPEC §"Semantic product-flow layer"). Repairable
-  // by prompt like the other artifact-shape codes; emitted by the stage-5
-  // diagram gate.
-  | "invalid_flow_diagram"          // companion flow diagram (.mmd) fails the Mermaid parser pre-write
-  | "flow_diagram_too_large"        // flow diagram exceeds the configured node/edge budget
+  // Stage-5 flow artifacts (SPEC §"Semantic product-flow layer") and the
+  // roadmap-#22 stage-4 module diagram gate (`moduleDiagrams`). The flow
+  // companion diagram is generated deterministically today, so these two
+  // codes fire only from the module diagram gate, where the model draws the
+  // diagram and prompt repair applies.
+  | "invalid_flow_diagram"          // companion diagram (.mmd) fails the Mermaid parser pre-write
+  | "flow_diagram_too_large"        // companion diagram exceeds the configured node/edge budget
   // R10.1 item D: stage-5 anchor placement (ancestor-H2 interval) and
   // semantic-tier coverage. Repairable by prompt; mechanical repair
   // stays fail-closed on them.
@@ -701,6 +755,7 @@ export type ArtifactValidationCode =
   | "topic_insufficient_product_evidence" // cited topic anchors fall below the 75% product threshold
   | "topic_source_link"               // topic prose links to a source path instead of naming the key in inline code
   | "auxiliary_page_not_compact"    // non-product module violated the compact Reference/H3 contract
+  | "module_diagram_placeholder"    // moduleDiagrams: the required `## Diagram` section is missing, or its mermaid fence lacks the exact placeholder
   // Phase-5 plan (X): codes used by the ORCHESTRATOR to feed the repair
   // prompt when the problem is NOT the artifact shape (LLM call failed or
   // verify rejected). The repair prompt treats all of them the same way.

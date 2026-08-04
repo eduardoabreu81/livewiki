@@ -339,6 +339,38 @@ in prose, and it does not infer “entry point” status from symbol count. Fixt
 tooling, benchmarks, and documentation pages use honest auxiliary task context
 rather than claiming product prominence.
 
+### Module page format flags (roadmap item 22)
+
+Two opt-in config flags revise the stage-4 module page contract (a
+prompt-contract revision on the existing module page kind, not a new page
+kind). Both default `false`; with both off the contract is byte-identical
+to the pre-flag behavior.
+
+- `moduleDiagrams` (hard contract): every stage-4 module page carries ONE
+  `## Diagram` H2 section, placed after `How it fits` and before the first
+  implementation section, holding exactly one inline ```mermaid block drawn
+  by the model at module granularity (files, classes, or components as
+  nodes). The orchestrator extracts the fence body to
+  `livewiki/diagrams/<slug>.mmd` (`<slug>` is the module slug the
+  deterministic class diagram uses — that diagram keeps the distinct
+  `<slug>.classes.mmd` name, and flow diagrams keep `flow-<slug>.mmd`), and
+  the on-disk page carries only the exact `%% livewiki/diagrams/<slug>.mmd`
+  placeholder line. The diagram is gated pre-write by the Mermaid parser
+  and the reused `flowMaxDiagramNodes`/`flowMaxDiagramEdges` budgets, and
+  page + diagram land (and roll back) in one transactional write, reusing
+  the stage-5 flow dual-artifact machinery; the stage-4 error-only verify
+  gate is preserved. Validation failures feed the bounded repair loop with
+  classified directives (`module_diagram_placeholder`,
+  `invalid_flow_diagram`, `flow_diagram_too_large` — the latter two are
+  live only for module pages, because the flow companion diagram is
+  generated deterministically). The placeholder contract never relaxes
+  under the relaxed completion round.
+- `deepHierarchy` (soft contract): the stage-4 prompt asks the model to
+  group a module with 8 or more symbols under concept-named H2 sections
+  with H3 symbol subsections instead of a flat symbol list. Guidance only —
+  no new validation code; the marker, prose, and primary-section rules are
+  unchanged.
+
 Architecture overview remains the detailed product inventory. Each product
 module card shows the human display title first, a separately labeled module
 id, file/symbol counts, up to three deterministic representative paths,

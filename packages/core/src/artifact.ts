@@ -89,6 +89,7 @@ import {
   hasUnclosedMarkdown,
   unclosedMarkdownDiagnostic,
 } from "./markdown-mask.js";
+import { moduleDiagramPlaceholder } from "./diagrams.js";
 
 export interface NormalizeResult {
   ok: boolean;
@@ -118,6 +119,14 @@ export interface Stage4ValidationContext {
   readonly pageKind?: ArtifactPageKind;
   /** Exact diagram placeholder required in the flow `## Diagram` section. */
   readonly expectedFlowDiagram?: string;
+  /**
+   * Roadmap item 22 (D2 hard contract): exact diagram placeholder required
+   * in the module page's `## Diagram` section when `moduleDiagrams` is on
+   * (e.g. `livewiki/diagrams/<slug>.mmd`). Module pages only; absent keeps
+   * the pre-#22 contract. Like the flow placeholder, it NEVER relaxes
+   * under the relaxed completion round.
+   */
+  readonly expectedModuleDiagram?: string;
   /** Exact participating module set required in flow frontmatter `modules:` (order-insensitive). */
   readonly expectedFlowModules?: readonly string[];
   /**
@@ -584,6 +593,29 @@ export function validateStage4Artifact(
         openingFailure.offending,
       ),
     );
+  }
+
+  // Roadmap item 22 (D2 hard contract): when the caller supplies
+  // `expectedModuleDiagram` (config `moduleDiagrams`), the module page must
+  // carry a `## Diagram` H2 whose mermaid fence holds EXACTLY the expected
+  // placeholder line. Strict under the relaxed round — the placeholder is
+  // one of the contracts that NEVER relax.
+  if (pageKind === "module" && context?.expectedModuleDiagram !== undefined) {
+    const moduleDiagramFailure = checkModuleDiagramPlaceholder(
+      markerScanBody,
+      body,
+      context.expectedModuleDiagram,
+    );
+    if (moduleDiagramFailure !== null) {
+      errors.push(
+        err(
+          "module_diagram_placeholder",
+          moduleDiagramFailure.message,
+          "body",
+          moduleDiagramFailure.offending,
+        ),
+      );
+    }
   }
 
   /** Keys seen in section markers (for cross-section duplicate detection). */
@@ -1374,6 +1406,68 @@ function checkRequiredTopicOpening(masked: string, expectedTitle?: string, relax
   return null;
 }
 
+/**
+ * Roadmap item 22 (D1/D2): locate the module page's `## Diagram` H2
+ * (case-insensitive, fence-safe via the masked view) and require its mermaid
+ * fence to hold the exact `%% <expectedModuleDiagram>` placeholder line.
+ * Same placeholder discipline as the flow opening check
+ * (checkRequiredFlowOpening), but the module Diagram section is NOT part of
+ * the page opening — it sits after `How it fits`, before the implementation
+ * sections.
+ */
+function checkModuleDiagramPlaceholder(
+  masked: string,
+  raw: string,
+  expectedModuleDiagram: string,
+): PageOpeningFailure | null {
+  const maskedLines = masked.split("\n");
+  const rawLines = raw.split("\n");
+  let diagramIndex = -1;
+  for (let i = 0; i < maskedLines.length; i++) {
+    const line = maskedLines[i]!.trim();
+    if (
+      /^##\s+\S/.test(line) &&
+      line.slice(3).trim().toLocaleLowerCase("en-US") === "diagram"
+    ) {
+      diagramIndex = i;
+      break;
+    }
+  }
+  if (diagramIndex < 0) {
+    return {
+      message: 'module page must contain a "Diagram" H2 section with a fenced mermaid block (config moduleDiagrams)',
+      offending: "(absent)",
+    };
+  }
+  let sectionEnd = maskedLines.length;
+  for (let i = diagramIndex + 1; i < maskedLines.length; i++) {
+    if (/^#{1,6}\s+\S/.test(maskedLines[i]!.trim())) {
+      sectionEnd = i;
+      break;
+    }
+  }
+  const diagramRaw = rawLines.slice(diagramIndex + 1, sectionEnd).join("\n");
+  const mermaidFence = /```mermaid[ \t]*\n([\s\S]*?)\n[ \t]*```/.exec(diagramRaw);
+  const placeholderLine = mermaidFence?.[1]
+    ?.split("\n")
+    .map((line) => line.trim())
+    .find((line) => /^%%\s*livewiki\/diagrams\/\S+\.mmd$/.test(line));
+  if (placeholderLine === undefined) {
+    return {
+      message: 'module "Diagram" section must contain a fenced mermaid code block holding a %% livewiki/diagrams/<slug>.mmd placeholder line',
+      offending: "(absent)",
+    };
+  }
+  const actual = placeholderLine.replace(/^%%\s*/, "").trim();
+  if (actual !== expectedModuleDiagram) {
+    return {
+      message: `module "Diagram" placeholder must be exactly "%% ${expectedModuleDiagram}"`,
+      offending: placeholderLine,
+    };
+  }
+  return null;
+}
+
 function checkRequiredFlowOpening(
   masked: string,
   raw: string,
@@ -1894,7 +1988,7 @@ export function flowDiagramPlaceholder(slug: string): string {
 }
 
 export interface InlineFlowDiagramExtraction {
-  /** Page with the extracted fence body replaced by `flowDiagramPlaceholder(slug)`. */
+  /** Page with the extracted fence body replaced by the exact placeholder line. */
   pageContent: string;
   /** Trimmed source of the inline mermaid block in the `## Diagram` section. */
   diagramSource: string;
@@ -1930,6 +2024,7 @@ export interface InlineFlowDiagramExtraction {
 export function extractInlineFlowDiagram(
   content: string,
   slug: string,
+  placeholder: string = flowDiagramPlaceholder(slug),
 ): InlineFlowDiagramExtraction | null {
   const rawLines = content.split("\n");
   const maskedLines = maskCodeSpansPreservingLength(content).split("\n");
@@ -1999,7 +2094,7 @@ export function extractInlineFlowDiagram(
 
   const pageContent = [
     ...rawLines.slice(0, fenceOpen + 1),
-    flowDiagramPlaceholder(slug),
+    placeholder,
     ...rawLines.slice(fenceOpen + 1 + mermaidBody.length),
   ].join("\n");
 
@@ -2008,6 +2103,22 @@ export function extractInlineFlowDiagram(
     diagramSource,
     sourceTooLarge: diagramSource.length > FLOW_DIAGRAM_SOURCE_MAX_CHARS,
   };
+}
+
+/**
+ * Roadmap item 22 (D1): module-page variant of the stage-5 inline-diagram
+ * extraction. Identical machinery; only the substituted placeholder differs
+ * (`moduleDiagramPlaceholder(slug)` — `livewiki/diagrams/<slug>.mmd`, the
+ * model-drawn module diagram, distinct from the deterministic
+ * `<slug>.classes.mmd` class diagram and the flow `flow-<slug>.mmd`). The
+ * placeholder exists only on disk — repair prompts always see the
+ * model-emitted inline form.
+ */
+export function extractInlineModuleDiagram(
+  content: string,
+  slug: string,
+): InlineFlowDiagramExtraction | null {
+  return extractInlineFlowDiagram(content, slug, moduleDiagramPlaceholder(slug));
 }
 
 export interface FlowDiagramElementCount {
