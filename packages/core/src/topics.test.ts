@@ -836,6 +836,46 @@ describe("D2 — spoke-merge fallback and concern-grouped candidates", () => {
     expect(testing!.modules).toEqual(["fixtures-a", "fixtures-b", "module-a", "module-b"]);
   });
 
+  it("the Testing concern also matches #24 test-role modules (maintainer decision 2026-08-04)", async () => {
+    const modules = [
+      mod({
+        id: "module-a",
+        title: "Module A",
+        importNeighbors: ["module-x", "fixtures-a"],
+        anchors: ["src/a.ts#1", "src/a.ts#2", "src/a.ts#3", "src/a.ts#4", "src/a.ts#5"],
+      }),
+      mod({ id: "module-x", title: "Module X", importNeighbors: ["module-a"], anchors: ["src/x.ts#1", "src/x.ts#2", "src/x.ts#3"] }),
+      mod({
+        id: "module-b",
+        title: "Module B",
+        importNeighbors: ["module-y", "src-tests"],
+        anchors: ["src/b.ts#1", "src/b.ts#2", "src/b.ts#3"],
+      }),
+      mod({ id: "module-y", title: "Module Y", importNeighbors: ["module-b"], anchors: ["src/y.ts#1", "src/y.ts#2", "src/y.ts#3"] }),
+      mod({
+        id: "fixtures-a",
+        role: "fixture",
+        paths: ["tests/fixtures/a.ts"],
+        importNeighbors: ["module-a"],
+        anchors: ["tests/fixtures/a.ts#1"],
+      }),
+      mod({
+        id: "src-tests",
+        role: "test",
+        paths: ["src/b.test.ts"],
+        importNeighbors: ["module-b"],
+        anchors: ["src/b.test.ts#1"],
+      }),
+    ];
+    const inv = clusterInventory(modules);
+    inv.anchorRoles["tests/fixtures/a.ts#1"] = "fixture";
+    inv.anchorRoles["src/b.test.ts#1"] = "test";
+    const candidates = proposeTopicPlanDeterministically(inv, new Map(), proposeOpts);
+    const testing = candidates.find((c) => c.title === "Testing");
+    expect(testing).toBeDefined();
+    expect(testing!.modules).toEqual(["fixtures-a", "module-a", "module-b", "src-tests"]);
+  });
+
   it("produces no concern candidate when no module matches a concern group", () => {
     const inv = inventory(); // plain src/ product modules in one import cluster
     const candidates = proposeTopicPlanDeterministically(inv, new Map(), proposeOpts);

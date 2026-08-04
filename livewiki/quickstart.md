@@ -10,12 +10,12 @@ livewiki is an agent-first living documentation tool: a Markdown wiki that lives
 
 ## What you'll find in this wiki
 
-- **[Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md)** — This module page describes the livewiki core's mid-stack pipeline: safe filesystem I/O, symbol and rationale extraction from source, deterministic debt risk scoring, surgical H2-section repair, the closed repair contract, and the status…
-- **[Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md)** — This module groups the livewiki core runtime surfaces that operate below the LLM: per-repo config loading, the SQLite index schema and migrations, deterministic Mermaid generators, a read-only working-tree debt preview, and the…
-- **[Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md)** — This page documents the core package's responsibilities for batch-stage 2 module identification and partitioning, the cross-machine manifest ledger under `livewiki/`, the deterministic Markdown code mask used by structural scans, and the…
-- **[core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)](core-src-06.md)** — This page documents the stage-5 cross-module flow machinery, the deterministic Mermaid flowchart renderer, the frontmatter parser, the `.gitignore` managed-block writer, the EOL-insensitive hash helpers, and the unified import resolver for…
+- **[Core batch pipeline and call-graph analytics](core-src-04.md)** — This page documents the batch documentation pipeline and the supporting call-graph analytics that feed it.
+- **[Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md)** — This page documents the symbols exported from the `packages/core/src` modules collected under the `core-src-09` slice — repository orientation evidence, the tree-sitter parser wrapper, the `AGENTS.md`/`CLAUDE.md` pointer writer, the…
+- **[Anchor ledger and artifact repair](core-src-01.md)** — This module reconciles wiki anchor metadata against the code index and mechanically repairs stage-4 documentation artifacts emitted by the model.
 - **[core prompts, presets, pricing, and README export](core-src-10.md)** — This module assembles the LLM prompt templates, provider presets, pricing table, and the deterministic README exporter that drive the batch documentation pipeline.
-- **[Livewiki core src 07](core-src-07.md)** — This page documents the livewiki core source slice covering imports parsing, the indexer entry point, the `init` command pipeline, the `install` agent registry and merge adapters, and the regression helpers used by the…
+- **[Batch stage 5, status aggregation, and surgical repair fixtures](core-src-03.md)** — This module owns the test fixtures, mock LLM stubs, and aggregation helpers that exercise stage-5 (semantic flows / topics), the `batch status` report, and the surgical section-scoped repair path in `packages/core/src`.
+- **[Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md)** — This module groups the livewiki core runtime surfaces that operate below the LLM: per-repo config loading, the SQLite index schema and migrations, deterministic Mermaid generators, a read-only working-tree debt preview, and the…
 
 Use this wiki to choose a task, inspect the repository architecture, query focused pages from an agent, and keep documentation debt under control.
 
@@ -48,6 +48,6 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 ## Repository facts
 
-- **218 files** indexed
-- **1099 symbols** extracted
-- **48 modules** identified
+- **206 files** indexed
+- **1221 symbols** extracted
+- **50 modules** identified

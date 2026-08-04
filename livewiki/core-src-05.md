@@ -272,9 +272,9 @@ function candidate(overrides: Partial<FlowCandidate> & { moduleIds: string[] }):
 ## Navigate
 
 - Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
-- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md) — dependency and dependent
-- [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md) — dependency and dependent
-- [core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)](core-src-06.md) — dependency and dependent
+- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
+- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency and dependent
+- [Anchor ledger and artifact repair](core-src-01.md) — dependency and dependent
 
-> Coverage note: this module's source (10 files, ~213k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (5 files, ~90k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

@@ -293,9 +293,7 @@ async function runVerify(repoRoot: string): Promise<VerifyOutput> {
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md) — dependency
-- [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md) — dependency
-- [Livewiki core src 07](core-src-07.md) — dependency
-
-> Coverage note: this module's source (6 files, ~100k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency
+- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency
+- [Anchor ledger and artifact repair](core-src-01.md) — dependency
 <!-- livewiki:navigate:end -->

@@ -124,10 +124,19 @@ export interface ModuleGraphEdge {
  * Arquivos com `path` que não tem diretório (raiz):
  *   - Se for o ÚNICO arquivo do repo → usa basename (sem extensão) como id
  *   - Caso contrário (raiz + outros módulos) → id = "root"
+ *
+ * #24 (2026-08-04): dentro de cada diretório, arquivos classificados como
+ * `"test"` (classifyPathRole) são separados ANTES do agrupamento — testes
+ * co-localizados não inflam mais módulos de produto (o voto majoritário
+ * por módulo não consegue corrigir um diretório com 43% de testes). Cada
+ * grupo de testes vira um módulo irmão `<id>-tests`, depois documentado
+ * pelo canal auxiliar determinístico (zero tokens). A partição continua
+ * exata: todo path aparece em exatamente um módulo.
  */
 export function identifyModulesHeuristic(
   filePaths: string[],
   symbolCountByPath: Map<string, number> = new Map(),
+  pathRoleConfig?: PathRoleConfig,
 ): Module[] {
   const byDir = new Map<string, string[]>();
   for (const raw of filePaths) {
@@ -140,13 +149,21 @@ export function identifyModulesHeuristic(
   }
   const totalDirs = byDir.size;
   const modules: Module[] = [];
+  const symbolSum = (paths: string[]) =>
+    paths.reduce((acc, p) => acc + (symbolCountByPath.get(p) ?? 0), 0);
   for (const [dir, paths] of byDir) {
     const id = dirToModuleId(dir, paths, totalDirs);
-    const symbolCount = paths.reduce(
-      (acc, p) => acc + (symbolCountByPath.get(p) ?? 0),
-      0,
-    );
-    modules.push({ id, paths, symbolCount });
+    const productPaths: string[] = [];
+    const testPaths: string[] = [];
+    for (const p of paths) {
+      (classifyPathRole(p, pathRoleConfig) === "test" ? testPaths : productPaths).push(p);
+    }
+    if (productPaths.length > 0) {
+      modules.push({ id, paths: productPaths, symbolCount: symbolSum(productPaths) });
+    }
+    if (testPaths.length > 0) {
+      modules.push({ id: `${id}-tests`, paths: testPaths, symbolCount: symbolSum(testPaths) });
+    }
   }
   // Ordena por id pra saída determinística
   modules.sort((a, b) => a.id.localeCompare(b.id));
@@ -801,22 +818,30 @@ function stripNodeNextExtension(p: string): string {
 /**
  * A documentation "role" derived
  * PURELY from a file path, used only to influence GROUPING/RANKING
- * decisions (module prioritization order, which modules get promoted to
- * "top" lists in quickstart/overview). It NEVER affects:
+ * decisions (module construction, module prioritization order, which
+ * modules get promoted to "top" lists in quickstart/overview). It NEVER
+ * affects:
  *   - which files get indexed (walker.ts is untouched)
- *   - module inventory (`identifyModulesHeuristic` groups every path,
- *     same as before — a fixture path still becomes a module)
- *   - closed-list completeness (every symbol in a fixture/tooling module
- *     still must be documented, same as a product module)
+ *   - closed-list completeness (every symbol in a test/fixture/tooling
+ *     module still must be documented, same as a product module)
  *
  * `"product"` is the default for anything that doesn't match a more
- * specific pattern — a project with no test fixtures or benchmark
+ * specific pattern — a project with no tests, fixtures, or benchmark
  * tooling classifies everything as `"product"` and behaves exactly like
  * before this change.
+ *
+ * `"test"` (#24, 2026-08-04): co-located test files previously classified
+ * as product and inflated product modules (43% of this repo's anchored
+ * files). Test files are split into their own modules at construction
+ * time (see `identifyModulesHeuristic`) and documented through the
+ * deterministic zero-token auxiliary channel — they NEVER leave the
+ * index, so anchors and `verify` keep working.
  */
-export type PathRole = "product" | "fixture" | "tooling" | "docs";
+export type PathRole = "product" | "test" | "fixture" | "tooling" | "docs";
 
 export interface PathRoleConfig {
+  /** Gitignore-style patterns for automated test files. */
+  testPatterns?: string[];
   /** Gitignore-style patterns for test fixtures and golden inputs. */
   fixturePatterns?: string[];
   /** Gitignore-style patterns for scripts, benchmarks, and development tools. */
@@ -826,6 +851,32 @@ export interface PathRoleConfig {
 }
 
 export const DEFAULT_PATH_ROLE_PATTERNS: Required<PathRoleConfig> = {
+  testPatterns: [
+    // Filename conventions (mirror isTestPath in flows.ts — keep in sync):
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/__tests__/**",
+    "**/test_*.py",
+    "**/*_test.py",
+    "**/*_test.go",
+    // JVM conventions:
+    "**/*Test.java",
+    "**/*Tests.java",
+    "**/*Test.kt",
+    "**/*Spec.kt",
+    "**/*Spec.scala",
+    "**/*Suite.scala",
+    // .NET convention (prose-tier, role still applies):
+    "**/*Tests.cs",
+    // Language-DEFINED layouts (Maven/Gradle standard, zero ambiguity —
+    // covers test helper classes that do not end in *Test):
+    "**/src/test/java/**",
+    "**/src/test/kotlin/**",
+    // Deliberately OUT (precision): bare `tests/` directories (too many
+    // non-test uses — same call isTestPath made) and the Rust Cargo
+    // `tests/` layout (needs sibling Cargo.toml detection). Opt in via
+    // pathRoles.testPatterns.
+  ],
   fixturePatterns: [
     "**/test/fixtures/**",
     "**/tests/fixtures/**",
@@ -884,9 +935,13 @@ export function matchesAnyPathPattern(path: string, patterns: string[]): boolean
 /** Classifies a SINGLE path. Config patterns replace (not merge with) the defaults for that category. */
 export function classifyPathRole(path: string, config?: PathRoleConfig): PathRole {
   const fixture = config?.fixturePatterns ?? DEFAULT_PATH_ROLE_PATTERNS.fixturePatterns;
+  const test = config?.testPatterns ?? DEFAULT_PATH_ROLE_PATTERNS.testPatterns;
   const tooling = config?.toolingPatterns ?? DEFAULT_PATH_ROLE_PATTERNS.toolingPatterns;
   const docs = config?.docsPatterns ?? DEFAULT_PATH_ROLE_PATTERNS.docsPatterns;
+  // Precedence: fixture > test > tooling > docs > product — a fixture that
+  // happens to match a test filename convention stays a fixture.
   if (matchesAnyPathPattern(path, fixture)) return "fixture";
+  if (matchesAnyPathPattern(path, test)) return "test";
   if (matchesAnyPathPattern(path, tooling)) return "tooling";
   if (matchesAnyPathPattern(path, docs)) return "docs";
   return "product";
@@ -1083,13 +1138,21 @@ function pathSlugOf(m: Module): string {
  *   modules/id="index"        path="index.ts"            → ["index"]
  */
 function candidateIdSequence(m: Module): string[] {
+  // #24: a trailing `-tests` is a namespace owned by identifyModulesHeuristic
+  // (the test-role sibling module). It must survive path expansion —
+  // otherwise co-located product/test modules under a colliding leaf dir
+  // (`src` in N packages) trade the suffix for a longer path prefix and the
+  // test module's id stops saying it holds tests ("packages-core-src"
+  // instead of "core-src-tests").
+  const suffix = m.id.endsWith("-tests") ? "-tests" : "";
   const result: string[] = [m.id];
   const segments = pathSegmentsFor(m);
   for (let n = 1; n <= segments.length; n++) {
-    const tail = segments
-      .slice(segments.length - n)
-      .map(slugifySegment)
-      .join("-");
+    const tail =
+      segments
+        .slice(segments.length - n)
+        .map(slugifySegment)
+        .join("-") + suffix;
     if (tail.length > 0 && !result.includes(tail)) {
       result.push(tail);
     }

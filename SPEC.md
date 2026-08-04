@@ -278,8 +278,8 @@ like any other Markdown page, but Tasks never enters the stage-4 closed-key
 denominator.
 
 `livewiki/auxiliary/index.md` is the deterministic inventory of every
-non-product module, grouped as test fixtures, tooling/benchmarks, and repository
-documentation. Existing module pages use their display title and an
+non-product module, grouped as automated tests, test fixtures, tooling/
+benchmarks, and repository documentation. Existing module pages use their display title and an
 existence-gated link; missing pages are labeled unavailable without a link. An
 existing human, mixed, ownerless, or unparseable non-empty auxiliary hub is
 preserved byte-for-byte. The skipped rewrite is reported with path and owner in
@@ -700,12 +700,22 @@ responses carry no hints. The table is pure presentation-layer data
    one module ID maps to exactly one task target and one `livewiki/<id>.md`
    page.
 
+   **Test-role split (#24):** within each directory, files whose path role is
+   `test` are split into their own sibling module `<id>-tests` BEFORE
+   grouping, so co-located tests never inflate product modules. Test modules
+   stay in the index (anchors and `verify` keep working) and are documented
+   through the deterministic zero-token auxiliary channel. When a partition
+   change makes a root-level `owner: generated` module page stale (its
+   module no longer exists), a full batch run removes it and re-runs the
+   ledger; human/mixed/ownerless/unparseable pages are preserved and
+   reported. `--only` runs never remove stale pages.
+
    **Two content layers (roadmap):** (A) structural/agent pages (dirs, symbols,
    import links, anchors — verifiable); (B) optional later human/product
    narrative synthesized from A. Batch today targets layer A.
 3. **Prioritization**: product modules are ordered before auxiliary modules,
    then by centrality (how many others depend on them) and size. Path roles are
-   deterministic (`product`, `fixture`, `tooling`, `docs`) with optional
+   deterministic (`product`, `test`, `fixture`, `tooling`, `docs`) with optional
    gitignore-style overrides in `config.pathRoles`. Roles affect ranking,
    navigation, and compact-vs-product presentation depth only: they never remove files, modules, symbols, or closed-list
    obligations. The user can reorder/exclude (`--plan` shows the plan before

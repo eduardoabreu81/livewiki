@@ -1,13 +1,15 @@
 graph LR
-  cli_src_01["cli-src-01"]
+  cli_src["cli-src"]
   commands["commands"]
-  cli_src_01 --> commands
-  cli_src_02["cli-src-02"]
-  cli_src_02 --> commands
-  commands --> cli_src_01
-  commands --> cli_src_02
+  cli_src --> commands
+  cli_src_tests["cli-src-tests"]
+  cli_src_tests --> cli_src
+  cli_src_tests --> commands
+  commands --> cli_src
   core_src_01["core-src-01"]
   commands --> core_src_01
+  core_src_02["core-src-02"]
+  commands --> core_src_02
   core_src_03["core-src-03"]
   commands --> core_src_03
   core_src_04["core-src-04"]
@@ -16,47 +18,41 @@ graph LR
   commands --> core_src_05
   core_src_07["core-src-07"]
   commands --> core_src_07
+  core_src_08["core-src-08"]
+  commands --> core_src_08
   core_src_09["core-src-09"]
   commands --> core_src_09
   core_src_10["core-src-10"]
   commands --> core_src_10
   core_src_11["core-src-11"]
   commands --> core_src_11
-  core_src_12["core-src-12"]
-  commands --> core_src_12
-  core_src_13["core-src-13"]
-  commands --> core_src_13
-  core_src_02["core-src-02"]
-  core_src_01 --> core_src_02
+  core_src_01 --> core_src_03
+  core_src_01 --> core_src_04
   core_src_01 --> core_src_05
   core_src_06["core-src-06"]
   core_src_01 --> core_src_06
-  core_src_01 --> core_src_07
-  core_src_08["core-src-08"]
   core_src_01 --> core_src_08
   core_src_01 --> core_src_09
   core_src_01 --> core_src_10
-  core_src_01 --> core_src_11
+  core_src_02 --> core_src_01
   core_src_02 --> core_src_03
   core_src_02 --> core_src_04
+  core_src_02 --> core_src_05
   core_src_02 --> core_src_06
   core_src_02 --> core_src_07
   core_src_02 --> core_src_08
+  core_src_02 --> core_src_09
   core_src_02 --> core_src_10
   core_src_02 --> core_src_11
-  core_src_02 --> core_src_12
   llm["llm"]
   core_src_02 --> llm
   core_src_03 --> core_src_01
-  core_src_03 --> core_src_02
   core_src_03 --> core_src_04
   core_src_03 --> core_src_05
+  core_src_03 --> core_src_06
   core_src_03 --> core_src_07
   core_src_03 --> core_src_08
-  core_src_03 --> core_src_10
-  core_src_03 --> core_src_11
-  core_src_03 --> core_src_12
-  core_src_03 --> llm
+  core_src_03 --> core_src_09
   core_src_04 --> core_src_01
   core_src_04 --> core_src_02
   core_src_04 --> core_src_03
@@ -67,84 +63,117 @@ graph LR
   core_src_04 --> core_src_09
   core_src_04 --> core_src_10
   core_src_04 --> core_src_11
-  core_src_04 --> core_src_12
-  core_src_14["core-src-14"]
-  core_src_04 --> core_src_14
   core_src_04 --> llm
   core_src_05 --> core_src_01
   core_src_05 --> core_src_02
+  core_src_05 --> core_src_03
+  core_src_05 --> core_src_04
   core_src_05 --> core_src_06
   core_src_05 --> core_src_07
-  core_src_05 --> core_src_08
   core_src_05 --> core_src_09
   core_src_05 --> core_src_10
-  core_src_05 --> core_src_11
-  core_src_06 --> core_src_02
   core_src_06 --> core_src_04
   core_src_06 --> core_src_05
   core_src_06 --> core_src_07
-  core_src_06 --> core_src_08
+  core_src_06 --> core_src_09
   core_src_06 --> core_src_10
-  core_src_06 --> llm
-  core_src_07 --> core_src_01
-  core_src_07 --> core_src_02
   core_src_07 --> core_src_03
   core_src_07 --> core_src_04
-  core_src_07 --> core_src_05
-  core_src_07 --> core_src_06
-  core_src_07 --> core_src_08
   core_src_07 --> core_src_09
-  core_src_07 --> core_src_10
-  core_src_07 --> core_src_11
-  core_src_07 --> core_src_12
-  core_src_07 --> core_src_13
-  core_src_07 --> core_src_14
-  core_src_07 --> llm
+  core_src_08 --> core_src_01
   core_src_08 --> core_src_03
-  core_src_08 --> core_src_05
+  core_src_08 --> core_src_04
   core_src_08 --> core_src_06
-  core_src_08 --> core_src_07
   core_src_08 --> core_src_09
-  core_src_08 --> core_src_11
-  core_src_09 --> core_src_06
+  core_src_08 --> core_src_10
+  core_src_09 --> core_src_03
+  core_src_09 --> core_src_04
+  core_src_09 --> core_src_05
   core_src_09 --> core_src_08
   core_src_09 --> core_src_10
   core_src_09 --> core_src_11
   core_src_10 --> core_src_01
+  core_src_10 --> core_src_02
+  core_src_10 --> core_src_03
+  core_src_10 --> core_src_04
   core_src_10 --> core_src_05
   core_src_10 --> core_src_06
+  core_src_10 --> core_src_07
   core_src_10 --> core_src_08
-  core_src_10 --> core_src_11
-  core_src_10 --> core_src_12
+  core_src_10 --> core_src_09
   core_src_11 --> core_src_01
+  core_src_11 --> core_src_04
   core_src_11 --> core_src_05
-  core_src_11 --> core_src_06
-  core_src_11 --> core_src_07
   core_src_11 --> core_src_08
   core_src_11 --> core_src_09
   core_src_11 --> core_src_10
-  core_src_11 --> core_src_12
-  core_src_11 --> core_src_14
-  core_src_12 --> core_src_01
-  core_src_12 --> core_src_04
-  core_src_12 --> core_src_05
-  core_src_12 --> core_src_06
-  core_src_12 --> core_src_07
-  core_src_12 --> core_src_08
-  core_src_12 --> core_src_10
-  core_src_12 --> core_src_11
-  core_src_12 --> core_src_13
-  core_src_13 --> core_src_01
-  core_src_13 --> core_src_06
-  core_src_13 --> core_src_08
-  core_src_13 --> core_src_11
-  core_src_13 --> core_src_12
-  core_src_13 --> core_src_14
-  llm --> core_src_05
+  core_src_tests_01["core-src-tests-01"]
+  core_src_tests_01 --> core_src_01
+  core_src_tests_01 --> core_src_02
+  core_src_tests_01 --> core_src_04
+  core_src_tests_01 --> core_src_05
+  core_src_tests_01 --> core_src_06
+  core_src_tests_01 --> core_src_07
+  core_src_tests_01 --> core_src_08
+  core_src_tests_01 --> core_src_09
+  core_src_tests_01 --> core_src_10
+  core_src_tests_01 --> llm
+  core_src_tests_02["core-src-tests-02"]
+  core_src_tests_02 --> core_src_01
+  core_src_tests_02 --> core_src_02
+  core_src_tests_02 --> core_src_03
+  core_src_tests_02 --> core_src_04
+  core_src_tests_02 --> core_src_05
+  core_src_tests_02 --> core_src_06
+  core_src_tests_02 --> core_src_07
+  core_src_tests_02 --> core_src_09
+  core_src_tests_02 --> core_src_10
+  core_src_tests_02 --> llm
+  core_src_tests_03["core-src-tests-03"]
+  core_src_tests_03 --> core_src_01
+  core_src_tests_03 --> core_src_02
+  core_src_tests_03 --> core_src_03
+  core_src_tests_03 --> core_src_04
+  core_src_tests_03 --> core_src_05
+  core_src_tests_03 --> core_src_06
+  core_src_tests_03 --> core_src_07
+  core_src_tests_03 --> core_src_09
+  core_src_tests_03 --> llm
+  core_src_tests_04["core-src-tests-04"]
+  core_src_tests_04 --> core_src_01
+  core_src_tests_04 --> core_src_03
+  core_src_tests_04 --> core_src_04
+  core_src_tests_04 --> core_src_05
+  core_src_tests_04 --> core_src_06
+  core_src_tests_04 --> core_src_07
+  core_src_tests_04 --> core_src_08
+  core_src_tests_04 --> core_src_09
+  core_src_tests_04 --> core_src_10
+  core_src_tests_05["core-src-tests-05"]
+  core_src_tests_05 --> core_src_01
+  core_src_tests_05 --> core_src_04
+  core_src_tests_05 --> core_src_06
+  core_src_tests_05 --> core_src_07
+  core_src_tests_05 --> core_src_08
+  core_src_tests_05 --> core_src_09
+  core_src_tests_05 --> core_src_10
+  core_src_tests_06["core-src-tests-06"]
+  core_src_tests_06 --> core_src_01
+  core_src_tests_06 --> core_src_04
+  core_src_tests_06 --> core_src_05
+  core_src_tests_06 --> core_src_08
+  core_src_tests_06 --> core_src_09
+  core_src_tests_06 --> core_src_10
+  core_src_tests_06 --> core_src_11
+  llm --> core_src_03
+  llm_tests["llm-tests"]
+  llm_tests --> llm
   mcp_src["mcp-src"]
   mcp_src --> core_src_01
+  mcp_src --> core_src_02
+  mcp_src --> core_src_03
   mcp_src --> core_src_04
-  mcp_src --> core_src_05
-  mcp_src --> core_src_07
-  mcp_src --> core_src_11
-  mcp_src --> core_src_12
+  mcp_src --> core_src_09
+  mcp_src --> core_src_10
+  mcp_src_tests["mcp-src-tests"]
+  mcp_src_tests --> mcp_src

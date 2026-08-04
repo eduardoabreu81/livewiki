@@ -818,7 +818,7 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error("invalid pathRoles: must be an object");
     }
     const roleObject = value as Record<string, unknown>;
-    const allowed = new Set(["fixturePatterns", "toolingPatterns", "docsPatterns"]);
+    const allowed = new Set(["testPatterns", "fixturePatterns", "toolingPatterns", "docsPatterns"]);
     for (const key of Object.keys(roleObject)) {
       if (!allowed.has(key)) {
         throw new Error(`invalid pathRoles key "${key}"`);

@@ -655,8 +655,8 @@ interface ConcernGroupRule {
 /**
  * D2 concern-group rules, evaluated in this FIXED order (deterministic
  * precedence after the import clusters): deployment surfaces, then
- * testing fixtures (modules whose `PathRole` classification is
- * "fixture").
+ * testing (modules whose `PathRole` classification is "fixture" or — #24 —
+ * "test").
  */
 const CONCERN_GROUP_RULES: readonly ConcernGroupRule[] = [
   {
@@ -668,7 +668,10 @@ const CONCERN_GROUP_RULES: readonly ConcernGroupRule[] = [
   {
     title: "Testing",
     intentSignal: "testing",
-    matches: (module) => module.role === "fixture",
+    // #24 (maintainer decision 2026-08-04): test-role modules are the
+    // concern's natural evidence — a "Testing" topic matching fixtures
+    // only while excluding the actual test files describes nothing.
+    matches: (module) => module.role === "fixture" || module.role === "test",
     surfacePaths: (module) => [...module.paths],
   },
 ];

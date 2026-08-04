@@ -894,3 +894,125 @@ describe("modules — advisory stage-2 display titles", () => {
     expect(modules).toEqual(snapshot);
   });
 });
+
+describe("modules — #24 test-role classification", () => {
+  it("defaults: filename conventions across languages → test", () => {
+    expect(classifyPathRole("src/auth/login.test.ts")).toBe("test");
+    expect(classifyPathRole("src/auth/login.spec.ts")).toBe("test");
+    expect(classifyPathRole("src/__tests__/login.ts")).toBe("test");
+    expect(classifyPathRole("test/services/test_llm.py")).toBe("test");
+    expect(classifyPathRole("services/llm_test.py")).toBe("test");
+    expect(classifyPathRole("internal/server/server_test.go")).toBe("test");
+    expect(classifyPathRole("src/main/java/com/x/FooTest.java")).toBe("test");
+    expect(classifyPathRole("src/main/java/com/x/FooTests.java")).toBe("test");
+    expect(classifyPathRole("app/FooTest.kt")).toBe("test");
+    expect(classifyPathRole("app/FooSpec.kt")).toBe("test");
+    expect(classifyPathRole("src/FooSpec.scala")).toBe("test");
+    expect(classifyPathRole("src/FooSuite.scala")).toBe("test");
+    expect(classifyPathRole("tests/FooTests.cs")).toBe("test");
+  });
+
+  it("defaults: language-DEFINED Maven/Gradle layouts match without a Test suffix", () => {
+    expect(classifyPathRole("src/test/java/com/x/TestHelper.java")).toBe("test");
+    expect(classifyPathRole("src/test/java/com/x/Base.java")).toBe("test");
+    expect(classifyPathRole("src/test/kotlin/com/x/Fixtures.kt")).toBe("test");
+    // The same layout elsewhere is product code.
+    expect(classifyPathRole("src/main/java/com/x/Base.java")).toBe("product");
+  });
+
+  it("defaults: bare tests/ dirs and the Cargo tests/ layout stay product (precision)", () => {
+    expect(classifyPathRole("tests/helper.py")).toBe("product");
+    expect(classifyPathRole("tests/integration.rs")).toBe("product");
+    // …but a test filename convention wins even inside a bare tests/ dir.
+    expect(classifyPathRole("tests/integration_test.py")).toBe("test");
+  });
+
+  it("precedence: a fixture matching a test convention stays fixture", () => {
+    expect(classifyPathRole("test/fixtures/foo/x.test.ts")).toBe("fixture");
+    expect(classifyPathRole("packages/core/test/fixtures/sample-go-repo/main_test.go")).toBe("fixture");
+  });
+
+  it("config testPatterns REPLACE the defaults; empty array disables", () => {
+    expect(classifyPathRole("src/auth/login.test.ts", { testPatterns: ["specs/**"] })).toBe("product");
+    expect(classifyPathRole("specs/login.ts", { testPatterns: ["specs/**"] })).toBe("test");
+    expect(classifyPathRole("src/auth/login.test.ts", { testPatterns: [] })).toBe("product");
+  });
+
+  it("heuristic: co-located tests split into a sibling <id>-tests module (exact partition)", () => {
+    const mods = identifyModulesHeuristic([
+      "src/auth/login.ts",
+      "src/auth/session.ts",
+      "src/auth/login.test.ts",
+      "src/utils/helper.ts",
+    ]);
+    const auth = mods.find((m) => m.id === "auth");
+    const authTests = mods.find((m) => m.id === "auth-tests");
+    expect(auth?.paths).toEqual(["src/auth/login.ts", "src/auth/session.ts"]);
+    expect(authTests?.paths).toEqual(["src/auth/login.test.ts"]);
+    // The partition stays exact: every path appears in exactly one module.
+    expect(mods.flatMap((m) => m.paths).sort()).toEqual([
+      "src/auth/login.test.ts",
+      "src/auth/login.ts",
+      "src/auth/session.ts",
+      "src/utils/helper.ts",
+    ]);
+    expect(classifyModuleRole(auth!)).toBe("product");
+    expect(classifyModuleRole(authTests!)).toBe("test");
+  });
+
+  it("heuristic: a directory with ONLY test files yields only the -tests module", () => {
+    const mods = identifyModulesHeuristic([
+      "src/auth/login.test.ts",
+      "src/auth/session.test.ts",
+    ]);
+    expect(mods.map((m) => m.id)).toEqual(["auth-tests"]);
+  });
+
+  it("heuristic: symbolCount is split between the product and test modules", () => {
+    const counts = new Map([
+      ["src/auth/login.ts", 5],
+      ["src/auth/login.test.ts", 3],
+    ]);
+    const mods = identifyModulesHeuristic(
+      ["src/auth/login.ts", "src/auth/login.test.ts"],
+      counts,
+    );
+    expect(mods.find((m) => m.id === "auth")?.symbolCount).toBe(5);
+    expect(mods.find((m) => m.id === "auth-tests")?.symbolCount).toBe(3);
+  });
+
+  it("heuristic: pathRoleConfig is honored in the split", () => {
+    const mods = identifyModulesHeuristic(
+      ["src/auth/login.ts", "src/auth/login.test.ts"],
+      new Map(),
+      { testPatterns: [] },
+    );
+    expect(mods.map((m) => m.id)).toEqual(["auth"]);
+    expect(mods[0]?.paths).toHaveLength(2);
+  });
+});
+
+describe("modules W — #24 `-tests` suffix survives uniqueness expansion", () => {
+  it("colliding leaf dirs: product and test siblings keep readable paired ids", () => {
+    const mods = makeUniqueDeterministicIds([
+      { id: "src", paths: ["packages/core/src/a.ts"], symbolCount: 1 },
+      { id: "src-tests", paths: ["packages/core/src/a.test.ts"], symbolCount: 1 },
+      { id: "src", paths: ["packages/cli/src/b.ts"], symbolCount: 1 },
+      { id: "src-tests", paths: ["packages/cli/src/b.test.ts"], symbolCount: 1 },
+      { id: "src", paths: ["packages/mcp/src/c.ts"], symbolCount: 1 },
+      { id: "src-tests", paths: ["packages/mcp/src/c.test.ts"], symbolCount: 1 },
+    ]);
+    const ids = mods.map((m) => m.id).sort();
+    expect(ids).toEqual([
+      "cli-src",
+      "cli-src-tests",
+      "core-src",
+      "core-src-tests",
+      "mcp-src",
+      "mcp-src-tests",
+    ]);
+    // The test module is the one carrying the test paths.
+    const coreTests = mods.find((m) => m.id === "core-src-tests");
+    expect(coreTests?.paths).toEqual(["packages/core/src/a.test.ts"]);
+  });
+});

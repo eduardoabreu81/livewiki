@@ -177,9 +177,9 @@ export function extractCalls(tree: Tree, relPath: string, source: string): CallR
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md) — dependency and dependent
-- [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md) — dependency and dependent
-- [core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)](core-src-06.md) — dependency
+- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
+- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency and dependent
+- [Anchor ledger and artifact repair](core-src-01.md) — dependency
 
-> Coverage note: this module's source (11 files, ~185k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (3 files, ~94k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

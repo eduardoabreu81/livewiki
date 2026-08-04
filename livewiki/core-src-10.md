@@ -189,9 +189,9 @@ The fixture harness builds a temp repo root, writes the wiki files needed by the
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md) — dependency and dependent
-- [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md) — dependency and dependent
-- [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md) — dependency
+- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
+- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency and dependent
+- [Anchor ledger and artifact repair](core-src-01.md) — dependency and dependent
 
-> Coverage note: this module's source (9 files, ~266k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (5 files, ~117k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

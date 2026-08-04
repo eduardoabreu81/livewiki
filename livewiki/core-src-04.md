@@ -256,9 +256,9 @@ The config layer (`config.ts`) is the thin dependency surface that loads `.livew
 ## Navigate
 
 - Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
-- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md) — dependency
-- [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md) — dependency
-- [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md) — dependency
+- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency and dependent
+- [Anchor ledger and artifact repair](core-src-01.md) — dependency and dependent
+- [core prompts, presets, pricing, and README export](core-src-10.md) — dependency and dependent
 
-> Coverage note: this module's source (11 files, ~330k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (8 files, ~141k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

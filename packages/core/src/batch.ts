@@ -141,7 +141,7 @@ import { validateMermaidSyntax } from "./mermaid-validator.js";
 import { computeSnapshotHash, writeManifestIfChanged, buildManifest } from "./manifest.js";
 import { sha256 } from "./hashes.js";
 import { recordUpdateMetric } from "./update-metrics.js";
-import { regenerateArchitectureOverview, syncClassDiagrams, syncStaleFlowArtifacts, syncStaleTopicArtifacts } from "./init.js";
+import { regenerateArchitectureOverview, syncClassDiagrams, syncStaleFlowArtifacts, syncStaleModulePages, syncStaleTopicArtifacts } from "./init.js";
 import { ensureTopicsIndexScaffold, extractModuleOpeningDigest, loadFlowPresentations, syncFlowsIndexHub } from "./navigation.js";
 import { parseFrontmatter, getOwner } from "./frontmatter.js";
 import { generateAuxiliaryModulePage } from "./auxiliary-page.js";
@@ -298,6 +298,14 @@ export interface BatchRunResult {
   skippedFlowsHub?: { path: string; owner: "human" | "mixed" | null };
   /** R11-NAV: a protected auxiliary hub was preserved and not regenerated. */
   skippedAuxiliaryHub?: { path: string; owner: "human" | "mixed" | null };
+  /**
+   * #24: generated module pages removed because their module is no longer
+   * in the run's effective partition (migration path for partition
+   * changes). Surfaced in the run result (human/JSON), never persisted.
+   * Full runs only — `--only` re-derives a partition that may differ from
+   * a refined one.
+   */
+  removedStalePages?: string[];
   /** R11-A: a protected topic hub was preserved and not regenerated. */
   skippedTopicsHub?: { path: string; owner: "human" | "mixed" | null };
   /**
@@ -572,7 +580,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     });
 
     // === Estágio 2: Identificação de módulos (heurística + optional LLM refine) ===
-    let modules = identifyModulesHeuristic(filePaths, symbolCountByPath);
+    let modules = identifyModulesHeuristic(filePaths, symbolCountByPath, resolvedConfig.pathRoles);
     const stage2Task = createOrGetTask(db, runId, 2, "modules", opts.mode);
     if (stage2Task) {
       const startedAt = Date.now();
@@ -2454,6 +2462,23 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       await syncStaleTopicArtifacts(absRoot, topicCandidates);
     }
 
+    // #24: generated module pages whose module disappeared from the
+    // effective partition (test-role split, pattern/config changes) are
+    // removed; human/mixed pages are preserved. FULL runs only — an
+    // `--only` run re-derives a partition that may differ from a
+    // previously refined one and would make valid pages look stale.
+    let removedStalePages: string[] | undefined;
+    if (!opts.onlyTarget && !runAbortedByRollback) {
+      const staleModulePages = await syncStaleModulePages(absRoot, modules);
+      if (staleModulePages.removed.length > 0) {
+        removedStalePages = staleModulePages.removed;
+        // Re-run the ledger so the removed pages' doc_pages/anchors drop
+        // NOW (ledger step 7) — otherwise verify reports missing_wiki_path
+        // for them until the next index.
+        await runLedger(absRoot, { quiet: true });
+      }
+    }
+
     // H (rev2): if ordered > 0 but cb.done === 0, this is a pipeline failure
     // (we finished nothing). Status becomes "completed_with_failures" (exit 1),
     // never "completed" (exit 0). Same logic as `cb.fails > 0` but for the
@@ -2564,6 +2589,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     if (skippedTopicsHub) finalResult.skippedTopicsHub = skippedTopicsHub;
     if (skippedFlowCandidates.length > 0) finalResult.skippedFlowCandidates = skippedFlowCandidates;
     if (skippedTopicPlan) finalResult.skippedTopicPlan = skippedTopicPlan;
+    if (removedStalePages) finalResult.removedStalePages = removedStalePages;
     return finalResult;
   } finally {
     db.close();

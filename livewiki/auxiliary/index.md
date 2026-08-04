@@ -7,29 +7,39 @@ owner: generated
 
 Reference inventory for tests, fixtures, tooling, benchmarks, and repository documentation.
 
+## Automated tests
+
+- Core source tests — part 1 of 6 — page unavailable
+- Core source tests — part 2 of 6 — page unavailable
+- CLI source tests — page unavailable
+- Core source tests — part 6 of 6 — page unavailable
+- Core source tests — part 3 of 6 — page unavailable
+- Core source tests — part 5 of 6 — page unavailable
+- MCP source tests — page unavailable
+- Core source tests — part 4 of 6 — page unavailable
+- LLM source tests — page unavailable
+
 ## Test fixtures
 
+- Sample rust repo source — page unavailable
+- Fixture server source — page unavailable
+- Sample go repo server module — page unavailable
 - [Sample ts repo source](../sample-ts-repo-src.md)
 - [Fase2 repo source](../fase2-repo-src.md)
+- Fixture source — page unavailable
+- Model source — page unavailable
+- Cmd module — page unavailable
 - [Lib module](../lib.md)
+- Sample go repo module — page unavailable
+- Sample rust repo module — page unavailable
 
 ## Tooling and benchmarks
 
 - [Scripts module](../scripts.md)
 - [CLI scripts module](../cli-scripts.md)
 - [MCP scripts module](../mcp-scripts.md)
-- Rerun clean v30 metrics module — page unavailable
-- Rerun clean v31 metrics module — page unavailable
-- Rerun clean v32 metrics module — page unavailable
-- Rerun clean v33 metrics module — page unavailable
-- Rerun clean v34 metrics module — page unavailable
-- Revert check metrics module — page unavailable
 
 ## Repository documentation
 
-- 2026 07 25 etapa 3 e2e module — page unavailable
-- 2026 07 25 etapa 3 e2e metrics module — page unavailable
 - [Documentation](../docs.md)
-- Handoffs module — page unavailable
-- Metrics run5 module — page unavailable
-- Metrics run6 module — page unavailable
+- Plans module — page unavailable

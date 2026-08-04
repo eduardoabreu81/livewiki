@@ -239,7 +239,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   filesWritten.push(...classDiagrams.written);
 
   // Human navigation is assembled only from the index and existing page metadata.
-  const presentations = await loadModulePresentations(absRoot, modules);
+  const presentations = await loadModulePresentations(absRoot, modules, pathRoleConfig);
   // Stage-5 surface: keep the flows hub consistent with the flow pages
   // on disk so a plain init neither points at a stale hub nor drops a
   // live one.
@@ -554,6 +554,50 @@ export async function syncStaleTopicArtifacts(
   return removed.sort();
 }
 
+export interface StaleModulePageSyncResult {
+  removed: string[];
+}
+
+/** Deterministic root-level pages that are never module pages. */
+const DETERMINISTIC_ROOT_PAGES = new Set(["quickstart.md", "tasks.md", "understanding.md"]);
+
+/**
+ * #24 (2026-08-04): removes root-level module pages whose module is no
+ * longer in the current partition — the migration path for partition
+ * changes (test-role split, pattern/config changes). Same ownership
+ * contract as syncStaleFlowArtifacts: a page is removed ONLY when its
+ * frontmatter parses and declares exactly `owner: generated`; human,
+ * mixed, unparseable, or ownerless pages are preserved byte-for-byte.
+ *
+ * Callers must pass the run's EFFECTIVE module list (post-refine) and
+ * must NOT call this from a plain init or an `--only` run: those derive
+ * the heuristic partition, which may differ from a previously
+ * LLM-refined one and would make valid pages look stale.
+ */
+export async function syncStaleModulePages(
+  repoRoot: string,
+  modules: Module[],
+): Promise<StaleModulePageSyncResult> {
+  const absRoot = nodePath.resolve(repoRoot);
+  // Module pages are written with the RAW module id (batch.ts:
+  // `livewiki/${module.id}.md`), so the keep set uses ids verbatim.
+  const keep = new Set(modules.map((module) => `${module.id}.md`));
+  const removed: string[] = [];
+  const wikiDir = "livewiki";
+  const absWiki = await safeIo.resolveAndValidate(absRoot, wikiDir);
+  for (const entry of await nodeFs.readdir(absWiki, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    if (DETERMINISTIC_ROOT_PAGES.has(entry.name)) continue;
+    if (keep.has(entry.name)) continue;
+    const relPath = `${wikiDir}/${entry.name}`;
+    const content = await safeIo.readText(absRoot, relPath).catch(() => null);
+    if (content === null || readFlowPageOwner(content) !== "generated") continue;
+    await safeIo.remove(absRoot, relPath);
+    removed.push(relPath);
+  }
+  return { removed: removed.sort() };
+}
+
 /**
  * Frontmatter owner of a flow page for stale cleanup. Returns "generated"
  * ONLY for a parseable page declaring exactly `owner: generated`;
@@ -613,7 +657,7 @@ async function buildPlan(
     // resolving edges and prioritizing — so module identity is the same
     // across all derived artifacts (modules.mmd, quickstart.md, overview.md,
     // regenerator, and batch_tasks.target).
-    const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath);
+    const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath, rawConfig.pathRoles);
     // Unique first, then split oversized, then unique again (see batch.ts).
     // Prefer config thresholds when present so init --plan matches batch.
     // The config is loaded ONCE in `runInit` and forwarded here — we do
@@ -697,7 +741,7 @@ export async function regenerateArchitectureOverview(
   // must not depend on the caller.
   const rawConfig = await loadConfig(absRoot);
   const { modules, edges, ordered, totalSymbols, totalFiles, pathRoleConfig } = await buildPlan(absRoot, rawConfig);
-  const presentations = await loadModulePresentations(absRoot, modules);
+  const presentations = await loadModulePresentations(absRoot, modules, pathRoleConfig);
   // Sync the stage-5 flows hub with the flow pages on disk before any
   // gated link (quickstart, overview) is regenerated.
   const flowPresentations = await loadFlowPresentations(absRoot);

@@ -192,9 +192,9 @@ On the repair side, `makePage` synthesizes a minimal compliant artifact for non-
 ## Navigate
 
 - Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
-- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md) — dependency and dependent
-- [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md) — dependency and dependent
-- [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md) — dependency
+- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
+- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency
+- [core prompts, presets, pricing, and README export](core-src-10.md) — dependency and dependent
 
-> Coverage note: this module's source (7 files, ~268k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (5 files, ~185k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

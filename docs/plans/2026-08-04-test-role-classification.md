@@ -177,13 +177,11 @@ Upgrade path (maintainer decision 2026-08-04):
 
 On THIS repo (the reviewer's evidence base):
 
-- Product module count drops (48 → ~15); `packages/core/src` fits one
-  module again (≤ `maxFiles`).
-- Zero LLM calls for test modules; batch token estimate drops ~40% for
-  stage 4.
 - **No product page contains a test-file anchor** (the old criterion —
   "the 321 anchors still resolve" — passed precisely because the stale
   pages stayed on disk; it measured nothing).
+- Zero LLM calls for test modules; stage-4 token spend on this repo's
+  partition drops ~40% (the test share).
 - **No orphan page from the old partition remains on disk** after one
   batch run (generated-owner only; a planted `owner: human` old-ID page is
   preserved and reported).
@@ -193,6 +191,12 @@ On THIS repo (the reviewer's evidence base):
   language convention (incl. Maven/Gradle layout and prose-tier Kotlin/
   Scala/C#), precedence vs fixture, per-file split, zero-token auxiliary
   routing, stale-page cleanup ownership contract, resume-keeps-partition.
+
+> Correction (2026-08-04, maintainer): the original "48 → ~15 modules,
+> `packages/core/src` fits one module again" criterion was based on a
+> wrong diagnosis — the binding split axis is `maxSymbols: 80`, not test
+> files (13→11 chunks). It is replaced by the no-test-anchor criterion
+> above; the residual "meaningless names" half is now item #25.
 
 ## Decisions taken (maintainer, 2026-08-04)
 

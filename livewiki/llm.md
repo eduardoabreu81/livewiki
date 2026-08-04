@@ -286,7 +286,7 @@ function fakeFetch(response: { status?: number; body?: unknown; ok?: boolean }):
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md) — dependency
-- [core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)](core-src-06.md) — dependent
-- [Livewiki core src 07](core-src-07.md) — dependent
+- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependent
+- [Batch stage 5, status aggregation, and surgical repair fixtures](core-src-03.md) — dependency
+- [Stage 4 artifact validator and auxiliary page assembly](core-src-02.md) — dependent
 <!-- livewiki:navigate:end -->

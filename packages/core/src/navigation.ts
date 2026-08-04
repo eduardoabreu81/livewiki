@@ -43,6 +43,7 @@ export interface RelatedModule {
 }
 
 const AUXILIARY_ROLE_SECTIONS = [
+  { role: "test", heading: "Automated tests" },
   { role: "fixture", heading: "Test fixtures" },
   { role: "tooling", heading: "Tooling and benchmarks" },
   { role: "docs", heading: "Repository documentation" },
@@ -59,9 +60,18 @@ const MANUAL_BLOCK_RE = /<!--\s*lw:manual\s*-->[\s\S]*?<!--\s*\/lw:manual\s*-->/
  * Module.id remains the sole key used by graphs, pages, tasks, checkpoints,
  * anchors, and filenames; this map is presentation-only.
  */
-export function buildDisplayTitleFallbacks(modules: Module[]): Map<string, string> {
+export function buildDisplayTitleFallbacks(
+  modules: Module[],
+  pathRoleConfig?: PathRoleConfig,
+): Map<string, string> {
   const stable = [...modules].sort(compareModules);
   const commonDirs = new Map(stable.map((module) => [module.id, commonDirectory(module.paths)]));
+  // #24: the display layer must not merge test-role modules into the same
+  // title series as product modules that share a directory — the W-gate
+  // keeps the ids distinguishable (`core-src-tests-*`), and the titles
+  // must follow ("Core Source Tests — part 1 of 6", not
+  // "Core source — part 12 of 17").
+  const roles = new Map(stable.map((module) => [module.id, classifyModuleRole(module, pathRoleConfig)]));
   const suffixes = new Map<string, string>();
 
   for (const module of stable) {
@@ -73,6 +83,11 @@ export function buildDisplayTitleFallbacks(modules: Module[]): Map<string, strin
       const collision = stable.some((other) => {
         if (other.id === module.id) return false;
         const otherSegments = commonDirs.get(other.id) ?? [];
+        // Same-directory siblings skip each other (they are distinguished by
+        // the appended role label — #24 "tests" — not by path segments);
+        // siblings in OTHER directories collide normally, so each role's
+        // series disambiguates across packages ("Core Source Tests" vs
+        // "CLI Source Tests").
         if (otherSegments.join("/").toLowerCase() === segments.join("/").toLowerCase()) return false;
         const otherCandidate = otherSegments.length > 0
           ? otherSegments.slice(-Math.min(length, otherSegments.length))
@@ -88,12 +103,18 @@ export function buildDisplayTitleFallbacks(modules: Module[]): Map<string, strin
     ) {
       chosen = [...chosen, "source"];
     }
+    if (roles.get(module.id) === "test") chosen = [...chosen, "tests"];
     suffixes.set(module.id, humanizeSegments(chosen));
   }
 
+  const groupKeyOf = (module: Module): string =>
+    (commonDirs.get(module.id) ?? []).join("/").toLowerCase() +
+    "" +
+    (roles.get(module.id) ?? "product");
+
   const byDirectory = new Map<string, Module[]>();
   for (const module of stable) {
-    const directoryKey = (commonDirs.get(module.id) ?? []).join("/").toLowerCase();
+    const directoryKey = groupKeyOf(module);
     const group = byDirectory.get(directoryKey) ?? [];
     group.push(module);
     byDirectory.set(directoryKey, group);
@@ -103,7 +124,7 @@ export function buildDisplayTitleFallbacks(modules: Module[]): Map<string, strin
   for (const module of stable) {
     let title = suffixes.get(module.id) ?? "Repository module";
     if (normalizeLabel(title) === normalizeLabel(module.id)) title += " module";
-    const group = byDirectory.get((commonDirs.get(module.id) ?? []).join("/").toLowerCase()) ?? [];
+    const group = byDirectory.get(groupKeyOf(module)) ?? [];
     if (group.length > 1) {
       const part = group.findIndex((candidate) => candidate.id === module.id) + 1;
       title += ` — part ${part} of ${group.length}`;
@@ -116,8 +137,9 @@ export function buildDisplayTitleFallbacks(modules: Module[]): Map<string, strin
 export async function loadModulePresentations(
   repoRoot: string,
   modules: Module[],
+  pathRoleConfig?: PathRoleConfig,
 ): Promise<Map<string, ModulePresentation>> {
-  const fallbacks = buildDisplayTitleFallbacks(modules);
+  const fallbacks = buildDisplayTitleFallbacks(modules, pathRoleConfig);
   const result = new Map<string, ModulePresentation>();
   for (const module of [...modules].sort(compareModules)) {
     const relPath = `livewiki/${module.id}.md`;

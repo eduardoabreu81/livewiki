@@ -362,9 +362,7 @@ async function writeLivewikiFile(relPath: string, content: string): Promise<void
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md) — dependency and dependent
-- [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md) — dependency and dependent
-- [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md) — dependency and dependent
-
-> Coverage note: this module's source (12 files, ~205k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
+- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency
+- [core prompts, presets, pricing, and README export](core-src-10.md) — dependent
 <!-- livewiki:navigate:end -->

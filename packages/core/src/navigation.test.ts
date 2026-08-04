@@ -1114,3 +1114,37 @@ describe("generateQuickstart — understanding synthesis priority (item 23)", ()
     expect(noReadme).not.toContain("Synthesized from the verified wiki pages");
   });
 });
+
+describe("display title fallbacks — #24 test-role separation", () => {
+  it("product and test siblings number separate series with distinct labels", () => {
+    const mods: Module[] = [
+      { id: "core-src-01", paths: ["packages/core/src/a.ts"], symbolCount: 2 },
+      { id: "core-src-02", paths: ["packages/core/src/b.ts"], symbolCount: 3 },
+      { id: "core-src-tests-01", paths: ["packages/core/src/a.test.ts"], symbolCount: 2 },
+      { id: "core-src-tests-02", paths: ["packages/core/src/b.test.ts"], symbolCount: 1 },
+      { id: "core-src-tests-03", paths: ["packages/core/src/c.test.ts"], symbolCount: 1 },
+      { id: "cli-src", paths: ["packages/cli/src/main.ts"], symbolCount: 1 },
+    ];
+    const titles = buildDisplayTitleFallbacks(mods);
+    // Product series counts only product chunks.
+    expect(titles.get("core-src-01")).toBe("Core source — part 1 of 2");
+    expect(titles.get("core-src-02")).toBe("Core source — part 2 of 2");
+    // Test series says "tests" and counts only test chunks.
+    expect(titles.get("core-src-tests-01")).toBe("Core source tests — part 1 of 3");
+    expect(titles.get("core-src-tests-03")).toBe("Core source tests — part 3 of 3");
+    // A lone product module in a sibling dir is untouched.
+    expect(titles.get("cli-src")).toBe("CLI source");
+  });
+
+  it("a single test module in a directory still gets the tests label (no part suffix)", () => {
+    const mods: Module[] = [
+      { id: "cli-src", paths: ["packages/cli/src/main.ts"], symbolCount: 1 },
+      { id: "cli-src-tests", paths: ["packages/cli/src/main.test.ts"], symbolCount: 1 },
+    ];
+    const titles = buildDisplayTitleFallbacks(mods);
+    // Lone-directory convention (unchanged): the product half is "Source";
+    // the test half is labeled.
+    expect(titles.get("cli-src")).toBe("Source");
+    expect(titles.get("cli-src-tests")).toBe("Source tests");
+  });
+});

@@ -17,8 +17,9 @@
 > queue is **#24 test-role classification → pay the repo's `changed` doc
 > debt via the MiniMax-M3 proxy (after #24 repartitions, never before) →
 > beta launch** (naming decided 2026-08-04: keep `@livewiki`, MIT, 0.1.0,
-> publish with `pnpm publish -r`). #6 v2 (pay-variant) and the optional
-> hardening list stay post-beta.
+> publish with `pnpm publish -r`). #6 v2 (pay-variant), #25 (semantic
+> partition of oversized modules), and the optional hardening list stay
+> post-beta.
 > items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
 > dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
 > ~6% of its token cost; R11-A validated and kept; commit/push done).
@@ -762,10 +763,27 @@ stale-module-page cleanup on every batch/init regen migrates existing
 wikis (human/mixed/untrusted pages preserved and reported, mirroring the
 flow/topic precedent). Acceptance: no product page contains a test-file
 anchor; no old-partition orphan page remains on disk; `verify` zero
-issues; `packages/core/src` fits one module again. Sequencing (2026-08-04):
+issues. Sequencing (2026-08-04):
 the repo's `changed` doc debt is paid AFTER #24 lands — repartition
 first, then pay, to avoid spending tokens on pages that will stop
 existing.
+
+### 25. Semantic partition of oversized modules (POST-BETA)
+
+Source: the "names that say nothing" half of the 2026-08-03 P2 finding —
+`core-src-07`, "core-src-06 stage-5 internals". The original diagnosis
+(test files force the split) was WRONG, corrected 2026-08-04: removing
+tests only moved `packages/core/src` from 13 to 11 chunks. The binding
+axis is `maxSymbols: 80` over giant files (`batch.ts` alone holds 55
+symbols), so the directory splits into ~11 chunks even with zero test
+files. Levers: the `maxSymbols` default; smarter chunking along import
+communities (item 9's diagnostic data); and stage-2 semantic
+rename/re-boundary (the refine contract already lets the LLM RENAME
+modules and ADJUST boundaries). Open questions: raise the symbol cap vs
+community-aware chunk boundaries vs post-split LLM naming only. Not a
+#24 acceptance gap — #24 delivered its measurable half (zero test
+anchors in product pages, zero tokens on tests); this is the residual
+half with a different cause.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 

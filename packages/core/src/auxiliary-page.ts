@@ -27,12 +27,18 @@ export interface AuxiliarySymbolRow {
 }
 
 const ROLE_LABEL: Record<AuxiliaryRole, string> = {
+  test: "automated tests",
   fixture: "test fixtures and supporting test data",
   tooling: "build tooling, scripts, or benchmarks",
   docs: "repository documentation",
 };
 
 const ROLE_BULLETS: Record<AuxiliaryRole, [string, string, string]> = {
+  test: [
+    "You are debugging a failing test and need to see what this suite covers.",
+    "You are adding a test for a behavior that this module's product code already handles.",
+    "You are checking whether a code path has test coverage before changing it.",
+  ],
   fixture: [
     "You are debugging a failing test that depends on this fixture.",
     "You need to see every exported symbol this fixture provides to tests.",

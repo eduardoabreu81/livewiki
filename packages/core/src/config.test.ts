@@ -138,6 +138,23 @@ describe("config.loadConfig", () => {
     );
     await expect(loadConfig(repoRoot)).rejects.toThrow(/pathRoles\.fixturePatterns/);
   });
+
+  it("loads pathRoles.testPatterns (#24) and rejects unknown keys", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ pathRoles: { testPatterns: ["specs/**"] } }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.pathRoles).toEqual({ testPatterns: ["specs/**"] });
+
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ pathRoles: { testFilePatterns: ["x/**"] } }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/invalid pathRoles key/);
+  });
 });
 
 describe("config.saveConfig + loadConfig round-trip", () => {

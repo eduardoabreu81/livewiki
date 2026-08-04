@@ -328,6 +328,11 @@ export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>):
   for (const s of result.skippedFlowCandidates ?? []) {
     lines.push(`  flow skipped: ${s.slug} (${s.code}) — ${s.message}`);
   }
+  // #24: stale generated module pages removed by the repartition cleanup
+  // are never silent either.
+  for (const p of result.removedStalePages ?? []) {
+    lines.push(`  stale page removed: ${p}`);
+  }
   // Priority-0 fix (v25 paid E2E): an exhausted topic plan is optional/
   // additive, not a batch failure — never silent either.
   if (result.skippedTopicPlan) {

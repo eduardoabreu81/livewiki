@@ -12,7 +12,7 @@ function module(overrides: Partial<Module> = {}): Module {
   };
 }
 
-function assertValid(artifact: string, closedKeyList: string[], moduleId: string, moduleRole: "fixture" | "tooling" | "docs") {
+function assertValid(artifact: string, closedKeyList: string[], moduleId: string, moduleRole: "test" | "fixture" | "tooling" | "docs") {
   const normalized = normalizeStage4Artifact(artifact);
   expect(normalized.ok).toBe(true);
   const result = validateStage4Artifact(normalized.content, closedKeyList, {
@@ -115,5 +115,23 @@ describe("generateAuxiliaryModulePage", () => {
     });
     expect(artifact).toContain("# Fixture helpers");
     expect(artifact).toContain("title: Fixture helpers");
+  });
+});
+
+describe("generateAuxiliaryModulePage — #24 test role", () => {
+  it("renders the test role with its own label and passes the full contract", () => {
+    const symbols: AuxiliarySymbolRow[] = [
+      { key: "src/auth/login.test.ts#parseFlowPrompt", name: "parseFlowPrompt", kind: "function", signature: "function parseFlowPrompt(u: string): Ctx" },
+      { key: "src/auth/login.test.ts#makeValidPage", name: "makeValidPage", kind: "function", signature: null },
+    ];
+    const closedKeyList = symbols.map((s) => s.key).sort();
+    const artifact = generateAuxiliaryModulePage({
+      module: module({ id: "auth-tests", paths: ["src/auth/login.test.ts"] }),
+      role: "test",
+      symbols,
+      closedKeyList,
+    });
+    expect(artifact).toContain("automated tests");
+    assertValid(artifact, closedKeyList, "auth-tests", "test");
   });
 });
