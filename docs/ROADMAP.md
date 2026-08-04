@@ -14,12 +14,17 @@
 > external re-review is fixed and committed (`ef403aa` — grammar-state
 > tracking via `meta.grammar_state`: grammar added / removed / remapped /
 > version-bumped all direct one-run re-parses). The remaining pre-beta
-> queue is **#24 test-role classification → pay the repo's `changed` doc
-> debt via the MiniMax-M3 proxy (after #24 repartitions, never before) →
-> beta launch** (naming decided 2026-08-04: keep `@livewiki`, MIT, 0.1.0,
-> publish with `pnpm publish -r`). #6 v2 (pay-variant), #25 (semantic
-> partition of oversized modules), and the optional hardening list stay
-> post-beta.
+> queue (reconciled 2026-08-04, maintainer decision): #24 test-role
+> classification DONE (acceptance verified — zero test anchors in product
+> pages, migration batch `96b2008`) → **#25 semantic partition of
+> oversized modules (promoted to PRE-BETA — "Core source — part 7 of 11"
+> is the showcase wiki's own headline) + the `purpose_too_long`
+> understanding-task failure class (surfaced by the migration batch,
+> recovered via `--only`, never root-caused) → beta launch** (naming
+> decided 2026-08-04: keep `@livewiki`, MIT, 0.1.0, publish with
+> `pnpm publish -r`; CI green-run evidence collection underway, 3
+> consecutive matrix runs as of 96b2008). #6 v2 (pay-variant) and the
+> optional hardening list stay post-beta.
 > items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
 > dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
 > ~6% of its token cost; R11-A validated and kept; commit/push done).
@@ -254,7 +259,7 @@ files inside transactions). Tests: `batch-concurrency.test.ts`.
 The "runs tasks sequentially" premise above is historical — kept as
 the source rationale.
 
-### 8. Native CALLS edges with confidence tags
+### 8. Native CALLS edges with confidence tags ✅ DONE 2026-08-01
 
 Source: 2026-08-01 Graphify analysis (EXTRACTED/INFERRED edge tags) plus
 the standing watch-list item. Extend the indexer beyond imports with call
@@ -264,7 +269,7 @@ candidate detection: fewer false candidates, fewer burned repair rounds
 Native only (rule #8); never a general-purpose call-graph database — the
 rejection below stands; this is the documentation-focused edge set only.
 
-### 9. Community-detection cross-check for stage-2 modules
+### 9. Community-detection cross-check for stage-2 modules ✅ DONE 2026-08-01
 
 Source: 2026-08-01 Graphify analysis (Leiden communities with LLM-free
 labels) plus the standing watch-list item. Use deterministic graph
@@ -273,7 +278,7 @@ module identification. The exact-partition contract (100% of the indexed
 inventory, heuristic wins on any rejection) is preserved; the goal is
 better partitions with less reliance on the LLM refine pass.
 
-### 10. Viewer freshness badge + social previews (Phase 7 polish)
+### 10. Viewer freshness badge + social previews (Phase 7 polish) ✅ DONE 2026-08-01
 
 Source: maintainer request + the codec8 thread insight (2026-08-01
 `docs/market-research.md`). (a) A deterministic "new/recently changed"
@@ -283,7 +288,7 @@ staleness-is-deterministic principle. (b) Social/OG preview metadata
 (title, description, generated card) in the exported/built site so shared
 doc links render professionally on Slack/Discord.
 
-### 11. `export readme` — README as an output, not just an input
+### 11. `export readme` — README as an output, not just an input ✅ DONE 2026-08-01
 
 Source: 2026-08-01 codec8 analysis (`docs/market-research.md`) — their
 sharpest idea is generating the repo README itself, and it connects to
@@ -299,7 +304,7 @@ like any generated artifact; positions livewiki's top-of-funnel ("your
 first artifact in minutes") against one-shot generators while the debt
 ledger keeps the long-term moat.
 
-### 12. EOL-insensitive content hashing (phantom-debt fix)
+### 12. EOL-insensitive content hashing (phantom-debt fix) ✅ DONE 2026-08-01
 
 Source: 2026-08-01 incremental-loop test on the real MPTP repo
 (`docs/market-research.md` session; corpus `/c/tmp/livewiki-e2e/incremental-mptp-2026-08-01/`).
@@ -311,7 +316,7 @@ symbol-level). The upgrade must NOT emit a one-time phantom debt wave for
 EOL-only files: silently migrate hashes when the stored hash still matches
 the legacy raw-bytes hash.
 
-### 13. Conservative twin-file `moved` detection
+### 13. Conservative twin-file `moved` detection ✅ DONE 2026-08-01
 
 Source: same 2026-08-01 test. Provider twins (`elevenlabs_music.py` hardened,
 `sonilo.py` unchanged, identical old bodies) produced `moved` rewrites
@@ -322,7 +327,7 @@ accept a `moved` only when the symbol is gone from ALL active files (no
 same-name twin survives anywhere); otherwise classify as `changed` (donor)
 and let the new occurrence surface as new/undocumented.
 
-### 14. In-session cost accounting
+### 14. In-session cost accounting ✅ DONE 2026-08-01
 
 Source: maintainer review of the 2026-08-01 incremental MPTP update. The
 in-session payment path (the agent already in the user's session writes
@@ -334,7 +339,7 @@ debt closed (wire `--record-write` / `update-metrics.ts` into the flow as
 a required step, surfaced in `status`/metrics), so the in-session vs
 batch economics per repo are decided on numbers, not guesses.
 
-### 15. Activity dashboard (viewer)
+### 15. Activity dashboard (viewer) ✅ DONE 2026-08-02
 
 Source: maintainer directive 2026-08-01 ("everything accounted and
 expressed to the client"). Once item 14's accounting history exists
@@ -373,7 +378,7 @@ designed). Zero degraded pages. The 208 stale `changed` debt rows
 dangled after the rewrite and were closed (`resolved_at`) with a
 `debt_resolved` ×208 ledger entry; `status` now reports debt 0.
 
-### 17. Viewer version stamp + source deep-links (PRE-BETA)
+### 17. Viewer version stamp + source deep-links (PRE-BETA) ✅ DONE 2026-08-03
 
 Source: CodeWiki review 2026-08-03 (Google's codewiki.google — hosted,
 Gemini-generated; its strongest mechanic is pinning every code mention
@@ -399,7 +404,7 @@ bounded-spawn helper (shell:false, injectable); no remote ⇒ no links
 (offline posture preserved). Shipped in `be9c8c4`; gate core 1631 /
 CLI 125 / MCP 56; matrix green run 30784207402.
 
-### 18. `livewiki view --ref <tag|sha>` (PRE-BETA)
+### 18. `livewiki view --ref <tag|sha>` (PRE-BETA) ✅ DONE 2026-08-03
 
 Source: maintainer request 2026-08-03 — "version the wikis so the user
 can compare 0.1 vs 0.2"; pre-launch per the same decision. Build the
@@ -740,7 +745,7 @@ evidence line ("one evidence input, not the authority"). Both design
 cases PASS. Run: 16 tasks done / 0 failed, exit 0, verify OK (20
 pages), checkpoint 116,975 + 35,855 = 152,830 tokens == proxy EXACTLY.
 
-### 24. Test-role classification (PRE-BETA)
+### 24. Test-role classification (PRE-BETA) ✅ DONE 2026-08-04
 
 Source: external re-review 2026-08-03 (finding P2, confirmed with live
 measurements on this repo's own index): `PathRole` has no "test" concept,
@@ -768,7 +773,7 @@ the repo's `changed` doc debt is paid AFTER #24 lands — repartition
 first, then pay, to avoid spending tokens on pages that will stop
 existing.
 
-### 25. Semantic partition of oversized modules (POST-BETA)
+### 25. Semantic partition of oversized modules (PRE-BETA)
 
 Source: the "names that say nothing" half of the 2026-08-03 P2 finding —
 `core-src-07`, "core-src-06 stage-5 internals". The original diagnosis
