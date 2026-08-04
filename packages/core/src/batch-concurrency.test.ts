@@ -164,7 +164,15 @@ async function createRepo(moduleIds: string[]): Promise<string> {
   await nodeFs.mkdir(nodePath.join(root, ".livewiki"), { recursive: true });
   await nodeFs.writeFile(
     nodePath.join(root, ".livewiki", "config.json"),
-    JSON.stringify({ maxFlows: 0, maxTopics: 0, understandingSynthesis: false }),
+    JSON.stringify({
+      maxFlows: 0,
+      maxTopics: 0,
+      understandingSynthesis: false,
+      // Roadmap #22: pin the pre-#22 stage-4 format (mocks emit no Diagram
+      // section); #22-on is covered by module-diagram-format/batch-module-diagrams.
+      moduleDiagrams: false,
+      deepHierarchy: false,
+    }),
     "utf8",
   );
   return root;
@@ -332,7 +340,15 @@ describe("batchConcurrency — stage-4 worker pool (roadmap item 7)", () => {
     const repo = await makeRepo(MODULE_IDS.slice(0, 5));
     await nodeFs.writeFile(
       nodePath.join(repo, ".livewiki", "config.json"),
-      JSON.stringify({ maxFlows: 0, maxTopics: 0, batchConcurrency: 2, understandingSynthesis: false }),
+      JSON.stringify({
+        maxFlows: 0,
+        maxTopics: 0,
+        batchConcurrency: 2,
+        understandingSynthesis: false,
+        // Roadmap #22: pin the pre-#22 stage-4 format (see the shared config helper).
+        moduleDiagrams: false,
+        deepHierarchy: false,
+      }),
       "utf8",
     );
     const llm = new ValidMockLlm();

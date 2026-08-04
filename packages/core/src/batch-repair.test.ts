@@ -195,6 +195,15 @@ beforeEach(async () => {
     "utf8",
   );
   llm = new ProgrammableMockLlm();
+  // Roadmap #22: pin the pre-#22 stage-4 format for these repair-contract
+  // fixtures (stubs do not emit the Diagram section); the #22-on behavior is
+  // covered by module-diagram-format.test.ts and batch-module-diagrams.test.ts.
+  await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+    "utf8",
+  );
 });
 
 afterEach(async () => {
@@ -1583,6 +1592,9 @@ describe("batch X W — unique module IDs before stage 4", () => {
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({
         maxTopics: 0,
+        // Roadmap #22: pin the pre-#22 stage-4 format (see beforeEach note).
+        moduleDiagrams: false,
+        deepHierarchy: false,
         pathRoles: { fixturePatterns: [], toolingPatterns: [] },
       }),
       "utf8",
@@ -1753,6 +1765,15 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
       "utf8",
     );
     llm = new ProgrammableMockLlm();
+    // Roadmap #22: pin the pre-#22 stage-4 format for these repair-contract
+    // fixtures (stubs do not emit the Diagram section); the #22-on behavior is
+    // covered by module-diagram-format.test.ts and batch-module-diagrams.test.ts.
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+      "utf8",
+    );
   });
 
   afterEach(async () => {

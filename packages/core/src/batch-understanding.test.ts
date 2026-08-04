@@ -248,6 +248,16 @@ let llm: UnderstandingMockLlm;
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-batch-understanding-"));
   llm = new UnderstandingMockLlm();
+  // Roadmap #22: pin the pre-#22 stage-4 format — the understanding layer is
+  // the subject here and the mock's module pages emit no Diagram section.
+  // #22-on is covered by module-diagram-format.test.ts and
+  // batch-module-diagrams.test.ts.
+  await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+    "utf8",
+  );
 });
 
 afterEach(async () => {

@@ -61,6 +61,14 @@ beforeEach(async () => {
   // Open + close to materialize the schema (CURRENT_SCHEMA_VERSION).
   const db = openIndex(dbPath);
   db.close();
+  // Roadmap #22: pin the pre-#22 stage-4 format for status/batch fixtures
+  // (stubs emit no Diagram section); #22-on is covered by
+  // module-diagram-format.test.ts and batch-module-diagrams.test.ts.
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+    "utf8",
+  );
 });
 
 afterEach(async () => {

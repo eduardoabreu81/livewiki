@@ -883,10 +883,10 @@ describe("config — batchConcurrency", () => {
 });
 
 describe("config — roadmap item 22 module format keys", () => {
-  it("applyDefaults fills moduleDiagrams=false and deepHierarchy=false when absent", () => {
+  it("applyDefaults fills moduleDiagrams=true and deepHierarchy=true when absent (A/B 2026-08-03)", () => {
     const cfg = applyDefaults({});
-    expect(cfg.moduleDiagrams).toBe(false);
-    expect(cfg.deepHierarchy).toBe(false);
+    expect(cfg.moduleDiagrams).toBe(true);
+    expect(cfg.deepHierarchy).toBe(true);
   });
 
   it("applyDefaults does NOT overwrite explicit values", () => {

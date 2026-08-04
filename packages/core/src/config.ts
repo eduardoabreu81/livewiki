@@ -218,15 +218,16 @@ export interface LivewikiConfig {
    * `livewiki/diagrams/<slug>.mmd`, leaving the exact
    * `%% livewiki/diagrams/<slug>.mmd` placeholder in the page (the flow
    * dual-artifact pattern; node/edge budgets reuse `flowMaxDiagramNodes` /
-   * `flowMaxDiagramEdges`). Default false — off keeps the byte-identical
-   * pre-#22 module page contract.
+   * `flowMaxDiagramEdges`). Default true (maintainer decision after the #22
+   * A/B passed); set false for the byte-identical pre-#22 module page
+   * contract.
    */
   moduleDiagrams?: boolean;
   /**
    * CodeWiki-grade module pages (roadmap item 22, D2 soft contract):
    * stage-4 prompt guidance to group a module with >= 8 symbols under
    * concept-named H2 sections with H3 symbol subsections instead of a flat
-   * symbol list. Guidance only — no hard validation. Default false.
+   * symbol list. Guidance only — no hard validation. Default true.
    */
   deepHierarchy?: boolean;
   /**
@@ -350,8 +351,8 @@ export const CONFIG_DEFAULTS = {
   /** Relaxed completion round after strict exhaustion (recovery tier, Component 2). */
   relaxedRound: true,
   /** CodeWiki-grade module page format (roadmap item 22); both default off. */
-  moduleDiagrams: false,
-  deepHierarchy: false,
+  moduleDiagrams: true,
+  deepHierarchy: true,
   /** Concern-grouped topic candidates (D2: deployment/testing). */
   concernTopics: true,
   /** Stage-5c repository understanding synthesis (roadmap item 23). */

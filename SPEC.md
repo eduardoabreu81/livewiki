@@ -341,10 +341,11 @@ rather than claiming product prominence.
 
 ### Module page format flags (roadmap item 22)
 
-Two opt-in config flags revise the stage-4 module page contract (a
+Two config flags revise the stage-4 module page contract (a
 prompt-contract revision on the existing module page kind, not a new page
-kind). Both default `false`; with both off the contract is byte-identical
-to the pre-flag behavior.
+kind). Both default `true` (maintainer decision after the #22 A/B passed);
+with both explicitly set to `false` the contract is byte-identical to the
+pre-flag behavior.
 
 - `moduleDiagrams` (hard contract): every stage-4 module page carries ONE
   `## Diagram` H2 section, placed after `How it fits` and before the first

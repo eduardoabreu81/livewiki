@@ -245,6 +245,10 @@ async function writeOpenAiConfig(model: string, baseUrl: string): Promise<void> 
       baseUrl,
       maxTopics: 0,
       pricing: { inputUsdPerMtok: 3.0, outputUsdPerMtok: 15.0 },
+      // Roadmap #22: pin the pre-#22 stage-4 format (stub pages emit no
+      // Diagram section); #22-on is covered by the core #22 suites.
+      moduleDiagrams: false,
+      deepHierarchy: false,
     }, null, 2),
     "utf8",
   );

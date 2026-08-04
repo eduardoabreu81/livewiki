@@ -148,6 +148,15 @@ let llm: MockLlm;
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-community-"));
   llm = new MockLlm();
+  // Roadmap #22: pin the pre-#22 stage-4 format — the community cross-check
+  // is diagnostic-only and the mock pages emit no Diagram section. #22-on is
+  // covered by module-diagram-format.test.ts and batch-module-diagrams.test.ts.
+  await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+    "utf8",
+  );
 });
 
 afterEach(async () => {
@@ -180,7 +189,7 @@ describe("stage-2 community cross-check (roadmap item 9)", () => {
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ communityDetection: false }),
+      JSON.stringify({ communityDetection: false, moduleDiagrams: false, deepHierarchy: false }),
       "utf8",
     );
     const result = await runBatch({
@@ -256,6 +265,13 @@ describe("stage-2 community cross-check (roadmap item 9)", () => {
     const repoRoot2 = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-community-"));
     try {
       await writeDivergentFixture(repoRoot2);
+      // Same #22 pre-#22 format pins as beforeEach (fresh root, fresh config).
+      await nodeFs.mkdir(nodePath.join(repoRoot2, ".livewiki"), { recursive: true });
+      await nodeFs.writeFile(
+        nodePath.join(repoRoot2, ".livewiki/config.json"),
+        JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+        "utf8",
+      );
       const second = await runBatch({
         repoRoot: repoRoot2,
         llmClient: new MockLlm(),

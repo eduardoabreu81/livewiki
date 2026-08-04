@@ -347,6 +347,16 @@ let repoRoot: string;
 
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-surgical-"));
+  // Roadmap #22: pin the pre-#22 stage-4 format — the surgical repair
+  // contract is the subject here and the mock pages emit no Diagram section.
+  // #22-on is covered by module-diagram-format.test.ts and
+  // batch-module-diagrams.test.ts.
+  await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+    "utf8",
+  );
 });
 
 afterEach(async () => {

@@ -269,7 +269,8 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
 describe("batch — module format flags off (pre-#22 contract)", () => {
   it("no extraction, no .mmd, no diagram rules in the prompt, page written as emitted", async () => {
     await writeModuleRepo(repoRoot);
-    await writeConfig(repoRoot, {});
+    // Explicitly pinned off — the defaults flipped to ON after the #22 A/B.
+    await writeConfig(repoRoot, { moduleDiagrams: false, deepHierarchy: false });
 
     // The mock emits an inline Diagram section anyway: with the flags off the
     // orchestrator must NOT touch it — the page lands exactly as emitted.

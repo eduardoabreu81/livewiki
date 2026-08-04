@@ -93,6 +93,15 @@ beforeEach(async () => {
     "utf8",
   );
   mockLlm = new MockLlm();
+  // Roadmap #22: pin the pre-#22 stage-4 format for these orchestrator
+  // fixtures (the mock emits no Diagram section); the #22-on behavior is
+  // covered by module-diagram-format.test.ts and batch-module-diagrams.test.ts.
+  await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+    "utf8",
+  );
 });
 
 afterEach(async () => {
@@ -249,7 +258,13 @@ describe("batch.runBatch — dynamic output-token budget (Priority-0 fix)", () =
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ outputTokenStrategy: "fixed", stage4MaxOutputTokens: 8192 }),
+      JSON.stringify({
+        outputTokenStrategy: "fixed",
+        stage4MaxOutputTokens: 8192,
+        // Roadmap #22: same pre-#22 format pins as beforeEach (this config overwrites it).
+        moduleDiagrams: false,
+        deepHierarchy: false,
+      }),
       "utf8",
     );
 

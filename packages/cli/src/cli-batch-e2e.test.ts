@@ -245,7 +245,10 @@ async function writeConfig(provider: string, model: string, baseUrl: string): Pr
   await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
   await nodeFs.writeFile(
     nodePath.join(repoRoot, ".livewiki/config.json"),
-    JSON.stringify({ provider, model, baseUrl }, null, 2),
+    // Roadmap #22: pin the pre-#22 stage-4 format — the stub pages emit no
+    // Diagram section. #22-on is covered (core) by module-diagram-format.test.ts
+    // and batch-module-diagrams.test.ts.
+    JSON.stringify({ provider, model, baseUrl, moduleDiagrams: false, deepHierarchy: false }, null, 2),
     "utf8",
   );
 }
@@ -1004,6 +1007,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
           model: "claude-test-mock",
           baseUrl: stub.url,
           ignores: ["benchmarks/", "raw/openwiki/"],
+          // Roadmap #22: same pre-#22 format pins as the shared writeConfig helper.
+          moduleDiagrams: false,
+          deepHierarchy: false,
         },
         null,
         2,

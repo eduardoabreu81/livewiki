@@ -367,6 +367,10 @@ async function writeConfig(extra: Record<string, unknown> = {}): Promise<void> {
         model: "claude-test-mock",
         baseUrl: stub.url,
         maxTopics: 0,
+        // Roadmap #22: pin the pre-#22 stage-4 format (stub pages emit no
+        // Diagram section); #22-on is covered by the core #22 suites.
+        moduleDiagrams: false,
+        deepHierarchy: false,
         ...extra,
       },
       null,

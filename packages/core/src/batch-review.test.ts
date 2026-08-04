@@ -145,6 +145,15 @@ beforeEach(async () => {
     "utf8",
   );
   llm = new MockLlm();
+  // Roadmap #22: pin the pre-#22 stage-4 format for these review fixtures
+  // (the mock pages emit no Diagram section); the #22-on behavior is covered
+  // by module-diagram-format.test.ts and batch-module-diagrams.test.ts.
+  await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+    "utf8",
+  );
 });
 
 afterEach(async () => {
@@ -817,7 +826,14 @@ describe("review #5 — pricing override is preserved in repairs (not just the i
     await safeIo.writeText(
       repoRoot,
       ".livewiki/config.json",
-      JSON.stringify({ provider: "anthropic", model: "claude-test-mock", pricing: sentinelPrice }),
+      JSON.stringify({
+        provider: "anthropic",
+        model: "claude-test-mock",
+        pricing: sentinelPrice,
+        // Roadmap #22: same pre-#22 format pins as beforeEach (this config overwrites it).
+        moduleDiagrams: false,
+        deepHierarchy: false,
+      }),
     );
 
     // Initial: anchor outside the closed list → validator rejects
@@ -1449,7 +1465,7 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     await safeIo.writeText(
       repoRoot,
       ".livewiki/config.json",
-      JSON.stringify({ maxTopics: 0 }),
+      JSON.stringify({ maxTopics: 0, moduleDiagrams: false, deepHierarchy: false }),
     );
     const result = await runBatch({
       repoRoot,

@@ -303,6 +303,10 @@ describe("key-leak — API key nunca vaza", () => {
       noRefine: true,
       skipManifestWrite: true,
       maxRepairAttempts: 0,
+      // Roadmap #22: pin the pre-#22 stage-4 format (the stub emits no Diagram
+      // section); #22-on is covered by module-diagram-format/batch-module-diagrams.
+      moduleDiagrams: false,
+      deepHierarchy: false,
     });
     expect(result.status).toBe("completed_with_failures");
 
@@ -447,6 +451,10 @@ describe("key-leak — API key nunca vaza", () => {
       noRefine: true,
       skipManifestWrite: true,
       maxRepairAttempts: 0,
+      // Roadmap #22: pin the pre-#22 stage-4 format (the stub emits no Diagram
+      // section); #22-on is covered by module-diagram-format/batch-module-diagrams.
+      moduleDiagrams: false,
+      deepHierarchy: false,
     });
     expect(result.status).toBe("completed_with_failures");
 

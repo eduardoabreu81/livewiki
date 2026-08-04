@@ -155,7 +155,9 @@ async function writeIgnores(ignores: string[]): Promise<void> {
   await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
   await nodeFs.writeFile(
     nodePath.join(repoRoot, ".livewiki/config.json"),
-    JSON.stringify({ ignores }),
+    // Roadmap #22: pin the pre-#22 stage-4 format (stub emits no Diagram
+    // section); #22-on is covered by module-diagram-format/batch-module-diagrams.
+    JSON.stringify({ ignores, moduleDiagrams: false, deepHierarchy: false }),
     "utf8",
   );
 }

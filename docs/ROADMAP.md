@@ -626,7 +626,7 @@ preserved locally at `/c/tmp/gson` (evidence, not in the repo). The
 no-recovery autonomous bar was NOT met (one disclosed retry) — same
 standing caveat as previous acceptances.
 
-### 22. CodeWiki-grade output format (PRE-BETA, implemented — acceptance A/B pending)
+### 22. CodeWiki-grade output format (PRE-BETA) ✅ DONE 2026-08-03 (A/B passed, defaults ON)
 
 Source: CodeWiki review 2026-08-03 — the maintainer's first reaction to
 Google's codewiki.google was "o wiki final está muito bom; a formatação
@@ -672,6 +672,16 @@ code. Tests: `module-diagram-format.test.ts` (20 unit) +
 mermaid, verify zero, repair ACTION directive, monotonic `--only` rerun,
 flags-off byte-identical) + config key validation. The A/B acceptance
 evaluation comes later per D3 — not in this pass.
+
+**Acceptance A/B + default flip (2026-08-03, maintainer decision):** the A/B
+passed — 18/18 tasks completed, 14/14 diagrams valid, +11% tokens — so BOTH
+flags now default to `true` in `CONFIG_DEFAULTS`. Batch fixtures exercising
+the pre-#22 stage-4 contract pin `moduleDiagrams: false` /
+`deepHierarchy: false` explicitly (config.json or BatchOptions) with a
+pointer comment; the #22-on suites (`module-diagram-format.test.ts`,
+`batch-module-diagrams.test.ts`) are unchanged and still test flags ON.
+Gate after the flip: full core suite 1814 passed / 14 skipped, CLI 125,
+build clean.
 
 ### 23. Repository understanding layer (PRE-BETA) ✅ DONE 2026-08-03
 

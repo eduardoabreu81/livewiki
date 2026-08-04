@@ -363,6 +363,17 @@ let llm: Stage5MockLlm;
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-batch-stage5-"));
   llm = new Stage5MockLlm();
+  // Roadmap #22: pin the pre-#22 stage-4 format — these stage-5 contract
+  // tests are not about module-page diagrams and their stubs do not emit
+  // the Diagram section. Tests that write their own config.json repeat the
+  // same two pins. The #22-on behavior is covered by
+  // module-diagram-format.test.ts and batch-module-diagrams.test.ts.
+  await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+  await nodeFs.writeFile(
+    nodePath.join(repoRoot, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
+    "utf8",
+  );
 });
 
 afterEach(async () => {
@@ -609,7 +620,8 @@ describe("batch stage 5 — diagram gates (Priority-0 fix: deterministic generat
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ flowMaxDiagramNodes: 1, flowMaxDiagramEdges: 1 }),
+      // #22: same pre-#22 format pins as beforeEach (this config overwrites it).
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, flowMaxDiagramNodes: 1, flowMaxDiagramEdges: 1 }),
       "utf8",
     );
 
@@ -865,7 +877,7 @@ describe("batch stage 5 — gating and cleanup", () => {
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ maxFlows: 0 }),
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, maxFlows: 0 }),
       "utf8",
     );
     // Pre-existing stale generated flow artifacts: with the gate closed
@@ -1399,7 +1411,7 @@ describe("batch stage 5 — flows hub ownership (R10.1 C)", () => {
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ maxTopics: 0 }),
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, maxTopics: 0 }),
       "utf8",
     );
     await nodeFs.mkdir(nodePath.join(repoRoot, "test/fixtures/example"), { recursive: true });
@@ -1629,7 +1641,7 @@ describe("batch stage 5 — semantic groups reach prompt and validator (R10.1 K)
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ maxTopics: 0 }),
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, maxTopics: 0 }),
       "utf8",
     );
     llm.flowResponder = (ctx) =>
@@ -1678,7 +1690,7 @@ describe("batch stage 5 — semantic groups reach prompt and validator (R10.1 K)
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ maxTopics: 0 }),
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, maxTopics: 0 }),
       "utf8",
     );
     llm.flowResponder = (ctx, idx) =>
@@ -1744,7 +1756,7 @@ describe("batch stage 5 — deterministic pre-LLM seed skips (R10.1 K)", () => {
     await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ flowMaxAnchors: 2, maxTopics: 0 }),
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, flowMaxAnchors: 2, maxTopics: 0 }),
       "utf8",
     );
 
@@ -1778,7 +1790,7 @@ describe("batch stage 5 — deterministic pre-LLM seed skips (R10.1 K)", () => {
     // (not 2) to still land below it and trigger K-a here.
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ flowMaxAnchors: 1, maxTopics: 0 }),
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, flowMaxAnchors: 1, maxTopics: 0 }),
       "utf8",
     );
 
@@ -2197,7 +2209,7 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
 
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
-      JSON.stringify({ topicMaxSourceChars: 1 }), // any evidence exceeds it
+      JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, topicMaxSourceChars: 1 }), // any evidence exceeds it
       "utf8",
     );
     const callsBefore = topicLlm.topicPageCallCount;
