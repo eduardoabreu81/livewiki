@@ -1,0 +1,22 @@
+graph TD
+  orientation["orientation.ts"]
+  outputBudget["output-budget.ts"]
+  parser["parser.ts"]
+  pointer["pointer.ts"]
+  presets["presets.ts"]
+  pricing["pricing.ts"]
+  safeIo["safe-io.ts"]
+  webTreeSitter["web-tree-sitter"]
+  nodeFs["node:fs/promises"]
+  config["config.ts"]
+  llmClient["LlmClient / adapters"]
+
+  orientation --> nodeFs
+  pointer --> nodeFs
+  pointer --> safeIo
+  parser --> webTreeSitter
+  parser --> nodeFs
+  presets --> config
+  presets --> pricing
+  presets --> llmClient
+  pricing --> presets

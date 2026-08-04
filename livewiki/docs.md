@@ -15,7 +15,7 @@ owner: generated
 
 ## How it fits
 
-This module spans 5 files classified as repository documentation. It exists so its symbols stay addressable from anchors and cross-references, without appearing in the primary product hubs.
+This module spans 1 file classified as repository documentation. It exists so its symbols stay addressable from anchors and cross-references, without appearing in the primary product hubs.
 
 ## Reference
 

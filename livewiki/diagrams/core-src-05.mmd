@@ -1,0 +1,17 @@
+flowchart LR
+  init["init.ts"]
+  install["install.ts"]
+  manifest["manifest.ts"]
+  mdMask["markdown-mask.ts"]
+  mmd["mermaid-validator.ts"]
+  pointer["pointer.js (external)"]
+  db["db.js / indexer.js (external)"]
+  nav["navigation.js (external)"]
+  diag["diagrams.js (external)"]
+  init --> manifest
+  init --> db
+  init --> nav
+  init --> diag
+  install --> pointer
+  install -.uses.-> mdMask
+  mmd -.shared DOM globals.-> init

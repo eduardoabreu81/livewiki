@@ -539,6 +539,37 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     // suite default.
   });
 
+  it("--only <module> SEM runId posicional re-executa a task (não cai no status)", async () => {
+    // Regression (2026-08-04): `batch --only <target>` without a positional
+    // runId silently printed `batch status` — the early no-args branch ran
+    // first and the flag was ignored; three "rehearsal" invocations in a
+    // row were status reads with zero LLM calls.
+    await writeCode("src/auth/login.ts", "export function login() { return 1; }");
+    stub.setHandler((req) => defaultHandler(req));
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-2";
+    try {
+      const r1 = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
+      expect(r1.status, r1.stderr).toBe(0);
+      const callsAfterInit = stub.callCount();
+
+      // NO positional runId — must still rerun the task, not print status.
+      const rerun = await runCli(["--json", "--repo", repoRoot, "batch", "--only", "auth"]);
+      expect(rerun.status, rerun.stderr).toBe(0);
+      expect(stub.callCount()).toBeGreaterThan(callsAfterInit);
+
+      const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
+      const report = JSON.parse(status.stdout);
+      const authTask = report.tasks.find(
+        (t: { target: string; stage: number }) => t.target === "auth" && t.stage === 4,
+      );
+      expect(authTask).toBeDefined();
+      expect(authTask.attempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
   it("circuit breaker: falha 3x seguidas → abort", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
     // Configura 3 módulos separados — mas só temos 1 arquivo. Pra ter 3+,

@@ -1,0 +1,18 @@
+graph LR
+  batch["batch.ts"]
+  state["batch-state.ts"]
+  status["batch-status.ts"]
+  blast["blast-radius.ts"]
+  calls["call-resolution.ts"]
+  impact["change-impact.ts"]
+  community["community.ts"]
+
+  batch --> state
+  status --> state
+  batch --> status
+  batch --> calls
+  blast --> calls
+  batch --> impact
+  impact --> calls
+  batch --> community
+  community --> batch

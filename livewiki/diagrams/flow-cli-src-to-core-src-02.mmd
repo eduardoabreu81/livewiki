@@ -1,0 +1,8 @@
+flowchart LR
+  n0[Entry: cli-src] --> n1[commands]
+  n1[commands] --> n2[core-src-01]
+  n2[core-src-01] --> n3[core-src-03 - persists]
+  n3[core-src-03 - persists] --> n4[core-src-04]
+  n4[core-src-04] --> n5[core-src-05]
+  n5[core-src-05] --> n6[core-src-10]
+  n6[core-src-10] --> n7[core-src-02]

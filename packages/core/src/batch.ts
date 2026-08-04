@@ -444,15 +444,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       opts.relaxedRound ?? resolvedConfig.relaxedRound ?? true;
     // Roadmap item 22 (D3): module-page format flags (opts > config >
     // default false — off keeps the byte-identical pre-#22 contract). The
-    // module diagram gate reuses the flow diagram node/edge budgets (D1).
+    // module diagram gate uses the OWN module budgets (2026-08-04) —
+    // reusing the flow budgets made near-cap modules systematically fail
+    // flow_diagram_too_large (the model draws what the module has).
     const moduleDiagramsEnabled =
       opts.moduleDiagrams ?? resolvedConfig.moduleDiagrams ?? false;
     const deepHierarchy =
       opts.deepHierarchy ?? resolvedConfig.deepHierarchy ?? false;
     const moduleDiagramBudgets: FlowDiagramBudget | undefined = moduleDiagramsEnabled
       ? {
-          maxNodes: resolvedConfig.flowMaxDiagramNodes ?? CONFIG_DEFAULTS.flowMaxDiagramNodes,
-          maxEdges: resolvedConfig.flowMaxDiagramEdges ?? CONFIG_DEFAULTS.flowMaxDiagramEdges,
+          maxNodes: resolvedConfig.moduleMaxDiagramNodes ?? CONFIG_DEFAULTS.moduleMaxDiagramNodes,
+          maxEdges: resolvedConfig.moduleMaxDiagramEdges ?? CONFIG_DEFAULTS.moduleMaxDiagramEdges,
         }
       : undefined;
     // D2: concern-grouped topic candidates toggle (opts > config > default true).
@@ -642,6 +644,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           const validation = validateRefinedModules(
             result.content,
             indexedInventory,
+            resolvedConfig.pathRoles,
           );
           if (validation.accepted) {
             modules = validation.modules!;
@@ -1289,7 +1292,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         // success marks the task DONE with the page flagged degraded
         // (exit code untouched), failure keeps the original
         // repair_exhausted path below, byte-for-byte unchanged.
-        if (!attemptDone && !taskError && relaxedRound && isRelaxedEligible("module", lastErrorsForReporting)) {
+        // Diagram-gate exception (2026-08-04, paid-rehearsal evidence on
+        // core-src-01): when the strict loop already burned attempts on
+        // diagram-gate codes, the relaxed attempt is unwinnable — the model
+        // drops the punished diagram and the STRICT placeholder gate
+        // rejects it (3,796 tokens for a guaranteed failure). Skip the
+        // relaxed round in that shape; the prompt keeps asking for the
+        // diagram, so a relaxed attempt after NON-diagram errors stays.
+        const sawDiagramGateFailure = diagnosticHistory.some((d) =>
+          (d.errors ?? []).some((e) => MODULE_DIAGRAM_GATE_CODES.has(e.code)),
+        );
+        if (!attemptDone && !taskError && relaxedRound && !sawDiagramGateFailure && isRelaxedEligible("module", lastErrorsForReporting)) {
           attempt++;
           const relaxedResult = await attemptStage4Generation({
             attemptNumber: attempt,
@@ -3789,6 +3802,7 @@ function safeJsonParse<T>(s: string): T | null {
 function validateRefinedModules(
   content: string,
   indexedInventory: Set<string>,
+  pathRoleConfig?: import("./modules.js").PathRoleConfig,
 ): {
   accepted: boolean;
   modules?: Module[];
@@ -3937,6 +3951,27 @@ function validateRefinedModules(
       errorCode: "refine_fragmented_peers",
       errorMessage: frag,
     };
+  }
+
+  // 6. Test-role purity (#24, found by the paid rehearsal 2026-08-04):
+  // the LLM may rename/merge/split, but it must NOT undo the test split —
+  // a module mixing a test-role path with non-test paths reintroduces
+  // test anchors into product pages (and their token cost). Merging
+  // test-only modules among themselves stays allowed.
+  for (const m of cleanModules) {
+    const roles = m.paths.map((p) => classifyPathRole(p, pathRoleConfig));
+    const hasTest = roles.some((r) => r === "test");
+    const hasNonTest = roles.some((r) => r !== "test");
+    if (hasTest && hasNonTest) {
+      const testPath = m.paths[roles.indexOf("test")]!;
+      return {
+        accepted: false,
+        errorCode: "refine_mixed_test_role",
+        errorMessage:
+          `module "${m.id}" mixes test file "${testPath}" with non-test paths; ` +
+          `test files must stay in test-only modules (#24); ignoring refinement`,
+      };
+    }
   }
 
   return {
@@ -4716,12 +4751,19 @@ type DiagnosticAttemptWithSurgical = DiagnosticAttempt & {
  * rollback_failed, unrepairable, ownership refusals — set `taskError`
  * before the exhaustion point and never reach this check.
  */
+/** Diagram-gate codes that make a module relaxed round unwinnable (the
+ *  model drops the punished diagram; the placeholder gate stays STRICT). */
+const MODULE_DIAGRAM_GATE_CODES: ReadonlySet<string> = new Set([
+  "flow_diagram_too_large",
+  "invalid_flow_diagram",
+  "module_diagram_placeholder",
+]);
+
 function isRelaxedEligible(
   pageKind: "module" | "flow" | "topic",
   errors: ReadonlyArray<ArtifactValidationError>,
 ): boolean {
-  return errors.length > 0 && collectUnclassified(pageKind, errors).length === 0;
-}
+  return errors.length > 0 && collectUnclassified(pageKind, errors).length === 0;}
 
 /**
  * Result of ONE LLM attempt (initial or repair) inside the bounded

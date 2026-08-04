@@ -1,150 +1,153 @@
 ---
-title: Batch stage 5, status aggregation, and surgical repair fixtures
+title: "Core Source 03: Config, Index, Export, Diagrams, Diff Preview"
 owner: generated
 anchors:
-  - packages/core/src/batch-stage5.test.ts#OneModuleAlwaysTruncatesLlm
-  - packages/core/src/batch-stage5.test.ts#OneModuleAlwaysTruncatesLlm.generate
-  - packages/core/src/batch-stage5.test.ts#RelaxedTopicMockLlm
-  - packages/core/src/batch-stage5.test.ts#RelaxedTopicMockLlm.generate
-  - packages/core/src/batch-stage5.test.ts#Stage5MockLlm
-  - packages/core/src/batch-stage5.test.ts#Stage5MockLlm.generate
-  - packages/core/src/batch-stage5.test.ts#TopicMockLlm
-  - packages/core/src/batch-stage5.test.ts#TopicMockLlm.generate
-  - packages/core/src/batch-stage5.test.ts#countStage5Tasks
-  - packages/core/src/batch-stage5.test.ts#fileExists
-  - packages/core/src/batch-stage5.test.ts#findTopicPagePath
-  - packages/core/src/batch-stage5.test.ts#isTopicRefineRequest
-  - packages/core/src/batch-stage5.test.ts#makeCompactAuxiliaryPage
-  - packages/core/src/batch-stage5.test.ts#makeFlowPage
-  - packages/core/src/batch-stage5.test.ts#makeFlowPageWithSections
-  - packages/core/src/batch-stage5.test.ts#makeRelaxedFlowPage
-  - packages/core/src/batch-stage5.test.ts#makeRelaxedTopicPage
-  - packages/core/src/batch-stage5.test.ts#makeStrictFailingFlowPage
-  - packages/core/src/batch-stage5.test.ts#makeStrictFailingTopicPage
-  - packages/core/src/batch-stage5.test.ts#makeTopicPage
-  - packages/core/src/batch-stage5.test.ts#makeValidPage
-  - packages/core/src/batch-stage5.test.ts#parseClosedKeys
-  - packages/core/src/batch-stage5.test.ts#parseFlowPrompt
-  - packages/core/src/batch-stage5.test.ts#parseTopicPrompt
-  - packages/core/src/batch-stage5.test.ts#readLatestRunTaskCheckpoint
-  - packages/core/src/batch-stage5.test.ts#readTaskCheckpoint
-  - packages/core/src/batch-stage5.test.ts#readTopicTaskCheckpoint
-  - packages/core/src/batch-stage5.test.ts#topicFrontmatter
-  - packages/core/src/batch-stage5.test.ts#topicRelatedPages
-  - packages/core/src/batch-stage5.test.ts#writeFlowRepo
-  - packages/core/src/batch-stage5.test.ts#writeGroupFlowRepo
-  - packages/core/src/batch-stage5.test.ts#writeHubAndSpokeTopicRepo
-  - packages/core/src/batch-stage5.test.ts#writeTopicEligibleRepo
-  - packages/core/src/batch-state.ts#DIAGNOSTIC_MAX_ERRORS
-  - packages/core/src/batch-state.ts#DIAGNOSTIC_TEXT_CAP
-  - packages/core/src/batch-state.ts#summarizeDiagnosticErrors
-  - packages/core/src/batch-status.test.ts#OneModuleMockLlm
-  - packages/core/src/batch-status.test.ts#OneModuleMockLlm.generate
-  - packages/core/src/batch-status.test.ts#OneShotMockLlm
-  - packages/core/src/batch-status.test.ts#OneShotMockLlm.generate
-  - packages/core/src/batch-status.test.ts#ValidMockLlm
-  - packages/core/src/batch-status.test.ts#ValidMockLlm.generate
-  - packages/core/src/batch-status.test.ts#seedLegacyCheckpoint
-  - packages/core/src/batch-status.ts#aggregateUsageFromCheckpoint
-  - packages/core/src/batch-status.ts#buildStatusReport
-  - packages/core/src/batch-status.ts#emptyStageUsage
-  - packages/core/src/batch-status.ts#listRuns
-  - packages/core/src/batch-status.ts#mergeStageUsage
-  - packages/core/src/batch-status.ts#parseRunSummary
-  - packages/core/src/batch-status.ts#safeJsonParse
-  - packages/core/src/batch-surgical-repair.test.ts#SurgicalFlowMockLlm
-  - packages/core/src/batch-surgical-repair.test.ts#SurgicalFlowMockLlm.generate
-  - packages/core/src/batch-surgical-repair.test.ts#SurgicalModuleMockLlm
-  - packages/core/src/batch-surgical-repair.test.ts#SurgicalModuleMockLlm.generate
-  - packages/core/src/batch-surgical-repair.test.ts#SurgicalTopicMockLlm
-  - packages/core/src/batch-surgical-repair.test.ts#SurgicalTopicMockLlm.generate
-  - packages/core/src/batch-surgical-repair.test.ts#expectJoinedAttempts
-  - packages/core/src/batch-surgical-repair.test.ts#makeEmptySectionPage
-  - packages/core/src/batch-surgical-repair.test.ts#makeFlowPage
-  - packages/core/src/batch-surgical-repair.test.ts#makeFlowPagePurposeBullets
-  - packages/core/src/batch-surgical-repair.test.ts#makeTopicPage
-  - packages/core/src/batch-surgical-repair.test.ts#makeTopicPageEmptyChangeMap
-  - packages/core/src/batch-surgical-repair.test.ts#makeValidPage
-  - packages/core/src/batch-surgical-repair.test.ts#parseClosedKeys
-  - packages/core/src/batch-surgical-repair.test.ts#parseFlowPrompt
-  - packages/core/src/batch-surgical-repair.test.ts#readTaskCheckpoint
-  - packages/core/src/batch-surgical-repair.test.ts#readTopicTaskCheckpoint
-  - packages/core/src/batch-surgical-repair.test.ts#surgicalOutcomeOf
-  - packages/core/src/batch-surgical-repair.test.ts#writeFlowRepo
-  - packages/core/src/batch-surgical-repair.test.ts#writeModuleRepo
-  - packages/core/src/batch.test.ts#MockLlm
-  - packages/core/src/batch.test.ts#MockLlm.generate
+  - packages/core/src/config.ts#CONFIG_DEFAULTS
+  - packages/core/src/config.ts#CONFIG_FILENAME
+  - packages/core/src/config.ts#CONFIG_PATH
+  - packages/core/src/config.ts#MAX_TIMEOUT_MS
+  - packages/core/src/config.ts#MissingProviderConfigError
+  - packages/core/src/config.ts#MissingProviderConfigError.constructor
+  - packages/core/src/config.ts#applyDefaults
+  - packages/core/src/config.ts#assertValidTimeoutMs
+  - packages/core/src/config.ts#loadConfig
+  - packages/core/src/config.ts#resolveBaseUrl
+  - packages/core/src/config.ts#resolveExtraIgnores
+  - packages/core/src/config.ts#resolveProviderFromConfig
+  - packages/core/src/config.ts#saveConfig
+  - packages/core/src/config.ts#validateConfigForBatch
+  - packages/core/src/config.ts#validateConfigShape
+  - packages/core/src/db.ts#CURRENT_SCHEMA_VERSION
+  - packages/core/src/db.ts#MIGRATION_SQL_V3
+  - packages/core/src/db.ts#SCHEMA_SQL
+  - packages/core/src/db.ts#SCHEMA_VERSION_KEY
+  - packages/core/src/db.ts#migrateV3ToV4
+  - packages/core/src/db.ts#migrateV4ToV5
+  - packages/core/src/db.ts#migrateV5ToV6
+  - packages/core/src/db.ts#migrateV6ToV7
+  - packages/core/src/db.ts#migrateV7ToV8
+  - packages/core/src/db.ts#migrationsFor
+  - packages/core/src/db.ts#openIndex
+  - packages/core/src/db.ts#postV3Migrations
+  - packages/core/src/diagrams.ts#STRUCTURE_MAX_EDGES
+  - packages/core/src/diagrams.ts#buildCollapsedStructureLines
+  - packages/core/src/diagrams.ts#buildExactStructureLines
+  - packages/core/src/diagrams.ts#classIdentity
+  - packages/core/src/diagrams.ts#escapeLabel
+  - packages/core/src/diagrams.ts#generateClassDiagram
+  - packages/core/src/diagrams.ts#generateModulesGraph
+  - packages/core/src/diagrams.ts#generateStructure
+  - packages/core/src/diagrams.ts#mermaidId
+  - packages/core/src/diagrams.ts#mermaidMemberName
+  - packages/core/src/diagrams.ts#moduleDiagramPlaceholder
+  - packages/core/src/diagrams.ts#moduleSlug
+  - packages/core/src/diff-preview.ts#MOVED_SCOPE_NOTE
+  - packages/core/src/diff-preview.ts#formatDiffPreviewHuman
+  - packages/core/src/diff-preview.ts#parseGitDiffOutput
+  - packages/core/src/diff-preview.ts#previewWorkingTreeDebt
+  - packages/core/src/diff-preview.ts#runGitDiff
+  - packages/core/src/export.ts#EXPORT_TARGETS
+  - packages/core/src/export.ts#ExportError
+  - packages/core/src/export.ts#ExportError.constructor
+  - packages/core/src/export.ts#GENERATED_MARKER_PREFIX
+  - packages/core/src/export.ts#GENERATED_MARKER_SUFFIX
+  - packages/core/src/export.ts#buildMarker
+  - packages/core/src/export.ts#detectMarker
+  - packages/core/src/export.ts#ensureExtension
+  - packages/core/src/export.ts#enumerateDestination
+  - packages/core/src/export.ts#enumerateSourcePages
+  - packages/core/src/export.ts#errMessage
+  - packages/core/src/export.ts#exportWiki
+  - packages/core/src/export.ts#flattenPath
+  - packages/core/src/export.ts#parseLinkHref
+  - packages/core/src/export.ts#renderMarkdownHeader
+  - packages/core/src/export.ts#replaceMermaidPlaceholder
+  - packages/core/src/export.ts#resolveLinkSource
+  - packages/core/src/export.ts#rewriteInternalLinks
+  - packages/core/src/export.ts#splitRawFrontmatter
+  - packages/core/src/export.ts#stripAnchorMarkers
+  - packages/core/src/export.ts#stripAnchorsField
+  - packages/core/src/export.ts#transformMarkdownPage
+  - packages/core/src/export.ts#transformMermaidPage
+  - packages/core/src/export.ts#transformPage
+  - packages/core/src/export.ts#validateTarget
+  - packages/core/src/flow-diagram.ts#FLOW_DIAGRAM_MODULE_GRANULARITY_THRESHOLD
+  - packages/core/src/flow-diagram.ts#annotateLabel
+  - packages/core/src/flow-diagram.ts#buildDiagramContext
+  - packages/core/src/flow-diagram.ts#escapeMermaidLabel
+  - packages/core/src/flow-diagram.ts#generateFlowDiagram
+  - packages/core/src/flow-diagram.ts#insertFlowDiagramSection
+  - packages/core/src/flow-diagram.ts#moduleGranularityIr
+  - packages/core/src/flow-diagram.ts#renderFlowchartMermaid
+  - packages/core/src/flow-diagram.ts#symbolGranularityIr
+  - packages/core/src/flow-diagram.ts#symbolLabel
+  - packages/core/src/flow-diagram.ts#truncateFlowchartToBudget
 ---
 
-# Batch stage 5, status aggregation, and surgical repair fixtures
+# Core Source 03: Config, Index, Export, Diagrams, Diff Preview
 
-This module owns the test fixtures, mock LLM stubs, and aggregation helpers that exercise stage-5 (semantic flows / topics), the `batch status` report, and the surgical section-scoped repair path in `packages/core/src`.
+This page documents the deterministic, non-LLM subsystems that back livewiki's source repo support: the per-repo JSON config, the SQLite schema and migrations that hold the index, the diagram generators that produce Mermaid from facts, the read-only working-tree diff preview, and the local export that mirrors the on-disk snapshot.
 
 ## When to use this page
 
-- **Run or extend** the stage-5 regression suite covering flow detection, topic refinement, and write-gate trips in `batch-stage5.test.ts`.
-- **Inspect** how `buildStatusReport` aggregates checkpoint usage, surface legacy `diagnosticHistory` shapes, and emit per-task token costs in `batch-status.test.ts` and `batch-status.ts`.
-- **Add** surgical-repair regression cases that exercise eligible / ineligible error sets, the cascade guard, and joined-attempts invariants in `batch-surgical-repair.test.ts`.
-- **Update** the diagnostic summarization caps and the `summarizeDiagnosticErrors` contract used by the stage-4 LLM-attempt history in `batch-state.ts`.
+- **Load or edit `.livewiki/config.json` for the target repo** — start with `loadConfig` and `saveConfig`, then read the `applyDefaults` and `validateConfigShape` rules.
+- **Open or migrate `.livewiki/index.db`** — read `openIndex`, `CURRENT_SCHEMA_VERSION`, and the `migrateV*ToV*` ladder before touching any index code.
+- **Preview anchor drift before committing** — call `previewWorkingTreeDebt`; it never writes the index.
+- **Mirror `livewiki/` to a host wiki target (generic / github-wiki / gitlab-wiki)** — invoke `exportWiki` and inspect `ExportError` / `validateTarget` for the contract.
 
 ## How it fits
 
-This module lives under `packages/core/src/` and groups three sibling test suites plus the production helpers they depend on. `batch-stage5.test.ts`, `batch-status.test.ts`, and `batch-surgical-repair.test.ts` all import `runBatch` from `./batch.js` and the `LlmClient` interface from `./llm/index.js`. The status suite also imports `buildStatusReport` and `listRuns` from `./batch-status.js`, which in turn consume the `TaskCheckpoint` and `StageUsage` shapes defined in `./batch-state.ts`. The diagnostic-shape caps `DIAGNOSTIC_TEXT_CAP` and `DIAGNOSTIC_MAX_ERRORS` are re-exported by `batch-state.ts` and used by both the production summarizer and the tests that assert on truncated error slices.
+This module groups five related services under `packages/core/src/`. `config.ts` reads and writes the per-repo `.livewiki/config.json` and never holds credentials (those stay in `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`). `db.ts` defines the SQLite schema (`SCHEMA_SQL`), the current `CURRENT_SCHEMA_VERSION`, and the migration ladder that upgrades an existing `.livewiki/index.db` to the current shape (the database is a derived cache; deleting `.livewiki/` is non-destructive). `diagrams.ts` produces Mermaid source for the structure graph (`generateStructure`), the import graph (`generateModulesGraph`), and the per-module class diagram (`generateClassDiagram`); `flow-diagram.ts` produces a deterministic flowchart for stage-5 flow pages instead of letting the LLM emit the syntax. `diff-preview.ts` reuses the indexer's own parse path to read the working tree and produces a `DiffPreviewResult` without any writes. `export.ts` runs the local deterministic transformation of `livewiki/` into `.livewiki/export/<target>/`, with all writes going through `safe-io`.
 
-## Stage-5 fixtures and prompt parsers
-<!-- lw:anchors packages/core/src/batch-stage5.test.ts#parseClosedKeys packages/core/src/batch-stage5.test.ts#parseFlowPrompt packages/core/src/batch-stage5.test.ts#parseTopicPrompt packages/core/src/batch-stage5.test.ts#makeValidPage packages/core/src/batch-stage5.test.ts#makeCompactAuxiliaryPage packages/core/src/batch-stage5.test.ts#makeFlowPage packages/core/src/batch-stage5.test.ts#makeFlowPageWithSections packages/core/src/batch-stage5.test.ts#makeRelaxedFlowPage packages/core/src/batch-stage5.test.ts#makeStrictFailingFlowPage packages/core/src/batch-stage5.test.ts#makeTopicPage packages/core/src/batch-stage5.test.ts#makeRelaxedTopicPage packages/core/src/batch-stage5.test.ts#makeStrictFailingTopicPage packages/core/src/batch-stage5.test.ts#topicFrontmatter packages/core/src/batch-stage5.test.ts#topicRelatedPages -->
+## Diagram
 
-`parseClosedKeys(user)` extracts the closed anchor list from any stage-4 or stage-5 prompt by scanning lines that match `^- (\S+#\S+)$`. `parseFlowPrompt(user)` reads `# Flow: <slug>` and `# Participating modules <list>` and returns the `FlowPromptCtx` shape with `slug`, `moduleIds`, `closedKeys`, and the raw `user` string. `parseTopicPrompt(user)` returns a `TopicPrompt` object for the topic-refinement prompt variant.
+```mermaid
+%% livewiki/diagrams/core-src-03.mmd
+```
 
-The page-builder helpers emit model-shaped Markdown. `makeValidPage(closedKeyList)` builds a stage-4 module page with the standard frontmatter, anchors block, and "Details" placeholder run. `makeCompactAuxiliaryPage(closedKeyList)` emits the auxiliary-contract variant selected when the prompt asks for compact auxiliary output. `makeFlowPage(ctx, _diagramSource)` produces a stage-5 flow page in the MODEL-EMITTED form, placing the first closed key in `Purpose`, the second in `Ordered flow`, and any remainder in `Failure and recovery`; `_diagramSource` is intentionally unused because the orchestrator now inserts the diagram deterministically (see `generateFlowDiagram`/`insertFlowDiagramSection` in `flow-diagram.ts`). `makeFlowPageWithSections(...)` returns a variant with a configurable section layout, while `makeRelaxedFlowPage(ctx)` and `makeStrictFailingFlowPage(ctx)` exercise the relaxed (degraded) and strict-failing fixture paths. `makeTopicPage(user)` builds a compliant topic page; `makeRelaxedTopicPage(user)` and `makeStrictFailingTopicPage(user)` cover the relaxed and strict-failing topic variants. `topicFrontmatter(t, anchors)` produces the topic frontmatter block from a `TopicPrompt` and the assigned anchor list, and `topicRelatedPages(t)` returns the related-pages bullet list referencing modules and flows.
+## Config load / save and provider resolution
 
-## Stage-5 mock LLM stubs
-<!-- lw:anchors packages/core/src/batch-stage5.test.ts#Stage5MockLlm packages/core/src/batch-stage5.test.ts#Stage5MockLlm.generate packages/core/src/batch-stage5.test.ts#TopicMockLlm packages/core/src/batch-stage5.test.ts#TopicMockLlm.generate packages/core/src/batch-stage5.test.ts#RelaxedTopicMockLlm packages/core/src/batch-stage5.test.ts#RelaxedTopicMockLlm.generate packages/core/src/batch-stage5.test.ts#OneModuleAlwaysTruncatesLlm packages/core/src/batch-stage5.test.ts#OneModuleAlwaysTruncatesLlm.generate -->
+<!-- lw:anchors packages/core/src/config.ts#CONFIG_DEFAULTS packages/core/src/config.ts#CONFIG_FILENAME packages/core/src/config.ts#CONFIG_PATH packages/core/src/config.ts#MAX_TIMEOUT_MS packages/core/src/config.ts#MissingProviderConfigError packages/core/src/config.ts#MissingProviderConfigError.constructor packages/core/src/config.ts#applyDefaults packages/core/src/config.ts#assertValidTimeoutMs packages/core/src/config.ts#loadConfig packages/core/src/config.ts#resolveBaseUrl packages/core/src/config.ts#resolveExtraIgnores packages/core/src/config.ts#resolveProviderFromConfig packages/core/src/config.ts#saveConfig packages/core/src/config.ts#validateConfigForBatch packages/core/src/config.ts#validateConfigShape -->
 
-`Stage5MockLlm` is the programmable stage-4 + stage-5 stub used by most regressions. Its `generate(req)` first records the call in `callLog`, increments `callCount`, then routes by prompt header: if `req.user` matches `^# Flow: \S+$`, it consumes the next flow-call slot, honors any `throwOnFlowCall` injection, optionally awaits `onBeforeFlowResponse(flowIdx)`, and answers either via the supplied `flowResponder(ctx, flowCallIndex)` queue or the default `makeFlowPage(ctx, "flowchart LR\n  cli --> core")`; otherwise it answers stage-4 prompts with `makeCompactAuxiliaryPage(closedKeys)` when the prompt mentions `compact auxiliary contract` and `makeValidPage(closedKeys)` for the standard module path. Each response carries a synthetic `{ inputTokens: 100, outputTokens: 50, model: "claude-test-mock" }` usage. `TopicMockLlm` is the stage-5 topic-path stub: its `generate(req)` returns a topic page built from the parsed prompt and the topic-relevant anchors. `RelaxedTopicMockLlm` extends `Stage5MockLlm` and overrides `generate(req)` to return the relaxed (degraded) topic page variant when it detects a topic-refinement request. `OneModuleAlwaysTruncatesLlm` is the truncation-fault stub: its `generate(req)` returns a deliberately truncated response on the single-module path so the verifier's `flow_diagram_too_large` / token-limit branches can be exercised.
+`loadConfig` reads `.livewiki/config.json` from the repo root and returns a parsed `LivewikiConfig`; `saveConfig` writes it back through `safe-io`. The path is fixed via `CONFIG_PATH` (the relative path) and `CONFIG_FILENAME` (its basename). `validateConfigShape` is the structural guard that rejects floats, strings, NaN, or negatives for the integer-typed options; `applyDefaults` fills in built-in defaults when keys are missing — `language` is the only field with an explicit default (`"en"`), while `provider`, `model`, and friends stay undefined on purpose so no silent fallback happens. When the LLM batch runs without those keys, `validateConfigForBatch(repoRoot, config)` raises `MissingProviderConfigError` (constructor wires the repo root and `missingFields` array into the message), and the supplied config object is untouched. Provider resolution delegates to `resolveProviderFromConfig` (which handles preset expansion via `presets.ts`) and `resolveBaseUrl` / `resolveExtraIgnores` project the merged config into the values the rest of the pipeline consumes. `assertValidTimeoutMs(v)` is the type predicate that rejects any number outside `0..MAX_TIMEOUT_MS` (and `MAX_TIMEOUT_MS` is `2_147_483_647`, the Node `setTimeout` safe max). The visible exception path: `validateConfigForBatch` throws on missing provider/model; `assertValidTimeoutMs` throws on out-of-range timeouts; `loadConfig` / `saveConfig` propagate I/O errors from `safe-io`.
 
-## Stage-5 repo writers and checkpoint readers
-<!-- lw:anchors packages/core/src/batch-stage5.test.ts#writeFlowRepo packages/core/src/batch-stage5.test.ts#writeGroupFlowRepo packages/core/src/batch-stage5.test.ts#writeTopicEligibleRepo packages/core/src/batch-stage5.test.ts#writeHubAndSpokeTopicRepo packages/core/src/batch-stage5.test.ts#countStage5Tasks packages/core/src/batch-stage5.test.ts#fileExists packages/core/src/batch-stage5.test.ts#findTopicPagePath packages/core/src/batch-stage5.test.ts#readTaskCheckpoint packages/core/src/batch-stage5.test.ts#readLatestRunTaskCheckpoint packages/core/src/batch-stage5.test.ts#readTopicTaskCheckpoint packages/core/src/batch-stage5.test.ts#isTopicRefineRequest -->
+## SQLite index schema and migrations
 
-`writeFlowRepo(root)` materializes the minimal detectable-flow fixture (`cli` entry module → `core` persistence sink) used by happy-path and write-gate tests. `writeGroupFlowRepo(root)` produces a grouped flow fixture for tests that need multiple flows with shared participating modules. `writeTopicEligibleRepo()` and `writeHubAndSpokeTopicRepo()` create topic-eligible and hub-and-spoke topic fixtures, respectively. `countStage5Tasks(root)` returns the number of stage-5 tasks recorded in the index for a given repo root, and `fileExists(root, rel)` is a small async filesystem probe used by the write-gate and stale-cleanup assertions. `findTopicPagePath(root)` locates a topic page on disk, returning `null` when none exists. `readTaskCheckpoint(...)`, `readLatestRunTaskCheckpoint(...)`, and `readTopicTaskCheckpoint(root)` read the persisted `TaskCheckpoint` JSON for a specific `(stage, target)`, the latest run, or the topic-task row respectively, giving tests direct access to `usageHistory`, `diagnosticHistory`, and the `error` field. `isTopicRefineRequest(req)` is the predicate used by stubs and the orchestrator to route a `GenerateRequest` to the topic-refinement branch.
+<!-- lw:anchors packages/core/src/db.ts#CURRENT_SCHEMA_VERSION packages/core/src/db.ts#SCHEMA_VERSION_KEY packages/core/src/db.ts#SCHEMA_SQL packages/core/src/db.ts#MIGRATION_SQL_V3 packages/core/src/db.ts#migrateV3ToV4 packages/core/src/db.ts#migrateV4ToV5 packages/core/src/db.ts#migrateV5ToV6 packages/core/src/db.ts#migrateV6ToV7 packages/core/src/db.ts#migrateV7ToV8 packages/core/src/db.ts#migrationsFor packages/core/src/db.ts#openIndex packages/core/src/db.ts#postV3Migrations -->
 
-## Diagnostic summarization constants
-<!-- lw:anchors packages/core/src/batch-state.ts#DIAGNOSTIC_MAX_ERRORS packages/core/src/batch-state.ts#DIAGNOSTIC_TEXT_CAP packages/core/src/batch-state.ts#summarizeDiagnosticErrors -->
+`openIndex(dbPath)` opens (creating if missing) the SQLite database and runs the idempotent `SCHEMA_SQL`, then enforces the migration ladder by comparing `schema_version` (written under `SCHEMA_VERSION_KEY` in `meta`) to `CURRENT_SCHEMA_VERSION`. The schema ships the tables `files`, `symbols`, `meta`, `anchors`, `debt`, `undocumented`, `batch_runs`, `batch_tasks`, `doc_pages`, `manual_blocks`, `calls`, `rationales` — each guarded by a partial unique index where status semantics require it. The migration ladder is `migrateV3ToV4 → migrateV4ToV5 → migrateV5ToV6 → migrateV6ToV7 → migrateV7ToV8`. `migrateV3ToV4` swaps the inline `UNIQUE` on `symbols.key` for the partial unique index over `status='active'`, adds `debt.symbol_key`, and creates the partial index `idx_debt_open`. The v2→v3 SQL is exposed as `MIGRATION_SQL_V3`. `migrationsFor(from, to)` returns the ordered subset of `migrateV*ToV*` functions needed to upgrade from `from` to `to`; `postV3Migrations(from, to, db)` is the post-v3 dispatcher. The visible branches: when `from >= to`, no migrations run; when an unsupported `from` is requested, `migrationsFor` returns no plan and the caller decides how to fail; the SQLite engine itself enforces per-statement errors and they propagate from `openIndex`.
 
-`DIAGNOSTIC_TEXT_CAP = 200` is the per-field character cap applied to each `DiagnosticErrorSummary.offending` and `message` value when diagnostic records are persisted, and `DIAGNOSTIC_MAX_ERRORS = 50` caps the number of structured errors kept per `DiagnosticAttempt`. The exported `summarizeDiagnosticErrors(input)` function takes a readonly array of `ArtifactValidationError`, slices it to `DIAGNOSTIC_MAX_ERRORS`, and projects each surviving entry into a `DiagnosticErrorSummary` with the `offending` and `message` strings truncated to `DIAGNOSTIC_TEXT_CAP` characters; it returns both the surviving `errors` array and the `truncatedErrorCount` (number of dropped entries, clamped at zero). When `error.offending` or `error.sectionSlug` is `undefined`, those fields are omitted from the projected summary rather than emitted as `undefined`.
+## Deterministic Mermaid diagrams
 
-## Status-report aggregation helpers
-<!-- lw:anchors packages/core/src/batch-status.ts#buildStatusReport packages/core/src/batch-status.ts#listRuns packages/core/src/batch-status.ts#emptyStageUsage packages/core/src/batch-status.ts#aggregateUsageFromCheckpoint packages/core/src/batch-status.ts#mergeStageUsage packages/core/src/batch-status.ts#parseRunSummary packages/core/src/batch-status.ts#safeJsonParse -->
+<!-- lw:anchors packages/core/src/diagrams.ts#STRUCTURE_MAX_EDGES packages/core/src/diagrams.ts#buildCollapsedStructureLines packages/core/src/diagrams.ts#buildExactStructureLines packages/core/src/diagrams.ts#classIdentity packages/core/src/diagrams.ts#escapeLabel packages/core/src/diagrams.ts#generateClassDiagram packages/core/src/diagrams.ts#generateModulesGraph packages/core/src/diagrams.ts#generateStructure packages/core/src/diagrams.ts#mermaidId packages/core/src/diagrams.ts#mermaidMemberName packages/core/src/diagrams.ts#moduleDiagramPlaceholder packages/core/src/diagrams.ts#moduleSlug -->
 
-`buildStatusReport(repoRoot, runId = null)` is the production entry point: it resolves `.livewiki/index.db` under `repoRoot`, picks the named run or the latest row, walks every `batch_tasks` row for that run, and emits a `BatchStatusReport` containing `run` (with parsed `summary`), `totals`, `byStage`, `byModule` (stage-4 only, keyed by module id), `tasks`, `failures`, and `pricingRefDate`. Per-task items additively surface `diagnosticHistory` and `communityCrossCheck` only when the checkpoint already carries those fields, preserving byte-stable output for older checkpoints. `listRuns(repoRoot)` returns the rows of `batch_runs` projected to `{ id, startedAt, finishedAt, status, startedBy }`, ordered newest first. `emptyStageUsage()` returns a zeroed `StageUsage` (`{ inputTokens: 0, outputTokens: 0, costUsd: null, models: [], usageIncomplete: false }`); `aggregateUsageFromCheckpoint(cp)` walks `cp.usageHistory`, treats an attempt as "known" when `usage` is a non-null object and `usageKnown !== false`, sums input/output tokens, collects distinct model names, sets `usageIncomplete` when any attempt is unknown, and keeps `costUsd` as `null` whenever any priced attempt is missing a price (no synthetic zero). `mergeStageUsage(a, b)` adds token counts, unions models, propagates `usageIncomplete`, and merges `costUsd` with the same null-takes-precedence rule. `safeJsonParse<T>(s)` is the tolerant JSON parser used to read `checkpoint_json` and `summary_json`. `parseRunSummary(raw)` decodes `summary_json` into a `BatchRunSummary | null`, returning `null` when the column is empty or unparseable.
+`generateStructure(filePaths)` produces the repo directory graph in `LR` orientation. The exact graph (every directory and file as a node) is built by `buildExactStructureLines` and counted against `STRUCTURE_MAX_EDGES` (450, chosen below Mermaid's 500-edge parser limit). When the exact graph would exceed 450 edges, `buildCollapsedStructureLines` emits the directory chain plus one `(N files)` node per directory instead. `generateModulesGraph(edges)` emits `graph LR` followed by deduped import edges; an empty edge array yields a single `root[No module edges detected]` node. `generateClassDiagram(module, symbols)` emits a `classDiagram` with `direction TB` and one block per class; methods are grouped per `(path, className)` via `classIdentity`. `mermaidId(value)` normalizes a path or name into a Mermaid-safe identifier; `escapeLabel(value)` strips characters that would break `[...]` labels; `mermaidMemberName(value)` produces the `+name()` style member token. `moduleDiagramPlaceholder(slug)` returns the exact `%% livewiki/diagrams/<slug>.mmd` placeholder the on-disk module page embeds, and `moduleSlug(value)` derives the filesystem-safe slug used across the diagram filenames.
 
-## Status-report test fixtures and legacy-checkpoint seeding
-<!-- lw:anchors packages/core/src/batch-status.test.ts#OneShotMockLlm packages/core/src/batch-status.test.ts#OneShotMockLlm.generate packages/core/src/batch-status.test.ts#ValidMockLlm packages/core/src/batch-status.test.ts#ValidMockLlm.generate packages/core/src/batch-status.test.ts#OneModuleMockLlm packages/core/src/batch-status.test.ts#OneModuleMockLlm.generate packages/core/src/batch-status.test.ts#seedLegacyCheckpoint -->
+## Working-tree diff preview
 
-`OneShotMockLlm` is the unused-by-test stub whose `generate()` always throws "OneShotMockLlm.generate was called — should not happen"; it satisfies the `LlmClient` interface for tests that seed the DB directly instead of routing through the orchestrator. `ValidMockLlm` produces a compliant stage-4 module page (with anchors, `When to use this page` tasks, and the `Details` placeholder run) on every `generate()` and is used by the post-Lot A `diagnosticHistory` assertions. `OneModuleMockLlm` is the single-module stub used by the `unrepairable` and `missing_page_opening` regressions; its `generate()` returns a deterministic one-module response. `seedLegacyCheckpoint()` inserts a `batch_runs` row plus a single `batch_tasks` row whose `checkpoint_json` is the pre-Lot A shape (with `usageHistory` but no `diagnosticHistory`), returning the inserted `runId` so the test can verify that `buildStatusReport` loads it without ever adding a synthesized `diagnosticHistory` field to the per-task output (CONTRACT I5).
+<!-- lw:anchors packages/core/src/diff-preview.ts#MOVED_SCOPE_NOTE packages/core/src/diff-preview.ts#parseGitDiffOutput packages/core/src/diff-preview.ts#runGitDiff packages/core/src/diff-preview.ts#previewWorkingTreeDebt packages/core/src/diff-preview.ts#formatDiffPreviewHuman -->
 
-## Surgical-repair fixtures and assertions
-<!-- lw:anchors packages/core/src/batch-surgical-repair.test.ts#parseClosedKeys packages/core/src/batch-surgical-repair.test.ts#parseFlowPrompt packages/core/src/batch-surgical-repair.test.ts#makeValidPage packages/core/src/batch-surgical-repair.test.ts#makeEmptySectionPage packages/core/src/batch-surgical-repair.test.ts#makeFlowPage packages/core/src/batch-surgical-repair.test.ts#makeFlowPagePurposeBullets packages/core/src/batch-surgical-repair.test.ts#makeTopicPage packages/core/src/batch-surgical-repair.test.ts#makeTopicPageEmptyChangeMap packages/core/src/batch-surgical-repair.test.ts#writeFlowRepo packages/core/src/batch-surgical-repair.test.ts#writeModuleRepo packages/core/src/batch-surgical-repair.test.ts#readTaskCheckpoint packages/core/src/batch-surgical-repair.test.ts#readTopicTaskCheckpoint packages/core/src/batch-surgical-repair.test.ts#expectJoinedAttempts packages/core/src/batch-surgical-repair.test.ts#surgicalOutcomeOf -->
+`previewWorkingTreeDebt(repoRoot)` is the read-only pre-commit anchor preview: it runs ONE `git diff --name-only --relative HEAD` (via `runGitDiff` with `shell: false`, `core.quotepath=false`, and `--relative` for subdirectory work trees) and decomposes the output through `parseGitDiffOutput` (sorted, deduped, blank-line tolerant). For each changed file it re-reads the working tree, normalizes EOLs, and re-extracts symbols via the same `parseSource` / `extractSymbols` path the indexer uses; files the indexer would skip (over `MAX_FILE_BYTES`, NUL byte sniff, or unreadable) are tracked in `skippedFiles` and excluded from comparison. Every anchor row whose `symbol_key` belongs to a changed file is then compared: missing from the working set → `deleted`; present but `content_hash` mismatch → `changed`. The combined hits are deduped per page and sorted by `wikiPath`, with the inner items sorted by `symbolKey`. The visible branches: `runGitDiff` returns `null` whenever git is missing, the dir is not a repo, no HEAD exists, or any non-zero exit fires — and `previewWorkingTreeDebt` translates that into `notGitRepo: true` rather than throwing; if no `.livewiki/index.db` exists the function returns an empty `pages` list (no anchors exist to check); parse failures are swallowed and treated as zero symbols for that file. `formatDiffPreviewHuman(result)` renders the structured output, appending the `MOVED_SCOPE_NOTE` so the human output explicitly states that `moved` is a post-commit signal covered by the ledger, not by the preview.
 
-The surgical-repair fixture helpers mirror the stage-5 harness. `parseClosedKeys(user)` re-uses the same line-by-line `^- (\S+#\S+)$` extraction. `parseFlowPrompt(user)` builds the same `FlowPromptCtx` shape (`slug`, `moduleIds`, `closedKeys`, `user`). `makeValidPage(closedKeyList)` emits the compliant stage-4 module page used to assert "page untouched" after a surgical cascade-rejection, and `makeEmptySectionPage(closedKeyList)` derives the same page with the trailing `Body.` paragraph removed to trigger an `empty_section` diagnostic. `makeFlowPage(ctx)` builds the model-emitted flow page variant used by stage-5 surgical repair tests; `makeFlowPagePurposeBullets(ctx)` substitutes the `Purpose` prose for a bullet list, producing a section-level `missing_page_opening` so the surgical path can resolve the target section from the error message. `makeTopicPage(user)` builds the compliant topic page; `makeTopicPageEmptyChangeMap(user)` drops the Change-map prose to surface a topic-level `empty_section`. `writeFlowRepo(root)` writes the minimal `cli` → `core` detectable-flow fixture, and `writeModuleRepo(root)` writes a single-module repo used by stage-4 surgical-repair cases. `readTaskCheckpoint(...)` and `readTopicTaskCheckpoint(root)` read the persisted `TaskCheckpoint` JSON from `.livewiki/index.db` for assertions on `attempt`, `usageHistory`, and `diagnosticHistory`. `expectJoinedAttempts(checkpoint)` asserts that the joined-attempts invariant holds — `usageHistory.length` equals `diagnosticHistory.length` (when `diagnosticHistory` is present) and the attempt numbers line up. `surgicalOutcomeOf(entry)` projects an unknown diagnostic entry to the surgical outcome string (`"surgical_ok"` or `"surgical_cascade_rejected"`) or returns `undefined` when the entry carries no surgical signal.
+## Local export to host wikis
 
-## Surgical-repair mock LLM stubs
-<!-- lw:anchors packages/core/src/batch-surgical-repair.test.ts#SurgicalModuleMockLlm packages/core/src/batch-surgical-repair.test.ts#SurgicalModuleMockLlm.generate packages/core/src/batch-surgical-repair.test.ts#SurgicalFlowMockLlm packages/core/src/batch-surgical-repair.test.ts#SurgicalFlowMockLlm.generate packages/core/src/batch-surgical-repair.test.ts#SurgicalTopicMockLlm packages/core/src/batch-surgical-repair.test.ts#SurgicalTopicMockLlm.generate -->
+<!-- lw:anchors packages/core/src/export.ts#EXPORT_TARGETS packages/core/src/export.ts#ExportError packages/core/src/export.ts#ExportError.constructor packages/core/src/export.ts#GENERATED_MARKER_PREFIX packages/core/src/export.ts#GENERATED_MARKER_SUFFIX packages/core/src/export.ts#buildMarker packages/core/src/export.ts#detectMarker packages/core/src/export.ts#ensureExtension packages/core/src/export.ts#enumerateDestination packages/core/src/export.ts#enumerateSourcePages packages/core/src/export.ts#errMessage packages/core/src/export.ts#exportWiki packages/core/src/export.ts#flattenPath packages/core/src/export.ts#parseLinkHref packages/core/src/export.ts#renderMarkdownHeader packages/core/src/export.ts#replaceMermaidPlaceholder packages/core/src/export.ts#resolveLinkSource packages/core/src/export.ts#rewriteInternalLinks packages/core/src/export.ts#splitRawFrontmatter packages/core/src/export.ts#stripAnchorMarkers packages/core/src/export.ts#stripAnchorsField packages/core/src/export.ts#transformMarkdownPage packages/core/src/export.ts#transformMermaidPage packages/core/src/export.ts#transformPage packages/core/src/export.ts#validateTarget -->
 
-`SurgicalModuleMockLlm` is the stage-4 surgical-path stub; its `generate(req)` answers module prompts with surgical-compliant content (e.g., the empty-section page when the previous attempt was flagged `empty_section`) so the eligible-error branch can be exercised without a real LLM. `SurgicalFlowMockLlm` is the stage-5 flow surgical-path stub; its `generate(req)` detects the `# Flow:` header and returns `makeFlowPagePurposeBullets(ctx)` (or another fixture) so the section-resolved repair target lands in `Purpose`. `SurgicalTopicMockLlm` is the topic-page surgical stub; its `generate(req)` returns `makeTopicPageEmptyChangeMap(user)` on the topic path to drive a topic-level `empty_section` repair. Each stub exposes a fixed `provider = "anthropic"` and `model = "claude-test-mock"` and returns a synthetic `{ inputTokens: 100, outputTokens: 50, ... }` usage so the orchestrator records a known attempt in the checkpoint's `usageHistory`.
+`exportWiki(opts)` is the Phase 6 Lot 6A entry point. It validates `opts.target` via `validateTarget` (which throws `ExportError` from the constructor — `issues: ExportIssue[]` → flattened message, with `issues` preserved on the instance), rejects `--push` before any I/O, and resolves both `livewiki/` and `.livewiki/export/<target>/` through `safe-io` (`source_path_unsafe` / `destination_path_unsafe` otherwise). `EXPORT_TARGETS` enumerates `generic`, `github-wiki`, and `gitlab-wiki`; each gets its own home-page mapping. `enumerateSourcePages` walks `livewiki/`, `flattenPath` derives the flat destination name (collision detection: `flattening_collision` is a fatal preflight issue), and per-page the transform branches: `transformMarkdownPage` runs `splitRawFrontmatter` → `parseFrontmatter` → `stripAnchorMarkers` / `stripAnchorsField` → `renderMarkdownHeader` (which embeds the `GENERATED_MARKER_PREFIX` + `buildMarker(sourceRel)` + `GENERATED_MARKER_SUFFIX` token) → `rewriteInternalLinks` (via `resolveLinkSource` and `parseLinkHref`). `transformMermaidPage` swaps the `%% livewiki/...` placeholder through `replaceMermaidPlaceholder`. `transformPage` is the dispatcher. `enumerateDestination` then reads each planned entry (after `safe-io` validation) and classifies it via `detectMarker`. The preflight loops reject `frontmatter_parse_error`, `missing_diagram`, `broken_internal_link`, `flattening_collision`, `destination_conflict`, `destination_unsafe`. The visible branches: preflight failure (`ok: false`) leaves the destination unchanged; an unforeseen filesystem failure during write or removal MAY leave the export partially updated and the command returns exit 1 with an idempotent rerun repairing it. `ensureExtension` and `errMessage` are the supporting helpers. The export never touches `livewiki/` and never spawns a Git subprocess or uses the network.
 
-## Base batch orchestrator fixture
-<!-- lw:anchors packages/core/src/batch.test.ts#MockLlm packages/core/src/batch.test.ts#MockLlm.generate -->
+## Deterministic flow diagrams
 
-`MockLlm` is the simplest stub used by the base `batch.test.ts` orchestrator regressions. Its `generate(req)` records the call into `callLog` (system, user, and the dynamic `maxTokens` budget), then extracts the module id from the first `# Module: <id>` line and the first closed key from `^- (.+?#[\w.]+)$` to build a valid module page that emits `title`, `owner: generated`, an `anchors` block with that key, the `When to use this page` and `How it fits` openers, and a `Details` placeholder run. The returned usage is `{ inputTokens: 100, outputTokens: 50, model: this.model }`. The dynamic-output-token-budget regressions read `mockLlm.callLog` to assert that a 40-symbol module clears the old 8192 ceiling, that the default tiny module stays below it, and that the `outputTokenStrategy: "fixed"` config overrides the dynamic formula.
+<!-- lw:anchors packages/core/src/flow-diagram.ts#FLOW_DIAGRAM_MODULE_GRANULARITY_THRESHOLD packages/core/src/flow-diagram.ts#annotateLabel packages/core/src/flow-diagram.ts#buildDiagramContext packages/core/src/flow-diagram.ts#escapeMermaidLabel packages/core/src/flow-diagram.ts#generateFlowDiagram packages/core/src/flow-diagram.ts#insertFlowDiagramSection packages/core/src/flow-diagram.ts#moduleGranularityIr packages/core/src/flow-diagram.ts#renderFlowchartMermaid packages/core/src/flow-diagram.ts#symbolGranularityIr packages/core/src/flow-diagram.ts#symbolLabel packages/core/src/flow-diagram.ts#truncateFlowchartToBudget -->
+
+`generateFlowDiagram(candidate, modules, budget)` builds the deterministic flowchart for a stage-5 flow page. Above `FLOW_DIAGRAM_MODULE_GRANULARITY_THRESHOLD` (6 modules) it calls `moduleGranularityIr`, which draws one node per participating module in walk order chained `n0 → n1 → ... → nN`. At or below the threshold it calls `symbolGranularityIr`, which orders the entry/boundary/sink tiers (T4/T5 are intentionally omitted so the diagram stays a story rather than a key dump), chains every entry key into the first boundary key (or into the first sink key when there is no boundary), chains boundary keys in sequence, and feeds every sink key from the last boundary key. Both IR builders funnel through `annotateLabel(baseLabel, moduleId, ctx)` to prepend `Entry:` or append ` - persists` when the owning module is in the entry or persistence signal sets from `buildDiagramContext(candidate, modules)`. `symbolLabel(key)` extracts the trailing name from a closed-list key, and `escapeMermaidLabel` strips `[ ] { } ( ) | "` so the label stays a single token. The resulting `FlowchartIR` is reduced by `truncateFlowchartToBudget(ir, maxNodes, maxEdges)` (kept nodes are the first `maxNodes` in appearance order; kept edges are the first `maxEdges` whose endpoints both survived) and re-serialized by `renderFlowchartMermaid` into a `flowchart LR` source. `insertFlowDiagramSection` is the orchestrator-side helper that replaces a placeholder in a flow page with the rendered Mermaid block. The visible exception path: re-truncating an already-small IR returns it unchanged (idempotent), and isolated kept nodes (no surviving edges after truncation) still receive a standalone declaration line so they do not silently vanish.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
-- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency and dependent
-- [Anchor ledger and artifact repair](core-src-01.md) — dependency and dependent
+- Flow: [CLI command surface to core pipeline wiring](flows/cli-src-to-core-src-02.md)
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependency and dependent
+- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md) — dependency and dependent
+- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md) — dependency and dependent
 
-> Coverage note: this module's source (6 files, ~132k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (6 files, ~133k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

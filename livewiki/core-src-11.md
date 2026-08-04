@@ -1,185 +1,172 @@
 ---
-title: Core Repair, Status, Sectioning, Symbols, and Risk Pipeline
+title: Viewer build pipeline and Activity dashboard
 owner: generated
 anchors:
-  - packages/core/src/repair-contract.ts#ALL_ARTIFACT_VALIDATION_CODES
-  - packages/core/src/repair-contract.ts#PAGE_KINDS
-  - packages/core/src/repair-contract.ts#SUPPORTED_FIXES
-  - packages/core/src/repair-contract.ts#UNCLASSIFIED
-  - packages/core/src/repair-contract.ts#collectUnclassified
-  - packages/core/src/repair-contract.ts#formatUnrepairableMessage
-  - packages/core/src/repair-contract.ts#isUnrepairableErrorSet
-  - packages/core/src/repair-contract.ts#renderActionDirective
-  - packages/core/src/repair-contract.ts#renderReportOnlyBlock
-  - packages/core/src/risk.test.ts#fakeSpawnError
-  - packages/core/src/risk.test.ts#fakeSpawnOk
-  - packages/core/src/risk.test.ts#tsImport
-  - packages/core/src/risk.ts#bandPoints
-  - packages/core/src/risk.ts#collectGitChurn
-  - packages/core/src/risk.ts#compareByRisk
-  - packages/core/src/risk.ts#computeTestCoverageAndFanIn
-  - packages/core/src/risk.ts#derivePathFromSymbolKey
-  - packages/core/src/risk.ts#parseGitChurnOutput
-  - packages/core/src/risk.ts#runGitLog
-  - packages/core/src/risk.ts#scoreDebtItem
-  - packages/core/src/safe-io.test.ts#detectSymlinkSupport
-  - packages/core/src/safe-io.ts#ALLOWED_DIRS
-  - packages/core/src/safe-io.ts#InvalidRelativePathError
-  - packages/core/src/safe-io.ts#InvalidRelativePathError.constructor
-  - packages/core/src/safe-io.ts#PathOutsideAllowlistError
-  - packages/core/src/safe-io.ts#PathOutsideAllowlistError.constructor
-  - packages/core/src/safe-io.ts#allowedAbs
-  - packages/core/src/safe-io.ts#allowlistFor
-  - packages/core/src/safe-io.ts#exists
-  - packages/core/src/safe-io.ts#findDeepestExisting
-  - packages/core/src/safe-io.ts#isInsideAllowlist
-  - packages/core/src/safe-io.ts#mkdir
-  - packages/core/src/safe-io.ts#readText
-  - packages/core/src/safe-io.ts#remove
-  - packages/core/src/safe-io.ts#resolveAndValidate
-  - packages/core/src/safe-io.ts#validateDeclared
-  - packages/core/src/safe-io.ts#writeText
-  - packages/core/src/section-guard.ts#SURGICAL_REPAIR_ELIGIBLE_CODES
-  - packages/core/src/section-guard.ts#slugifyHeading
-  - packages/core/src/section-guard.ts#spliceSections
-  - packages/core/src/section-guard.ts#splitH2Sections
-  - packages/core/src/section-guard.ts#surgicalRepairTargetSections
-  - packages/core/src/status.test.ts#setupChangedDebtOnBoth
-  - packages/core/src/status.test.ts#writeRepoFile
-  - packages/core/src/status.test.ts#writeWikiPage
-  - packages/core/src/status.ts#anchoredLangs
-  - packages/core/src/status.ts#applyFreshness
-  - packages/core/src/status.ts#applyRiskRanking
-  - packages/core/src/status.ts#collect
-  - packages/core/src/status.ts#collectDegradedPages
-  - packages/core/src/status.ts#formatActivityEvent
-  - packages/core/src/status.ts#formatHuman
-  - packages/core/src/status.ts#formatLocalTimestamp
-  - packages/core/src/status.ts#formatSnapshotAge
-  - packages/core/src/status.ts#run
-  - packages/core/src/symbols.test.ts#parse
-  - packages/core/src/symbols.ts#attributeRationale
-  - packages/core/src/symbols.ts#collectRationaleCandidates
-  - packages/core/src/symbols.ts#extractCalleeName
-  - packages/core/src/symbols.ts#extractCalls
-  - packages/core/src/symbols.ts#extractRationales
-  - packages/core/src/symbols.ts#extractSymbols
-  - packages/core/src/symbols.ts#extractSymbolsWithRanges
-  - packages/core/src/symbols.ts#groupContiguousBlocks
-  - packages/core/src/symbols.ts#isLikelyGenerated
-  - packages/core/src/symbols.ts#isTsDocstringComment
-  - packages/core/src/symbols.ts#makeRecord
-  - packages/core/src/symbols.ts#normalizeRationaleText
-  - packages/core/src/symbols.ts#signatureFor
-  - packages/core/src/symbols.ts#toSymbolRecord
-  - packages/core/src/symbols.ts#walkForCalls
-  - packages/core/src/symbols.ts#walkNode
+  - packages/core/src/view-activity.ts#axisFrame
+  - packages/core/src/view-activity.ts#buildActivityModel
+  - packages/core/src/view-activity.ts#escapeHtml
+  - packages/core/src/view-activity.ts#formatActivityEvent
+  - packages/core/src/view-activity.ts#formatCompact
+  - packages/core/src/view-activity.ts#formatDuration
+  - packages/core/src/view-activity.ts#formatInt
+  - packages/core/src/view-activity.ts#formatUsd
+  - packages/core/src/view-activity.ts#formatUtc
+  - packages/core/src/view-activity.ts#legend
+  - packages/core/src/view-activity.ts#renderActivityPage
+  - packages/core/src/view-activity.ts#renderBurndownChart
+  - packages/core/src/view-activity.ts#renderWeeklyBarChart
+  - packages/core/src/view-activity.ts#round1
+  - packages/core/src/view-activity.ts#svgWrap
+  - packages/core/src/view-activity.ts#utcDay
+  - packages/core/src/view-activity.ts#utcWeekStart
+  - packages/core/src/view.ts#DEFAULT_BADGE_DAYS
+  - packages/core/src/view.ts#DEFAULT_SITE_REL
+  - packages/core/src/view.ts#DEFAULT_TEMPLATE
+  - packages/core/src/view.ts#THEME_STORAGE_KEY
+  - packages/core/src/view.ts#VIEW_TEMPLATES
+  - packages/core/src/view.ts#ViewError
+  - packages/core/src/view.ts#ViewError.constructor
+  - packages/core/src/view.ts#applyFreshnessBadges
+  - packages/core/src/view.ts#badgeSpan
+  - packages/core/src/view.ts#buildSearchIndexJs
+  - packages/core/src/view.ts#buildSidebar
+  - packages/core/src/view.ts#buildSite
+  - packages/core/src/view.ts#classifyGroup
+  - packages/core/src/view.ts#collectFreshnessLog
+  - packages/core/src/view.ts#collectHeadings
+  - packages/core/src/view.ts#createDiskWikiSource
+  - packages/core/src/view.ts#createGitRefWikiSource
+  - packages/core/src/view.ts#createMarkdownRenderer
+  - packages/core/src/view.ts#deriveTitle
+  - packages/core/src/view.ts#escapeHtml
+  - packages/core/src/view.ts#filterWikiArtifactPaths
+  - packages/core/src/view.ts#firstStderrLine
+  - packages/core/src/view.ts#heading
+  - packages/core/src/view.ts#inlineMermaidPlaceholders
+  - packages/core/src/view.ts#insertAfterFirstH1
+  - packages/core/src/view.ts#listArtifacts
+  - packages/core/src/view.ts#normalizeGitHubRemote
+  - packages/core/src/view.ts#normalizeRefOption
+  - packages/core/src/view.ts#outRelFor
+  - packages/core/src/view.ts#parseGitFreshnessLog
+  - packages/core/src/view.ts#parseTasksGrouping
+  - packages/core/src/view.ts#parseWikiStamp
+  - packages/core/src/view.ts#plainTextExcerpt
+  - packages/core/src/view.ts#probeGitHubRemoteBase
+  - packages/core/src/view.ts#probeWikiStamp
+  - packages/core/src/view.ts#read
+  - packages/core/src/view.ts#readMermaidAsset
+  - packages/core/src/view.ts#relativeHref
+  - packages/core/src/view.ts#renderPage
+  - packages/core/src/view.ts#renderShell
+  - packages/core/src/view.ts#resolveOutDir
+  - packages/core/src/view.ts#rewriteLinks
+  - packages/core/src/view.ts#rootPrefixFor
+  - packages/core/src/view.ts#runGitCaptured
+  - packages/core/src/view.ts#runGitLog
+  - packages/core/src/view.ts#sourceRefHtml
+  - packages/core/src/view.ts#stripControlMarkers
+  - packages/core/src/view.ts#uniqueAnchorFilePaths
+  - packages/core/src/walker.ts#DENIED_BASENAMES
+  - packages/core/src/walker.ts#DENIED_EXTENSIONS
+  - packages/core/src/walker.ts#EXTENSION_LANG
+  - packages/core/src/walker.ts#buildIgnore
+  - packages/core/src/walker.ts#isMinified
+  - packages/core/src/walker.ts#walkRepo
 ---
 
-# Core Repair, Status, Sectioning, Symbols, and Risk Pipeline
+# Viewer build pipeline and Activity dashboard
 
-This module page describes the livewiki core's mid-stack pipeline: safe filesystem I/O, symbol and rationale extraction from source, deterministic debt risk scoring, surgical H2-section repair, the closed repair contract, and the status reporter.
+The Phase 7 viewer transforms the canonical `livewiki/` wiki into a self-contained static site and adds a synthetic Activity dashboard rendered from the local metrics ledger.
 
 ## When to use this page
-
-- **Review** the repair-contract mapping and surgical-repair eligibility rules before extending the prompt layer with a new `ArtifactValidationCode`.
-- **Audit** `safe-io` allowlist checks, error classes, and symlink-revalidation behavior when modifying any code path that writes to disk.
-- **Inspect** symbol extraction (`extractSymbols`, `extractSymbolsWithRanges`, `walkNode`, `signatureFor`, `makeRecord`, `toSymbolRecord`) when changing what becomes a `SymbolRecord` in the index.
-- **Verify** the risk rubric (`bandPoints`, `computeTestCoverageAndFanIn`, `scoreDebtItem`, `derivePathFromSymbolKey`, `compareByRisk`, `parseGitChurnOutput`, `collectGitChurn`, `runGitLog`) when adjusting how `livewiki status` orders debt.
+- **Build** a static site from the working-tree wiki using `buildSite`.
+- **Render** a historical site from a git ref (`--ref`) without touching the working tree.
+- **Inspect** how the Activity dashboard aggregates the `update_metrics.json` ledger and emits deterministic inline SVG.
+- **Audit** the repo walker used by tier-1/tier-2 indexing — its denylists, `.gitignore` composition, and extension-to-language mapping.
 
 ## How it fits
+This module groups three sibling files under `packages/core/src/`: `walker.ts` (the indexable-file walker used by the symbol indexer), `view.ts` (the Phase 7 static-site builder), and `view-activity.ts` (the pure Activity dashboard renderer). `view.ts` imports `view-activity.ts` and is the only consumer of its `buildActivityModel` / `renderActivityPage` exports; `view-activity.ts` never imports back into `view.ts`. The walker is independent of both viewer files and is consumed by the indexing pipeline that feeds the wiki the viewer renders. Git data flows in through injectable `SpawnImpl` boundaries so every probe (`runGitCaptured`, `runGitLog`, `probeWikiStamp`, `probeGitHubRemoteBase`) is testable without a real `.git`.
 
-These eleven files live under `packages/core/src/` and sit between the indexer/DB layer and the CLI/orchestrator layer. `safe-io.ts` is the single authority for any disk write that touches `livewiki/` or `.livewiki/` inside the repo root, and every higher module ultimately funnels through it. `symbols.ts` is what turns a parsed tree-sitter tree into the `SymbolRecord` rows the indexer persists, while `status.ts` is what reads those rows back into the human/JSON status report (with the Etapa 2c risk overlay applied on the fly). `repair-contract.ts` and `section-guard.ts` together gate the surgical repair path: `repair-contract.ts` decides which `ArtifactValidationCode` values have a supported directive per page kind, and `section-guard.ts` decides whether a given error set is eligible for surgical splice and how to splice it safely. Test files (`risk.test.ts`, `safe-io.test.ts`, `section-guard.test.ts`, `status.test.ts`, `symbols.test.ts`) cover the contract surfaces of those modules.
-
-## Repair contract and surgical-repair eligibility
-
-<!-- lw:anchors packages/core/src/repair-contract.ts#ALL_ARTIFACT_VALIDATION_CODES packages/core/src/repair-contract.ts#PAGE_KINDS packages/core/src/repair-contract.ts#SUPPORTED_FIXES packages/core/src/repair-contract.ts#UNCLASSIFIED packages/core/src/repair-contract.ts#collectUnclassified packages/core/src/repair-contract.ts#formatUnrepairableMessage packages/core/src/repair-contract.ts#isUnrepairableErrorSet packages/core/src/repair-contract.ts#renderActionDirective packages/core/src/repair-contract.ts#renderReportOnlyBlock packages/core/src/section-guard.ts#SURGICAL_REPAIR_ELIGIBLE_CODES packages/core/src/section-guard.ts#slugifyHeading packages/core/src/section-guard.ts#spliceSections packages/core/src/section-guard.ts#splitH2Sections packages/core/src/section-guard.ts#surgicalRepairTargetSections -->
-
-`PAGE_KINDS` enumerates the three page kinds (`"module"`, `"flow"`, `"topic"`) that the closed repair contract keys on. `ALL_ARTIFACT_VALIDATION_CODES` is the runtime mirror of the `ArtifactValidationCode` union, used as the iteration set for the exhaustiveness test. `SUPPORTED_FIXES` maps every code to the exact ACTION text the prompt renders (port of the historical if-chains in `prompts.ts`); `UNCLASSIFIED` maps every code that has no supported repair to a one-line reason and is rendered report-only — the model is never asked to repair by guessing (for example, `manual_block_altered` is human content under rule #6).
-
-`renderActionDirective(err, kind)` returns the directive text for one error under the page kind's contract, or `""` when the code is unclassified or the directive does not apply to this exact instance (the caller must already have neutralized `messageSafe` / `offendingSafe`). `collectUnclassified(errors, kind)` returns the distinct unclassified codes present in an error set in first-seen order; codes absent from both maps are tolerated here so a legacy checkpoint code can never crash the loop. `isUnrepairableErrorSet(errors, kind)` is the Etapa 2a early-abort gate: when every error in a non-empty set is unclassified for the page kind, the orchestrator must not burn a paid repair call on it. `renderReportOnlyBlock(errors, kind)` is the report-only prompt block listing the unclassified codes the model must NOT try to fix by guessing; it is empty when every error has a directive. `formatUnrepairableMessage(errors, kind)` formats the human-readable abort message for the early-abort path.
-
-On the section-guard side, `splitH2Sections(page)` splits a Markdown page into its prefix (frontmatter + opening) and H2 sections using the same heading-scan idiom as `artifact.ts` (`maskCodeSpansPreservingLength` keeps fenced `##` lines invisible and gives exact byte offsets on both LF and CRLF). `spliceSections(original, repaired, targetSections)` is the anti-cascade guard: it returns `original` with only the target sections replaced, or `null` when the prefix, non-target sections, or section sequence drifted. `slugifyHeading(text)` must stay byte-identical to the private rule in `artifact.ts` because validation errors carry its output as `sectionSlug`. `surgicalRepairTargetSections(errors, kind)` is the eligibility rule — every error must carry a prose-level code AND a resolvable section (its `sectionSlug`, or for the section-level `missing_page_opening` shape, the section named in the message via `FLOW_FIXES` in `repair-contract.ts`). `SURGICAL_REPAIR_ELIGIBLE_CODES` is the read-only set of codes that satisfy the prose-level part of that rule.
-
-## Safe filesystem I/O
-
-<!-- lw:anchors packages/core/src/safe-io.ts#ALLOWED_DIRS packages/core/src/safe-io.ts#InvalidRelativePathError packages/core/src/safe-io.ts#InvalidRelativePathError.constructor packages/core/src/safe-io.ts#PathOutsideAllowlistError packages/core/src/safe-io.ts#PathOutsideAllowlistError.constructor packages/core/src/safe-io.ts#allowedAbs packages/core/src/safe-io.ts#allowlistFor packages/core/src/safe-io.ts#exists packages/core/src/safe-io.ts#findDeepestExisting packages/core/src/safe-io.ts#isInsideAllowlist packages/core/src/safe-io.ts#mkdir packages/core/src/safe-io.ts#readText packages/core/src/safe-io.ts#remove packages/core/src/safe-io.ts#resolveAndValidate packages/core/src/safe-io.ts#validateDeclared packages/core/src/safe-io.ts#writeText packages/core/src/safe-io.test.ts#detectSymlinkSupport -->
-
-`ALLOWED_DIRS = ["livewiki", ".livewiki"] as const` is the canonical allowlist (rule #1). The two error classes surface every allowlist violation as a structured exception: `PathOutsideAllowlistError` carries the `repoRoot`, the `attempted` path, and the `allowlist` it was checked against; `InvalidRelativePathError` carries the rejected relPath and a `reason`. `isInsideAllowlist(repoRoot, absPath, opts)` is the pure (no disk) prefix check — it uses prefix-plus-separator matching, not substring, so `livewiki-evil` cannot match `livewiki/`; the optional `allowPointer` flag also matches root-level `AGENTS.md` / `CLAUDE.md` (rule #2, opt-in, pointer phase only), and `allowReadme` matches root-level `README.md` (rule #6: readme-export enforces the marker-block contract before any write reaches `safe-io`). `allowlistFor(opts)` builds the effective allowlist including the pointer/readme filenames; `allowedAbs(repoRoot, dir)` resolves an `AllowedDir` to an absolute path and throws if the literal ever escapes `repoRoot`.
-
-`resolveAndValidate(repoRoot, relPath, opts)` is the only entry point for safe I/O: it realpath-canonicalizes the repo root itself before any allowlist comparison (macOS `/var` → `/private/var`, Windows 8.3 aliases — the allowlist must apply to the real location; falls back to the lexical resolve when the root does not exist yet), then calls `validateDeclared` (rejects absolute paths and `..` escapes), then walks from the target up to the deepest existing ancestor via `findDeepestExisting`, realpaths that ancestor, reconstitutes the final path, and **revalidates** it against `isInsideAllowlist` to close symlink-escape attacks (`livewiki` → `/tmp`, `livewiki/sub` → `../src`, `livewiki/leaf` → `/etc/x`). `writeText`, `readText`, `exists`, `mkdir`, and `remove` are the thin wrappers that delegate to `resolveAndValidate` first and then call `node:fs/promises`. `detectSymlinkSupport()` is the test-only Windows capability probe that runs once per test session — when symlink creation fails (no admin / no Developer Mode), symlink-sensitive tests are skipped via `it.runIf(canSymlink)`.
-
-## Risk-weighted debt prioritization
-
-<!-- lw:anchors packages/core/src/risk.ts#bandPoints packages/core/src/risk.ts#collectGitChurn packages/core/src/risk.ts#compareByRisk packages/core/src/risk.ts#computeTestCoverageAndFanIn packages/core/src/risk.ts#derivePathFromSymbolKey packages/core/src/risk.ts#parseGitChurnOutput packages/core/src/risk.ts#runGitLog packages/core/src/risk.ts#scoreDebtItem packages/core/src/risk.test.ts#fakeSpawnError packages/core/src/risk.test.ts#fakeSpawnOk packages/core/src/risk.test.ts#tsImport -->
-
-```ts
-function bandPoints(bands: ReadonlyArray<readonly [number, number, number]>, value: number): number
+## Diagram
+```mermaid
+%% livewiki/diagrams/core-src-11.mmd
 ```
 
-`bandPoints` is the top-down band lookup shared by the fan-in and churn rubric: each band is a `[min, max, points]` triple, and the first band whose range contains `value` wins (out-of-range values yield `0`).
+## Public surface and templates
+<!-- lw:anchors packages/core/src/view.ts#VIEW_TEMPLATES packages/core/src/view.ts#DEFAULT_TEMPLATE packages/core/src/view.ts#DEFAULT_SITE_REL packages/core/src/view.ts#DEFAULT_BADGE_DAYS packages/core/src/view.ts#THEME_STORAGE_KEY packages/core/src/view.ts#ViewError packages/core/src/view.ts#ViewError.constructor -->
+
+The viewer exposes the two supported shells, the default shell/site path, the freshness-badge window, and the persisted-theme key as named exports so the CLI and runtime stay in sync.
 
 ```ts
-export function computeTestCoverageAndFanIn(opts: {
-  importsByFile: Map<string, ExtractedImport[]>;
-  knownFiles: ReadonlySet<string>;
-}): { coveredByTest: Set<string>; fanIn: Map<string, number> }
+export const VIEW_TEMPLATES = ["agent", "docs"] as const;
+export const DEFAULT_TEMPLATE: ViewTemplate = "agent";
+export const DEFAULT_SITE_REL = ".livewiki/site";
+export const DEFAULT_BADGE_DAYS = 7;
+export const THEME_STORAGE_KEY = "livewiki-theme";
 ```
 
-`computeTestCoverageAndFanIn` resolves file-level import edges via `resolveImportEdges` (relative specifiers only; workspace packages empty) and projects them into two signals: `coveredByTest` (files imported by at least one test file per `isTestPath`) and `fanIn` (count of distinct importer files per imported file). Self-edges are dropped by `resolveImportEdges`, and specifiers that resolve outside `knownFiles` are ignored.
+`ViewError` carries a `code` discriminated by the `ViewErrorCode` union. The constructor body assigns the provided `code` to the readonly `code` field and delegates to the `Error` superconstructor with the message; the `name` property is set to `"ViewError"` so `instanceof` plus `name` distinguish it from generic `Error` throws.
 
 ```ts
-export function derivePathFromSymbolKey(key: string | null): string | null
-export function scoreDebtItem(opts: {
-  event: "changed" | "moved" | "deleted";
-  tier: "anchored" | "prose" | null;
-  coveredByTest: boolean;
-  fanIn: number;
-  churnCount: number | null;
-}): RiskScore
+constructor(code: ViewErrorCode, message: string) {
 ```
 
-`derivePathFromSymbolKey` splits a `${relPath}#${name}` key back into its `relPath` and returns `null` when the key is absent or carries no `#` segment (such items still get event points, with all file-derived factors at `0`). `scoreDebtItem` applies the rubric: event points (`changed=10`, `deleted=10`, `moved=5`); test-gap (`40` for an anchored file with no test importer, `10` flat for prose-tier files since import coverage is not extractable); fan-in via `bandPoints` (`11+→20`, `6–10→15`, `3–5→10`, `1–2→5`); churn via `bandPoints` (`10+→15`, `4–9→10`, `1–3→5`). `null` `tier` zeroes every file-derived factor. `compareByRisk` is the comparator that puts higher `score` first and uses stable fallbacks to keep ordering deterministic.
+The `invalid_out_dir` branch rejects `--out` paths that are inside `livewiki/`, that contain `livewiki/`, or that equal a filesystem root — the visible check uses `path.relative` in both directions and only fails on a non-`..`-prefixed result, so the rejection is shape-dependent (a path equal to the repo root or to a filesystem root is caught separately).
+
+## Build entry point and output resolution
+<!-- lw:anchors packages/core/src/view.ts#buildSite packages/core/src/view.ts#resolveOutDir packages/core/src/view.ts#listArtifacts packages/core/src/view.ts#read packages/core/src/view.ts#createDiskWikiSource packages/core/src/view.ts#createGitRefWikiSource packages/core/src/view.ts#normalizeRefOption packages/core/src/view.ts#filterWikiArtifactPaths packages/core/src/view.ts#runGitCaptured packages/core/src/view.ts#firstStderrLine packages/core/src/view.ts#probeWikiStamp packages/core/src/view.ts#parseWikiStamp packages/core/src/view.ts#probeGitHubRemoteBase packages/core/src/view.ts#normalizeGitHubRemote packages/core/src/view.ts#parseTasksGrouping packages/core/src/view.ts#applyFreshnessBadges packages/core/src/view.ts#collectFreshnessLog packages/core/src/view.ts#runGitLog packages/core/src/view.ts#parseGitFreshnessLog packages/core/src/view.ts#readMermaidAsset packages/core/src/view.ts#renderShell packages/core/src/view.ts#buildSidebar packages/core/src/view.ts#badgeSpan packages/core/src/view.ts#buildSearchIndexJs packages/core/src/view.ts#relativeHref packages/core/src/view.ts#rootPrefixFor packages/core/src/view.ts#escapeHtml packages/core/src/view.ts#rewriteLinks packages/core/src/view.ts#inlineMermaidPlaceholders packages/core/src/view.ts#createMarkdownRenderer packages/core/src/view.ts#heading packages/core/src/view.ts#stripControlMarkers packages/core/src/view.ts#outRelFor packages/core/src/view.ts#classifyGroup packages/core/src/view.ts#deriveTitle packages/core/src/view.ts#renderPage packages/core/src/view.ts#collectHeadings packages/core/src/view.ts#plainTextExcerpt packages/core/src/view.ts#uniqueAnchorFilePaths packages/core/src/view.ts#sourceRefHtml packages/core/src/view.ts#insertAfterFirstH1 -->
+
+`buildSite` orchestrates the whole pipeline: resolve output, choose a wiki source (disk or git ref via `normalizeRefOption`), enumerate artifacts, probe the version stamp and GitHub remote for deep links, read tasks grouping, read every `.mmd` source so pages can sort before the diagrams they reference, render each page, optionally apply freshness badges, append the synthetic Activity page when the ledger is non-empty, wipe and recreate the output directory, then write one HTML document per page plus the four shared assets.
 
 ```ts
-export function parseGitChurnOutput(text: string): Map<string, number>
-export function collectGitChurn(repoRoot: string, spawnImpl?: SpawnImpl): Promise<Map<string, number>>
-function runGitLog(repoRoot: string, spawnImpl: SpawnImpl): Promise<string>
+export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult> {
 ```
 
-`parseGitChurnOutput` parses `git log --name-only --pretty=format:` output into a per-file commit count (`Map<relPath, count>`). `collectGitChurn` calls `runGitLog` with an injectable `SpawnImpl` and degrades gracefully (returns an empty map) when the directory is not a git repo, the churn window is disabled, or the spawn errors — the test helpers `fakeSpawnOk(output, code)` and `fakeSpawnError()` exercise the success and spawn-error paths without touching real git. `tsImport(source)` is the test helper that wraps a relative specifier into the `ExtractedImport` shape (`kind: "ts-import"`) the resolver expects.
+`resolveOutDir` validates the `--out` option: undefined returns the safe-io default; an explicit path is rejected when it sits inside `livewiki/`, when `livewiki/` sits inside it, or when it equals a filesystem root. Git failures degrade silently into `null` for the stamp and remote — `buildSite` only emits deep links when both are present, preserving the offline posture. The `--ref` branch rejects empty or flag-like values via `normalizeRefOption` and surfaces unresolvable refs as a `ViewError` with `code === "invalid_ref"` rather than degrading. `WikiSource.listArtifacts()` returns the canonical artifact set unsorted; `WikiSource.read(wikiPath)` returns the artifact body — `createDiskWikiSource` backs them with `collectWikiArtifactPaths` and `safeIo.readText`, while `createGitRefWikiSource` backs them with `runGitCaptured` over `git ls-tree -r --name-only <ref> -- livewiki/` (filtered through `filterWikiArtifactPaths`) and `git show <ref>:<wikiPath>`. `firstStderrLine` extracts the first non-empty line from a `GitCaptured` result. `probeWikiStamp` runs a single bounded `git log -1 --format=%H%n%cI -- livewiki/` and parses it through `parseWikiStamp`. `probeGitHubRemoteBase` runs `git remote get-url origin` and parses it through `normalizeGitHubRemote`. `parseTasksGrouping` reads the canonical `livewiki/tasks.md` back to learn the implementation-reference grouping rather than re-deriving clusters. `applyFreshnessBadges` consumes the `FreshnessLog` produced by `collectFreshnessLog` (which itself wraps `runGitLog` over the bounded `FRESHNESS_LOG_MAX_COMMITS` window and parses the output with `parseGitFreshnessLog`) and stamps each page with `new` / `updated` against `DEFAULT_BADGE_DAYS`. `readMermaidAsset` vendors `node_modules/mermaid/dist/mermaid.min.js` for the offline posture — failure surfaces as `ViewError("missing_mermaid_asset", …)`. `renderShell` wraps each page fragment in the template chrome; `buildSidebar` produces the navigation from the full page set with the active item marked; `badgeSpan` renders the per-page freshness pill; `buildSearchIndexJs` emits the offline `window.SEARCH_INDEX = [...]` blob. `relativeHref` and `rootPrefixFor` compute the link paths between sibling pages and the site root. `escapeHtml` is the shared HTML escaper reused by every fragment. `rewriteLinks` rewrites internal `.md` / `.mmd` references to `.html` with the same relative resolution as verify, and `inlineMermaidPlaceholders` resolves `%% livewiki/<path>.mmd` placeholders into inline Mermaid blocks using the pre-read `mmdSources` map. `createMarkdownRenderer` builds the `Marked` instance; the `heading` override is what strips livewiki control markers from headings; `stripControlMarkers` removes livewiki nav markers and `<!-- livewiki:... -->` tags from the rest of the body. `outRelFor` converts a wiki path into its `pages/...` output path; `classifyGroup` assigns the sidebar group from the wiki path; `deriveTitle` falls back from frontmatter to the first H1 to the file stem. `renderPage` orchestrates a single page (Markdown → HTML, link rewriting, mermaid inlining, deep-link annotation) and is what `buildSite` calls once per wiki artifact. `collectHeadings` extracts the heading list for the search index; `plainTextExcerpt` builds the OG/search snippet. `uniqueAnchorFilePaths` dedupes anchor paths before they reach `sourceRefHtml`, which then renders the per-page `Sources:` deep-link line. `insertAfterFirstH1` injects the deep-link line below the page title.
 
-## Status reporter
+## Repo walker
+<!-- lw:anchors packages/core/src/walker.ts#EXTENSION_LANG packages/core/src/walker.ts#DENIED_EXTENSIONS packages/core/src/walker.ts#DENIED_BASENAMES packages/core/src/walker.ts#isMinified packages/core/src/walker.ts#buildIgnore packages/core/src/walker.ts#walkRepo -->
 
-<!-- lw:anchors packages/core/src/status.ts#anchoredLangs packages/core/src/status.ts#applyFreshness packages/core/src/status.ts#applyRiskRanking packages/core/src/status.ts#collect packages/core/src/status.ts#collectDegradedPages packages/core/src/status.ts#formatActivityEvent packages/core/src/status.ts#formatHuman packages/core/src/status.ts#formatLocalTimestamp packages/core/src/status.ts#formatSnapshotAge packages/core/src/status.ts#run packages/core/src/status.test.ts#setupChangedDebtOnBoth packages/core/src/status.test.ts#writeRepoFile packages/core/src/status.test.ts#writeWikiPage -->
-
-`run(repoRoot, opts)` is the top-level entry: resolves the index DB via `safeIo.resolveAndValidate`, opens it, builds the initial report via `collect(db, topN)`, then layers on freshness (`applyFreshness`) and risk ranking (`applyRiskRanking`) only when there is open debt to score. `collect` reads the file/symbol/debt/undocumented/metrics rows and applies `anchoredLangs()` (a `Set` built from `EXTENSION_LANG`, kept import-light so status never pulls web-tree-sitter) to compute the per-language coverage tier (`"anchored"` when a tree-sitter grammar exists, `"prose"` otherwise). The open-debt query COALESCEs `symbol_key` and `wiki_path` from the durable debt columns (`debt.symbol_key`, `debt.doc_page_id` via a second `doc_pages` join) over the anchor-path LEFT JOINs, so deleted-event rows keep their identity after anchor removal (schema v8). `applyFreshness` stats the indexed files only (never a repo walk) and fills `meta.snapshotAgeMs`, `meta.stale`, and `meta.staleChangedFiles`. `applyRiskRanking` recomputes imports on demand and rewrites `debt.items` in `compareByRisk` order, attaching the additive `risk` field — status on a clean repo never parses files because the ranking step is gated on `debt.items.length > 0`. `collectDegradedPages` recounts pages flagged `quality: degraded` in frontmatter directly from disk (recovery tier, Component 2; verify-style walk, never stale).
-
-The formatters produce the human-readable output: `formatHuman(report)` is the multi-line CLI text, `formatActivityEvent(e)` formats a single `UpdateMetric` (used inside the Activity block) — `batch_run` lines end with a wall-clock duration via the private `formatDuration` helper (`45s` / `30m` / `1h12m`), `formatLocalTimestamp(ts)` formats an epoch millisecond as local `YYYY-MM-DD HH:MM:SS`, and `formatSnapshotAge(ms)` formats the age bucket for the freshness line. Test helpers `writeRepoFile(rel, content)`, `writeWikiPage(rel, frontmatter)`, and `setupChangedDebtOnBoth()` build the fixture repo and DB so the populated-report expectations have something to assert against.
-
-## Symbol and rationale extraction
-
-<!-- lw:anchors packages/core/src/symbols.ts#extractSymbols packages/core/src/symbols.ts#extractSymbolsWithRanges packages/core/src/symbols.ts#walkNode packages/core/src/symbols.ts#makeRecord packages/core/src/symbols.ts#toSymbolRecord packages/core/src/symbols.ts#extractCalls packages/core/src/symbols.ts#walkForCalls packages/core/src/symbols.ts#extractCalleeName packages/core/src/symbols.ts#signatureFor packages/core/src/symbols.ts#isLikelyGenerated packages/core/src/symbols.ts#extractRationales packages/core/src/symbols.ts#collectRationaleCandidates packages/core/src/symbols.ts#isTsDocstringComment packages/core/src/symbols.ts#normalizeRationaleText packages/core/src/symbols.ts#groupContiguousBlocks packages/core/src/symbols.ts#attributeRationale packages/core/src/symbols.test.ts#parse -->
+The walker is a denylist-based scanner: every text file under the repo root is visited; archives, binaries, media, fonts, source maps, minified bundles, denylisted lockfiles, and extensionless files are skipped before the language name is computed.
 
 ```ts
-export function extractSymbols(tree: Tree, relPath: string, source: string): SymbolRecord[]
-export function extractSymbolsWithRanges(tree: Tree, relPath: string, source: string): Array<SymbolRecord & SymbolRange>
+export async function walkRepo(
+  repoRoot: string,
+  opts: WalkOptions = {},
+): Promise<WalkResult[]>
 ```
 
-`extractSymbols` returns the public `SymbolRecord[]`; `extractSymbolsWithRanges` is the same extraction with the AST byte range preserved (`source_start_byte`, `source_end_byte`) so the indexer can re-slice the EOL-normalized file text per-symbol (roadmap item 12). Both share `walkNode`, which descends the tree and emits one record per declaration — top-level `function_declaration` / `generator_function_declaration` (kind `"function"`), `class_declaration` (kind `"class"`), `method_definition` with parent class (kind `"method"`, name `Class.method`), `export_statement` (kind `"export"`), Python `function_definition` and `class_definition`, and `decorated_definition` for Python decorators. Anonymous arrows and IIFEs are skipped (a `SymbolRecord.key` must be referenceable). Classes declared inside a function/method body are also skipped — they are local implementation detail, and emitting them would collide on the same `path#Name` key across sibling methods (a confirmed root cause of recurring `duplicate_anchor` errors, 2026-07-23). `signatureFor(node, source)` returns the first line of the node as the signature slice; `makeRecord` and `toSymbolRecord` are the small constructors that build the `SymbolRecord` / `SymbolRange` from the walker output.
+`EXTENSION_LANG` maps grammar-supported extensions to their tree-sitter language name; any other recognized extension resolves to its lowercase extension with the leading dot stripped (tier-2 prose). `DENIED_EXTENSIONS` covers archives, binaries, media, fonts, and `.map`; `DENIED_BASENAMES` covers lockfiles compared case-insensitively by full filename; `isMinified` flags `*.min.js` and `*.min.css`. `buildIgnore` composes `.gitignore` content (if readable) with the always-on defaults `.git/`, `node_modules/`, `.livewiki/`, `livewiki/`, `dist/`, `coverage/` and any `opts.extraIgnores`, then `walkRepo` walks a directory stack — a missing or unreadable directory is logged and skipped, never thrown.
+
+## Activity model aggregation
+<!-- lw:anchors packages/core/src/view-activity.ts#buildActivityModel packages/core/src/view-activity.ts#utcWeekStart packages/core/src/view-activity.ts#utcDay packages/core/src/view-activity.ts#formatUtc packages/core/src/view-activity.ts#formatActivityEvent packages/core/src/view-activity.ts#formatDuration packages/core/src/view-activity.ts#round1 packages/core/src/view-activity.ts#formatInt packages/core/src/view-activity.ts#formatCompact packages/core/src/view-activity.ts#formatUsd packages/core/src/view-activity.ts#escapeHtml -->
+
+The Activity model is a pure function of the ledger — no `Date.now()`, no I/O, no timezone dependence — so the same ledger rebuilds byte-identical HTML on any host.
 
 ```ts
-export function extractCalls(tree: Tree, relPath: string, source: string): CallRecord[]
+export function buildActivityModel(entries: UpdateMetric[]): ActivityModel | null {
 ```
 
-`extractCalls` walks the tree with `walkForCalls` and records call sites; `extractCalleeName(node)` resolves the callee to a `{ name, confidence }` pair (or `null` when the call shape is not recoverable). The rationale side: `extractRationales` walks comments, `collectRationaleCandidates` collects them, `isTsDocstringComment(rawText)` decides whether a JSDoc/TSDoc block counts, `normalizeRationaleText(rawText, pythonDocstring)` strips the comment markers (handles both `/** … */` and Python `""" … """` shapes), `groupContiguousBlocks` merges adjacent lines into one rationale, and `attributeRationale` binds each rationale to the next declaration in source order. `isLikelyGenerated(content)` is the heuristic that flags vendored or generated files so their extracted symbols never leak into the index. The test helper `parse(ext, src)` initializes the parser once per session (via `beforeAll(initParser)`) and returns the `Tree` the extraction tests assert against.
+An empty ledger returns `null` and the caller omits the Activity page entirely (graceful degrade). Across `package_emitted`, `write_received`, `debt_resolved`, and `batch_run` entries, the aggregator computes totals (with `batchCostUsd` summing only over runs that carry pricing and `efficiencyRatio` returning `null` when no packages exist), bucketed `weeklyTokens` (last 12 non-empty UTC weeks, oldest first), the open-debt and cumulative-resolved series, the top-10 pages by writes (ties broken by token count, then path), the last 10 entries as the recent feed, and a `timeToDocument` measurement that pairs the most recent debt-carrying package timestamp with the next write or resolution — `null` when no pair exists. Week buckets and time labels go through `utcWeekStart`, `utcDay`, and `formatUtc`, which all derive from `Date.UTC(...)` and ISO slicing to stay host-independent. `formatActivityEvent` renders the one-line event text for each `UpdateMetric` kind. `formatDuration` formats milliseconds as a human-readable duration, `round1` rounds a number to one decimal place, `formatInt` formats an integer with thousands separators, `formatCompact` formats a number in a compact form for axis labels, `formatUsd` formats a USD amount, and `escapeHtml` is the shared escaper used inside the SVG/HTML fragments.
+
+## Activity page rendering
+<!-- lw:anchors packages/core/src/view-activity.ts#renderActivityPage packages/core/src/view-activity.ts#legend packages/core/src/view-activity.ts#renderWeeklyBarChart packages/core/src/view-activity.ts#renderBurndownChart packages/core/src/view-activity.ts#axisFrame packages/core/src/view-activity.ts#svgWrap -->
+
+`renderActivityPage` emits the dashboard as an HTML fragment: a Totals card grid, a Tokens-per-week grouped bar chart, a Debt-burndown dual-series line chart, a Writes-per-page table, and a Recent-activity table — each section heading is captured for the offline search index, and a single excerpt string feeds search snippets and OG meta.
+
+```ts
+export function renderActivityPage(model: ActivityModel): ActivityPageFragment {
+```
+
+Charts are inline SVG built at build time — `legend` writes the color-keyed swatches, `renderWeeklyBarChart` paints two bars per week (session vs. batch) against an axis frame, `renderBurndownChart` draws the open-debt step line plus the cumulative-resolved line on the same axes, `axisFrame` provides the 0 / half / max tick labels and a faint mid gridline, and `svgWrap` wraps everything in a `viewBox` SVG with `role="img"` and the XHTML namespace. Each chart is gated on non-empty data: the weekly bars skip when the week list is empty or `weekMax` is zero, the burndown skips when both series are empty, and the tables skip when their rows would be empty.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
-- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency and dependent
-- [Anchor ledger and artifact repair](core-src-01.md) — dependency
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependency and dependent
+- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md) — dependency and dependent
+- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md) — dependency
 
 > Coverage note: this module's source (3 files, ~94k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

@@ -1,0 +1,14 @@
+flowchart TB
+  artifact["artifact.ts<br/>(normalize / validate / opening checks / diagram helpers)"]
+  repair["artifact-repair.ts<br/>(mechanical repairers + closed code sets)"]
+  anchors["anchors.ts<br/>(wiki markdown parser)"]
+  ledger["anchor-ledger.ts<br/>(wiki-to-index sync + rewrite)"]
+  aux["auxiliary-page.ts<br/>(compact page assembler)"]
+  index["code index<br/>(SQLite symbols)"]
+
+  artifact --> repair
+  ledger --> anchors
+  ledger --> index
+  repair --> artifact
+  aux --> artifact
+  ledger --> repair

@@ -1,0 +1,13 @@
+flowchart LR
+  PkgJson["package.json"] --> WS["pnpm-workspace.yaml"]
+  PkgJson --> TSC["tsconfig.base.json"]
+  WS --> Core["packages/core (Phase 0)"]
+  WS --> CLI["packages/cli (Phase 0)"]
+  WS --> MCP["packages/mcp (Phase 4, deferred)"]
+  CLI --> Core
+  SPEC["SPEC.md"] -. governs .-> Core
+  SPEC -. governs .-> CLI
+  SPEC -. governs .-> MCP
+  VISION["VISION.md"] -. rationale .-> SPEC
+  README["README.md"] --> SPEC
+  README --> VISION

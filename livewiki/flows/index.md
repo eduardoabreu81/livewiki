@@ -7,4 +7,4 @@ owner: generated
 
 Each page below explains one principal end-to-end flow across modules, with its companion diagram.
 
-### [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](cli-src-01-to-core-src-05.md)
+### [CLI command surface to core pipeline wiring](cli-src-to-core-src-02.md)

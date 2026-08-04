@@ -1,0 +1,21 @@
+graph TD
+  packageJson["package.json<br/>(manifest + exports)"]
+  tsconfig["tsconfig.json<br/>(TS compile)"]
+  vitest["vitest.config.ts<br/>(test runner)"]
+  src["src/**/*.ts<br/>(source root)"]
+  tests["src/**/*.test.ts<br/>(unit tests)"]
+  dist["dist/<br/>(build output)"]
+  grammars["grammars/<br/>(tree-sitter)"]
+  subgraphDeps["Runtime deps<br/>sqlite, jsdom, marked,<br/>mermaid, tree-sitter-*"]
+  devDeps["Dev deps<br/>vitest, typescript,<br/>tree-sitter-cli"]
+
+  packageJson -->|declares| src
+  packageJson -->|publishes| dist
+  packageJson -->|publishes| grammars
+  packageJson -->|runtime| subgraphDeps
+  packageJson -->|dev| devDeps
+  tsconfig -->|compiles| src
+  tsconfig -->|emits| dist
+  vitest -->|runs| tests
+  vitest -->|covers| src
+  tests -->|exercises| src

@@ -1,115 +1,68 @@
 ---
-title: document-as-you-go (livewiki skill)
+title: document-as-you-go skill
 owner: generated
 anchors: []
 ---
 
-# document-as-you-go (livewiki skill)
+# document-as-you-go skill
 
-This skill instructs an agent to pay livewiki documentation debt immediately after closing a commit, task, or branch, before ending the session.
+This skill teaches a coding agent how to pay livewiki documentation debt immediately after closing a task, commit, merge, or batch of changes, while keeping the write smaller than the work package it pays down.
 
 ## When to use this page
 
-- **Run** `livewiki status --json` after closing a commit, task, subtask, or merge to check whether the wiki has unpaid debt before stopping the session.
-- **Issue** a work package with `livewiki update --json` and inspect `debt`, `snippets`, `validAnchors`, and `tokensEstimated` to plan how to pay each item.
-- **Pay** debt either through the MCP tool `livewiki_write_doc` (preferred) or by editing `livewiki/<wiki_path>.md` directly and running `livewiki verify`, then record the write with `livewiki update --record-write <tokens_estimados>`.
-- **Defer** items flagged `assignee=human`, items with no matching canonical anchor (undocumented), and trivial typo/formatting changes rather than rewriting them.
+- **Run** `livewiki status --json` after closing a commit, task, or merge to discover what documentation debt exists before stopping the session.
+- **Issue** `livewiki update --json` to receive a work package containing `debt`, `snippets`, `validAnchors`, and `tokensEstimated`, then pay only the items whose `assignee` is `agent`.
+- **Write** each pay-down through the `livewiki_write_doc` MCP tool when available, falling back to direct file edits plus `livewiki verify` when MCP is not configured.
+- **Record** every doc write with `livewiki update --record-write <tokens>` so the product's `efficiencyRatio = write/package` metric reflects your contribution.
 
 ## How it fits
 
-This skill lives in `packages/cli/skills/document-as-you-go/SKILL.md` as part of the `livewiki` CLI's skills surface, alongside the `livewiki` commands it orchestrates (`status`, `update`, `verify`). It targets any agent runtime (Claude Code, OpenCode, Codex CLI, or any agent that has the livewiki MCP skill) and operates after a code change has already been detected by the surrounding hook pipeline; the agent's role is the "agente paga a dívida via MCP" step in the Fase 5 acceptance flow, while hook detection and manifest updates run elsewhere.
+The `document-as-you-go` skill lives at `packages/cli/skills/document-as-you-go/SKILL.md` inside the livewiki repository's CLI package, alongside other agent-facing guidance. It targets any agent runtime that has the livewiki MCP skill loaded (Claude Code, OpenCode, Codex CLI, or compatible), and complements the product's hook pipeline by supplying the human-authored side of the loop: while the hook detects code changes and updates the manifest, the agent (acting on this skill) reads the resulting debt list and writes the matching wiki page.
 
-## Skill contract
+The skill's stated acceptance criterion references SPEC §Fase 5 — an end-to-end flow where the agent edits code, the hook detects it, the agent pays the debt via MCP, `verify` passes, and the manifest refreshes. From the skill's vantage point, only the "agent pays the debt via MCP" step is in scope; the rest of the loop is described as automatic. The skill also enforces guardrails shared with the rest of livewiki, including never inventing anchor keys outside `validAnchors`, leaving `assignee=human` items alone, and treating manual blocks as byte-for-byte sacred.
 
-The skill frontmatter declares:
+## Diagram
 
-```
----
-name: document-as-you-go
-description: Quando você termina uma tarefa/commit, pague a dívida de documentação da wiki antes de fechar. Use este skill no Claude Code, OpenCode, Codex CLI ou qualquer agente que tenha a skill MCP do livewiki.
----
+```mermaid
+%% livewiki/diagrams/document-as-you-go.mmd
 ```
 
-The body is written in Portuguese and frames the agent's responsibility as: "Quem fez a mudança documenta melhor" — whoever made the change documents it, because the fresh context is still in memory and costs no extra API tokens.
+## Debt discovery and the work package
 
-## When to invoke
+The skill begins by telling the agent to run `livewiki status --json` and inspect `debt.items`. If the array is empty, the skill instructs the agent to stop immediately — there is nothing to pay. This early exit is part of the design: the skill is meant to keep the agent's cost near zero on clean checkouts.
 
-The skill lists four triggering actions, all required to happen BEFORE the session ends:
+When debt exists, `livewiki update --json` emits a package that the skill describes with four fields:
 
-- Closed a commit.
-- Finished a task or subtask.
-- Merged a branch.
-- Left work in a "complete for now" state.
+- `debt`: items with `symbol_key`, `wiki_path`, and `assignee`. The agent only pays items where `assignee=agent`; items where `assignee=human` are business pages that need human review and must be surfaced in the final report instead of edited.
+- `snippets`: source windows around each anchor that act as fresh context so the agent does not have to re-read the file.
+- `validAnchors`: the canonical keys currently active in the index. The skill is explicit that no key outside this list may appear in the produced documentation, because `verify` rejects documents that reference keys not in the index.
+- `tokensEstimated`: the package's estimated token count, using a `chars/4` heuristic. The skill frames this as the product thesis — the package must remain smaller than re-reading the repository.
 
-It explicitly forbids invocation during an active edit; the work must be closed first.
+## Pay-down paths
 
-## Work package shape (`livewiki update --json`)
+The skill defines two parallel pay-down paths and prefers the first.
 
-The JSON emitted by `livewiki update` carries four named fields:
+The preferred path is the `livewiki_write_doc` MCP tool. For each debt item the agent reads the existing wiki page with `livewiki_read`, updates the content by placing each anchor under the correct section and matching prose to the new snippet, and calls `livewiki_write_doc` with the full wiki path and updated content. The tool runs `verify` itself before accepting; if an anchor would break, the write is rejected and the agent must correct and retry.
 
-- `debt` — a list of items with kind `changed`/`moved`/`deleted`, each carrying `symbol_key`, `wiki_path`, and `assignee`. Only `assignee=agent` items are payable; `assignee=human` items are business pages that require human review and must not be touched.
-- `snippets` — current source windows around each anchor, supplied as context so the agent does not have to re-read the file.
-- `validAnchors` — the canonical keys the agent is allowed to anchor; keys outside this list will be rejected by `verify`.
-- `tokensEstimated` — a `chars/4` heuristic of the package size. The skill states the product thesis that this number is smaller than re-reading the whole repo, and that the agent must keep it that way.
+The fallback path is manual editing. When the agent has no MCP configured, it edits `livewiki/<wiki_path>.md` directly and then runs `livewiki verify`. The skill is strict that exit code `0` is necessary but not sufficient: the verify output must show zero issues, counting both errors and warnings. Anything else must be fixed before the agent stops.
 
-If `debt.items` is empty, the skill instructs the agent to stop — there is nothing to pay.
+## Accounting and confirmation
 
-## Two payment paths
+After a write succeeds, the agent records the doc it produced with `livewiki update --record-write <tokens_estimados>`, where `<tokens_estimados>` follows the same `bytes / 4` heuristic. This feeds the `efficiencyRatio = write/package` metric that `livewiki status --json` exposes, and the skill frames the product thesis as "large package, small write" being a good economy.
 
-**Path A — MCP `livewiki_write_doc` (preferred).** For each debt item the agent reads the corresponding wiki page with `livewiki_read`, updates the content (placing the anchor in the right section, adjusting the description to match the new snippet), then calls `livewiki_write_doc` with the full wiki page path and the updated content. `livewiki_write_doc` runs `verify` before accepting; if an anchor breaks, the write is rejected and the agent must correct and retry.
+The skill closes the loop by re-running `livewiki status --json` and confirming that `debt.items` is empty or contains only `assignee=human` entries, and that `metrics` aggregates the agent's packages and writes so the agent can see its own contribution to the product economy.
 
-**Path B — manual edit + `livewiki verify`.** If the agent does not have MCP configured, it edits `livewiki/<wiki_path>.md` directly on disk and then runs:
+## Guardrails
 
-```bash
-livewiki verify
-```
+The skill lists four inviolable rules. Human-authored content is untouchable: if `assignee=human`, the agent must not write the markdown and must flag it in the final report instead. No invented keys are allowed; the only valid anchors come from `validAnchors` in the package, and the skill explicitly states that documentation referencing keys outside the index is rejected by `verify`. Manual blocks are preserved byte-for-byte; the skill warns that a `manual_block_altered` complaint means the agent rewrote something it should not have, and the fix is to revert. Finally, "verify clean" means exit code zero *and* zero issues — both errors and warnings — which the skill notes is the same standard that batch-mode `livewiki update` (Fase 3) and the product's E2E tests apply.
 
-The exit code must be 0 **and** there must be zero issues (both errors and warnings — not only errors). Otherwise the agent must correct until the result is clean.
+## When not to pay
 
-## Accounting write
+The skill is explicit about three cases where the agent should refuse to pay debt. Items with `assignee=human` must be signaled to a human, not written. Items the skill calls "undocumented" — where no matching anchor exists in `validAnchors` — lack enough fresh context for the agent; the skill defers those to `livewiki init --batch` with an LLM. Trivial changes such as typos or formatting tweaks may not be worth paying immediately; trivial debt can wait for the next round.
 
-Every paid item is recorded via:
+## Acceptance criterion
 
-```bash
-livewiki update --record-write <tokens_estimados>
-```
-
-`<tokens_estimados>` is a `bytes / 4` heuristic of what the agent actually wrote. This number feeds `efficiencyRatio = write/package` in `status --json`. The stated thesis: a large package that produces a small write is good economy.
-
-## Confirmation loop
-
-After paying and recording, the agent runs `livewiki status --json` again. `debt.items` must be empty (or contain only `assignee=human` items), and `metrics` aggregates the agent's packages and writes so it can see its own contribution to the product's economy.
-
-## Inviolable guardrails
-
-1. **Human content is untouchable.** If `assignee=human`, do not write into the markdown — flag it to the human in the final report.
-2. **No invented keys.** Use only `validAnchors` from the package. Documentation with a key outside the index is rejected by `verify`.
-3. **Manual blocks preserved byte-for-byte.** Manual blocks (the skill notes these are human-owned property) must not be rewritten; a `manual_block_altered` complaint from verification means the agent overwrote something it shouldn't, and must be reverted.
-4. **Clean verify is the criterion.** Exit 0 alone is not enough — zero issues is required. `livewiki update` in batch mode (Phase 3) and the product's E2E test enforce the same rule, and the skill instructs the agent to follow the same standard.
-
-## When NOT to pay
-
-- `assignee=human` debt — human review is needed; signal, do not write.
-- No corresponding anchor (undocumented) — the agent lacks fresh-enough context; better left to `livewiki init --batch` to resolve with an LLM.
-- Trivial change (typo, formatting) — evaluate whether it is worth paying; trivial debt can wait for the next round.
-
-## Acceptance criterion (SPEC §Fase 5)
-
-The skill quotes the end-to-end flow: "agente altera código, hook detecta, agente paga a dívida via MCP, verify passa, manifest atualizado." The agent's own role is the "agente paga a dívida via MCP" step; the other steps (Step 3 hook detection, manifest update after `verify` passes) are automatic.
-
-## Essential commands (TL;DR)
-
-```bash
-livewiki status --json    # see debt + metrics
-livewiki update --json    # emit work package
-livewiki_write_doc        # MCP — pay one page (runs verify before accepting)
-livewiki verify           # CLI fallback — exit 0 + zero issues
-livewiki update --record-write <N>   # account for written documentation
-```
-
-## Privacy
-
-The skill explicitly does not touch any API key and does not call an LLM directly. If MCP is configured, the MCP server reads the key from the environment variable. Without MCP, the agent edits manually. The skill instructs the agent to never ask the human to paste a key.
+The skill closes by quoting the SPEC §Fase 5 acceptance criterion verbatim: an end-to-end flow where the agent edits code, the hook detects it, the agent pays the debt via MCP, `verify` passes, and the manifest is updated. The skill positions itself as the "agent pays the debt via MCP" step in that flow, while the remaining steps — hook detection (Step 3) and manifest refresh on a passing `verify` — are described as automatic.
 
 <!-- livewiki:navigate:start -->
 ## Navigate

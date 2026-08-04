@@ -6,105 +6,50 @@ anchors: []
 
 # livewiki repository root
 
-This module is the workspace-level configuration and authoritative documentation surface for the livewiki monorepo itself, defining stack, scripts, monorepo layout, and the inviolable product rules.
+The repository root ties together the monorepo, runtime, and product-level governance documents that define what livewiki is and how the package set is wired together.
 
 ## When to use this page
 
-- **Read** `AGENTS.md`, `SPEC.md`, and `VISION.md` before contributing any change so you respect the inviolable rules and the product-first execution discipline.
-- **Consult** `package.json` and `pnpm-workspace.yaml` to understand the Node ≥ 20 runtime, pnpm workspaces, and the recursive `build`/`test`/`lint:tsc` scripts that drive the monorepo.
-- **Verify** the cross-platform product contract by checking `tsconfig.base.json` (strict NodeNext ESM) and the shell/line-ending/Unicode guarantees documented in `SPEC.md` when adapting CLI or MCP code.
-- **Resolve** design questions (out-of-scope features, durable English-only artifacts, pointer-in-`AGENTS.md` semantics) against the explicit rules listed in `SPEC.md` instead of inferring intent from code.
+- **Inspect** the workspace wiring in `package.json` and `pnpm-workspace.yaml` when you need to add a new package or change the build/test fan-out.
+- **Read** `SPEC.md` for the phase-by-phase behavioral contract and the inviolable rules every contributor must respect.
+- **Read** `VISION.md` for the product rationale, positioning, and the non-negotiable design principles.
+- **Confirm** the TypeScript baseline in `tsconfig.base.json` when configuring a new workspace package or debugging strictness inheritance.
 
 ## How it fits
 
-The `root` module is the polyrepo-level companion of the `@livewiki/core`, `@livewiki/cli`, and `@livewiki/mcp` packages: `pnpm-workspace.yaml` declares the `packages/*` glob that turns each subdirectory into a workspace, while `package.json` exposes the top-level `pnpm -r build`, `pnpm -r test`, and `pnpm -r lint:tsc` scripts that fan out to them. The `allowBuilds` section in `pnpm-workspace.yaml` whitelists `better-sqlite3`, `esbuild`, `tree-sitter-cli`, `tree-sitter-cli` companions, and the three tree-sitter language packages so the native/WASM toolchain can be installed inside CI. The `packageManager: pnpm@10.34.0` pin in `package.json` is consumed by `pnpm/action-setup` so workflows do not repeat the version.
+This module is the monorepo entry point. `package.json` declares the `livewiki` private root, pins `pnpm@10.34.0` as the package manager, requires Node `>=24`, and fans `build`, `test`, `test:watch`, `test:coverage`, and `lint:tsc` across all workspaces via `pnpm -r`. The only declared runtime dependency at the root is `@livewiki/cli` (a `workspace:*` reference), and the devDependencies set lists `typescript ^5.6.0`, `vitest ^2.1.0`, and `@types/node ^22.0.0`. Two `pnpm.overrides` entries pin `fast-uri ^3.1.5` and `@hono/node-server ^2.0.12`.
 
-The documentation half of the module is the durable source of truth that every contributor, agent, and reviewer is expected to follow before touching code. `SPEC.md` enumerates eight inviolable rules (restricted writes through `safe-io`, optional pointer in `AGENTS.md`/`CLAUDE.md`, derived DB, no telemetry, vitest coverage ladder, immutable human content, English-only product artifacts, and no external product dependency) plus the cross-platform product contract. `VISION.md` states the product positioning, the empty quadrant that livewiki fills, and the non-negotiable principles (safe by architecture, economical, tool-agnostic, local-first, rebuildable, self-contained). `AGENTS.md` records the live phase status, language policy, and product-first execution discipline that constrain day-to-day work.
+`pnpm-workspace.yaml` scopes packages to `packages/*` and grants `allowBuilds` to `better-sqlite3`, `esbuild`, and the `tree-sitter-*` tools, which is the mechanism that lets the native and WASM-based build steps run inside the workspaces. An inline comment restricts Phase 0 to `core` and `cli`, deferring `packages/mcp` to Phase 4.
 
-Together these files form the contract that the per-package code in `packages/core`, `packages/cli`, and `packages/mcp` is measured against. `tsconfig.base.json` enforces strict TypeScript, `NodeNext` modules, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and `isolatedModules`; that baseline is what every package extends, which is why a single one-line `strict: true` change here can move the entire monorepo.
+`tsconfig.base.json` is the shared strict-mode baseline: `ES2022` target, `NodeNext` module and moduleResolution, full `strict` plus `noImplicitOverride`, `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`, `exactOptionalPropertyTypes`, declaration/source maps emitted to `dist`, and `rootDir: src`. Per-package configs inherit this and only loosen or specialize what their own entry shape needs.
 
-## Stack and tooling baseline
+`SPEC.md` is the executable source of truth for behavior. It opens with an ordered phase plan and an explicit instruction to the executing LLM, then enumerates eight inviolable rules covering restricted writes through a single I/O module, the pointer exception for `AGENTS.md`/`CLAUDE.md`, the "DB is derived" rule (no SQLite-only information), the no-telemetry/no-network default (with two explicit exceptions), vitest with an 80% coverage floor on core, human-content untouchability for `owner: human` pages and `lw:manual` blocks, English as the product artifact language, and the no-external-product-dependency rule. It then defines the stack — Node ≥ 20, pnpm workspaces, `web-tree-sitter` WASM parsing with MVP grammars for TypeScript/JavaScript/Python, a two-tier grammar coverage ladder, `better-sqlite3` for storage, `@modelcontextprotocol/sdk` for MCP, `commander` for the CLI with `--json` everywhere, and an own thin HTTP LLM client with a preset table covering Anthropic, OpenAI, OpenRouter, DeepSeek, Kimi, MiniMax, Gemini, NVIDIA NIM, Ollama, and LM Studio. The spec also fixes a cross-platform product contract covering Node ≥ 20 on Windows/Linux/macOS, PowerShell/CMD/Bash/Zsh terminal surfaces, `node:path` usage with `path.posix` for durable keys, LF/CRLF preservation, Unicode and spaces in paths, identical CLI JSON shapes and exit codes across OSes, and the no-shell-invocation rule for product logic.
 
-```json
-{
-  "engines": { "node": ">=20" },
-  "type": "module",
-  "packageManager": "pnpm@10.34.0"
-}
+`VISION.md` is the founding rationale. It positions livewiki in an "empty quadrant" that combines AST structure, content, real-time detection, publishing, and handoff, names four problems (docs rotting, LLM handoff losing context, hallucination, token cost), and lists six non-negotiable principles: safe-by-architecture path allowlisting, economical staleness detection without LLM tokens, tool-agnostic plain markdown, local-first operation, rebuildable derived index, and self-contained capabilities (no required external agent framework, MCP server, code-intelligence service, or hosted orchestrator). It then describes the three-layer architecture (`livewiki/` wiki, `.livewiki/` derived index, `AGENTS.md`/`CLAUDE.md` pointer), the incremental and batch operating modes, the four surfaces (CLI, MCP, skills, hooks), and the native capability boundary that keeps livewiki from becoming a general-purpose code-graph database.
+
+## Diagram
+
+```mermaid
+%% livewiki/diagrams/root.mmd
 ```
 
-`package.json` fixes the supported runtime to Node ≥ 20 and locks the package manager so contributors and CI resolve identical dependency graphs. The dev-dependencies — `typescript ^5.6.0`, `vitest ^2.1.0`, `@types/node ^22.0.0` — align with `tsconfig.base.json` (target ES2022, module NodeNext, lib ES2022) and with the SPEC's mandate that tests use vitest. The runtime dependency on `@livewiki/cli` (workspace reference) makes the CLI the canonical entry point when running the monorepo locally.
+## Repository configuration
 
-```yaml
-packages:
-  - "packages/*"
+`package.json` is the root manifest for the monorepo. It declares `"name": "livewiki"`, `"version": "0.0.0"`, `"private": true`, `"type": "module"`, the MIT license, and the repository URL `https://github.com/eduardoabreu81/livewiki.git`. The `engines.node` constraint is `">=24"`, matching the README's Node 24 requirement and the CI matrix. Scripts are workspace-recursive: `build`, `test`, `test:watch`, and `lint:tsc` all use `pnpm -r`; `test:coverage` is scoped to `@livewiki/core` via `pnpm --filter`. The only declared `dependencies` entry is `"@livewiki/cli": "workspace:*"`, which makes the CLI a workspace package rather than an external install. DevDependencies are `typescript ^5.6.0`, `vitest ^2.1.0`, and `@types/node ^22.0.0`.
 
-allowBuilds:
-  better-sqlite3: true
-  esbuild: true
-  tree-sitter-cli: true
-  tree-sitter-javascript: true
-  tree-sitter-python: true
-  tree-sitter-typescript: true
-```
+`pnpm-workspace.yaml` declares a single glob — `packages/*` — and an `allowBuilds` list admitting `better-sqlite3`, `esbuild`, `tree-sitter-cli`, `tree-sitter-javascript`, `tree-sitter-python`, and `tree-sitter-typescript`. The inline comment in the file explicitly defers `packages/mcp` to Phase 4 and frames the `core`+`cli` Phase 0 choice as aligned with SPEC.md's "start single-package, extract later is acceptable" guidance.
 
-`pnpm-workspace.yaml` declares a single glob (`packages/*`) and pins the build permissions for the native/WASM toolchain. The trailing comment makes it explicit that only `core` and `cli` exist for Fase 0 and that `packages/mcp` is gated to Fase 4 — implementers must not anticipate later phases.
+`tsconfig.base.json` defines the compiler options every workspace package extends. The language target is `ES2022` with `lib: ["ES2022"]`, modules are `NodeNext` for both `module` and `moduleResolution`, and strictness is turned up with `strict: true` plus `noImplicitOverride`, `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`, and `exactOptionalPropertyTypes`. Interop flags (`esModuleInterop`, `forceConsistentCasingInFileNames`, `resolveJsonModule`, `isolatedModules`) and output flags (`declaration`, `declarationMap`, `sourceMap`, `outDir: dist`, `rootDir: src`) are all on; `skipLibCheck` is enabled. There is no `paths`, `baseUrl`, or `composite` setting here — each package owns its own `tsconfig.json` extending this base.
 
-## TypeScript baseline
+## Governance documents
 
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
-    "strict": true,
-    "noImplicitOverride": true,
-    "noUncheckedIndexedAccess": true,
-    "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "skipLibCheck": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "outDir": "dist",
-    "rootDir": "src"
-  }
-}
-```
+`SPEC.md` opens with a phase-ordered execution note directed at the LLM that will read it ("follow the phases in order … a design question goes to Eduardo, it's not your call"), then states the eight inviolable rules verbatim. The stack section is a contract: Node ≥ 20 (the README and `package.json` tighten this to 24), pnpm workspaces, `web-tree-sitter` WASM with MVP grammars for TypeScript/JavaScript/Python and a post-MVP roadmap for Go/Rust/Java, the two-tier coverage ladder (tier 1 anchored, tier 2 unanchored prose with `symbolCount: 0`), `better-sqlite3` with WAL mode, `@modelcontextprotocol/sdk`, `commander` with `--json` everywhere, and an own thin LLM HTTP client. The LLM section further pins the no-hardcoded-default-model rule, env-var-only API keys (with a dedicated test guaranteeing no leak), and a preset table that includes Anthropic, OpenAI, OpenRouter, DeepSeek, Kimi, MiniMax, Gemini, NVIDIA NIM, Ollama, and LM Studio — the comment specifies that for providers with an Anthropic-compatible endpoint (the file's own example, if visible, would need to be re-read from the untruncated source) the preset reuses the Anthropic adapter for cache-read economics. Agent tools (Codex, Cursor, Roo Code, Kilo Code, VS Code) are explicitly NOT presets — they are MCP/skill consumers. The cross-platform product contract section enumerates the supported runtime, supported shells, the no-`bash -c` rule for product logic (with a `child_process.spawn` + `shell: false` escape hatch), `node:path` usage, LF/CRLF handling, Unicode-and-spaces path support, identical CLI JSON and exit codes, and the matrix-skip rule (a Unix host that skips symlink coverage is treated as a contract violation rather than a harmless skip).
 
-`tsconfig.base.json` is the single source of TypeScript truth that every package extends. Notable flags: `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` raise the floor for index access and optional members, which is consistent with SPEC's emphasis on deterministic, verifiable indexing. `outDir: dist` and `rootDir: src` define the canonical build output naming, so build artifact cleanup (the explicit `Remove-Item` recipe in `AGENTS.md` for `packages/*/dist`) matches the layout the compiler actually emits.
+`VISION.md` opens with a language note mirroring SPEC.md rule 7: durable product artifacts are English; maintainer conversation may be PT-BR; existing PT-BR artifacts are migration debt. It states the elevator pitch ("documentation anchored to the code, verifiable and always current — written by whoever made the change, at the moment they made it"), the two content layers (A: structural wiki for agents; B: human/product narrative), and the ordering ("layer B is the destination; layer A is the means"). The four named problems are documentation rot, LLM handoff loss, hallucination, and token cost. The positioning table compares livewiki to codegraph, OpenWiki, CodeWiki, DeepWiki, and agentmemory across structure, content, real-time, publishing, and handoff — the technical differentiator is "staleness detected at the section level, without spending an LLM token." The six non-negotiable principles are safe-by-architecture path allowlisting, economical debt detection, tool-agnostic plain markdown, local-first operation, rebuildable derived index, and self-contained capabilities. The key concepts section defines anchors (the symbol hash at documentation time), documentation debt (changed/moved/deleted/new events emitted by the deterministic indexer), anti-hallucination verification (anchors must resolve; signatures must match), human content as first-class ownership (`owner: generated | human | mixed`, `lw:manual` blocks), and handoff (wiki + manifest as the state that travels in git). The three-layer architecture diagram appears inline: `livewiki/` wiki, `.livewiki/` derived SQLite index, and an `AGENTS.md`/`CLAUDE.md` pointer added only with explicit consent. The two operating modes are incremental (heart) and batch (4-stage pipeline with checkpoints). The four surfaces are CLI, MCP, skills, and hooks. The native capability boundary is stated as a constraint: structural intelligence must live in livewiki itself, and external projects are design references only — they are reproduced inside the product, not consumed as dependencies.
 
-## Inviolable rules and product contract
+## Product positioning and surfaces
 
-The eight rules in `SPEC.md` are non-negotiable and frame every package:
-
-- **Restricted writes** through `packages/core/src/safe-io.ts`, with the allowlist covering `livewiki/` and `.livewiki/` plus the pointer exception for `AGENTS.md`/`CLAUDE.md` (only with `--write-pointer` or interactive confirmation, via an idempotent `<!-- livewiki:start -->` … `<!-- livewiki:end -->` append).
-- **Derived DB**: SQLite is an index, never the source of truth; everything that matters for handoff lives in versioned markdown and the manifest.
-- **No telemetry, no network** except opt-in LLM calls in batch mode and a one-time WASM grammar download.
-- **English-only** durable artifacts (source, comments, tests, CLI/UI text, templates, internal and user-facing docs); PT-BR is restricted to maintainer conversation and existing PT-BR artifacts are explicit migration debt.
-- **Native capability boundary**: livewiki must not require another agent framework, MCP server, code-intelligence service, hosted orchestrator, or third-party app to run its core workflow; LLM providers, MCP clients, Git hosts, and editors are optional user-selected surfaces.
-
-The cross-platform product contract further constrains the CLI, MCP server, and core library: Node ≥ 20 on Windows, Linux, and macOS; PowerShell/CMD on Windows, Bash on Linux, Bash/Zsh on macOS; no `bash -c`/`cmd /c`/`sh -c` for product logic (future subprocesses must use `child_process.spawn` with explicit argument arrays and `shell: false`); durable keys use forward slashes (`path.posix`), native separators only at the I/O boundary; LF and CRLF inputs are both supported and the export's CRLF tests must detect stray bare CR or LF characters; paths with spaces and non-ASCII characters must work everywhere; identical `--json` shape and exit codes across operating systems. Symlink tests may skip on Windows when the host cannot create symlinks, but they must run and pass on at least one Linux and one macOS host, enforced by an in-test guard so a Unix skip cannot silently pass.
-
-## Layout and operating modes
-
-`SPEC.md` defines what `livewiki init` produces in a target repository: a `livewiki/` tree holding `.manifest.json`, `quickstart.md`, `tasks.md`, `architecture/`, `diagrams/`, `flows/`, `topics/`, `auxiliary/`, `files/`, and `decisions/`; a gitignored `.livewiki/index.db`; and an opt-in pointer paragraph in `AGENTS.md`/`CLAUDE.md`. Coverage is two-tier: tree-sitter-grammar files are tier 1 (anchored symbols, debt applies) and every other indexed text file is tier 2 (unanchored prose, `symbolCount: 0`), so the wiki never finishes empty because the target language has no grammar yet.
-
-`VISION.md` describes two operating modes built on top of this layout: incremental mode (a hook runs the deterministic staleness check after each commit/task; if there is debt, the in-session agent is notified and documents what it just did — fresh context, zero extra API cost) and batch mode (`livewiki init` runs a four-stage pipeline — scan → module identification → prioritization → coordinated documentation — with checkpoints so an interrupted run can resume from task N/M). Both modes rely on the same anchor + debt + verify machinery and never bypass `safe-io`.
-
-## Live state and execution discipline
-
-`AGENTS.md` records the live phase status, which an implementer must consult before scoping work: Phase 0–5 are on main; batch-resilience lots U–X are approved pending push (unique module IDs + taken set, `owner:mixed` retention, multiple manual blocks, `rollback_failed` aborts the run, monotonic usage attempts, stage-4 artifact normalize/repair, English-only new U–X text); a benchmark rerun against commit `572b8a3` reported 13/13 modules with zero verify issues, 427/427 symbols and exact accounting under `docs/benchmarks/2026-07-10-minimax-m3/rerun-clean-v18/`. Phase 6 Lot 6A (deterministic export) is on main (`75cd004`) and the `generic` target passed a manual Windows happy-path and idempotence check on 2026-07-15; Git-host targets are not yet manually validated. R11-NAV intent-first navigation and R11-A concept topics are implemented in the working tree but uncommitted; validation evidence (topic planner + topic page generated, verify zero issues on 2026-07-26) exists for R11-A.
-
-Product-first execution discipline is enforced explicitly: GitHub integration, remote CI, release automation, and broad platform matrices are final validation steps, not prerequisites for local product work; benchmark/proxy/orchestrator harnesses are reserved for explicit benchmark or publication evidence and are not part of the normal fix-and-retest loop; internal test evidence stays LOCAL and untracked; paid/provider calls require explicit maintainer approval; an external executor receives one bounded task, leaves changes uncommitted and unpushed, and the coordinator reviews before any commit/push authorization; do not add durable tests for exploratory work or a passing manual check, and for a confirmed product defect keep at most the smallest regression test that prevents that exact defect; do not combine unrelated cleanup with the active product flow; after one flow passes, stop, document the result, and let the maintainer choose the next flow. The current handoff and next E2E contract live in `docs/tasks/2026-07-15-local-product-e2e/HANDOFF.md`.
-
-Working-tree hygiene is part of the contract: `git clean -fdx` is forbidden because the tree is shared with the reviewer and the command has destroyed uncommitted work before; build artifacts must be removed explicitly via the `Remove-Item -Recurse -Force packages/core/dist, packages/cli/dist, packages/mcp/dist` (and matching `*.tsbuildinfo`) recipe quoted in `AGENTS.md`, never via `-fdx`. Uncommitted `.md` files in the working tree must not be reverted — they may be reviewer's work and, if in doubt, the implementer must ask.
+`README.md` states the agent-first positioning and the cost-thesis ("detecting what went stale costs nothing … writing is the only thing that costs tokens") and lists the surfaces: CLI, MCP server (search, read, validated write, debt), deterministic exports, and `livewiki view` (self-contained offline site with search, Mermaid, version stamp, `view --ref <tag>`). The Quick start block shows `npm install -g @livewiki/cli`, `livewiki init`, `livewiki init --batch`, `livewiki status`, `livewiki verify`, and the agent hand-off via `npx @livewiki/mcp --repo /path/to/repo` or `livewiki install`. The "Results so far" section cites a blind dual-evaluator comparison against OpenWiki at ~6–8% of token cost, a self-hosting dogfood run of 138 tasks with 0 failures and zero verify issues, cross-platform CI green on Node 24, and zero-token debt detection on every merge via `packages/cli/templates/github-actions/docs-debt.yml`. It points readers to `SPEC.md`, `VISION.md`, `docs/ROADMAP.md`, and `livewiki/quickstart.md`, restates the Node 24 requirement (and notes that `better-sqlite3` ships prebuilt Windows binaries for it), and reaffirms the MIT license.
 
 <!-- livewiki:navigate:start -->
 ## Navigate

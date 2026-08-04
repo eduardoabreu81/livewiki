@@ -1,267 +1,154 @@
 ---
-title: core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)
+title: core-src-06 — module identification, splitting, and navigation metadata
 owner: generated
 anchors:
-  - packages/core/src/flow-diagram.ts#FLOW_DIAGRAM_MODULE_GRANULARITY_THRESHOLD
-  - packages/core/src/flow-diagram.ts#annotateLabel
-  - packages/core/src/flow-diagram.ts#buildDiagramContext
-  - packages/core/src/flow-diagram.ts#escapeMermaidLabel
-  - packages/core/src/flow-diagram.ts#generateFlowDiagram
-  - packages/core/src/flow-diagram.ts#insertFlowDiagramSection
-  - packages/core/src/flow-diagram.ts#moduleGranularityIr
-  - packages/core/src/flow-diagram.ts#renderFlowchartMermaid
-  - packages/core/src/flow-diagram.ts#symbolGranularityIr
-  - packages/core/src/flow-diagram.ts#symbolLabel
-  - packages/core/src/flow-diagram.ts#truncateFlowchartToBudget
-  - packages/core/src/flows.test.ts#mod
-  - packages/core/src/flows.test.ts#overlapFixture
-  - packages/core/src/flows.test.ts#shuffled
-  - packages/core/src/flows.test.ts#shuffledMap
-  - packages/core/src/flows.ts#FLOW_MAX_PATH_LENGTH
-  - packages/core/src/flows.ts#FLOW_PER_ROOT_PATH_BUDGET
-  - packages/core/src/flows.ts#assignFlowKeySections
-  - packages/core/src/flows.ts#buildCandidate
-  - packages/core/src/flows.ts#buildSeedKeyGroups
-  - packages/core/src/flows.ts#capGroupsToSeedKeys
-  - packages/core/src/flows.ts#compareLongestFirst
-  - packages/core/src/flows.ts#comparePathLex
-  - packages/core/src/flows.ts#computeModuleSignals
-  - packages/core/src/flows.ts#crossesBoundary
-  - packages/core/src/flows.ts#detectFlowCandidates
-  - packages/core/src/flows.ts#displayName
-  - packages/core/src/flows.ts#isExternalSpecifier
-  - packages/core/src/flows.ts#isProperPrefix
-  - packages/core/src/flows.ts#isTestPath
-  - packages/core/src/flows.ts#matchedPatterns
-  - packages/core/src/flows.ts#normalizeFileMap
-  - packages/core/src/frontmatter.ts#FrontmatterParseError
-  - packages/core/src/frontmatter.ts#FrontmatterParseError.constructor
-  - packages/core/src/frontmatter.ts#getAnchors
-  - packages/core/src/frontmatter.ts#getOwner
-  - packages/core/src/frontmatter.ts#parseFrontmatter
-  - packages/core/src/frontmatter.ts#parseYamlBlock
-  - packages/core/src/frontmatter.ts#stripComment
-  - packages/core/src/gitignore.ts#ensureGitignoreEntries
-  - packages/core/src/gitignore.ts#extractManagedBlock
-  - packages/core/src/gitignore.ts#mergeBlockLines
-  - packages/core/src/gitignore.ts#readGitignore
-  - packages/core/src/gitignore.ts#renderBlock
-  - packages/core/src/gitignore.ts#replaceManagedBlock
-  - packages/core/src/hashes.ts#expandEolToCrlf
-  - packages/core/src/hashes.ts#normalizeEol
-  - packages/core/src/hashes.ts#sha256
-  - packages/core/src/hashes.ts#sha256Slice
-  - packages/core/src/ignores-propagation.test.ts#FullMockLlm
-  - packages/core/src/ignores-propagation.test.ts#FullMockLlm.generate
-  - packages/core/src/ignores-propagation.test.ts#activeFilePaths
-  - packages/core/src/ignores-propagation.test.ts#writeIgnores
-  - packages/core/src/import-resolution.test.ts#edgesOf
-  - packages/core/src/import-resolution.test.ts#imp
-  - packages/core/src/import-resolution.test.ts#writeAcmeCoreManifest
-  - packages/core/src/import-resolution.test.ts#writeFile
-  - packages/core/src/import-resolution.ts#expandWorkspaceGlob
-  - packages/core/src/import-resolution.ts#hasPackageManifest
-  - packages/core/src/import-resolution.ts#isPlainObject
-  - packages/core/src/import-resolution.ts#loadEffectiveTsconfig
-  - packages/core/src/import-resolution.ts#loadPackageTsconfig
-  - packages/core/src/import-resolution.ts#loadWorkspacePackages
-  - packages/core/src/import-resolution.ts#mapCompiledTargetToSource
-  - packages/core/src/import-resolution.ts#normalizeDirOption
-  - packages/core/src/import-resolution.ts#parsePnpmWorkspaceGlobs
-  - packages/core/src/import-resolution.ts#pythonSourceBaseDir
-  - packages/core/src/import-resolution.ts#readPackageManifest
-  - packages/core/src/import-resolution.ts#readTextIfExists
-  - packages/core/src/import-resolution.ts#readWorkspaceGlobs
-  - packages/core/src/import-resolution.ts#resolveExportsValue
-  - packages/core/src/import-resolution.ts#resolveImportEdges
-  - packages/core/src/import-resolution.ts#resolvePackageTarget
-  - packages/core/src/import-resolution.ts#resolvePythonModulePath
-  - packages/core/src/import-resolution.ts#resolvePythonSpecifier
-  - packages/core/src/import-resolution.ts#resolveSpecifier
-  - packages/core/src/import-resolution.ts#sourceCandidatesForCompiled
-  - packages/core/src/import-resolution.ts#stringEntries
-  - packages/core/src/import-resolution.ts#stripLeadingDotSlash
+  - packages/core/src/modules.ts#DEFAULT_FLOW_SIGNAL_PATTERNS
+  - packages/core/src/modules.ts#DEFAULT_PATH_ROLE_PATTERNS
+  - packages/core/src/modules.ts#DuplicateModuleIdError
+  - packages/core/src/modules.ts#DuplicateModuleIdError.constructor
+  - packages/core/src/modules.ts#ExactPartitionError
+  - packages/core/src/modules.ts#ExactPartitionError.constructor
+  - packages/core/src/modules.ts#MODULE_SPLIT_DEFAULTS
+  - packages/core/src/modules.ts#SPLIT_AXIS_DISABLED
+  - packages/core/src/modules.ts#applyRefinedDisplayTitles
+  - packages/core/src/modules.ts#assertExactPathPartition
+  - packages/core/src/modules.ts#assertUniqueModuleIds
+  - packages/core/src/modules.ts#axisEnabled
+  - packages/core/src/modules.ts#candidateIdSequence
+  - packages/core/src/modules.ts#chunkFlatBucket
+  - packages/core/src/modules.ts#classifyModuleRole
+  - packages/core/src/modules.ts#classifyPathRole
+  - packages/core/src/modules.ts#countSymbols
+  - packages/core/src/modules.ts#dirToModuleId
+  - packages/core/src/modules.ts#fileStem
+  - packages/core/src/modules.ts#fitsLimits
+  - packages/core/src/modules.ts#groupPathsByNextSegment
+  - packages/core/src/modules.ts#identifyModulesHeuristic
+  - packages/core/src/modules.ts#makeUniqueDeterministicIds
+  - packages/core/src/modules.ts#matchesAnyPathPattern
+  - packages/core/src/modules.ts#normalizePresentationLabel
+  - packages/core/src/modules.ts#normalizeRefinedDisplayTitle
+  - packages/core/src/modules.ts#normalizeRepoPath
+  - packages/core/src/modules.ts#normalizeSplitLimits
+  - packages/core/src/modules.ts#pathSegmentsFor
+  - packages/core/src/modules.ts#pathSlugOf
+  - packages/core/src/modules.ts#prioritizeModules
+  - packages/core/src/modules.ts#refinePeerDirectoryFragmentationError
+  - packages/core/src/modules.ts#resolveModuleEdges
+  - packages/core/src/modules.ts#resolveRelativeImport
+  - packages/core/src/modules.ts#resolveSymbolCount
+  - packages/core/src/modules.ts#slugifyIdSegment
+  - packages/core/src/modules.ts#slugifySegment
+  - packages/core/src/modules.ts#splitOneModule
+  - packages/core/src/modules.ts#splitOversizedModules
+  - packages/core/src/modules.ts#stripNodeNextExtension
+  - packages/core/src/navigation.ts#MODULE_DIGEST_CAP
+  - packages/core/src/navigation.ts#RESPONSIBILITY_MAX_CHARS
+  - packages/core/src/navigation.ts#buildDisplayTitleFallbacks
+  - packages/core/src/navigation.ts#buildModuleCoverageNote
+  - packages/core/src/navigation.ts#buildModuleDigestBlock
+  - packages/core/src/navigation.ts#buildNavigateBlock
+  - packages/core/src/navigation.ts#buildOrientationBlock
+  - packages/core/src/navigation.ts#commonDirectory
+  - packages/core/src/navigation.ts#compareModules
+  - packages/core/src/navigation.ts#compareTopics
+  - packages/core/src/navigation.ts#ensureTopicsIndexScaffold
+  - packages/core/src/navigation.ts#extractModuleOpeningDigest
+  - packages/core/src/navigation.ts#extractModuleResponsibility
+  - packages/core/src/navigation.ts#generateAuxiliaryIndex
+  - packages/core/src/navigation.ts#generateFlowsIndex
+  - packages/core/src/navigation.ts#generateQuickstart
+  - packages/core/src/navigation.ts#generateTasksPage
+  - packages/core/src/navigation.ts#generateTopicsIndex
+  - packages/core/src/navigation.ts#groupTasksModules
+  - packages/core/src/navigation.ts#humanizeSegments
+  - packages/core/src/navigation.ts#loadFlowPresentations
+  - packages/core/src/navigation.ts#loadModuleDigests
+  - packages/core/src/navigation.ts#loadModulePresentations
+  - packages/core/src/navigation.ts#loadTopicPresentations
+  - packages/core/src/navigation.ts#moduleSourceExceedsBudget
+  - packages/core/src/navigation.ts#normalizeLabel
+  - packages/core/src/navigation.ts#parseModuleOpening
+  - packages/core/src/navigation.ts#readHubDeclaredOwner
+  - packages/core/src/navigation.ts#sameStrings
+  - packages/core/src/navigation.ts#selectRelatedModules
+  - packages/core/src/navigation.ts#sumModuleSourceBytes
+  - packages/core/src/navigation.ts#syncAuxiliaryIndexHub
+  - packages/core/src/navigation.ts#syncFlowsIndexHub
+  - packages/core/src/navigation.ts#syncTopicsIndexHub
+  - packages/core/src/navigation.ts#synthesizePurposeFromDigests
+  - packages/core/src/navigation.ts#updateFlowTopicLinks
+  - packages/core/src/navigation.ts#updateModuleNavigateBlocks
 ---
 
-# core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)
+# core-src-06 — module identification, splitting, and navigation metadata
 
-This page documents the stage-5 cross-module flow machinery, the deterministic Mermaid flowchart renderer, the frontmatter parser, the `.gitignore` managed-block writer, the EOL-insensitive hash helpers, and the unified import resolver for the `packages/core/src` slice.
+This module is the pipeline that turns a file inventory into stable, sized module buckets and the navigation surfaces that reference them.
 
 ## When to use this page
 
-- Read or extend the stage-5 flow candidate detector in `flows.ts` or change how Mermaid flowcharts are rendered in `flow-diagram.ts`.
-- Modify the wiki frontmatter parser (`frontmatter.ts`), the `.gitignore` managed-block writer (`gitignore.ts`), the EOL-insensitive hash helpers (`hashes.ts`), or the unified import resolver (`import-resolution.ts`).
+- **Identify** the deterministic module list from a directory of repo-relative paths and tune per-path role patterns.
+- **Split** oversized modules into subdirectory chunks or ordinal flat chunks while preserving the exact-path partition invariant.
+- **Generate** the wiki's navigation pages (quickstart, tasks, auxiliary, flows, topics) from accepted module pages and topic/flow frontmatter.
 
 ## How it fits
 
-The `packages/core/src` source set sits at the center of livewiki's pipeline: `import-resolution.ts` turns per-file `ExtractedImport` lists into one canonical `ResolvedImportEdge` set consumed by both the module graph and the stage-5 flow signals, so the two views cannot disagree about where an import resolved. `hashes.ts` provides the EOL-insensitive `sha256` / `sha256Slice` used by the indexer to detect file- and symbol-level change; `gitignore.ts` keeps `.livewiki/` out of source control idempotently; `frontmatter.ts` parses the YAML subset that every generated wiki page opens with. `flows.ts` then consumes the resulting graph to enumerate ranked `FlowCandidate` walks, `flow-diagram.ts` deterministically renders each candidate into a Mermaid `flowchart` block, and the `*.test.ts` files in this slice pin down the contracts.
+`packages/core/src/modules.ts` implements batch stage 2: it groups files by top-level directory, splits co-located test files into sibling `<id>-tests` modules, splits modules that exceed `maxFiles` / `maxSymbols` thresholds, and asserts the result is an exact-path partition with globally unique module ids. It also resolves module-to-module import edges on top of the single file-level resolver and classifies paths by role for downstream ranking.
 
-## Deterministic Mermaid flowchart generation
-<!-- lw:anchors packages/core/src/flow-diagram.ts#FLOW_DIAGRAM_MODULE_GRANULARITY_THRESHOLD packages/core/src/flow-diagram.ts#annotateLabel packages/core/src/flow-diagram.ts#buildDiagramContext packages/core/src/flow-diagram.ts#escapeMermaidLabel packages/core/src/flow-diagram.ts#generateFlowDiagram packages/core/src/flow-diagram.ts#insertFlowDiagramSection packages/core/src/flow-diagram.ts#moduleGranularityIr packages/core/src/flow-diagram.ts#renderFlowchartMermaid packages/core/src/flow-diagram.ts#symbolGranularityIr packages/core/src/flow-diagram.ts#symbolLabel packages/core/src/flow-diagram.ts#truncateFlowchartToBudget -->
+`packages/core/src/navigation.ts` reads accepted module pages from `livewiki/<id>.md` and the topic/flow/auxiliary hub frontmatter, then renders the reader-facing pages (`quickstart`, `tasks`, `flows/index`, `topics/index`, `auxiliary/index`) and the navigation blocks (`updateModuleNavigateBlocks`, `updateFlowTopicLinks`) injected into each unit page. It parses the H1 + opening responsibility sentence of each module page through a shared `parseModuleOpening` so the quickstart digest and flow-context share one definition of "the opening".
 
-The `flow-diagram.ts` module replaces an earlier contract in which the LLM was asked to write the Mermaid `## Diagram` fence by hand — a contract that produced repeated `invalid_flow_diagram` failures with no mechanical repair for genuinely malformed syntax. The LLM never sees or writes anything about `## Diagram`; instead the orchestrator calls these functions and inserts the output wholesale.
+## Diagram
 
-The render path is: `generateFlowDiagram` builds a typed IR (`FlowchartIR` of `direction`, `nodes`, `edges`) from a `FlowCandidate`, `truncateFlowchartToBudget` enforces node/edge budgets, and `renderFlowchartMermaid` re-serializes the IR into valid, deterministic Mermaid source. The boundary between MODULE and SYMBOL granularity is fixed by `FLOW_DIAGRAM_MODULE_GRANULARITY_THRESHOLD = 6`: above it, one node per module in walk order; at or below it, one node per semantic-role symbol key (entry / boundary / sink). `symbolLabel` extracts the trailing symbol name from a closed-list key (`path/to/file.ts#name` → `name`), `escapeMermaidLabel` strips characters that would break a `[...]` label token, and `annotateLabel` enriches a base label with entry/persistence signals for the owning module when present. `buildDiagramContext` packages the per-candidate lookup tables the granularities consult.
-
-`moduleGranularityIr` produces one node per module (walk-order adjacency). `symbolGranularityIr` covers only the semantically-tiered keys (entry / boundary / sink) — T4/T5 (`otherProductKeys` / `auxiliaryKeys`) are intentionally left out so the diagram stays the walk's "story" rather than a dump of every closed-list key; its edges are chained by tier order (every entry key into the first boundary key, that into the next, …, into every sink key), a deterministic, honestly-labeled approximation of role order rather than a proven call sequence. `insertFlowDiagramSection` is the orchestrator-side splice: it places the rendered Mermaid block into the stage-5 page, and because the input is already a complete IR → text pipeline the section's contents are guaranteed to be valid Mermaid as long as `truncateFlowchartToBudget` was applied against the supplied `FlowDiagramBudget`.
-
-The key signatures (copied verbatim from the symbol table) for this section:
-
-```ts
-export function truncateFlowchartToBudget(
-export function renderFlowchartMermaid(ir: FlowchartIR): string
-export const FLOW_DIAGRAM_MODULE_GRANULARITY_THRESHOLD = 6
-function symbolLabel(key: string): string
-function escapeMermaidLabel(label: string): string
-function annotateLabel(baseLabel: string, moduleId: string | undefined, ctx: DiagramContext): string
-function buildDiagramContext(candidate: FlowCandidate, modules: ReadonlyArray<Module>): DiagramContext
-function moduleGranularityIr(candidate: FlowCandidate, ctx: DiagramContext): FlowchartIR
-function symbolGranularityIr(candidate: FlowCandidate, ctx: DiagramContext): FlowchartIR
-export function generateFlowDiagram(
-export function insertFlowDiagramSection(
+```mermaid
+%% livewiki/diagrams/core-src-06.mmd
 ```
 
-A visible behavior in this pipeline is `truncateFlowchartToBudget` keeping only edges whose endpoints are both still kept: nodes that survive truncation but have no surviving edge are explicitly re-declared in `renderFlowchartMermaid` (the "isolated kept nodes" loop), so they do not silently vanish from the rendered diagram. `renderFlowchartMermaid` itself does not throw on a missing node — it falls back to an empty `shape` token for any edge endpoint whose id is not in `ir.nodes`, so a caller that produces a malformed IR still gets syntactically valid output but with bare-id nodes.
+## Module identification and role classification
 
-## Stage-5 flow candidate detection
-<!-- lw:anchors packages/core/src/flows.ts#FLOW_MAX_PATH_LENGTH packages/core/src/flows.ts#FLOW_PER_ROOT_PATH_BUDGET packages/core/src/flows.ts#assignFlowKeySections packages/core/src/flows.ts#buildCandidate packages/core/src/flows.ts#buildSeedKeyGroups packages/core/src/flows.ts#capGroupsToSeedKeys packages/core/src/flows.ts#compareLongestFirst packages/core/src/flows.ts#comparePathLex packages/core/src/flows.ts#computeModuleSignals packages/core/src/flows.ts#crossesBoundary packages/core/src/flows.ts#detectFlowCandidates packages/core/src/flows.ts#displayName packages/core/src/flows.ts#isExternalSpecifier packages/core/src/flows.ts#isProperPrefix packages/core/src/flows.ts#isTestPath packages/core/src/flows.ts#matchedPatterns packages/core/src/flows.ts#normalizeFileMap -->
+<!-- lw:anchors packages/core/src/modules.ts#DEFAULT_PATH_ROLE_PATTERNS packages/core/src/modules.ts#DEFAULT_FLOW_SIGNAL_PATTERNS packages/core/src/modules.ts#matchesAnyPathPattern packages/core/src/modules.ts#classifyPathRole packages/core/src/modules.ts#classifyModuleRole packages/core/src/modules.ts#identifyModulesHeuristic packages/core/src/modules.ts#dirToModuleId packages/core/src/modules.ts#normalizeRepoPath packages/core/src/modules.ts#applyRefinedDisplayTitles packages/core/src/modules.ts#normalizeRefinedDisplayTitle packages/core/src/modules.ts#normalizePresentationLabel -->
 
-`detectFlowCandidates` decides WHICH cross-module product flows exist in a repo, purely from index facts (modules, edges, active symbol keys per file, external import specifiers per file). It is a pure function with no disk I/O, no db access, no LLM, and is deterministic under input reordering — input maps are normalized via `normalizeFileMap` into sorted lookup tables before any iteration happens, so shuffling the modules / edges arrays or the map insertion orders must produce byte-identical output.
+The heuristic builder groups files by directory and emits a `Module` per group. `PathRole` is derived purely from the file path and influences grouping and ranking only — it never prunes the index.
 
-The detector's constants are explicit budget knobs:
+`export const DEFAULT_PATH_ROLE_PATTERNS: Required<PathRoleConfig> = {` defines the default glob set for role classification; `export const DEFAULT_FLOW_SIGNAL_PATTERNS: Required<FlowSignalConfig> = {` defines the default signal patterns for flow detection. `export function matchesAnyPathPattern(path: string, patterns: string[]): boolean` tests a path against a list of glob patterns. `export function classifyPathRole(path: string, config?: PathRoleConfig): PathRole` returns the role for a single path; `export function classifyModuleRole(module: Module, config?: PathRoleConfig): PathRole` returns the role for a module (majority vote across its paths). `export function identifyModulesHeuristic(` builds the module list: it groups by top-level directory, separates files classified as `"test"` into sibling `<id>-tests` modules so co-located tests do not inflate product modules, and sorts the output by id for deterministic emission. `function dirToModuleId(dir: string, paths: string[], totalDirs: number): string` derives the slug from the last directory segment (or `"root"` for a top-level file when the repo is more than one module). `export function normalizeRepoPath(p: string): string` canonicalises a path to forward slashes with no leading `./`. `export function applyRefinedDisplayTitles(` accepts advisory stage-2 titles without making them part of partition validation; `function normalizeRefinedDisplayTitle(value: unknown, moduleId: string): string | null` rejects strings that are too short, too long, contain control characters, lack any letter, normalize to the module id, or normalize to a generic word (`module`, `source`, `code`, `repository-module`); `function normalizePresentationLabel(value: string): string` strips diacritics, lowercases, and collapses non-alphanumerics into dashes. Duplicate normalized titles across modules are dropped so the display layer falls back to its deterministic title.
 
-```ts
-export const FLOW_PER_ROOT_PATH_BUDGET = 64
-export const FLOW_MAX_PATH_LENGTH = 8
-```
+## Partition invariants and uniqueness
 
-`computeModuleSignals` derives the per-module signals (`entry`, `persistence`, `external`, `sink`, plus the product-role ranking signal) by combining in/out-degree in the module graph with gitignore-style pattern matches (`matchedPatterns` is the shared helper used for both file and external-specifier pattern matching) and per-occurrence external-import accounting (`isExternalSpecifier` classifies a specifier as non-relative / non-`node:`; an occurrence with a resolved internal edge in `resolvedEdges` is NOT external — the same specifier may be internal in one file and external in another). `crossesBoundary` tests whether a walk passes through at least one persistence or external-boundary module.
+<!-- lw:anchors packages/core/src/modules.ts#ExactPartitionError packages/core/src/modules.ts#ExactPartitionError.constructor packages/core/src/modules.ts#assertExactPathPartition packages/core/src/modules.ts#assertUniqueModuleIds packages/core/src/modules.ts#DuplicateModuleIdError packages/core/src/modules.ts#DuplicateModuleIdError.constructor packages/core/src/modules.ts#refinePeerDirectoryFragmentationError packages/core/src/modules.ts#makeUniqueDeterministicIds packages/core/src/modules.ts#pathSlugOf packages/core/src/modules.ts#candidateIdSequence packages/core/src/modules.ts#pathSegmentsFor packages/core/src/modules.ts#slugifySegment packages/core/src/modules.ts#slugifyIdSegment packages/core/src/modules.ts#prioritizeModules packages/core/src/modules.ts#resolveModuleEdges packages/core/src/modules.ts#resolveRelativeImport packages/core/src/modules.ts#stripNodeNextExtension -->
 
-Walk enumeration is a deterministic DFS (sorted module ids, sorted edges — `comparePathLex` and `compareLongestFirst` together impose the canonical ordering) with a `FLOW_PER_ROOT_PATH_BUDGET` cap per entry root. `isProperPrefix` is the prefix-drop helper used after enumeration: proper prefixes of a longer qualified path are dropped, and each entry+sink pair keeps only its longest path. `buildCandidate` is the per-path constructor that materializes a `FlowCandidate` from the walked module ids, the resolved closed-list keys, and the per-module signals. `isTestPath` guards the root selection — a zero-indegree module whose files are all test code is no longer eligible as a walk root, so the entry tier does not get filled with unittest test methods.
+The module list must be an exact partition of the expected path set and every id must be unique before stage 4 writes any page.
 
-After ranking, `capGroupsToSeedKeys` is the bridge between the five tiered groups and the closed list: every truncated key is dropped from every group (order preserved), so the union of the five groups EQUALS `seedKeys` always. `buildSeedKeyGroups` performs the actual T1 (entry) / T2 (boundary) / T3 (boundary-sink) / T4 (other product) / T5 (auxiliary) classification. `assignFlowKeySections` is what downstream consumers call: it maps a candidate's tiered keys to the markdown sections (`## Entry` / `## Boundary` / `## Sink` / `## Other product` / `## Auxiliary`) the stage-5 page will host. `displayName` picks a human-meaningful module label for the diagram context (falling back to the module id when no `displayTitle` is set).
+`export class ExactPartitionError extends Error {` is thrown when the partition is violated; its `constructor(message: string)` sets `name = "ExactPartitionError"`. `export function assertExactPathPartition(` enforces: every module is non-empty, every module path is in the expected set, no path appears in two modules, and no expected path is missing. `export function assertUniqueModuleIds(modules: Module[]): void` guards the W-gate by throwing `DuplicateModuleIdError` on an id collision. `export class DuplicateModuleIdError extends Error {` and its `constructor(message: string)` mirror the partition error. `export function refinePeerDirectoryFragmentationError(` returns a non-null error when stage-2 refinement splits peer files under a single directory across multiple modules — T0 forbids directory-level fragmentation in refine because the deterministic chunker owns size splits. `export function makeUniqueDeterministicIds(modules: Module[]): Module[]` expands the slug right-to-left (e.g. two `src` trees become `core-src` and `cli-src`) until every id is unique. `function pathSlugOf(m: Module): string` returns the base slug; `function candidateIdSequence(m: Module): string[]` enumerates the right-to-left expansions; `function pathSegmentsFor(m: Module): string[]` returns the path segments used for the expansion; `function slugifySegment(s: string): string` and `function slugifyIdSegment(s: string): string` sanitise segments, with the latter capped at 48 characters and falling back to `"part"` when the result is empty. `export function prioritizeModules(` ranks modules for downstream consumption. `export function resolveModuleEdges(` builds a deduplicated, sorted `ModuleGraphEdge[]` from the file-level resolver; self-loops are dropped and edges resolve only between modules that own both endpoints. `export function resolveRelativeImport(` resolves a `./foo` or `../bar` specifier against `knownFiles`, stripping NodeNext-style `.js`/`.jsx`/`.mjs`/`.cjs` extensions before trying `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, and barrel `index.*` / `__init__.py` candidates; `function stripNodeNextExtension(p: string): string` performs the extension strip.
 
-The ranking, overlap cap, and per-occurrence external rules are policy-level guarantees the detector enforces — the visible exceptions are the explicit test-only-root exclusion (`isTestPath`), the budget-driven truncation (`FLOW_PER_ROOT_PATH_BUDGET`, `FLOW_MAX_PATH_LENGTH`), and the overlap-drop rule that records a `seed_key_overlap` skip on the dropped candidate. A repo with no qualifying walk produces zero candidates — that is a valid outcome, not a failure.
+## Oversized module splitting
 
-## Flow detector test fixtures
-<!-- lw:anchors packages/core/src/flows.test.ts#mod packages/core/src/flows.test.ts#overlapFixture packages/core/src/flows.test.ts#shuffled packages/core/src/flows.test.ts#shuffledMap -->
+<!-- lw:anchors packages/core/src/modules.ts#MODULE_SPLIT_DEFAULTS packages/core/src/modules.ts#SPLIT_AXIS_DISABLED packages/core/src/modules.ts#normalizeSplitLimits packages/core/src/modules.ts#splitOversizedModules packages/core/src/modules.ts#splitOneModule packages/core/src/modules.ts#chunkFlatBucket packages/core/src/modules.ts#groupPathsByNextSegment packages/core/src/modules.ts#fileStem packages/core/src/modules.ts#fitsLimits packages/core/src/modules.ts#axisEnabled packages/core/src/modules.ts#countSymbols packages/core/src/modules.ts#resolveSymbolCount -->
 
-`flows.test.ts` is the contract pin for the detector. `mod` builds a minimal `Module` literal (id, paths, optional displayTitle, symbolCount 0) for graph-construction tests. `shuffled` and `shuffledMap` are deterministic Fisher–Yates shuffles (LCG-seeded) used to permute inputs and assert that the detector's output is byte-identical regardless of map insertion order. `overlapFixture` constructs the two-candidate pair used by the A/B round-5 overlap-cap regression (one candidate whose seed-key set overlaps another above `flowMaxOverlap` must be dropped with a `seed_key_overlap` skip).
+Splitting breaks modules that exceed the LLM page budget into smaller units that still complete with valid frontmatter and verify.
 
-```ts
-function mod(id: string, paths: string[], displayTitle?: string): Module
-function shuffled<T>(arr: readonly T[], seed: number): T[]
-function shuffledMap<K, V>(entries: Array<[K, V]>, seed: number): Map<K, V>
-function overlapFixture()
-```
+`export const MODULE_SPLIT_DEFAULTS = {` carries `maxFiles: 12` and `maxSymbols: 80`. `export const SPLIT_AXIS_DISABLED = Number.MAX_SAFE_INTEGER;` is the sentinel for a disabled axis. `export function normalizeSplitLimits(` maps `undefined` to the defaults and `0`/negative to `SPLIT_AXIS_DISABLED` — note the disable is one-sided: only the upper bound is invalidated; lower bounds are not enforced. `export function splitOversizedModules(` returns a deterministic exact partition of its input: it sorts modules by `(id, first path)`, then walks each module through `splitOneModule`. `function splitOneModule(` short-circuits empty input, marks a single file over the symbol cap as `unsplittable`, leaves intact modules under both limits, and otherwise descends: structural subdirectories become `<id>-<seg>` children, peer leaves flow into a flat bucket, and a single nested directory with no peer leaves is recursed without renaming. `function chunkFlatBucket(` packs sorted peer paths into chunks that respect both enabled limits with ordinal ids (`parent-01`, `parent-02`, …); an individual file over the symbol cap is given its own chunk and marked `unsplittable`. `function groupPathsByNextSegment(paths: string[]): {` returns the longest common prefix length and the map of the next segment to its paths. `function fileStem(path: string): string` returns the dot-less basename. `function fitsLimits(` returns false when an enabled axis is exceeded; `function axisEnabled(limit: number): boolean` reports whether a limit is the `SPLIT_AXIS_DISABLED` sentinel. `function countSymbols(paths: string[], map: Map<string, number>): number` sums per-path entries. `function resolveSymbolCount(` prefers per-path map entries when any path is known and otherwise keeps the module-level fallback so an omitted map does not wipe a known `symbolCount` for an intact module — chunked modules without map data for their paths receive `symbolCount: 0`.
 
-## Wiki frontmatter parser
-<!-- lw:anchors packages/core/src/frontmatter.ts#FrontmatterParseError packages/core/src/frontmatter.ts#FrontmatterParseError.constructor packages/core/src/frontmatter.ts#getAnchors packages/core/src/frontmatter.ts#getOwner packages/core/src/frontmatter.ts#parseFrontmatter packages/core/src/frontmatter.ts#parseYamlBlock packages/core/src/frontmatter.ts#stripComment -->
+## Page opening parsing and reader digest
 
-`frontmatter.ts` is a small YAML-subset parser dedicated to wiki pages, deliberately scoped (top-level keys, lists of strings, comments, `\r\n` line endings) so the livewiki codebase carries no `yaml` library dependency. `parseFrontmatter` is the entry point — it normalizes line endings, detects the leading `---` opener, locates the closing `---`, slices the YAML block, then delegates to `parseYamlBlock`. The same parser handles inline flow-style lists (`key: [a, b, c]`) for both the YAML block and the `Frontmatter` record.
+<!-- lw:anchors packages/core/src/navigation.ts#MODULE_DIGEST_CAP packages/core/src/navigation.ts#RESPONSIBILITY_MAX_CHARS packages/core/src/navigation.ts#parseModuleOpening packages/core/src/navigation.ts#extractModuleOpeningDigest packages/core/src/navigation.ts#extractModuleResponsibility packages/core/src/navigation.ts#loadModuleDigests packages/core/src/navigation.ts#buildModuleDigestBlock packages/core/src/navigation.ts#synthesizePurposeFromDigests packages/core/src/navigation.ts#buildOrientationBlock packages/core/src/navigation.ts#generateQuickstart packages/core/src/navigation.ts#humanizeSegments packages/core/src/navigation.ts#normalizeLabel packages/core/src/navigation.ts#commonDirectory packages/core/src/navigation.ts#sameStrings -->
 
-The error type is `FrontmatterParseError`; its constructor is:
+The quickstart digests accepted module pages into a top-N list of responsibilities.
 
-```ts
-constructor(message: string, line: number)
-```
+`export const MODULE_DIGEST_CAP = 6;` caps the quickstart reader digest. `export const RESPONSIBILITY_MAX_CHARS = 240;` caps the length of a single responsibility sentence. `function parseModuleOpening(pageContent: string): ModuleOpeningParts` parses the H1, the paragraph immediately after it, and the `How it fits` block; heading detection runs on a length-preserving masked view so fenced code cannot fake a heading, while text comes from the raw page. `export function extractModuleOpeningDigest(pageContent: string): string` returns the bounded H1 + paragraph + `How it fits` block (cap 1200 chars, appended with `…` when truncated). `export function extractModuleResponsibility(pageContent: string): string | null` returns the single-line paragraph right after the H1, sentence-clipped to `RESPONSIBILITY_MAX_CHARS`; pages without a usable opening contribute `null`. `export async function loadModuleDigests(` walks the prioritised module list in order, filters to `"product"` roles, skips modules whose page is missing, and otherwise reads the responsibility — unreadable pages yield a title-link-only entry, never invented prose. `function buildModuleDigestBlock(moduleDigests: ModuleDigest[]): string[]` emits the `## What you'll find in this wiki` block, re-capping at `MODULE_DIGEST_CAP`. `function synthesizePurposeFromDigests(moduleDigests: ModuleDigest[]): string | null` deterministically composes a no-README purpose from up to three digests with a responsibility (Oxford comma). `function buildOrientationBlock(` composes the `## What this repository is` block: when a stage-5c understanding synthesis is present it is the primary content; otherwise the README purpose wins, falling back to the digest synthesis. `export function generateQuickstart(` stitches orientation, digest, work-by-intent, topic, and workflow sections into the final reader page. `function humanizeSegments(segments: string[]): string` joins segments into a human-readable title; `function normalizeLabel(value: string): string` lowercases and trims for comparison; `function commonDirectory(paths: string[]): string[]` returns the longest common path segments; `function sameStrings(a: string[], b: string[]): boolean` compares two string arrays for set equality.
 
-…and every parse failure (unclosed block, list item without a prior key, malformed line) is raised as one of these, with `line` pointing at the offending source line. The visible throw paths in `parseFrontmatter` are:
+## Module, flow, and topic presentation loaders
 
-- the document does not start with `---\n` → returns `{ frontmatter: null, body: source, bodyOffset: 0 }` (NOT an error — pages without frontmatter are permitted);
-- the opener is present but no closing `---` is found → `throw new FrontmatterParseError(...)` with line `1`.
+<!-- lw:anchors packages/core/src/navigation.ts#buildDisplayTitleFallbacks packages/core/src/navigation.ts#loadModulePresentations packages/core/src/navigation.ts#loadFlowPresentations packages/core/src/navigation.ts#loadTopicPresentations packages/core/src/navigation.ts#generateTasksPage packages/core/src/navigation.ts#groupTasksModules packages/core/src/navigation.ts#generateAuxiliaryIndex packages/core/src/navigation.ts#generateFlowsIndex packages/core/src/navigation.ts#generateTopicsIndex packages/core/src/navigation.ts#ensureTopicsIndexScaffold packages/core/src/navigation.ts#syncTopicsIndexHub packages/core/src/navigation.ts#syncFlowsIndexHub packages/core/src/navigation.ts#syncAuxiliaryIndexHub packages/core/src/navigation.ts#readHubDeclaredOwner packages/core/src/navigation.ts#compareModules packages/core/src/navigation.ts#compareTopics packages/core/src/navigation.ts#buildModuleCoverageNote packages/core/src/navigation.ts#sumModuleSourceBytes packages/core/src/navigation.ts#moduleSourceExceedsBudget packages/core/src/navigation.ts#selectRelatedModules packages/core/src/navigation.ts#updateModuleNavigateBlocks packages/core/src/navigation.ts#updateFlowTopicLinks packages/core/src/navigation.ts#buildNavigateBlock -->
 
-`parseYamlBlock` raises on the malformed-line conditions; `stripComment` removes a trailing `# …` comment from a value before it is recorded. `getAnchors(fm)` returns the frontmatter `anchors` list (or `[]` when absent); `getOwner(fm)` returns the owner field normalized to the closed set `"generated" | "human" | "mixed"` (any other value is treated as missing and a default of `"generated"` is what downstream validators see).
+The loaders and generators emit the wiki's navigation pages and the navigation blocks injected into each module page.
 
-`parseFrontmatter` and `getAnchors` / `getOwner` are the only public surface used by the page validator and the planner:
-
-```ts
-export function parseFrontmatter(source: string): ParseResult
-export function getAnchors(fm: Frontmatter | null): string[]
-export function getOwner(fm: Frontmatter | null): "generated" | "human" | "mixed"
-```
-
-## Idempotent `.gitignore` managed-block writer
-<!-- lw:anchors packages/core/src/gitignore.ts#ensureGitignoreEntries packages/core/src/gitignore.ts#extractManagedBlock packages/core/src/gitignore.ts#mergeBlockLines packages/core/src/gitignore.ts#readGitignore packages/core/src/gitignore.ts#renderBlock packages/core/src/gitignore.ts#replaceManagedBlock -->
-
-`gitignore.ts` keeps `.livewiki/` out of source control idempotently. The public surface is:
-
-```ts
-export async function readGitignore(repoRoot: string): Promise<string>
-export async function ensureGitignoreEntries(
-```
-
-`readGitignore` is a thin wrapper around `node:fs/promises.readFile` that swallows the missing-file error and returns `""`. `ensureGitignoreEntries` is the policy enforcer: if every requested entry is already in the existing managed block (or, when there is no block, already present as a non-comment, non-blank line in the file), it returns `{ file, changed: false, added: [] }` without writing; otherwise it rebuilds the block with `mergeBlockLines`, re-renders it with `renderBlock`, splices it back with `replaceManagedBlock`, and writes the file. It never deletes entries the user added around the block.
-
-The block is delimited by `# livewiki:start` / `# livewiki:end` comment markers. `extractManagedBlock` finds them via regex (tolerant of whitespace in the markers) and returns `{ lines }` between them, or `null` if either marker is missing — a truncated block (no `# livewiki:end`) is intentionally ignored so the file is treated as "no block" and a fresh one is appended. `mergeBlockLines` keeps existing block entries first, then appends the new ones (case-sensitive, exact-match after `trim`) preserving caller order; `renderBlock` emits the `# livewiki:start` / `# livewiki:end` markers around the line list; `replaceManagedBlock` swaps the block in place when one exists or appends a `\n\n` separator followed by the rendered block when it does not.
-
-## EOL-insensitive content hashes
-<!-- lw:anchors packages/core/src/hashes.ts#expandEolToCrlf packages/core/src/hashes.ts#normalizeEol packages/core/src/hashes.ts#sha256 packages/core/src/hashes.ts#sha256Slice -->
-
-`hashes.ts` is the indexer's fingerprint helper. The four exported functions are:
-
-```ts
-export function sha256(content: string | Uint8Array): string
-export function sha256Slice(source: string, startByte: number, endByte: number): string
-export function normalizeEol(content: string): string
-export function expandEolToCrlf(content: string): string
-```
-
-`sha256` is `node:crypto.createHash("sha256").update(...).digest("hex")` — deterministic lowercase hex, no salt. `sha256Slice` is a thin wrapper that hashes `source.slice(startByte, endByte)`; a zero-length slice hashes the empty string. `normalizeEol` collapses `\r\n` → `\n` and deliberately leaves lone `\r` alone (classic-Mac `\r` is not produced by git, and treating it as a line break would corrupt string literals containing a raw carriage return). `expandEolToCrlf` is the inverse — it expands every `\n` to `\r\n` — and is documented as ONLY safe on LF-only input: if the input already contains `\r\n`, those sequences would be double-expanded to `\r\r\n`, so callers MUST guarantee zero `\r\n` before calling it. The intended use is legacy-hash detection for databases indexed under the CRLF convention while the files on disk are now LF (or vice-versa).
-
-The visible invariant the test suite pins: `sha256(normalizeEol(crlf)) === sha256(lf)` for the same content, and `sha256(expandEolToCrlf(lf)) === sha256(crlf)` for LF-only inputs. Mixed-EOL legacy files fall through to the normal updated path.
-
-## Unified import resolver
-<!-- lw:anchors packages/core/src/import-resolution.ts#expandWorkspaceGlob packages/core/src/import-resolution.ts#hasPackageManifest packages/core/src/import-resolution.ts#isPlainObject packages/core/src/import-resolution.ts#loadEffectiveTsconfig packages/core/src/import-resolution.ts#loadPackageTsconfig packages/core/src/import-resolution.ts#loadWorkspacePackages packages/core/src/import-resolution.ts#mapCompiledTargetToSource packages/core/src/import-resolution.ts#normalizeDirOption packages/core/src/import-resolution.ts#parsePnpmWorkspaceGlobs packages/core/src/import-resolution.ts#pythonSourceBaseDir packages/core/src/import-resolution.ts#readPackageManifest packages/core/src/import-resolution.ts#readTextIfExists packages/core/src/import-resolution.ts#readWorkspaceGlobs packages/core/src/import-resolution.ts#resolveExportsValue packages/core/src/import-resolution.ts#resolveImportEdges packages/core/src/import-resolution.ts#resolvePackageTarget packages/core/src/import-resolution.ts#resolvePythonModulePath packages/core/src/import-resolution.ts#resolvePythonSpecifier packages/core/src/import-resolution.ts#resolveSpecifier packages/core/src/import-resolution.ts#sourceCandidatesForCompiled packages/core/src/import-resolution.ts#stringEntries packages/core/src/import-resolution.ts#stripLeadingDotSlash -->
-
-`import-resolution.ts` is the single internal operation that turns an `ExtractedImport` into a `ResolvedImportEdge { fromFile, toFile, source }`. Both the module graph and the stage-5 flow detector consume these same file edges, so the two views cannot disagree about where an import resolved.
-
-The pipeline:
-
-1. `loadWorkspacePackages` discovers declared packages. `readWorkspaceGlobs` reads `pnpm-workspace.yaml` (or the root `package.json` `workspaces`); `parsePnpmWorkspaceGlobs` extracts the bare or quoted `- <glob>` entries under a top-level `packages:` key; `expandWorkspaceGlob` expands each glob against the repo root and keeps only directories that satisfy `hasPackageManifest` (a real `package.json`). `readPackageManifest` parses each `package.json` (returning `name`, `dir`, optional `main` and verbatim `exports`).
-2. `loadEffectiveTsconfig` reads a single package's own `tsconfig.json` and `loadPackageTsconfig` is the per-package variant that only consults the direct `compilerOptions` (no `extends` chain). The result is a per-package `PackageTsconfig { rootDir, outDir }` keyed by the package dir. `normalizeDirOption` normalizes an arbitrary tsconfig value into a repo-relative posix string; packages that lack either `rootDir` or `outDir` get NO compiled-target mapping — strict, no guessing.
-3. `resolveImportEdges` is the public entry. It dedupes and sorts the output deterministically (`fromFile`, `toFile`, `source`) and drops self-edges.
-4. `resolveSpecifier` dispatches by shape: relative (`./`, `../`) is delegated to `modules.ts:resolveRelativeImport` (NodeNext extension stripping + barrel index); workspace specifiers go through `resolvePackageTarget` + `resolveExportsValue`; compiled targets go through `mapCompiledTargetToSource` + `sourceCandidatesForCompiled`.
-5. `resolveExportsValue` supports only the documented forms (string target, or an object with `import` then `default`); wildcards / arrays / nested conditions stay external.
-6. `mapCompiledTargetToSource` + `sourceCandidatesForCompiled` perform the NodeNext extension flip (`.js` → `.ts`/`.tsx`, `.jsx` → `.tsx`, `.mjs` → `.mts`, `.cjs` → `.cts`) and try both the flipped candidates AND the literal target; exactly ONE candidate present in `knownFiles` is accepted — zero or ambiguous stays external.
-7. `resolvePythonSpecifier` + `resolvePythonModulePath` + `pythonSourceBaseDir` handle Python resolution (`sourceBaseDir` is computed relative to the importing file).
-8. `stripLeadingDotSlash`, `stringEntries`, `isPlainObject`, and `readTextIfExists` are the low-level helpers around path normalization, package-manifest arrays, and safe file reads.
-
-Visible "non-edge" cases (no edge emitted): `node:*` builtins, absolute paths, undeclared third-party package names, lookalike workspace names that share a folder prefix but do not exactly match (`@acme/core-utils` must NOT resolve into `@acme/core`'s directory), and occurrences whose compiled target cannot be unambiguously mapped to a single source file.
-
-## Import resolution test fixtures
-<!-- lw:anchors packages/core/src/import-resolution.test.ts#edgesOf packages/core/src/import-resolution.test.ts#imp packages/core/src/import-resolution.test.ts#writeAcmeCoreManifest packages/core/src/import-resolution.test.ts#writeFile -->
-
-```ts
-function imp(source: string): ExtractedImport
-function edgesOf(
-async function writeFile(rel: string, content: string): Promise<void>
-async function writeAcmeCoreManifest(): Promise<void>
-```
-
-`imp` is a literal factory that produces `{ source, kind: "ts-import" }`. `edgesOf` is the test-side convenience wrapper around `resolveImportEdges` — it forwards `tsconfigs` (when supplied) as a `Map` keyed by package dir, mirroring the production `EffectiveTsconfigs` shape, and accepts an undefined `tsconfigs` to exercise the no-compiled-mapping path. `writeFile` writes a UTF-8 file at a repo-relative path; `writeAcmeCoreManifest` writes the `@acme/core` `package.json` fixture used by the cross-package resolver tests (its exports / main mirror `ACME_CORE` above).
-
-## End-to-end `ignores` propagation test harness
-<!-- lw:anchors packages/core/src/ignores-propagation.test.ts#FullMockLlm packages/core/src/ignores-propagation.test.ts#FullMockLlm.generate packages/core/src/ignores-propagation.test.ts#activeFilePaths packages/core/src/ignores-propagation.test.ts#writeIgnores -->
-
-This regression file proves that `.livewiki/config.json` `ignores` actually propagates: configured ignored paths must be absent from the indexed inventory, the module plan, the batch tasks, the LLM work, AND the generated pages across `livewiki init` and a subsequent `livewiki batch` run.
-
-```ts
-class FullMockLlm implements LlmClient
-async generate(req: GenerateRequest): Promise<GenerateResult>
-async function writeIgnores(ignores: string[]): Promise<void>
-async function activeFilePaths(root: string): Promise<string[]>
-```
-
-`FullMockLlm` is a vitest-only mock that returns a minimum-valid stage-4 artifact — every closed-list key from the request appears in BOTH the frontmatter `anchors:` list AND a single section marker, the page-opening contract (H1, one responsibility sentence, `## When to use this page` with verb-led bullets, `## How it fits`) is satisfied, and no `lw:anchors` marker appears in the opening (the validator rejects that placement). `generate` parses the closed-list from the request, records the documented module id, and emits a synthetic page. `writeIgnores(ignores)` writes the `.livewiki/config.json` `ignores` block; `activeFilePaths(root)` walks the indexed snapshot (NOT the live filesystem) so the test asserts "what the pipeline saw", not "what is on disk now". Resume / `--only` are explicitly out of scope here: they operate on the existing run's snapshot, so a configured ignored path cannot re-enter via resume.
+`export function buildDisplayTitleFallbacks(` produces a deterministic, role-respecting title per module without changing the module id. `export async function loadModulePresentations(` reads the `livewiki/<id>.md` page when present, parses its frontmatter, and resolves its `owner` and `title`; malformed pages are not trusted as navigation evidence. `export async function loadFlowPresentations(` reads every `livewiki/flows/<slug>.md` (excluding `index.md`) into a `FlowPresentation` map. `export async function loadTopicPresentations(` reads every `livewiki/topics/<slug>.md` (excluding `index.md`) and validates `title`, `intent`, `modules`, `flows`, `owner`, `kind="topic"`, and `order` against a numeric pattern. `export function generateTasksPage(` emits the `tasks.md` skeleton: a concept-topic section, an end-to-end behavior section, an implementation reference section grouped by directory cluster when more than one exists, and an auxiliary-work pointer. `function groupTasksModules(productModules: Module[]): TasksModuleGroup[]` clusters modules by their common directory for the grouped contract. `export function generateAuxiliaryIndex(`, `export function generateFlowsIndex(`, and `export function generateTopicsIndex(` render the corresponding hub pages. `export async function ensureTopicsIndexScaffold(` creates the topics index skeleton when missing. `export async function syncTopicsIndexHub(`, `export async function syncFlowsIndexHub(`, and `export async function syncAuxiliaryIndexHub(` reconcile the hub pages with the on-disk inventory. `function readHubDeclaredOwner(content: string): "generated" | "human" | "mixed" | null` reads the declared ownership from a hub frontmatter. `function compareModules(a: Module, b: Module): number` and `function compareTopics(a: TopicPresentation, b: TopicPresentation): number` provide deterministic ordering for the loaders and generators. `export function buildModuleCoverageNote(fileCount: number, totalBytes: number): string` formats the source-size footer. `async function sumModuleSourceBytes(absRoot: string, module: Module): Promise<number>` totals the bytes of a module's source files. `export async function moduleSourceExceedsBudget(` reports whether a module's source crosses the byte budget. `export function selectRelatedModules(opts: {` picks the related modules surfaced in each module's navigate block. `export async function updateModuleNavigateBlocks(` rewrites the `
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
-- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency
-- [Anchor ledger and artifact repair](core-src-01.md) — dependent
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependency and dependent
+- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md) — dependency
+- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md) — dependent
 
 > Coverage note: this module's source (2 files, ~96k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
-<!-- livewiki:navigate:end -->
+<!-- livewiki:navigate:end -->` block in each module page; `export async function updateFlowTopicLinks(` keeps the related-topic links in flow pages in sync; `function buildNavigateBlock(` composes the rendered block.

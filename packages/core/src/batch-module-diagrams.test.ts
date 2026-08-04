@@ -200,7 +200,7 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
     // The flags reached the prompt: diagram rules + hierarchy guidance.
     expect(llm.callLog.length).toBe(1);
     expect(llm.callLog[0]!.system).toContain("emit ONE H2 `Diagram` section");
-    expect(llm.callLog[0]!.system).toContain("at most 12 nodes and 20 edges");
+    expect(llm.callLog[0]!.system).toContain("at most 24 nodes and 32 edges");
     expect(llm.callLog[0]!.system).toContain("concept-named H2 sections");
   });
 
@@ -233,6 +233,61 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
     const checkpoint = await readTaskCheckpoint(repoRoot, 4, "core");
     expect(checkpoint?.status).toBe("done");
     expect(checkpoint?.usageHistory.map((u) => u.attempt)).toEqual([1, 2]);
+  });
+
+  it("own budget: moduleMaxDiagramNodes gates the module diagram; relaxed round SKIPPED after diagram-gate exhaustion", async () => {
+    // 2026-08-04 (paid rehearsal): the module diagram budget is the OWN
+    // moduleMax* keys (default 24/32), not the flow budget (12/20) — and a
+    // diagram-gate exhaustion must NOT trigger the relaxed round (the model
+    // drops the punished diagram; the STRICT placeholder gate then fails —
+    // unwinnable, 3,796 tokens of guaranteed waste on core-src-01).
+    await writeModuleRepo(repoRoot);
+    await writeConfig(repoRoot, {
+      moduleDiagrams: true,
+      deepHierarchy: false,
+      moduleMaxDiagramNodes: 1, // INLINE_DIAGRAM has 2 nodes — always over budget
+    });
+    const result = await runBatch({ repoRoot, llmClient: llm, noRefine: true, skipManifestWrite: true });
+
+    // 1 initial + 2 repairs; the relaxed round must NOT fire.
+    expect(llm.callLog).toHaveLength(3);
+    expect(result.status).toBe("completed_with_failures");
+    expect(result.failures[0]?.error.code).toBe("repair_exhausted");
+    const cp = await readTaskCheckpoint(repoRoot, 4, "core");
+    expect(
+      cp?.diagnosticHistory?.some((d) =>
+        (d.errors ?? []).some((e) => e.code === "flow_diagram_too_large"),
+      ),
+    ).toBe(true);
+    expect(cp?.degraded).toBeUndefined();
+  });
+
+  it("default module budget (24 nodes) accepts a 15-node module diagram (the core-src-01 shape)", async () => {
+    // The rehearsal's failure mode: 13–15 nodes is what a near-cap module
+    // actually has; the flow budget (12) rejected it, the module budget (24)
+    // must not.
+    class FifteenNodeLlm extends ModuleDiagramMockLlm {
+      override async generate(req: GenerateRequest): Promise<GenerateResult> {
+        this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
+        const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+        const closedKeys = parseClosedKeys(req.user);
+        const nodes = Array.from({ length: 15 }, (_, i) => `n${i}`);
+        const edges = nodes.slice(0, -1).map((n, i) => `  ${n} --> ${nodes[i + 1]}`);
+        const diagram = `flowchart LR\n${edges.join("\n")}`;
+        const page = makeModulePage(closedKeys, true).replace(
+          INLINE_DIAGRAM,
+          diagram,
+        );
+        return { content: page, usage };
+      }
+    }
+    const big = new FifteenNodeLlm();
+    await writeModuleRepo(repoRoot);
+    await writeConfig(repoRoot, { moduleDiagrams: true, deepHierarchy: false });
+    const result = await runBatch({ repoRoot, llmClient: big, noRefine: true, skipManifestWrite: true });
+    expect(result.status).toBe("completed");
+    const mmd = await readFile(repoRoot, DIAGRAM_PATH);
+    expect(mmd).toContain("n14");
   });
 
   it("--only rerun: monotonic attempts, transactional rewrite, byte-identical under a deterministic mock", async () => {

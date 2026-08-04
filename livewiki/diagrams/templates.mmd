@@ -1,0 +1,21 @@
+flowchart LR
+  classDef ext fill:#eef,stroke:#88a;
+  classDef hook fill:#efe,stroke:#8a8;
+  classDef ci fill:#fee,stroke:#a88;
+  classDef core fill:#fef,stroke:#a8a;
+
+  git[Git commit]:::ext
+  cc[Claude Code Stop]:::ext
+  gha[GitHub Actions push]:::ext
+
+  H_git["git/post-commit hook"]:::hook
+  H_cc["claude-code/settings.local.json"]:::hook
+  H_ci["github-actions/docs-debt.yml"]:::ci
+
+  CLI["@livewiki/cli\n(livewiki index --quiet,\nlivewiki status --json)"]:::core
+  CACHE[".livewiki/ derived cache"]:::core
+
+  git --> H_git --> CLI
+  cc --> H_cc --> CLI
+  gha --> H_ci --> CLI
+  CLI <--> CACHE

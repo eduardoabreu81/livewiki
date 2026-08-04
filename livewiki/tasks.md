@@ -9,40 +9,40 @@ Choose an end-to-end behavior or a product area. Auxiliary repository roles are 
 
 ## End-to-end behavior
 
-### [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
+### [CLI command surface to core pipeline wiring](flows/cli-src-to-core-src-02.md)
 
 ## Implementation reference
 
 ### Packages core source
 
-- [Core batch pipeline and call-graph analytics](core-src-04.md)
-- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md)
-- [Anchor ledger and artifact repair](core-src-01.md)
-- [core prompts, presets, pricing, and README export](core-src-10.md)
-- [Batch stage 5, status aggregation, and surgical repair fixtures](core-src-03.md)
-- [Core runtime config, schema, diagrams, diff preview, and export](core-src-05.md)
-- [core-src-06 stage-5 internals (flows, diagrams, frontmatter, gitignore, hashes, import resolution)](core-src-06.md)
-- [Core module identification, manifest I/O, and Markdown mask helpers](core-src-08.md)
-- [Livewiki core src 07](core-src-07.md)
-- [Stage 4 artifact validator and auxiliary page assembly](core-src-02.md)
-- [LLM client and adapters](llm.md)
-- [Core Repair, Status, Sectioning, Symbols, and Risk Pipeline](core-src-11.md)
-- [CLI command handlers](commands.md)
-- CLI source — page unavailable: `livewiki/cli-src.md` has not been generated yet.
-- ["@livewiki/mcp — MCP server, stdio entry, and FTS5 search index"](mcp-src.md)
-- [claude-code hook template](claude-code.md)
-- [livewiki CLI package](cli.md)
-- ["@livewiki/core package"](core.md)
-- [document-as-you-go (livewiki skill)](document-as-you-go.md)
-- Github actions module — page unavailable: `livewiki/github-actions.md` has not been generated yet.
-- ["@livewiki/mcp package configuration"](mcp.md)
-- [Livewiki hook templates (Fase 5)](templates.md)
+- [core indexing, imports, flows, and frontmatter](core-src-04.md)
+- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md)
+- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md)
+- [core topics, understanding, update metrics, update, and verify](core-src-10.md)
+- [Init, install, manifest, markdown-mask, and mermaid-validator support](core-src-05.md)
+- ["Core Source 03: Config, Index, Export, Diagrams, Diff Preview"](core-src-03.md)
+- [core-src-06 — module identification, splitting, and navigation metadata](core-src-06.md)
+- [Core prompt templates, repair contract, README export, and risk-weighted debt ranking](core-src-08.md)
+- ["Core source utilities for orientation, output budgeting, parsing, pointer blocks, presets, and pricing"](core-src-07.md)
+- [Batch orchestration, status reporting, and graph analysis core](core-src-02.md)
+- [LLM client and provider adapters](llm.md)
+- [Viewer build pipeline and Activity dashboard](core-src-11.md)
+- [CLI command registry for the livewiki workspace](commands.md)
+- [livewiki CLI entrypoint and output formatting](cli-src.md)
+- ["@livewiki/mcp stdio server and search index"](mcp-src.md)
+- [claude-code settings.local.json template](claude-code.md)
+- ["@livewiki/cli — livewiki command-line interface"](cli.md)
+- [Core Engine Package](core.md)
+- [document-as-you-go skill](document-as-you-go.md)
+- [livewiki docs-debt GitHub Actions workflow](github-actions.md)
+- [livewiki MCP server package](mcp.md)
+- [CLI hook and CI templates](templates.md)
 
 ### Other modules
 
-- [Claude local settings](.claude.md)
+- [Claude tooling local permissions](.claude.md)
 - [livewiki repository root](root.md)
-- Workflows module — page unavailable: `livewiki/workflows.md` has not been generated yet.
+- [GitHub Actions workflows for livewiki CI and docs-debt gating](workflows.md)
 
 ## Auxiliary work
 

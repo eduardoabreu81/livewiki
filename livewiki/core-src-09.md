@@ -1,172 +1,217 @@
 ---
-title: Core source module 09 — orientation, parser, pointer, output budget, navigation
+title: Safe I/O, section guarding, status reporting, and symbol extraction
 owner: generated
 anchors:
-  - packages/core/src/navigation.ts#MODULE_DIGEST_CAP
-  - packages/core/src/navigation.ts#RESPONSIBILITY_MAX_CHARS
-  - packages/core/src/navigation.ts#buildDisplayTitleFallbacks
-  - packages/core/src/navigation.ts#buildModuleCoverageNote
-  - packages/core/src/navigation.ts#buildModuleDigestBlock
-  - packages/core/src/navigation.ts#buildNavigateBlock
-  - packages/core/src/navigation.ts#buildOrientationBlock
-  - packages/core/src/navigation.ts#commonDirectory
-  - packages/core/src/navigation.ts#compareModules
-  - packages/core/src/navigation.ts#compareTopics
-  - packages/core/src/navigation.ts#ensureTopicsIndexScaffold
-  - packages/core/src/navigation.ts#extractModuleOpeningDigest
-  - packages/core/src/navigation.ts#extractModuleResponsibility
-  - packages/core/src/navigation.ts#generateAuxiliaryIndex
-  - packages/core/src/navigation.ts#generateFlowsIndex
-  - packages/core/src/navigation.ts#generateQuickstart
-  - packages/core/src/navigation.ts#generateTasksPage
-  - packages/core/src/navigation.ts#generateTopicsIndex
-  - packages/core/src/navigation.ts#groupTasksModules
-  - packages/core/src/navigation.ts#humanizeSegments
-  - packages/core/src/navigation.ts#loadFlowPresentations
-  - packages/core/src/navigation.ts#loadModuleDigests
-  - packages/core/src/navigation.ts#loadModulePresentations
-  - packages/core/src/navigation.ts#loadTopicPresentations
-  - packages/core/src/navigation.ts#moduleSourceExceedsBudget
-  - packages/core/src/navigation.ts#normalizeLabel
-  - packages/core/src/navigation.ts#parseModuleOpening
-  - packages/core/src/navigation.ts#readHubDeclaredOwner
-  - packages/core/src/navigation.ts#sameStrings
-  - packages/core/src/navigation.ts#selectRelatedModules
-  - packages/core/src/navigation.ts#sumModuleSourceBytes
-  - packages/core/src/navigation.ts#syncAuxiliaryIndexHub
-  - packages/core/src/navigation.ts#syncFlowsIndexHub
-  - packages/core/src/navigation.ts#syncTopicsIndexHub
-  - packages/core/src/navigation.ts#synthesizePurposeFromDigests
-  - packages/core/src/navigation.ts#updateFlowTopicLinks
-  - packages/core/src/navigation.ts#updateModuleNavigateBlocks
-  - packages/core/src/orientation.ts#PURPOSE_MAX_CHARS
-  - packages/core/src/orientation.ts#clipSentence
-  - packages/core/src/orientation.ts#detectSurfaces
-  - packages/core/src/orientation.ts#extractPurpose
-  - packages/core/src/orientation.ts#extractRepoOrientation
-  - packages/core/src/orientation.ts#findFastPathSection
-  - packages/core/src/orientation.ts#findPrimaryReadme
-  - packages/core/src/orientation.ts#isBadgeOrLinkOnlyLine
-  - packages/core/src/orientation.ts#isListLeadIn
-  - packages/core/src/orientation.ts#isMeaningfulProse
-  - packages/core/src/orientation.ts#readBounded
-  - packages/core/src/orientation.ts#readdirNames
-  - packages/core/src/orientation.ts#stripHtmlTags
-  - packages/core/src/output-budget.ts#MODULE_OUTPUT_BUDGET_OPTIONS
-  - packages/core/src/output-budget.ts#TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS
-  - packages/core/src/output-budget.ts#computeDynamicOutputTokenBudget
-  - packages/core/src/parser.ts#_grammarToExtensionForTest
-  - packages/core/src/parser.ts#grammarForExtension
-  - packages/core/src/parser.ts#grammarsDir
-  - packages/core/src/parser.ts#initParser
-  - packages/core/src/parser.ts#listSupportedGrammars
-  - packages/core/src/parser.ts#loadLanguage
-  - packages/core/src/parser.ts#parseSource
-  - packages/core/src/pointer.ts#POINTER_END
-  - packages/core/src/pointer.ts#POINTER_FILES
-  - packages/core/src/pointer.ts#POINTER_START
-  - packages/core/src/pointer.ts#_internal
-  - packages/core/src/pointer.ts#applyPointerRemove
-  - packages/core/src/pointer.ts#applyPointerReplace
-  - packages/core/src/pointer.ts#buildPointerBlock
-  - packages/core/src/pointer.ts#ensurePointerFile
-  - packages/core/src/pointer.ts#findPointerBlock
-  - packages/core/src/pointer.ts#insertPointer
-  - packages/core/src/pointer.ts#pickPointerFile
-  - packages/core/src/pointer.ts#readPointerStatus
-  - packages/core/src/pointer.ts#removePointer
-  - packages/core/src/orientation.test.ts#write
+  - packages/core/src/safe-io.ts#ALLOWED_DIRS
+  - packages/core/src/safe-io.ts#InvalidRelativePathError
+  - packages/core/src/safe-io.ts#InvalidRelativePathError.constructor
+  - packages/core/src/safe-io.ts#PathOutsideAllowlistError
+  - packages/core/src/safe-io.ts#PathOutsideAllowlistError.constructor
+  - packages/core/src/safe-io.ts#allowedAbs
+  - packages/core/src/safe-io.ts#allowlistFor
+  - packages/core/src/safe-io.ts#exists
+  - packages/core/src/safe-io.ts#findDeepestExisting
+  - packages/core/src/safe-io.ts#isInsideAllowlist
+  - packages/core/src/safe-io.ts#mkdir
+  - packages/core/src/safe-io.ts#readText
+  - packages/core/src/safe-io.ts#remove
+  - packages/core/src/safe-io.ts#resolveAndValidate
+  - packages/core/src/safe-io.ts#validateDeclared
+  - packages/core/src/safe-io.ts#writeText
+  - packages/core/src/section-guard.ts#SURGICAL_REPAIR_ELIGIBLE_CODES
+  - packages/core/src/section-guard.ts#slugifyHeading
+  - packages/core/src/section-guard.ts#spliceSections
+  - packages/core/src/section-guard.ts#splitH2Sections
+  - packages/core/src/section-guard.ts#surgicalRepairTargetSections
+  - packages/core/src/status.ts#anchoredLangs
+  - packages/core/src/status.ts#applyFreshness
+  - packages/core/src/status.ts#applyRiskRanking
+  - packages/core/src/status.ts#collect
+  - packages/core/src/status.ts#collectDegradedPages
+  - packages/core/src/status.ts#formatActivityEvent
+  - packages/core/src/status.ts#formatDuration
+  - packages/core/src/status.ts#formatHuman
+  - packages/core/src/status.ts#formatLocalTimestamp
+  - packages/core/src/status.ts#formatSnapshotAge
+  - packages/core/src/status.ts#run
+  - packages/core/src/symbols.ts#attributeRationale
+  - packages/core/src/symbols.ts#collectRationaleCandidates
+  - packages/core/src/symbols.ts#extractCalleeName
+  - packages/core/src/symbols.ts#extractCalls
+  - packages/core/src/symbols.ts#extractRationales
+  - packages/core/src/symbols.ts#extractSymbols
+  - packages/core/src/symbols.ts#extractSymbolsWithRanges
+  - packages/core/src/symbols.ts#goReceiverTypeName
+  - packages/core/src/symbols.ts#groupContiguousBlocks
+  - packages/core/src/symbols.ts#isLikelyGenerated
+  - packages/core/src/symbols.ts#isRustDocComment
+  - packages/core/src/symbols.ts#isTsDocstringComment
+  - packages/core/src/symbols.ts#javaCreationTypeName
+  - packages/core/src/symbols.ts#makeRecord
+  - packages/core/src/symbols.ts#normalizeRationaleText
+  - packages/core/src/symbols.ts#rustImplTypeName
+  - packages/core/src/symbols.ts#signatureFor
+  - packages/core/src/symbols.ts#toSymbolRecord
+  - packages/core/src/symbols.ts#walkForCalls
+  - packages/core/src/symbols.ts#walkNode
 ---
 
-# Core source module 09 — orientation, parser, pointer, output budget, navigation
+# Safe I/O, section guarding, status reporting, and symbol extraction
 
-This page documents the symbols exported from the `packages/core/src` modules collected under the `core-src-09` slice — repository orientation evidence, the tree-sitter parser wrapper, the `AGENTS.md`/`CLAUDE.md` pointer writer, the content-scaled output-token budget, and the navigation-page generators and index syncers.
+This page documents the responsibilities of four cooperating modules in `packages/core/src`: `safe-io.ts`, `section-guard.ts`, `status.ts`, and `symbols.ts`.
 
 ## When to use this page
 
-- **Parse source code with tree-sitter** by calling `parseSource` with a file extension and source string, after a one-shot `initParser`.
-- **Compute a content-scaled `maxTokens`** for module/flow/topic-prose pages via `computeDynamicOutputTokenBudget` with `MODULE_OUTPUT_BUDGET_OPTIONS` (and the smaller `TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS` for the topic-plan refine pass).
-- **Insert or remove the livewiki pointer block** in `AGENTS.md` / `CLAUDE.md` using `insertPointer` / `removePointer` (the pure-string helpers `buildPointerBlock`, `findPointerBlock`, `applyPointerReplace`, and `applyPointerRemove` are useful for tests and previews).
-- **Generate navigation pages** (`generateQuickstart`, `generateTasksPage`, `generateAuxiliaryIndex`, `generateFlowsIndex`, `generateTopicsIndex`) and keep their hub files in sync (`syncTopicsIndexHub`, `syncFlowsIndexHub`, `syncAuxiliaryIndexHub`, `ensureTopicsIndexScaffold`).
+- **Audit the disk-write allowlist** when you need to know which paths `safe-io` will accept and which it refuses.
+- **Trace a surgical repair call** through `splitH2Sections`, `spliceSections`, and `surgicalRepairTargetSections` to confirm why a section-level edit was accepted or rejected.
+- **Inspect a `livewiki status` report** to understand how `collect`, `applyRiskRanking`, `applyFreshness`, and the formatters compose the final `StatusReport` and its human rendering.
+- **Understand symbol and call extraction** when adjusting the parser-side rules in `symbols.ts` (kind mapping, key qualification, rationale scraping, generated-file heuristics).
 
 ## How it fits
 
-This slice lives under `packages/core/src/` and supplies the deterministic, non-LLM substrate that the higher pipeline layers consume: orientation reads the repository root for evidence (README purpose, fast-path heading, entry-point surfaces) and never invents prose; the parser wrapper wraps `web-tree-sitter` so any later stage can extract AST information from cited files; the pointer writer is the only opt-in writer outside the `livewiki/` and `.livewiki/` safety directories and is gated by `--write-pointer`; the output-budget module replaces the flat `stage4MaxOutputTokens` default with a content-scaled formula after a paid E2E failure showed the fixed ceiling starving large modules; and the navigation module reads accepted module/flow/topic pages back into presentation metadata and emits the reader-digest quickstart, the tasks page, and the auxiliary/flows/topics index hubs together with helpers that update per-module `navigate` blocks and `topics` link sections in flow pages. Callers reach into these exports from the batch flow, the verify stage, and the index sync stages of `packages/core`.
+The four files form the on-disk enforcement and reporting surface of the `livewiki` core. `safe-io.ts` is the sole authorized writer; every other module that touches the filesystem routes through `resolveAndValidate`, which combines a fast declared-path check with a realpath-based symlink defense. `section-guard.ts` provides the deterministic split/splice helpers the orchestrator needs around the surgical repair prompt, mirroring the heading-scan idiom of the artifact validator. `status.ts` opens the SQLite index, gathers file/symbol/debt counts, layers on risk ranking and freshness, and formats the result for both machine and human consumers. `symbols.ts` walks tree-sitter ASTs to produce the `SymbolRecord` keys that downstream indexer, debt, and risk code consume, and additionally scrapes rationale evidence and call edges for the livewiki documentation pipeline.
 
-## Orientation evidence
+## Diagram
 
-<!-- lw:anchors packages/core/src/orientation.ts#extractRepoOrientation packages/core/src/orientation.ts#findPrimaryReadme packages/core/src/orientation.ts#readdirNames packages/core/src/orientation.ts#readBounded packages/core/src/orientation.ts#extractPurpose packages/core/src/orientation.ts#clipSentence packages/core/src/orientation.ts#PURPOSE_MAX_CHARS packages/core/src/orientation.ts#isMeaningfulProse packages/core/src/orientation.ts#isListLeadIn packages/core/src/orientation.ts#isBadgeOrLinkOnlyLine packages/core/src/orientation.ts#stripHtmlTags packages/core/src/orientation.ts#findFastPathSection packages/core/src/orientation.ts#detectSurfaces packages/core/src/orientation.test.ts#write -->
+```mermaid
+%% livewiki/diagrams/core-src-09.mmd
+```
 
-`extractRepoOrientation` is the single entry point; it resolves the repo root, picks the primary README via `findPrimaryReadme` (tries `README.md`, then `README.en.md`, then any other `README*.{md,markdown}` sorted case-insensitively — `readdirNames` filters non-files and returns an empty array on a read error), reads it through `readBounded` (bounded at 256 KiB; bytes above the cap are read by an explicit `bytesRead` from an opened handle, not by `readFile`), then derives `purpose` from `extractPurpose` and `fastPathSection` from `findFastPathSection`. Every absence degrades to `null`/empty fields rather than throwing.
+## Safe I/O allowlist and validation
 
-`export async function extractRepoOrientation(absRoot: string): Promise<RepoOrientation>` returns `{ purpose, surfaces, readmePath, fastPathSection }`. `purpose` is `extractPurpose`'s output clipped to `PURPOSE_MAX_CHARS` (600) at a sentence boundary. The README scanned is capped at `README_MAX_BYTES = 256 * 1024` bytes; `readBounded` calls `nodeFs.stat` first and only opens the file with a `Buffer.alloc(README_MAX_BYTES)` read when the file exceeds the cap.
+<!-- lw:anchors packages/core/src/safe-io.ts#ALLOWED_DIRS packages/core/src/safe-io.ts#PathOutsideAllowlistError packages/core/src/safe-io.ts#PathOutsideAllowlistError.constructor packages/core/src/safe-io.ts#InvalidRelativePathError packages/core/src/safe-io.ts#InvalidRelativePathError.constructor packages/core/src/safe-io.ts#allowlistFor packages/core/src/safe-io.ts#allowedAbs packages/core/src/safe-io.ts#isInsideAllowlist packages/core/src/safe-io.ts#validateDeclared packages/core/src/safe-io.ts#findDeepestExisting packages/core/src/safe-io.ts#resolveAndValidate -->
 
-`export function extractPurpose(markdown: string): string | null` walks the lines with explicit fenced-code and multi-line-HTML bookkeeping; inside a code fence or inside `inTag` the loop only flushes and otherwise continues without further scanning. Within reach, the first paragraph that survives `isMeaningfulProse` and `isListLeadIn` wins; a colon-terminated paragraph (including fullwidth-colon CJK lead-ins) is rejected and scanning continues. `isBadgeOrLinkOnlyLine` keeps language-switchers and badge blocks out of the candidate set, and `stripHtmlTags` removes inline tags from headers (HTML containers are traversed, not skipped). The chosen paragraph is sentence-clipped via `clipSentence` to `PURPOSE_MAX_CHARS`.
+`safe-io` is the only module in `packages/core/src` authorized to write to disk. The allowlist is the literal tuple of two directories relative to `repoRoot`:
 
-`export function clipSentence(text: string, maxChars: number = PURPOSE_MAX_CHARS): string` truncates at a sentence terminator (`.`, `!`, `?`, or the CJK equivalents `。`, `!`, `?`) before the cap, returning the original text when no terminator precedes the cap. `PURPOSE_MAX_CHARS` is exported at 600 chars. `findFastPathSection` returns the heading text whose first matching line matches `/quick ?start|getting started|installation|setup|run locally|local development|usage/i`, or `null`. `detectSurfaces` produces one-line entry-point hints for well-known root files. The test helper `write` (in `orientation.test.ts`) is a sandbox-only async function that `mkdir -p`s a relative path under a temp root and `writeFile`s UTF-8 content — it has no production role.
+```ts
+export const ALLOWED_DIRS = ["livewiki", ".livewiki"] as const;
+```
 
-## Pointer writer
+`allowlistFor` extends that tuple with opt-in extras: when `SafeIoOptions.allowPointer` is true it appends `AGENTS.md` and `CLAUDE.md`; when `SafeIoOptions.allowReadme` is true it appends `README.md`. Both flags default to `false`, and the module itself contains no special case for the pointer or readme writes — that decision lives in the Phase 5 `pointer.ts` module and the `readme-export` target respectively.
 
-<!-- lw:anchors packages/core/src/pointer.ts#POINTER_START packages/core/src/pointer.ts#POINTER_END packages/core/src/pointer.ts#POINTER_FILES packages/core/src/pointer.ts#pickPointerFile packages/core/src/pointer.ts#buildPointerBlock packages/core/src/pointer.ts#findPointerBlock packages/core/src/pointer.ts#applyPointerReplace packages/core/src/pointer.ts#applyPointerRemove packages/core/src/pointer.ts#insertPointer packages/core/src/pointer.ts#removePointer packages/core/src/pointer.ts#readPointerStatus packages/core/src/pointer.ts#ensurePointerFile packages/core/src/pointer.ts#_internal -->
+Two named errors describe every refusal. `PathOutsideAllowlistError` carries `repoRoot`, `attempted`, and `allowlist` (the list produced by `allowlistFor`). `InvalidRelativePathError` carries the rejected `relPath` and a `reason` string. Both extend `Error` and set a `name` for `instanceof` matching.
 
-The marker constants are part of an external contract: `export const POINTER_START = "<!-- livewiki:start -->"` and `export const POINTER_END = "<!-- livewiki:end -->"`. `export const POINTER_FILES = ["AGENTS.md", "CLAUDE.md"] as const` is the closed allow-list of pointer files; `export type PointerFile = (typeof POINTER_FILES)[number]` is the matching file-name type. `export const _internal = { nodeFs }` exposes the underlying `node:fs/promises` namespace for diagnostics; the pointer module is the only place outside `safe-io.ts` that touches a file the rest of the pipeline considers off-limits.
+`allowedAbs(repoRoot, dir)` resolves an `AllowedDir` to an absolute path and throws an internal `Error` if the resolved directory escapes `repoRoot` — a defense-in-depth check that fires only if `ALLOWED_DIRS` is corrupted. `isInsideAllowlist` is a pure function: it uses `nodePath.relative` plus a prefix-and-separator check so that `livewiki-evil` cannot match `livewiki/`. For `allowPointer` it matches exact filenames at `repoRoot` (`AGENTS.md`, `CLAUDE.md`); for `allowReadme` it matches `README.md` at `repoRoot`. The source only checks the equality of the resolved path against the resolved candidate, so prefix-without-equal matches (sibling files) are not accepted.
 
-The decision of which file to write is `pickPointerFile(hasAgentsMd, hasClaudeMd, requested?)`: a `requested` value of `"AGENTS.md"` or `"CLAUDE.md"` is honored verbatim; otherwise the file that already exists wins (AGENTS preferred over CLAUDE), and when neither exists the function defaults to `"AGENTS.md"`.
+`validateDeclared` performs the first pass: it rejects absolute `relPath`s, normalizes the path, throws on any `..` segment, and then runs `isInsideAllowlist` on the resolved absolute target. `findDeepestExisting` walks from the declared target back toward `repoRoot` using `existsSync` (synchronous, used only inside this loop) and returns the deepest existing ancestor plus the suffix to reattach. `resolveAndValidate` then canonicalizes `repoRoot` via `realpath` (falling back to lexical resolution when the root does not yet exist), runs `validateDeclared`, asks for the deepest existing ancestor, `realpath`s that ancestor, reconstructs `realAncestor + suffix`, and re-runs `isInsideAllowlist` on the final absolute path. If any of those steps fail, `PathOutsideAllowlistError` or `InvalidRelativePathError` is thrown. The source notes an inherent race window between `existsSync` and `realpath`; on Phase 0 the caller absorbs I/O errors so this is not considered a problem.
 
-`buildPointerBlock()` returns the default block content: a short PT-BR paragraph pointing at `./livewiki/quickstart.md`, bracketed by the `POINTER_START` / `POINTER_END` markers. Its total length is bounded to < 800 chars in tests so the pointer never duplicates wiki content.
+## Safe I/O operations
 
-`findPointerBlock(content)` is a pure parser: it matches `<!--\s*livewiki:start\s*-->` and `<!--\s*livewiki:end\s*-->` with tolerant whitespace, returns `null` when either side is missing (a truncated or end-only block is treated as absent so the writer never corrupts the doc), and otherwise returns `{ startIdx, endIdx, inner }`. `applyPointerReplace(content, newBlock)` returns `{ content, action }` where `action` is `"inserted"`, `"replaced"`, or `"unchanged"` — appending when no block exists, in-place substitution when one does, and explicitly reporting a no-op write when the byte-identical replacement equals the input. `applyPointerRemove(content)` returns `{ content, removed }` and removes the block plus trailing whitespace when present, otherwise leaves the content untouched.
+<!-- lw:anchors packages/core/src/safe-io.ts#writeText packages/core/src/safe-io.ts#readText packages/core/src/safe-io.ts#exists packages/core/src/safe-io.ts#mkdir packages/core/src/safe-io.ts#remove -->
 
-The disk-touching writers are `insertPointer(repoRoot, opts)`, `removePointer(repoRoot, opts)`, `readPointerStatus(repoRoot, opts)`, and `ensurePointerFile(repoRoot, opts)` — all gated by an explicit allowPointer flag (this module is the documented exception to `safe-io`'s two-directory rule, after SPEC rule #2).
+The five exported operations all call `resolveAndValidate` before touching the disk. The signatures copied verbatim from the source:
 
-## Tree-sitter parser wrapper
+```ts
+export async function writeText(
+  repoRoot: string,
+  relPath: string,
+  content: string,
+  opts: SafeIoOptions = {},
+): Promise<void>
+export async function readText(
+  repoRoot: string,
+  relPath: string,
+  opts: SafeIoOptions = {},
+): Promise<string>
+export async function exists(
+  repoRoot: string,
+  relPath: string,
+  opts: SafeIoOptions = {},
+): Promise<boolean>
+export async function mkdir(
+  repoRoot: string,
+  relPath: string,
+  opts: SafeIoOptions = {},
+): Promise<void>
+export async function remove(
+  repoRoot: string,
+  relPath: string,
+  opts: SafeIoOptions = {},
+): Promise<void>
+```
 
-<!-- lw:anchors packages/core/src/parser.ts#initParser packages/core/src/parser.ts#grammarsDir packages/core/src/parser.ts#loadLanguage packages/core/src/parser.ts#grammarForExtension packages/core/src/parser.ts#parseSource packages/core/src/parser.ts#listSupportedGrammars packages/core/src/parser.ts#_grammarToExtensionForTest -->
+`writeText` resolves the target, creates the parent directory recursively, then writes UTF-8. `readText` resolves and reads UTF-8. `exists` resolves and tries `nodeFs.access`; if `resolveAndValidate` threw `PathOutsideAllowlistError` it is re-thrown (the source surfaces the security violation rather than swallowing it), while any other error returns `false`. The source comment notes this is intentional: knowing whether a file exists outside `livewiki/` already leaks information. `mkdir` resolves and creates recursively. `remove` resolves and calls `rm` with `recursive: true, force: true`.
 
-`initParser` is the idempotent global initializer; subsequent calls return the cached `initPromise`. After it resolves, `parseSource` is safe to call.
+## Section guarding
 
-- `export async function initParser(): Promise<void>` — sets `initPromise = Parser.init()` once and returns the same promise on subsequent calls.
-- `function grammarsDir(): string` — resolves `packages/core/grammars/` by trying `./package.json` then `../package.json` via `createRequire(import.meta.url)`, and throws if neither exists.
-- `async function loadLanguage(name: string): Promise<Language>` — caches `Language.load(wasmPath)` in a module-local `Map<string, Language>` keyed by grammar name; the WASM path must exist or the call throws with a localized error pointing at the missing grammar.
-- `export function grammarForExtension(ext: string): string | undefined` — lowercase-lookup in the `EXT_TO_GRAMMAR` map covering `.ts` → `typescript`, `.tsx` → `tsx`, `.js`/`.mjs`/`.cjs` → `javascript`, `.jsx` → `tsx`, `.py` → `python`; unknown extensions return `undefined`.
-- `export async function parseSource(ext: string, source: string): Promise<Tree>` — awaits `initParser`, looks up the grammar, sets it on a fresh `Parser`, calls `parser.parse(source)`, and throws on a `null` tree (the visible branch handles the "input vazio" case explicitly so `null` never propagates).
-- `export function listSupportedGrammars(): string[]` — `readdirSync(grammarsDir())`, filtered to `*.wasm` and stripped of the `tree-sitter-` prefix and `.wasm` suffix; returns `[]` when the directory is missing (so a build without grammars is observable rather than throwing).
-- `export function _grammarToExtensionForTest(grammar: string): string | undefined` — inverse lookup helper used by the test suite to cross-check that each supported grammar is referenceable.
+<!-- lw:anchors packages/core/src/section-guard.ts#SURGICAL_REPAIR_ELIGIBLE_CODES packages/core/src/section-guard.ts#slugifyHeading packages/core/src/section-guard.ts#splitH2Sections packages/core/src/section-guard.ts#spliceSections packages/core/src/section-guard.ts#surgicalRepairTargetSections -->
 
-## Output-token budget
+`section-guard` is the deterministic H2 machinery that sits around the surgical repair prompt. `slugifyHeading` is the same lowercase, NFD-stripped, alphanumerics+hyphens slugifier used by the artifact validator; the source comment stresses that this copy MUST stay byte-identical to the private copy in `artifact.ts` so that the `sectionSlug` carried by validation errors lines up. `splitH2Sections` runs the heading scan on `maskCodeSpansPreservingLength(page)` so that `##` lines inside fenced code blocks cannot fake a boundary, then groups H2 sections by walking the masked scan and using each subsequent H2's start as the previous section's end. The result is a `{ prefix, sections }` pair where `sections[i]` carries `slug`, `heading`, `start`, and `end` offsets that map byte-for-byte to the original page.
 
-<!-- lw:anchors packages/core/src/output-budget.ts#computeDynamicOutputTokenBudget packages/core/src/output-budget.ts#MODULE_OUTPUT_BUDGET_OPTIONS packages/core/src/output-budget.ts#TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS -->
+`spliceSections` is the anti-cascade guard. With `targetSections` non-empty it splits both `original` and `repaired` and returns `null` if the prefixes differ, the section counts differ, or any pair of slugs at the same index differs. It also returns `null` if a target slug is absent or duplicated in either side, or if any non-target section differs byte-for-byte between the two pages. Otherwise it splices in only the target sections using an offset-descending walk so earlier offsets stay valid.
 
-`export function computeDynamicOutputTokenBudget(signals, opts)` returns an integer budget via the formula `base + perAnchor * anchorCount` (with `anchorCount` clamped to `Math.max(0, …)` so a negative count never subtracts from `base`), plus `Math.ceil(anchorSourceChars / SOURCE_CHARS_PER_OUTPUT_TOKEN)` when `anchorSourceChars` is supplied and positive. The intermediate value is rounded up to the nearest 256 (`TOKEN_ROUNDING_STEP`) and clamped into `[opts.floor, opts.ceiling]` by a `Math.min(opts.ceiling, Math.max(opts.floor, rounded))` envelope — a one-sided cap above the floor and a one-sided cap below the ceiling; both sides are always enforced, but the formula's content-scaling term only ever adds.
+```ts
+export function spliceSections(
+  original: string,
+  repaired: string,
+  targetSections: readonly string[],
+): string | null
+```
 
-`OutputBudgetSignals` is `{ anchorCount: number; anchorSourceChars?: number }`; `anchorSourceChars` is the additive source-size proxy (topics only). `MODULE_OUTPUT_BUDGET_OPTIONS` is the module/flow/topic-prose preset: `base 2048`, `perAnchor 300`, `floor 4096`, `ceiling 32_768`. `TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS` is the compact structured-payload preset used by the topic-plan refine pass: `base 1024`, `perAnchor 40`, `floor 4096`, `ceiling 32_768`. The floor and ceiling are always respected regardless of preset (verified in the test file by sweeping `anchorCount` across `0` and `10_000`).
+`SURGICAL_REPAIR_ELIGIBLE_CODES` is the fixed `ReadonlySet<string>` of codes the surgical prompt may attempt: `missing_page_opening`, `todo_marker_present`, `empty_section`, `broken_internal_link`, `anchor_missing_in_required_section`. `surgicalRepairTargetSections` walks a `ReadonlyArray<ArtifactValidationError>` and returns the deduplicated target slug list when every error carries one of those codes and a resolvable section — either an explicit `sectionSlug`, or for a section-level `missing_page_opening` (location `"body"`) the slug extracted from the message via the internal `SECTION_LEVEL_OPENING_RE`. An empty error set, a disallowed code, an unresolved slug, or any other mismatch returns `null` so the caller falls back to the existing full-context repair path.
 
-## Navigation builders and helpers
+## Status reporting
 
-<!-- lw:anchors packages/core/src/navigation.ts#buildDisplayTitleFallbacks packages/core/src/navigation.ts#loadModulePresentations packages/core/src/navigation.ts#loadFlowPresentations packages/core/src/navigation.ts#loadTopicPresentations packages/core/src/navigation.ts#MODULE_DIGEST_CAP packages/core/src/navigation.ts#RESPONSIBILITY_MAX_CHARS packages/core/src/navigation.ts#loadModuleDigests packages/core/src/navigation.ts#parseModuleOpening packages/core/src/navigation.ts#extractModuleOpeningDigest packages/core/src/navigation.ts#extractModuleResponsibility -->
+<!-- lw:anchors packages/core/src/status.ts#run packages/core/src/status.ts#collect packages/core/src/status.ts#applyRiskRanking packages/core/src/status.ts#applyFreshness packages/core/src/status.ts#collectDegradedPages packages/core/src/status.ts#anchoredLangs packages/core/src/status.ts#formatSnapshotAge packages/core/src/status.ts#formatLocalTimestamp packages/core/src/status.ts#formatActivityEvent packages/core/src/status.ts#formatDuration packages/core/src/status.ts#formatHuman -->
 
-`buildDisplayTitleFallbacks(modules)` computes human-facing fallback titles by grouping modules on the longest common directory suffix (via `commonDirectory`) until a non-colliding suffix is found, appending `source` when the group contains a `src`/`source` segment, and, when several modules share a directory, suffixing `— part N of M`. `Module.id` is the sole identity key everywhere else (graphs, pages, tasks, checkpoints, anchors, filenames); the title map is presentation-only. `compareModules`, `humanizeSegments`, and `normalizeLabel` are the supporting helpers.
+`run` is the entry point: it resolves `.livewiki/index.db` via `safe-io.resolveAndValidate`, opens the SQLite handle, calls `collect` to build the base `StatusReport`, layers on `applyFreshness`, then runs `applyRiskRanking` only when `report.debt.items.length > 0`. Incremental token metrics come from `snapshotMetrics` (best-effort; on failure `metrics` stays `null`), and `collectDegradedPages` recounts degraded pages from disk.
 
-`loadModulePresentations`, `loadFlowPresentations`, and `loadTopicPresentations` return maps of presentation metadata (display title, page existence, declared frontmatter owner) for the three page kinds. The module loader reads `livewiki/<moduleId>.md`, parses frontmatter, prefers the frontmatter `title` when it does not normalize-collide with the module id, and trusts a missing or malformed page to produce `owner: null` rather than fabricating metadata.
+```ts
+export async function run(
+  repoRoot: string,
+  opts: StatusOptions = {},
+): Promise<StatusReport>
+```
 
-`MODULE_DIGEST_CAP` (6) is the cap for the quickstart reader digest's top product modules; `RESPONSIBILITY_MAX_CHARS` (240) caps a single responsibility sentence. `loadModuleDigests` produces the digest (top product modules in prioritization order, each with its display title and opening responsibility sentence). `parseModuleOpening`, `extractModuleOpeningDigest`, and `extractModuleResponsibility` parse the H1 + opening paragraph + `How it fits` block of an accepted module page; `extractModuleResponsibility` returns the sentence-clipped opening paragraph (or `null`) and `extractModuleOpeningDigest` returns the longer bounded block shared by the batch flow-context builder and the quickstart.
+`collect` reads active `files` and `symbols` rows, builds `byLang`/`byKind` histograms, computes the top-N by symbol count, derives `tiers` via `anchoredLangs()` (the walker-side `EXTENSION_LANG` projection, intentionally import-light), and reads debt rows using `COALESCE` against both the durable debt columns and the live anchor joins so that identity survives anchor removal. Undocumented rows are read up to a 20-row sample. `meta` carries `schemaVersion`, `lastIndexedAt`, and `lastLedgerAt`; the `metrics` and `degraded` slots are placeholders filled in by `run` after `collect` returns. `applyRiskRanking` loads config defensively (config-read failure → defaults), recomputes imports on demand for anchored-tier files only, computes test coverage and fan-in, optionally pulls git churn, attaches `risk` to each item, and reorders items via `compareByRisk`. `applyFreshness` stats the indexed files only — never a repo walk — and sets `meta.snapshotAgeMs`, `meta.stale`, and `meta.staleChangedFiles`; an unindexed repo keeps `snapshotAgeMs` `null` and `stale` `false`.
 
-## Navigation pages and link updates
+The formatters turn the report into a single human-readable string. `formatSnapshotAge`, `formatLocalTimestamp`, `formatActivityEvent`, and `formatDuration` are small presentation helpers; `formatHuman(report)` is the public aggregator that strings the sections together for the CLI's human mode.
 
-<!-- lw:anchors packages/core/src/navigation.ts#generateQuickstart packages/core/src/navigation.ts#buildOrientationBlock packages/core/src/navigation.ts#buildModuleDigestBlock packages/core/src/navigation.ts#synthesizePurposeFromDigests packages/core/src/navigation.ts#generateTasksPage packages/core/src/navigation.ts#groupTasksModules packages/core/src/navigation.ts#generateAuxiliaryIndex packages/core/src/navigation.ts#generateFlowsIndex packages/core/src/navigation.ts#generateTopicsIndex packages/core/src/navigation.ts#ensureTopicsIndexScaffold packages/core/src/navigation.ts#syncTopicsIndexHub packages/core/src/navigation.ts#syncFlowsIndexHub packages/core/src/navigation.ts#syncAuxiliaryIndexHub packages/core/src/navigation.ts#readHubDeclaredOwner packages/core/src/navigation.ts#selectRelatedModules packages/core/src/navigation.ts#updateModuleNavigateBlocks packages/core/src/navigation.ts#updateFlowTopicLinks packages/core/src/navigation.ts#buildNavigateBlock packages/core/src/navigation.ts#buildModuleCoverageNote packages/core/src/navigation.ts#sumModuleSourceBytes packages/core/src/navigation.ts#moduleSourceExceedsBudget packages/core/src/navigation.ts#compareTopics packages/core/src/navigation.ts#sameStrings packages/core/src/navigation.ts#commonDirectory packages/core/src/navigation.ts#normalizeLabel packages/core/src/navigation.ts#compareModules packages/core/src/navigation.ts#humanizeSegments -->
+## Symbol extraction
 
-`generateQuickstart(opts)` emits the quickstart page using the orientation block built by `buildOrientationBlock` (README purpose plus entry-point surfaces, with provenance — and a fast-path section name referenced as a plain code span, never a link — and a deterministic digest synthesis fallback via `synthesizePurposeFromDigests` when the README yields no purpose and accepted module pages exist). `buildModuleDigestBlock` materializes the per-module lines from the digest map. The orientation block is emitted only when there is real evidence; absent evidence renders a title-link-only bullet rather than invented prose.
+<!-- lw:anchors packages/core/src/symbols.ts#extractSymbols packages/core/src/symbols.ts#extractSymbolsWithRanges packages/core/src/symbols.ts#walkNode packages/core/src/symbols.ts#makeRecord packages/core/src/symbols.ts#toSymbolRecord -->
 
-`generateTasksPage(opts)` outputs the tasks page from grouped product modules via `groupTasksModules`. `generateAuxiliaryIndex`, `generateFlowsIndex`, and `generateTopicsIndex` are the three hub-level index generators; their on-disk counterparts are `syncTopicsIndexHub`, `syncFlowsIndexHub`, and `syncAuxiliaryIndexHub`, with `ensureTopicsIndexScaffold` providing the topics scaffold bootstrap. `readHubDeclaredOwner` reports the per-page owner tag (`generated` / `human` / `mixed` / `null`) so the syncers can decide whether to overwrite human content.
+`extractSymbols` is the public entry point; `extractSymbolsWithRanges` is the range-preserving variant consumed by the indexer for per-symbol EOL realignment. Both share the same walker and dedup rule: candidates are sorted by `(start_line, source_start_byte, discoveryOrder)` and the first record with each `key` wins. Anonymous functions and classes declared inside a function body are skipped at the walker level (`walkNode` sets `insideFunctionBody` whenever it descends into a function-like node and short-circuits on `class_declaration`/`class_definition`). This skip matters: sibling test methods commonly repeat local class names, and the dedup would otherwise silently drop all but the first.
 
-`selectRelatedModules`, `updateModuleNavigateBlocks`, and `updateFlowTopicLinks` keep the per-module `navigate` blocks and the per-flow `topics` link sections in sync with the navigation graph; `buildNavigateBlock` composes the per-module block from related modules. `buildModuleCoverageNote` reports file count and byte total for a module digest; `sumModuleSourceBytes` totals the bytes; `moduleSourceExceedsBudget` is the predicate that gates whether a module source can be quoted in full (it is the one-sided "above the cap" branch — the function name describes the visible above-limit signal, and `sumModuleSourceBytes` defines what the byte total covers). The remaining helpers (`compareTopics`, `sameStrings`, `commonDirectory`, `normalizeLabel`, `compareModules`, `humanizeSegments`) underpin deterministic ordering and label equality used across the navigation layer.
+```ts
+export function extractSymbols(
+  tree: Tree,
+  relPath: string,
+  source: string,
+): SymbolRecord[]
+export function extractSymbolsWithRanges(
+  tree: Tree,
+  relPath: string,
+  source: string,
+): Array<SymbolRecord & SymbolRange>
+```
+
+`walkNode` recognizes TS function/class/method/export shapes (where `export class`/`export function` emit a single class or function entry — not a separate `export` — and `export const` emits an `export` entry per declarator), Python `function_definition` and `class_definition` (qualified by enclosing class), and recurses into class bodies to attach parent qualifiers. `makeRecord` produces an `ExtractedSymbol` carrying the AST byte range plus the `signature` slice; `toSymbolRecord` strips the `SymbolRange` to produce the persisted shape.
+
+## Per-language symbol kind mapping
+
+<!-- lw:anchors packages/core/src/symbols.ts#goReceiverTypeName packages/core/src/symbols.ts#rustImplTypeName packages/core/src/symbols.ts#javaCreationTypeName -->
+
+`goReceiverTypeName` strips a leading `*` from a Go method receiver so `*T` resolves to `T` for key qualification. `rustImplTypeName` resolves the type name of a `function_item` inside an `impl_item` — both `impl T` and `impl Trait for T` qualify the method under `T` so the produced key is callable on `T`. `javaCreationTypeName` resolves the right-most `type_identifier` from an `object_creation_expression`'s type field, used so `new X()` produces a symbol key named `X` and matches the same policy as TS `new_expression`.
+
+## Call extraction
+
+<!-- lw:anchors packages/core/src/symbols.ts#extractCalls packages/core/src/symbols.ts#walkForCalls packages/core/src/symbols.ts#extractCalleeName packages/core/src/symbols.ts#signatureFor -->
+
+`extractCalls(tree, relPath, source)` returns a `CallRecord[]` derived from the same AST; `walkForCalls` is the dedicated walker. `extractCalleeName` returns a `{ name, confidence }` where `confidence` is one of `"extracted"` or `"inferred"`. A bare callee identifier (Go, Rust call_expression, Java method_invocation with no receiver, TS call_expression with no field) is `extracted`; anything with a receiver form (`x.m()`, `Type.m()`, `a.b.m()`, scoped identifiers, field expressions, generic functions) is `inferred` from the right-most name. `signatureFor` slices a representative header from the source via the node's byte range; returns `null` when the slice would be empty or out of range.
+
+## Rationale evidence
+
+<!-- lw:anchors packages/core/src/symbols.ts#extractRationales packages/core/src/symbols.ts#collectRationaleCandidates packages/core/src/symbols.ts#isTsDocstringComment packages/core/src/symbols.ts#isRustDocComment packages/core/src/symbols.ts#normalizeRationaleText packages/core/src/symbols.ts#groupContiguousBlocks packages/core/src/symbols.ts#attributeRationale packages/core/src/symbols.ts#isLikelyGenerated -->
+
+`extractRationales` returns rationale candidates for a file: `collectRationaleCandidates` walks the AST and accumulates raw blocks; `isTsDocstringComment` accepts JSDoc-style comments and rejects plain `//` comments, `isRustDocComment` accepts `///` and `//!` doc comments and rejects ordinary `//`. `normalizeRationaleText` strips leading `*` markers (Rust/TS doc style) and, for Python docstrings, the surrounding triple quotes; non-Python input keeps the comment markers as-is. `groupContiguousBlocks` merges consecutive candidate lines into a single rationale block. `attributeRationale` binds each block to the immediately following declaration and the file-level lead; rationale text is untrusted intent context and never a source of anchor keys. `isLikelyGenerated` is a content heuristic (looking for `// Code generated` / equivalent markers) used to skip scraped rationale from generated files.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
-- [Anchor ledger and artifact repair](core-src-01.md) — dependent
-- [core prompts, presets, pricing, and README export](core-src-10.md) — dependency and dependent
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependency and dependent
+- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md) — dependent
+- [core topics, understanding, update metrics, update, and verify](core-src-10.md) — dependency and dependent
 
 > Coverage note: this module's source (4 files, ~91k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

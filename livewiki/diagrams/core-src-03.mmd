@@ -1,0 +1,25 @@
+graph LR
+  subgraph config
+    C_CFG[config.ts]
+  end
+  subgraph db
+    C_DB[db.ts]
+  end
+  subgraph diagrams
+    C_DIA[diagrams.ts]
+  end
+  subgraph diffpreview
+    C_DIFF[diff-preview.ts]
+  end
+  subgraph export
+    C_EXP[export.ts]
+  end
+  subgraph flowdiagram
+    C_FLOW[flow-diagram.ts]
+  end
+  C_DIFF -- "openIndex" --> C_DB
+  C_DIFF -- "parseSource / extractSymbols" --> C_DB
+  C_FLOW -- "FlowchartIR reuses escapeLabel / mermaidId" --> C_DIA
+  C_EXP -- "transformPage / buildMarker / replaceMermaidPlaceholder" --> C_DIA
+  C_EXP -- "validateTarget rejects bad targets" --> C_EXP
+  C_CFG -- "read by export preflight via livewiki/ allowlist" --> C_EXP

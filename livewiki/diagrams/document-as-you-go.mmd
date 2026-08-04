@@ -1,0 +1,26 @@
+flowchart LR
+    classDef agent fill:#e6f3ff,stroke:#1f6feb,color:#0b3a66;
+    classDef cli fill:#fff4e6,stroke:#d97706,color:#5b3a00;
+    classDef mcp fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f;
+    classDef wiki fill:#f3e8ff,stroke:#7c3aed,color:#3a1d6b;
+
+    Agent[Agent running this skill]:::agent
+    StatusCli[livewiki status --json]:::cli
+    UpdateCli[livewiki update --json]:::cli
+    Package[Work package: debt, snippets, validAnchors]:::cli
+    WriteDoc[livewiki_write_doc MCP tool]:::mcp
+    DirectEdit[Direct edit of wiki page file]:::wiki
+    Verify[livewiki verify]:::cli
+    Record[livewiki update --record-write]:::cli
+    WikiPage[livewiki/<wiki_path>.md]:::wiki
+
+    Agent --> StatusCli
+    StatusCli --> Package
+    Package --> UpdateCli
+    UpdateCli --> Agent
+    Agent --> WriteDoc
+    WriteDoc --> Verify
+    Agent --> DirectEdit
+    DirectEdit --> Verify
+    Verify --> WikiPage
+    Agent --> Record

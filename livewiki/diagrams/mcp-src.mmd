@@ -1,0 +1,40 @@
+flowchart LR
+  indexTs["index.ts"]:::entry
+  serverTs["server.ts"]:::core
+  searchTs["search.ts"]:::core
+  coreSafe["@livewiki/core/safe-io"]:::ext
+  coreStatus["@livewiki/core/status"]:::ext
+  coreVerify["@livewiki/core/verify"]:::ext
+  coreDb["@livewiki/core/db"]:::ext
+  coreBlast["@livewiki/core/blast-radius"]:::ext
+  coreImpact["@livewiki/core/change-impact"]:::ext
+  coreIdx["@livewiki/core/indexer"]:::ext
+  coreLedger["@livewiki/core/anchor-ledger"]:::ext
+  coreUpdate["@livewiki/core/update-metrics"]:::ext
+  fts["SQLite FTS5 (.livewiki/search.db)"]:::store
+  fsWatch["fs.watch (recursive)"]:::ext
+  stdio["StdioServerTransport"]:::ext
+  mcp["McpServer (tools)"]:::mcp
+
+  indexTs --> serverTs
+  indexTs --> stdio
+  serverTs --> searchTs
+  serverTs --> coreSafe
+  serverTs --> coreStatus
+  serverTs --> coreVerify
+  serverTs --> coreDb
+  serverTs --> coreBlast
+  serverTs --> coreImpact
+  serverTs --> coreIdx
+  serverTs --> coreLedger
+  serverTs --> coreUpdate
+  serverTs --> fsWatch
+  serverTs --> mcp
+  searchTs --> coreSafe
+  searchTs --> fts
+
+  classDef entry fill:#fdf6b2,stroke:#888,color:#222
+  classDef core fill:#e1f0ff,stroke:#3a78b5,color:#0b2a4a
+  classDef ext fill:#f4f4f4,stroke:#aaa,color:#333
+  classDef store fill:#ffe9cc,stroke:#c97a2a,color:#3a1f00
+  classDef mcp fill:#e7ffe1,stroke:#3a8a3a,color:#103a10

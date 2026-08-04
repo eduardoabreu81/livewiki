@@ -1,0 +1,34 @@
+flowchart LR
+  subgraph workflows[".github/workflows"]
+    ci["cross-platform-ci.yml"]
+    debt["docs-debt.yml"]
+  end
+  subgraph inputs["Triggers"]
+    pr["pull_request"]
+    push["push: main"]
+    manual["workflow_dispatch"]
+  end
+  subgraph matrix["CI matrix"]
+    ubuntu["ubuntu-latest"]
+    win["windows-latest"]
+    mac["macos-latest"]
+    node["Node 24"]
+  end
+  subgraph cli["packages/cli"]
+    cliBin["dist/index.js"]
+  end
+  pr --> ci
+  push --> ci
+  manual --> ci
+  push --> debt
+  ci --> ubuntu
+  ci --> win
+  ci --> mac
+  ubuntu --> node
+  win --> node
+  mac --> node
+  ubuntu --> cliBin
+  win --> cliBin
+  mac --> cliBin
+  debt --> cliBin
+  cliBin -- "index / status" --> summary["GITHUB_STEP_SUMMARY"]

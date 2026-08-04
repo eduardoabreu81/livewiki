@@ -1,0 +1,11 @@
+flowchart TD
+  T["settings.local.json template"] --> H["hooks.Stop array"]
+  H --> C["command entry type command"]
+  C --> R["resolve livewiki via command -v"]
+  R -->|"not found"| X["exit 0 no-op"]
+  R -->|"found"| I["livewiki index --quiet"]
+  I --> S["livewiki status --json"]
+  S --> P["parse total field"]
+  P -->|"total greater than zero"| N["stderr notice to agent"]
+  P -->|"total zero or empty"| X
+  N --> X

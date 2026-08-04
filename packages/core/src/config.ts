@@ -217,12 +217,25 @@ export interface LivewikiConfig {
    * whose inline mermaid block the orchestrator extracts to
    * `livewiki/diagrams/<slug>.mmd`, leaving the exact
    * `%% livewiki/diagrams/<slug>.mmd` placeholder in the page (the flow
-   * dual-artifact pattern; node/edge budgets reuse `flowMaxDiagramNodes` /
-   * `flowMaxDiagramEdges`). Default true (maintainer decision after the #22
+   * dual-artifact pattern; node/edge budgets are `moduleMaxDiagramNodes` /
+   * `moduleMaxDiagramEdges`). Default true (maintainer decision after the #22
    * A/B passed); set false for the byte-identical pre-#22 module page
    * contract.
    */
   moduleDiagrams?: boolean;
+  /**
+   * Per-diagram node budget for module pages (`moduleDiagrams`). Default 24.
+   * Must be an integer >= 1. Own budget since 2026-08-04 — reusing the flow
+   * budget (12 nodes) made the largest modules (near the 80-symbol cap)
+   * systematically fail `flow_diagram_too_large`: the model drew 13–15
+   * nodes because that is what the module actually has.
+   */
+  moduleMaxDiagramNodes?: number;
+  /**
+   * Per-diagram edge budget for module pages (`moduleDiagrams`). Default 32.
+   * Must be an integer >= 1.
+   */
+  moduleMaxDiagramEdges?: number;
   /**
    * CodeWiki-grade module pages (roadmap item 22, D2 soft contract):
    * stage-4 prompt guidance to group a module with >= 8 symbols under
@@ -334,6 +347,10 @@ export const CONFIG_DEFAULTS = {
   /** Flow companion diagram budgets (nodes / edges). */
   flowMaxDiagramNodes: 12,
   flowMaxDiagramEdges: 20,
+  /** Module-page diagram budgets (nodes / edges) — own budget since
+   *  2026-08-04, sized for modules near the symbol cap. */
+  moduleMaxDiagramNodes: 24,
+  moduleMaxDiagramEdges: 32,
   /** Semantic topic synthesis budgets. */
   maxTopics: 4,
   topicMaxAnchors: 18,
@@ -455,6 +472,8 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     flowMaxOverlap: CONFIG_DEFAULTS.flowMaxOverlap,
     flowMaxDiagramNodes: CONFIG_DEFAULTS.flowMaxDiagramNodes,
     flowMaxDiagramEdges: CONFIG_DEFAULTS.flowMaxDiagramEdges,
+    moduleMaxDiagramNodes: CONFIG_DEFAULTS.moduleMaxDiagramNodes,
+    moduleMaxDiagramEdges: CONFIG_DEFAULTS.moduleMaxDiagramEdges,
     maxTopics: CONFIG_DEFAULTS.maxTopics,
     topicMaxAnchors: CONFIG_DEFAULTS.topicMaxAnchors,
     topicMaxSourceChars: CONFIG_DEFAULTS.topicMaxSourceChars,
@@ -811,6 +830,24 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       );
     }
     out.flowMaxDiagramEdges = v;
+  }
+  if (obj["moduleMaxDiagramNodes"] !== undefined) {
+    const v = obj["moduleMaxDiagramNodes"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+      throw new Error(
+        `invalid moduleMaxDiagramNodes: must be an integer >= 1, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.moduleMaxDiagramNodes = v;
+  }
+  if (obj["moduleMaxDiagramEdges"] !== undefined) {
+    const v = obj["moduleMaxDiagramEdges"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+      throw new Error(
+        `invalid moduleMaxDiagramEdges: must be an integer >= 1, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.moduleMaxDiagramEdges = v;
   }
   if (obj["pathRoles"] !== undefined) {
     const value = obj["pathRoles"];

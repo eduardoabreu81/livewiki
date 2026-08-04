@@ -1,0 +1,8 @@
+graph LR
+  Settings["settings.local.json"]
+  AllowList["permissions.allow"]
+  BashRtk["Bash(rtk ls/grep/find/wc/git)"]
+  BashPnpm["Bash(pnpm -r build/test)"]
+  Settings --> AllowList
+  AllowList --> BashRtk
+  AllowList --> BashPnpm

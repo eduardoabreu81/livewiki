@@ -1,8 +1,7 @@
 ---
-title: LLM client and adapters
+title: LLM client and provider adapters
 owner: generated
 anchors:
-  - packages/core/src/llm/adapters.test.ts#fakeFetch
   - packages/core/src/llm/anthropic.ts#AnthropicAdapter
   - packages/core/src/llm/anthropic.ts#AnthropicAdapter.constructor
   - packages/core/src/llm/anthropic.ts#AnthropicAdapter.generate
@@ -28,73 +27,53 @@ anchors:
   - packages/core/src/llm/openai-compat.ts#resolveThinkingMode
 ---
 
-# LLM client and adapters
+# LLM client and provider adapters
 
-The `llm` module is a thin native `fetch`-based HTTP client that exposes a single normalized `LlmClient` interface over Anthropic Messages and OpenAI-compatible Chat Completions providers.
+This module owns the thin HTTP client, the shared retry/timeout infrastructure, and the two provider adapters (Anthropic Messages and OpenAI Chat-Completions–compatible) that the batch pipeline calls.
 
 ## When to use this page
 
-- **Wire an LLM call into a batch stage** using `createLlmClient` and the `LlmClient.generate` shape.
-- **Tune retry, timeout, or `Retry-After` behavior** by reading the `requestWithRetry` policy and its helpers.
-- **Map a provider's raw usage and stop signals** to the canonical `LlmUsage` / `StopReason` types used by the rest of the pipeline.
-- **Diagnose a thrown `LlmTimeoutError` or `LlmRequestError`** and understand the missing-API-key path.
+- **Configure** the LLM client for a batch run by inspecting `createLlmClient` and the factory's preset/provider resolution.
+- **Diagnose** HTTP, timeout, or provider-error behavior by reading `requestWithRetry`, `LlmTimeoutError`, and `LlmRequestError`.
+- **Extend** to a new provider by following the `LlmClient` interface implemented by `AnthropicAdapter` and `OpenAiCompatAdapter`.
+- **Translate** provider-specific stop/finish and usage fields into the canonical shapes by comparing both adapters' `generate` methods and their normalizers.
 
 ## How it fits
 
-The `llm` package sits under `packages/core/src/llm` and is consumed by `batch.ts` and any other stage that needs a chat completion. It deliberately avoids SDKs and agent frameworks: adapters are hand-written around native `fetch`, the public surface is the `LlmClient` interface plus a small error/timeout vocabulary, and provider selection is driven by the validated `LivewikiConfig` (preset or legacy `provider`) and the matching env var. Anthropic and OpenAI-compatible transports share a single HTTP/retry/timeout core (`base.ts`), and each adapter owns only request shaping, response parsing, and provider-specific stop-reason normalization. API keys are read only from env vars and are never copied into `config.json`, checkpoints, logs, or error messages.
+The `packages/core/src/llm` directory sits under the core package and exposes a minimal, fetch-based LLM client. `createLlmClient` in `index.ts` validates the livewiki config, resolves the provider (preset overrides legacy `config.provider`), reads the API key from a single env var, and returns an `LlmClient` whose `generate` method is the only entry point the batch pipeline (`batch.ts`) needs. Both adapters delegate the actual HTTP work to `requestWithRetry` in `base.ts`, which centralizes per-attempt timeouts, exponential backoff for 429/5xx, `Retry-After` honoring, and normalized error wrapping. The two adapters diverge only in request shape, headers, and the field-level translation of provider JSON into the module's canonical `LlmUsage` and `StopReason` types.
 
-## Shared HTTP core: retry, timeout, and Retry-After
+## Diagram
+
+```mermaid
+%% livewiki/diagrams/llm.mmd
+```
+
+## Public surface and factory
+
+<!-- lw:anchors packages/core/src/llm/index.ts#createLlmClient packages/core/src/llm/index.ts#MissingApiKeyError packages/core/src/llm/index.ts#MissingApiKeyError.constructor packages/core/src/llm/index.ts#LlmRequestError packages/core/src/llm/index.ts#LlmRequestError.constructor -->
+
+The `LlmClient` interface is the only contract the rest of the core package depends on. `createLlmClient` is the entry point:
+
+```ts
+export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient
+```
+
+It first calls `validateConfigForBatch` so a missing provider or model fails before any HTTP call. It then resolves the adapter and base URL via `resolveProviderFromConfig` / `resolveBaseUrl`, reads the API key from the env var chosen by the preset or adapter, and throws `MissingApiKeyError` when the env var is unset. `timeoutMs` is forwarded only when explicitly set on the config, so `0` (disable) is preserved instead of being truthy-filtered out. The returned client is always an `AnthropicAdapter` or `OpenAiCompatAdapter`.
+
+`MissingApiKeyError` carries the provider and env var name; its message never references the key value (there is none to leak). `LlmRequestError` carries `provider`, `status`, and a truncated `errorBody` (first 500 chars) so messages stay bounded; it never includes request or response headers, which is where the API key would otherwise appear.
+
+## Shared HTTP infrastructure
 
 <!-- lw:anchors packages/core/src/llm/base.ts#DEFAULT_LLM_TIMEOUT_MS packages/core/src/llm/base.ts#LlmTimeoutError packages/core/src/llm/base.ts#LlmTimeoutError.constructor packages/core/src/llm/base.ts#isRetryableStatus packages/core/src/llm/base.ts#parseRetryAfterMs packages/core/src/llm/base.ts#withTimeoutMs packages/core/src/llm/base.ts#requestWithRetry packages/core/src/llm/base.ts#sleep packages/core/src/llm/base.ts#readText -->
 
-The shared core centralizes the per-attempt timeout, exponential-backoff retry on HTTP retryables, and `Retry-After` honoring.
+`base.ts` owns every network concern. `DEFAULT_LLM_TIMEOUT_MS` is the fallback `timeoutMs` when no override is configured. `LlmTimeoutError` is the dedicated client-side timeout signal; its message distinguishes the "timed out after Nms" case from the meaningless `timeoutMs === 0` path, and it explicitly states that the provider may still complete and bill.
 
-```ts
-export const DEFAULT_LLM_TIMEOUT_MS = 300_000;
-```
+Retry classification is two predicates:
 
-`DEFAULT_LLM_TIMEOUT_MS` is the fallback applied by `requestWithRetry` when `AdapterConfig.timeoutMs` is omitted. It is also re-exported from `llm/index` and asserted directly in tests.
+- `isRetryableStatus` returns `true` only for HTTP `429` or any `5xx` (i.e. `status >= 500 && status < 600`).
+- `parseRetryAfterMs` reads the `Retry-After` header, supports integer seconds, and falls back to HTTP-date parsing; non-numeric, unparseable headers return `null` so the caller falls back to pure exponential backoff. There is no cap on the parsed delay.
 
-```ts
-export class LlmTimeoutError extends Error {
-  public readonly provider: LlmProvider;
-  public readonly timeoutMs: number;
-  constructor(provider: LlmProvider, timeoutMs: number) {
-    super(
-      timeoutMs > 0
-        ? `LLM ${provider} request timed out after ${timeoutMs}ms (client abort; provider may still bill; usage unknown)`
-        : `LLM ${provider} request aborted (timeout)`,
-    );
-    this.name = "LlmTimeoutError";
-    this.provider = provider;
-    this.timeoutMs = timeoutMs;
-  }
-}
-```
-
-`LlmTimeoutError` carries the provider name and the configured `timeoutMs`. The message distinguishes a positive timeout (provider may still complete and bill) from a `timeoutMs: 0` abort. The error is thrown exactly once — by `requestWithRetry` when an `AbortError` reaches it — and is not retried, because the generation state is unknown.
-
-```ts
-function isRetryableStatus(status: number): boolean {
-  return status === 429 || (status >= 500 && status < 600);
-}
-```
-
-`isRetryableStatus` decides whether a non-2xx response triggers another attempt. Only `429` and 5xx (500–599 inclusive) are considered retryable; all other statuses become a single non-retryable `LlmRequestError`.
-
-```ts
-function parseRetryAfterMs(res: Response): number | null
-```
-
-`parseRetryAfterMs` reads the `Retry-After` header and returns a millisecond delay. Integer-seconds values are the standard form; HTTP-date values are handled defensively and clamped to `>= 0`. Unparseable values (including non-numeric strings) return `null` so the caller falls back to pure exponential backoff. There is no upper cap on the parsed delay.
-
-```ts
-export function withTimeoutMs(
-  timeoutMs: number | undefined,
-): { timeoutMs: number } | Record<string, never>
-```
-
-`withTimeoutMs` is a spread helper that preserves `timeoutMs: 0` (which a truthy spread would drop). `undefined` yields an empty object so the field is absent, and any defined number — including `0` — is included verbatim.
+The transport entry point is:
 
 ```ts
 export async function requestWithRetry(
@@ -105,188 +84,65 @@ export async function requestWithRetry(
 ): Promise<Response>
 ```
 
-`requestWithRetry` runs up to `maxRetries` attempts (default 3) on `fetchImpl ?? globalThis.fetch`. It only attaches an `AbortController` when `timeoutMs > 0`; on abort it throws `LlmTimeoutError` without a second generation. On `429`/`503` it parses `Retry-After` and sleeps `max(exponentialBackoff, retryAfterMs ?? 0)` between attempts; on other retryable 5xx it uses pure exponential backoff (`retryDelayMs * 2^(attempt-1)`, default base 1000 ms). Non-retryable HTTP becomes a single `LlmRequestError`. If every attempt is exhausted on a retryable path, it throws `LlmRequestError(provider, 0, …)` annotated with the last status or last error kind.
+On each attempt it arms an `AbortController` only when `timeoutMs > 0` (so `0` disables the timer), then calls the configured `fetchImpl` (defaulting to `globalThis.fetch`). Success returns immediately. Non-retryable HTTP statuses throw `LlmRequestError` once with the body attached for diagnostics. Retryable statuses sleep for `max(exponentialBackoff, retryAfterMs)` between attempts. The retry loop has a visible non-retry exception: an `AbortError` raised by the timeout is wrapped in `LlmTimeoutError` and `throw`n, so a timed-out generation is never retried — the provider's billing state is unknown. Network errors continue to retry under the existing exponential backoff. After exhausting attempts, the function throws `LlmRequestError` with `status: 0` and a `"Failed after N attempts (last status: ... | last error: network | unknown)"` body. The `LlmTimeoutError` and `LlmRequestError` catches inside the loop re-`throw` before the retry branch, so neither is ever retried.
 
-```ts
-function sleep(ms: number): Promise<void>
-```
+`withTimeoutMs` is the spread helper that preserves `timeoutMs: 0` (a truthy filter would drop it). `sleep` is a `setTimeout`-based promise. `readText` is a thin async wrapper around `Response.text()` retained for adapters.
 
-`sleep` resolves after `ms` milliseconds and is the only delay primitive used by `requestWithRetry` between attempts.
-
-```ts
-export async function readText(res: Response): Promise<string>
-```
-
-`readText` is a thin wrapper around `res.text()` used by adapters that want to log or inspect response bodies without re-importing the global.
-
-## Anthropic Messages adapter
+## Anthropic adapter
 
 <!-- lw:anchors packages/core/src/llm/anthropic.ts#AnthropicAdapter packages/core/src/llm/anthropic.ts#AnthropicAdapter.constructor packages/core/src/llm/anthropic.ts#AnthropicAdapter.generate packages/core/src/llm/anthropic.ts#normalizeStopReason -->
 
-The Anthropic adapter targets `POST <baseUrl>/v1/messages` with `x-api-key`, `anthropic-version: 2023-06-01`, and a JSON body of `{ model, system, messages: [{ role: "user", content }], max_tokens, temperature? }`.
-
 ```ts
 export class AnthropicAdapter implements LlmClient {
-  public readonly provider = "anthropic" as const;
-  public readonly model: string;
-  private readonly apiKey: string;
-  private readonly baseUrl: string;
-  private readonly config: AdapterConfig;
-
   constructor(opts: { apiKey: string; baseUrl: string; model: string; fetchImpl?: typeof fetch; timeoutMs?: number; maxRetries?: number }) {
-    this.apiKey = opts.apiKey;
-    this.baseUrl = opts.baseUrl;
-    this.model = opts.model;
-    this.config = {
-      apiKey: opts.apiKey,
-      baseUrl: opts.baseUrl,
-      model: opts.model,
-      ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      ...withTimeoutMs(opts.timeoutMs),
-      ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
-    };
-  }
+  async generate(req: GenerateRequest): Promise<GenerateResult> {
+}
 ```
 
-The constructor stores the `apiKey`, `baseUrl`, and `model` on the instance and assembles an `AdapterConfig` for the shared core. `fetchImpl`, `maxRetries`, and `timeoutMs` are each spread conditionally; `withTimeoutMs` ensures `timeoutMs: 0` is preserved rather than dropped by a truthy check.
+`AnthropicAdapter` exposes `provider: "anthropic"` (literal) and `model` as readonly fields. The constructor stores the API key and base URL, then builds an `AdapterConfig` that uses `withTimeoutMs` to forward `timeoutMs` even when it is `0`, and conditional spreads for `fetchImpl` and `maxRetries` so the config object stays minimal.
 
-```ts
-async generate(req: GenerateRequest): Promise<GenerateResult>
-```
+`generate` targets `POST <baseUrl without trailing slash>/v1/messages` with headers `x-api-key`, `anthropic-version: 2023-06-01`, and `content-type: application/json`. The body shape is `{ model, system, messages: [{ role: "user", content: req.user }], max_tokens: req.maxTokens ?? 4096, [temperature if defined] }`. On success it extracts the first content item's text when it is `type: "text"`, translates `usage.input_tokens` / `usage.output_tokens` to `inputTokens` / `outputTokens`, and reports the provider's `model` field (not the requested one) so cost reporting can see fallbacks or aliases. The raw `stop_reason` is preserved on the result when it is non-null.
 
-`generate` builds the Anthropic Messages payload (defaulting `max_tokens` to `4096` and including `temperature` only when set), POSTs through `requestWithRetry`, then normalizes the response. It picks the first content block whose `type === "text"` for the textual answer, maps `usage.input_tokens` → `inputTokens` and `usage.output_tokens` → `outputTokens`, and records the provider-reported `model` (not the requested one) in usage. When `stop_reason` is non-null it is preserved as `rawStopReason` for checkpoints/diagnostics.
+`normalizeStopReason` maps Anthropic's vocabulary to the canonical `StopReason`:
 
-```ts
-function normalizeStopReason(stopReason: string | null | undefined): StopReason
-```
+- `"max_tokens"` → `"length"`
+- `"end_turn"` or `"stop_sequence"` → `"complete"`
+- `null` / `undefined` → `"unknown"`
+- any other value → `"incomplete"`
 
-`normalizeStopReason` maps Anthropic's `stop_reason` to the canonical `StopReason`. `"max_tokens"` becomes `"length"` (truncated by the limit); `"end_turn"` and `"stop_sequence"` become `"complete"`; `null`/`undefined` become `"unknown"`; any other non-null value is treated as `"incomplete"` (for example `"tool_use"`).
-
-## OpenAI-compatible Chat Completions adapter
+## OpenAI-compatible adapter
 
 <!-- lw:anchors packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter.constructor packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter.generate packages/core/src/llm/openai-compat.ts#normalizeFinishReason packages/core/src/llm/openai-compat.ts#resolveThinkingMode -->
 
-The OpenAI-compatible adapter targets `POST <baseUrl>(/v1)/chat/completions` with `Authorization: Bearer <apiKey>`. The constructor accepts preset hints (`thinkingDefault`, `preferMaxCompletionTokens`) that the generator consults when shaping the body.
-
 ```ts
 export class OpenAiCompatAdapter implements LlmClient {
-  public readonly provider = "openai-compat" as const;
-  public readonly model: string;
-  private readonly apiKey: string;
-  private readonly baseUrl: string;
-  private readonly config: AdapterConfig;
-  private readonly thinkingDefault: ThinkingMode | "n/a";
-  private readonly preferMaxCompletionTokens: boolean;
-
   constructor(opts: OpenAiCompatAdapterOpts) {
-    this.apiKey = opts.apiKey;
-    this.baseUrl = opts.baseUrl;
-    this.model = opts.model;
-    this.thinkingDefault = opts.thinkingDefault ?? "omit";
-    this.preferMaxCompletionTokens = opts.preferMaxCompletionTokens ?? false;
-    this.config = {
-      apiKey: opts.apiKey,
-      baseUrl: opts.baseUrl,
-      model: opts.model,
-      ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      ...withTimeoutMs(opts.timeoutMs),
-      ...(opts.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
-      ...(opts.retryDelayMs !== undefined
-        ? { retryDelayMs: opts.retryDelayMs }
-        : {}),
-    };
-  }
-```
-
-The constructor stores the connection fields and the preset hints, then assembles an `AdapterConfig` for the shared core. `thinkingDefault` defaults to `"omit"` (do not send the `thinking` field) and `preferMaxCompletionTokens` defaults to `false`. As with the Anthropic adapter, `withTimeoutMs` keeps `timeoutMs: 0` intact in the spread.
-
-```ts
-async generate(req: GenerateRequest): Promise<GenerateResult>
-```
-
-`generate` first normalizes `baseUrl`: a trailing slash is stripped, and if the base already ends in `/v1` (or `/v1/`) the request path is just `/chat/completions`; otherwise `/v1/chat/completions` is appended. It builds a body with `system` + `user` messages and `temperature` only when set. The token-cap field is `max_completion_tokens` when `req.preferMaxCompletionTokens ?? this.preferMaxCompletionTokens` is true, otherwise the legacy `max_tokens` (default value `4096`). The effective `thinking` mode is resolved via `resolveThinkingMode` and serialized as `thinking: { type: "disabled" }` or `thinking: { type: "adaptive" }`; `"omit"` sends no field. The response is mapped to the canonical shape with `prompt_tokens` → `inputTokens` and `completion_tokens` → `outputTokens`, `rawStopReason` retained when present, and `choices[0].message.content` as `content` (defaulting to `""` when absent).
-
-```ts
-function normalizeFinishReason(finishReason: string | null | undefined): StopReason
-```
-
-`normalizeFinishReason` maps OpenAI's `finish_reason`. `"length"` becomes `"length"`; `"stop"` becomes `"complete"`; `null`/`undefined` becomes `"unknown"`; any other non-null value is treated as `"incomplete"` (for example `"tool_calls"`).
-
-```ts
-export function resolveThinkingMode(
-  requestThinking: ThinkingMode | undefined,
-  adapterDefault: ThinkingMode | "n/a",
-  model: string,
-): ThinkingMode | "omit"
-```
-
-`resolveThinkingMode` picks the effective thinking mode. An explicit non-`"omit"` request value wins; an explicit `"omit"` returns `"omit"` (do not send the field). Otherwise the adapter default is used, treating `"n/a"` as `"omit"`. When the default is `"omit"` and the model name matches `/minimax-m3/i` (case-insensitive), the function returns `"disabled"` so MiniMax-M3 chat does not silently enable thinking for documentation batches. The returned value `"omit"` means the caller will not emit any `thinking` field in the request body.
-
-## Public surface, factory, and errors
-
-<!-- lw:anchors packages/core/src/llm/index.ts#createLlmClient packages/core/src/llm/index.ts#MissingApiKeyError packages/core/src/llm/index.ts#MissingApiKeyError.constructor packages/core/src/llm/index.ts#LlmRequestError packages/core/src/llm/index.ts#LlmRequestError.constructor -->
-
-The module's public entry point is the `LlmClient` interface plus the factory and the typed errors.
-
-```ts
-export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient
-```
-
-`createLlmClient` is the canonical entry point used by `batch.ts`. It first calls `validateConfigForBatch(repoRoot, config)`, which enforces provider/preset/model presence and validates `timeoutMs`; invalid `timeoutMs` values cause the factory to throw before any client is constructed. It then resolves the provider via `resolveProviderFromConfig` (preset first, legacy `provider` second; absent values surface as `MissingProviderConfigError`) and uses `resolved.baseUrl || resolveBaseUrl(config)` for the base URL. The API key is read from `process.env[resolved.envVar]`; if missing, the factory throws `MissingApiKeyError`. When `config.timeoutMs` is defined it is forwarded verbatim (so `0` disables the abort timer); otherwise the field is omitted and the shared core applies `DEFAULT_LLM_TIMEOUT_MS`. The factory returns a configured `AnthropicAdapter` or `OpenAiCompatAdapter` depending on `resolved.adapter`, forwarding the preset's `thinkingDefault` and `preferMaxCompletionTokens` to the openai-compat path.
-
-```ts
-export class MissingApiKeyError extends Error {
-  public readonly provider: LlmProvider;
-  public readonly envVar: string;
-  constructor(provider: LlmProvider, envVar: string) {
-    super(
-      `Missing API key for provider "${provider}". ` +
-        `Set env var ${envVar} before running the batch. ` +
-        `Keys never live in config.json, checkpoint_json, logs, or error messages.`,
-    );
-    this.name = "MissingApiKeyError";
-    this.provider = provider;
-    this.envVar = envVar;
-  }
+  async generate(req: GenerateRequest): Promise<GenerateResult> {
 }
 ```
 
-`MissingApiKeyError` is thrown only when the resolved env var is empty or unset. Its message names the provider and env var but never references any key value, preserving the rule that keys never appear in logs or error messages.
+`OpenAiCompatAdapter` exposes `provider: "openai-compat"` (literal) and supports a wider set of per-call knobs via `OpenAiCompatAdapterOpts`: `fetchImpl`, `timeoutMs`, `maxRetries`, `retryDelayMs`, `thinkingDefault`, and `preferMaxCompletionTokens`. The constructor seeds `thinkingDefault` to `"omit"` and `preferMaxCompletionTokens` to `false`, then builds the same shape of `AdapterConfig` as the Anthropic adapter (using `withTimeoutMs` so `0` is preserved).
 
-```ts
-export class LlmRequestError extends Error {
-  public readonly status: number;
-  public readonly provider: LlmProvider;
-  public readonly errorBody: string;
-  constructor(provider: LlmProvider, status: number, errorBody: string) {
-    const truncated = errorBody.length > 500 ? errorBody.slice(0, 500) + "..." : errorBody;
-    super(`LLM ${provider} request failed (status ${status}): ${truncated}`);
-    this.name = "LlmRequestError";
-    this.status = status;
-    this.provider = provider;
-    this.errorBody = errorBody;
-  }
-}
-```
+URL construction rules in `generate`:
 
-`LlmRequestError` is thrown for non-retryable HTTP failures and after the retry budget is exhausted on a retryable path (in that case `status` is `0` and the message describes the last status or last error kind). The constructor truncates the provider body to the first 500 characters to keep error messages bounded; the full body remains on the instance as `errorBody`. Auth headers are never included.
+- If the base URL already ends with `/v1` (or `/v1/`), the adapter appends `/chat/completions` directly.
+- Otherwise it appends `/v1/chat/completions`.
 
-## Test support
+The body is `{ model, messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }], [temperature if defined] }`. Token cap is written as `max_completion_tokens` when `req.preferMaxCompletionTokens` or the adapter's own flag is set, otherwise as the legacy `max_tokens` field. The effective thinking mode is resolved via `resolveThinkingMode`; when the resolved value is `"disabled"` or `"adaptive"`, the body includes `thinking: { type: ... }`. Successful responses are translated with `usage.prompt_tokens`/`completion_tokens` → `inputTokens`/`outputTokens` (defaulting to `0` when absent), and `choices[0].message.content` → `content`. The raw `finish_reason` is preserved when non-null.
 
-<!-- lw:anchors packages/core/src/llm/adapters.test.ts#fakeFetch -->
+`normalizeFinishReason` maps the OpenAI-compatible vocabulary:
 
-The adapter test file uses a small fake-fetch helper to keep the tests offline.
+- `"length"` → `"length"`
+- `"stop"` → `"complete"`
+- `null` / `undefined` → `"unknown"`
+- any other value → `"incomplete"`
 
-```ts
-function fakeFetch(response: { status?: number; body?: unknown; ok?: boolean }): typeof fetch
-```
-
-`fakeFetch` returns a `vi.fn` that resolves with a `Response` whose `status` defaults to `200`, `ok` defaults to `status in [200,300)`, and body is the JSON-serialized `response.body` (or `"{}"` when undefined). It lets a single test drive multiple sequential responses by swapping the implementation returned from a closure, and is the building block for asserting both request shape (headers, URL, body) and response normalization (token field renaming, stop-reason mapping, retry behavior).
+`resolveThinkingMode(requestThinking, adapterDefault, model)` returns the request's value when it is `"disabled"` or `"adaptive"`, returns `"omit"` when the request explicitly sets `"omit"`, and otherwise applies the adapter default (treating `"n/a"` as `"omit"`). If the default is still `"omit"` and the model name matches `/minimax-m3/i` (or `/^minimax-m3$/i`), it returns `"disabled"` — the heuristic that prevents the MiniMax-M3 chat API from enabling thinking by default during the documentation batch. For every other model it returns `"omit"` and the provider's own default applies.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependent
-- [Batch stage 5, status aggregation, and surgical repair fixtures](core-src-03.md) — dependency
-- [Stage 4 artifact validator and auxiliary page assembly](core-src-02.md) — dependent
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependent
+- ["Core Source 03: Config, Index, Export, Diagrams, Diff Preview"](core-src-03.md) — dependency
+- [Batch orchestration, status reporting, and graph analysis core](core-src-02.md) — dependent
 <!-- livewiki:navigate:end -->

@@ -124,8 +124,6 @@ graph LR
   core_src_tests_02 --> core_src_03
   core_src_tests_02 --> core_src_04
   core_src_tests_02 --> core_src_05
-  core_src_tests_02 --> core_src_06
-  core_src_tests_02 --> core_src_07
   core_src_tests_02 --> core_src_09
   core_src_tests_02 --> core_src_10
   core_src_tests_02 --> llm
@@ -140,31 +138,38 @@ graph LR
   core_src_tests_03 --> core_src_09
   core_src_tests_03 --> llm
   core_src_tests_04["core-src-tests-04"]
-  core_src_tests_04 --> core_src_01
-  core_src_tests_04 --> core_src_03
+  core_src_tests_04 --> core_src_02
   core_src_tests_04 --> core_src_04
   core_src_tests_04 --> core_src_05
   core_src_tests_04 --> core_src_06
   core_src_tests_04 --> core_src_07
-  core_src_tests_04 --> core_src_08
   core_src_tests_04 --> core_src_09
   core_src_tests_04 --> core_src_10
+  core_src_tests_04 --> llm
   core_src_tests_05["core-src-tests-05"]
   core_src_tests_05 --> core_src_01
+  core_src_tests_05 --> core_src_03
   core_src_tests_05 --> core_src_04
+  core_src_tests_05 --> core_src_05
   core_src_tests_05 --> core_src_06
   core_src_tests_05 --> core_src_07
   core_src_tests_05 --> core_src_08
   core_src_tests_05 --> core_src_09
-  core_src_tests_05 --> core_src_10
   core_src_tests_06["core-src-tests-06"]
   core_src_tests_06 --> core_src_01
   core_src_tests_06 --> core_src_04
   core_src_tests_06 --> core_src_05
+  core_src_tests_06 --> core_src_06
+  core_src_tests_06 --> core_src_07
   core_src_tests_06 --> core_src_08
   core_src_tests_06 --> core_src_09
   core_src_tests_06 --> core_src_10
-  core_src_tests_06 --> core_src_11
+  core_src_tests_07["core-src-tests-07"]
+  core_src_tests_07 --> core_src_01
+  core_src_tests_07 --> core_src_04
+  core_src_tests_07 --> core_src_08
+  core_src_tests_07 --> core_src_10
+  core_src_tests_07 --> core_src_11
   llm --> core_src_03
   llm_tests["llm-tests"]
   llm_tests --> llm

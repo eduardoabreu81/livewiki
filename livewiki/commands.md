@@ -1,5 +1,5 @@
 ---
-title: CLI command handlers
+title: CLI command registry for the livewiki workspace
 owner: generated
 anchors:
   - packages/cli/src/commands/batch.ts#USAGE_INCOMPLETE_NOTE
@@ -43,236 +43,412 @@ anchors:
   - packages/cli/src/commands/view.ts#registerView
 ---
 
-# CLI command handlers
+# CLI command registry
 
-This page documents the per-command registration and formatting helpers that the `livewiki` CLI wires onto a Commander program.
+This page documents the livewiki CLI command handlers that wire Commander subcommands to core operations and output formatting.
 
 ## When to use this page
 
-- **Reference** a specific command's flags, exit-code semantics, or human/JSON output shape when implementing or reviewing the CLI surface.
-- **Trace** how a command delegates to its `@livewiki/core` counterpart (e.g. `init` → `runInit`, `verify` → `runVerify`) and where the action handler swallows exceptions to honor the JSON contract.
-- **Extend** the CLI by adding a new command module under `packages/cli/src/commands/` that exports a `registerXxx(program: Command): void` matching the pattern used here.
-- **Diagnose** stub vs. real behaviour: `serve` is currently a stub created via `makeStubAction`, while `init`, `index`, `status`, `verify`, `view`, `batch`, `export`, `update`, `pointer`, and `install` are implemented.
+- **Add** a new `livewiki <cmd>` subcommand by following the Commander-12 registration pattern used here.
+- **Debug** a command's exit code, JSON contract, or interactive prompt by consulting the relevant handler's error branches.
+- **Refactor** shared formatters (`formatHuman`, `emit`) without breaking per-command output shapes.
+- **Map** each CLI subcommand to its core package (indexer, batch, export, install, pointer, verify, view).
 
 ## How it fits
 
-The `commands/` directory lives inside `packages/cli/src/` and sits between the top-level `cli.ts` (which assembles the Commander program and the global `--json` / `--repo` flags) and the `@livewiki/core` packages that hold the real implementation. Each file in this directory owns exactly one top-level user-facing command and exposes a `registerX(program: Command): void` that `cli.ts` calls to attach the command, its description, its flags, and its action handler. Output shaping — JSON vs. human — flows through `../output.js` (`emit` / `emitJson` / `emitHuman`) and `path.resolve(process.cwd(), resolveRepoRoot(opts.repo ?? "."))` is the recurring pattern for locating the repository root. Several commands also share a small stub helper (`stub.ts`) used by the still-unimplemented `serve`.
+The `commands/` directory under `packages/cli/src` is the registry layer between Commander's `Command` tree and the core packages under `@livewiki/core/*`. Each file owns one user-facing subcommand (`init`, `index`, `status`, `batch`, `export`, `install`, `pointer`, `update`, `verify`, `view`, `serve`); `stub.ts` provides the shared `makeStubAction` helper used until a command's SPEC phase is implemented. Handlers normalize global flags (`--json`, `--repo`), resolve the repo root, call core, and emit either JSON or human output through `../output.js`. Most handlers catch thrown errors and convert them into a stable JSON envelope with `process.exitCode` (never `process.exit`), letting the event loop drain before exit.
 
-## `batch` — run/resume/inspect the full-documentation pipeline
+## Diagram
 
-<!-- lw:anchors packages/cli/src/commands/batch.ts#registerBatch packages/cli/src/commands/batch.ts#USAGE_INCOMPLETE_NOTE packages/cli/src/commands/batch.ts#formatStatusHuman packages/cli/src/commands/batch.ts#formatResultHuman packages/cli/src/commands/batch.ts#formatListHuman packages/cli/src/commands/batch.ts#formatDiagnosticLine packages/cli/src/commands/batch.ts#appendStage4Diagnostics packages/cli/src/commands/batch.ts#setExitCode -->
-
-The `batch` command owns Phase 3 orchestration: status, resume, list, and `--only` re-run of a single task. Its subcommands are dispatched by inspecting positional `args` inside the action handler — no second-level `program.command()` is used.
-
-```ts
-export function registerBatch(program: Command): void
+```mermaid
+%% livewiki/diagrams/commands.mmd
 ```
 
-`registerBatch` declares `--only <target>`, `--no-refine` (Commander maps it to `refine === false`, not `noRefine`), and `--concurrency <n>` (validated in core as an integer in `1..16`; the CLI only forwards it when defined). With no positional args it falls through to `buildStatusReport(absRoot)`; `status [<runId>]` calls `buildStatusReport(absRoot, runId)` and throws on a non-numeric `runId`; `list` calls `listRuns`; `resume <runId>` calls `resumeBatch`; `--only <target> <runId>` calls `runOnly`. Exit codes follow the batch convention `0 = completed`, `1 = completed_with_failures`, `2 = aborted`, applied by `setExitCode(absRoot, status, json)`.
+## Batch subcommand
+<!-- lw:anchors packages/cli/src/commands/batch.ts#USAGE_INCOMPLETE_NOTE packages/cli/src/commands/batch.ts#appendStage4Diagnostics packages/cli/src/commands/batch.ts#formatDiagnosticLine packages/cli/src/commands/batch.ts#formatListHuman packages/cli/src/commands/batch.ts#formatResultHuman packages/cli/src/commands/batch.ts#formatStatusHuman packages/cli/src/commands/batch.ts#registerBatch packages/cli/src/commands/batch.ts#setExitCode -->
+
+The `batch` subcommand drives long-running, multi-stage documentation generation runs and exposes the result, status, resume, and list views used by CI and operators. It is the only CLI handler that aggregates token totals, USD estimates, circuit-breaker state, and per-task diagnostic histories across the four batch stages; every helper below exists to make those states observable without leaking internals to JSON consumers.
+
+### registerBatch
 
 ```ts
-function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string
-function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string
-function formatListHuman(runs: Awaited<ReturnType<typeof listRuns>>): string
-function formatDiagnosticLine(d: { ... }): string
-function appendStage4Diagnostics(...): void
-function setExitCode(repoRoot: string, status: string, json: boolean): void
-export const USAGE_INCOMPLETE_NOTE = ...
+export function registerBatch(program: Command): void {
 ```
 
-Both `formatStatusHuman` and `formatResultHuman` append `USAGE_INCOMPLETE_NOTE` when the run was left in an unfinished state so the user sees the missing-arg hint alongside the report. `formatDiagnosticLine` produces one compact ordered line per diagnostic entry (deduplicated by code, first-seen order preserved) and `appendStage4Diagnostics` decorates failed stage-4 tasks with the per-attempt sequence derived from `diagnosticHistory`; if the checkpoint pre-dates diagnostics (CONTRACT I5) or the task never reached the LLM, the helpers fall back silently rather than crashing. `setExitCode` maps the batch status string to the `0/1/2` exit code via `path.join(repoRoot, ...)` resolution.
+`registerBatch` attaches the `batch` command and its `status` / `resume` / `list` / `--only` sub-flows to the Commander program. The handler reads global flags via `optsWithGlobals`, resolves the absolute repo root from `--repo`, parses `--concurrency` as a number (validated 1..16 by core), and routes to `buildStatusReport`, `resumeBatch`, `runOnly`, or `listRuns` depending on positional args. The branch order is deliberate: when both positional args and `--only` are absent, it falls back to status of the last run. Exit codes follow the 0=success / 1=completed_with_failures / 2=aborted mapping propagated through `setExitCode`.
 
-## `export` — flatten the wiki or synthesize a README
-
-<!-- lw:anchors packages/cli/src/commands/export.ts#registerExport packages/cli/src/commands/export.ts#exportErrorToResult packages/cli/src/commands/export.ts#emit packages/cli/src/commands/export.ts#runReadmeExport packages/cli/src/commands/export.ts#emitReadme -->
-
-`export` covers Phase 6 Lot 6A: local deterministic flattening to `.livewiki/export/<target>/` for `generic`, `github-wiki`, and `gitlab-wiki`, plus the `readme` target which is dispatched separately and goes through `@livewiki/core/readme-export`.
+### USAGE_INCOMPLETE_NOTE
 
 ```ts
-export function registerExport(program: Command): void
+export const USAGE_INCOMPLETE_NOTE =
 ```
 
-`registerExport` declares `--force`, `--yes` (readme only), and `--push <remote>`. The action handler short-circuits on `target === "readme"` by calling `runReadmeExport(absRoot, json, opts.yes === true)`, before any `validateTarget` call, because the readme pipeline has different write semantics (repo-root file, marker-block contract, `--yes` opt-in). For the other targets, `validateTarget(target)` is invoked first; any throw — `ExportError` for an unknown target, or any other unexpected error during `exportWiki` — is funneled through `exportErrorToResult` so the JSON payload always has a stable `ok: false` shape with a structured `issues` list and the global fatal handler never receives a thrown `ExportError`.
+A shared constant used by `formatStatusHuman` and `formatResultHuman` to surface incomplete-usage instructions in human output. It is reused across both formats so the wording stays consistent regardless of which batch view is rendered.
+
+### formatDiagnosticLine
 
 ```ts
-function exportErrorToResult(repoRoot: string, target: ExportTarget, err: unknown): ExportResult
-function emit(json: boolean, result: ExportResult): void
-async function runReadmeExport(repoRoot: string, json: boolean, yes: boolean): Promise<void>
-function emitReadme(json: boolean, result: ReadmeExportResult): void
+function formatDiagnosticLine(d: {
 ```
 
-`exportErrorToResult` derives `detail` via `err instanceof Error ? err.message : String(err)` so a thrown `null` or primitive does not crash the catch handler. `emit` sets `process.exitCode` (FIX L rev2: never `process.exit`). The exit-code mapping is `0` for success and `1` for any failure — invalid target, preflight failure, write failure, or `--push` (rejected in Lot 6A). JSON mode uses the same codes; there is no batch-style `0/1/2` ladder here.
+`formatDiagnosticLine` renders one compact ordered line per diagnostic entry. It mirrors the `repair_exhausted` line shape from `core/batch.ts` so the human output matches what is persisted in the checkpoint error message. `stopReason` falls back to `"-"` when the LLM did not supply one (for example, `llm_error` outcomes). Codes are deduplicated while preserving first-seen order so the user can match against the validator enumeration.
 
-## `index-cmd` — reindex the repo and sync the anchor ledger
-
-<!-- lw:anchors packages/cli/src/commands/index-cmd.ts#registerIndex packages/cli/src/commands/index-cmd.ts#collectIgnore packages/cli/src/commands/index-cmd.ts#emit packages/cli/src/commands/index-cmd.ts#formatLedgerHuman -->
-
-`livewiki index` is idempotent and incremental: it extracts symbols, updates hashes, and (Phase 2) chains the anchor-ledger step so changed/moved/deleted anchors are detected in the same pass.
+### appendStage4Diagnostics
 
 ```ts
-export function registerIndex(program: Command): void
+function appendStage4Diagnostics(
 ```
 
-The action loads `.livewiki/config.json` via `loadConfig(repoRoot)` (which throws on malformed JSON — fail-closed by design), merges `resolveExtraIgnores(config)` with CLI-supplied `--ignore` patterns, and runs the indexer. `--no-ledger` maps Commander-style to `opts.ledger === false` and skips the ledger pass. `--quiet` suppresses human output without producing JSON (used by Phase 5 hooks); `--json` also suppresses human output but emits a structured payload. `loadConfig` failures fall through to the catch branch, which writes to stderr and sets `process.exitCode = 1` so Node can drain pending I/O before exiting.
+`appendStage4Diagnostics` prints the compact per-attempt sequence for failed stage-4 tasks, derived from `diagnosticHistory`. The function falls back silently when the checkpoint pre-dates diagnostics (CONTRACT I5) or when the task never reached the LLM (for example, `refused_human_page`).
+
+### formatListHuman
 
 ```ts
-function collectIgnore(value: string, previous: string[]): string[]
-function emit(json: boolean, quiet: boolean, indexResult: IndexResult, ledgerResult: LedgerResult | null): void
-function formatLedgerHuman(r: LedgerResult): string
+function formatListHuman(runs: Awaited<ReturnType<typeof listRuns>>): string {
 ```
 
-`collectIgnore` is the Commander variadic aggregator for repeatable `--ignore`. `emit` returns early when `quiet && !json`, writes JSON when `json`, and otherwise prints the indexer human output followed by `formatLedgerHuman(ledgerResult)`. The ledger human formatter reports `pages processed/skipped`, `anchors upsert`, the `+changed +moved +deleted` debt deltas, and any moved pairs as `from → to` lines.
+`formatListHuman` formats the result of `listRuns` for human consumption under the `batch list` subcommand. It pairs with `emit(json, …, formatListHuman(runs))` and never has to translate an error since `listRuns` does not surface one to the caller.
 
-## `init` — bootstrap the wiki and optionally run the LLM pipeline
-
-<!-- lw:anchors packages/cli/src/commands/init.ts#registerInit packages/cli/src/commands/init.ts#formatHuman -->
-
-`livewiki init` creates `livewiki/` and `.livewiki/`, indexes, and generates the deterministic layout (quickstart + diagrams + manifest) without any LLM call. Adding `--batch` triggers the full Phase 3 LLM pipeline; `--plan` prints the heuristic module plan without writing; `--no-refine` skips stage-2 LLM refinement (Commander maps to `opts.refine === false`).
+### formatStatusHuman
 
 ```ts
-export function registerInit(program: Command): void
+export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string {
 ```
 
-The action delegates to `runInit(...)` from `@livewiki/core/init`, then emits a structured payload via `emit`. The batch exit code is propagated only in human mode (`!json && result.batchExitCode !== undefined`) so `--json` callers always see exit 0 (batch CLI convention). The catch branch writes to stderr and sets `process.exitCode = 1`; it deliberately uses `process.exitCode` rather than `process.exit(1)` (FIX L rev2) because abrupt exit can trigger a libuv `STATUS_STACK_BUFFER_OVERRUN` on Windows when async handles (in-flight fetch, SQLite WAL, watcher) are still open.
+`formatStatusHuman` renders the batch status report. It reuses `USAGE_INCOMPLETE_NOTE` so the user sees the same incomplete-usage hint as in the result view.
+
+### formatResultHuman
 
 ```ts
-function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; ... }): string
+export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string {
 ```
 
-`formatHuman` is the only formatting helper exported for `init` and renders the plan summary, files written, batch summary (run id, status, tasks done/failed), batch exit code, and the `skippedFlowsHub` / `skippedAuxiliaryHub` / `skippedTopicsHub` / `skippedFlowCandidates` / `skippedTopicPlan` skip reasons when present.
+`formatResultHuman` renders the output of `runBatch` / `resumeBatch` / `runOnly` for human consumption. It also pulls in `appendStage4Diagnostics` to expand failed stage-4 attempts inline and shares `USAGE_INCOMPLETE_NOTE` with `formatStatusHuman`.
 
-## `install` — configure MCP entries and shared assets for coding agents
-
-<!-- lw:anchors packages/cli/src/commands/install.ts#registerInstall packages/cli/src/commands/install.ts#readSources packages/cli/src/commands/install.ts#promptYesNo packages/cli/src/commands/install.ts#formatDetectionHuman packages/cli/src/commands/install.ts#formatPlanHuman packages/cli/src/commands/install.ts#formatResultsHuman packages/cli/src/commands/install.ts#formatResultJson -->
-
-`livewiki install` detects which coding agents are present (`claude-code`, `codex`, `cursor`, `kimi`, `gemini`) and configures the MCP entry, hook templates, the shared skill, and the opt-in pointer. Safety defaults: every target is shown before being written; `--print` is a full dry-run with zero writes; without `--yes` a TTY confirmation is required and non-TTY fails closed; the pointer additionally needs `--write-pointer` or its own interactive confirmation.
+### setExitCode
 
 ```ts
-export function registerInstall(program: Command): void
+function setExitCode(repoRoot: string, status: string, json: boolean): void {
 ```
 
-The action validates `--agents <csv>` first and exits with `process.exitCode = 2` (invalid `--agents`) before any detection, mapping empty or unrecognized ids against `AGENT_REGISTRY`. Home resolution honors `LIVEWIKI_HOME` env var over `os.homedir()` — a documented seam for tests and smoke runs. The action builds the plan via `planInstall({ repoRoot, home, agents: toInstall, sources, writePointer })`, prints it under `--print`, and otherwise prompts or applies depending on flags.
+`setExitCode` translates the string `status` returned by core into the documented exit code (0/1/2) and assigns it to `process.exitCode` so Node can drain pending I/O before exit. In `--json` mode it preserves exit 0 to follow the structured-output convention used elsewhere.
+
+## Export subcommand
+<!-- lw:anchors packages/cli/src/commands/export.ts#emit packages/cli/src/commands/export.ts#emitReadme packages/cli/src/commands/export.ts#exportErrorToResult packages/cli/src/commands/export.ts#registerExport packages/cli/src/commands/export.ts#runReadmeExport -->
+
+The `export` subcommand fans a generated wiki out to a chosen target — flattened copy, GitHub/GitLab wiki mirror, or `README.md` injection — while keeping a single stable JSON envelope across all targets. Every error path funnels through `exportErrorToResult` so consumers can branch on `result.ok` without parsing free-form stderr.
+
+### registerExport
 
 ```ts
-async function readSources(): Promise<InstallSources>
-async function promptYesNo(question: string): Promise<boolean>
-function formatDetectionHuman(detections: AgentDetection[], home: string): string
-function formatPlanHuman(plan: readonly InstallAction[], toInstall: readonly AgentId[]): string
-function formatResultsHuman(...): string
-function formatResultJson(r: { action: InstallAction; applied: boolean; detail?: string }): string
+export function registerExport(program: Command): void {
 ```
 
-`readSources` loads the templates and skill that ship inside the CLI package. `promptYesNo` performs the TTY y/N confirmation used by both `install` and `pointer`. The detection, plan, and result formatters produce the human-readable summary and the per-action JSON shape (action id, applied flag, optional detail) consumed by automation.
+`registerExport` attaches `livewiki export <target>` and dispatches the `readme` target through `runReadmeExport` before calling `validateTarget`. For other targets (`generic`, `github-wiki`, `gitlab-wiki`) it wraps `exportWiki` in a try/catch and converts any thrown `ExportError` (or unexpected error) into a structured `ExportResult` so the JSON contract is always honored. The `--push` flag is rejected with exit 1 before any write (reserved for Lot 6B). Exit codes are 0 on success and 1 on invalid target, preflight failure, write failure, or `--push` — JSON uses the same mapping.
 
-## `pointer` — manage the AGENTS.md / CLAUDE.md opt-in block
-
-<!-- lw:anchors packages/cli/src/commands/pointer.ts#registerPointer packages/cli/src/commands/pointer.ts#promptYesNo packages/cli/src/commands/pointer.ts#formatPointerResult packages/cli/src/commands/pointer.ts#formatStatusHuman packages/cli/src/commands/pointer.ts#_internal -->
-
-`livewiki pointer` implements Inviolable rule #2: writing to `AGENTS.md` / `CLAUDE.md` is **never automatic** — it requires `--write-pointer` (or its alias `--yes`) or an interactive TTY confirmation. No flag and no TTY fails closed with exit code 1.
+### exportErrorToResult
 
 ```ts
-export function registerPointer(program: Command): void
+function exportErrorToResult(
 ```
 
-The action validates `--file <name>` against `POINTER_FILES` (`AGENTS.md`, `CLAUDE.md`) up front. Mode dispatch is based on flags: `--remove` removes the block (destructive — asks for confirmation when TTY is available, otherwise requires `--write-pointer` or `--yes`); `--write-pointer` or `--yes` triggers a write; no flag and a TTY triggers an interactive prompt; no flag and no TTY prints an instructional error.
+`exportErrorToResult` converts an `ExportError` (or any other unexpected error) into a structured `ExportResult` with `ok: false` and a structured issue list. Detail extraction uses `err instanceof Error ? err.message : String(err)` so a thrown `null` or primitive does not crash the catch handler that would otherwise touch `.message` directly.
+
+### emit
 
 ```ts
-async function promptYesNo(question: string): Promise<boolean>
-function formatPointerResult(result: PointerResult, mode: "wrote" | "removed"): string
-function formatStatusHuman(status: { present: boolean; file: PointerFile | null; inner?: string }): string
-export const _internal = { nodeFs }
+function emit(json: boolean, result: ExportResult): void {
 ```
 
-`formatPointerResult` formats the structured write/remove result with the chosen mode label. `formatStatusHuman` renders the read-only status block used when `pointer` is invoked without mutating flags. The `_internal` re-export surfaces `nodeFs` for tests that need to swap filesystem behaviour; it is the only non-function symbol exported from this module.
+`emit` writes the export result to stdout as either JSON or human output (delegated to `../output.js`) and sets `process.exitCode`. It is invoked both on the success path returned by `exportWiki` and on the failure path produced by `exportErrorToResult`.
 
-## `serve` — MCP server (Phase 4 stub)
+### runReadmeExport
 
+```ts
+async function runReadmeExport(
+```
+
+`runReadmeExport` orchestrates the `readme` target: it delegates to core's `exportReadme`, applies `--yes` semantics, and routes any `ReadmeExportError` through a try/catch so the structured payload still reaches the caller. The repo-root file path is fixed; the marker-block contract governs overwrites.
+
+### emitReadme
+
+```ts
+function emitReadme(json: boolean, result: ReadmeExportResult): void {
+```
+
+`emitReadme` writes the readme-export payload to stdout as either JSON or human text and assigns the appropriate exit code via `process.exitCode`. It pairs with `runReadmeExport` to keep the `readme` target on the same envelope shape as the flatten/copy targets.
+
+## Index subcommand
+<!-- lw:anchors packages/cli/src/commands/index-cmd.ts#collectIgnore packages/cli/src/commands/index-cmd.ts#emit packages/cli/src/commands/index-cmd.ts#formatLedgerHuman packages/cli/src/commands/index-cmd.ts#registerIndex -->
+
+The `index` subcommand walks the source tree, builds the anchor ledger, and chains the documentation-debt report when the user has not opted out via `--no-ledger`. It is the cheapest way to populate `livewiki/index.json` and to surface undocumented-symbol counts before deciding whether to launch a full `batch` run.
+
+### registerIndex
+
+```ts
+export function registerIndex(program: Command): void {
+```
+
+`registerIndex` attaches the `index` command and chains the anchor-ledger after the indexer when `--no-ledger` is not passed. It merges `.livewiki/config.json` `ignores` with the CLI `--ignore` flag so every entry point shares the same semantics; `loadConfig` is intentionally fail-closed on malformed JSON. A `--quiet` flag suppresses human output without producing JSON (used by hooks). On caught errors the handler writes to stderr and sets `process.exitCode = 1` so Node can drain the event loop before exit.
+
+### collectIgnore
+
+```ts
+function collectIgnore(value: string, previous: string[]): string[] {
+```
+
+`collectIgnore` is the Commander variadic collector for `--ignore <pattern>`; each invocation appends the supplied pattern to `previous`. It is the additive counterpart to the configured `ignores` list.
+
+### emit
+
+```ts
+function emit(
+```
+
+`emit` writes either JSON or human output for indexer + ledger results. In `--quiet` mode without `--json` it returns immediately (the hook only wants debt detection, surfaced separately via `status --json`). JSON mode emits a combined envelope `{ ok: true, index, ledger }`.
+
+### formatLedgerHuman
+
+```ts
+function formatLedgerHuman(r: LedgerResult): string {
+```
+
+`formatLedgerHuman` renders the ledger report after the indexer line. It includes pages processed/skipped, anchors upserted, debt by event, undocumented-symbol counts, and an optional list of moved pairs.
+
+## Init subcommand
+<!-- lw:anchors packages/cli/src/commands/init.ts#formatHuman packages/cli/src/commands/init.ts#registerInit -->
+
+The `init` subcommand bootstraps a repo with `livewiki/` skeleton files and optionally drives a first batch run end-to-end. It is the canonical entry point for greenfield setups and the only handler that combines a heuristic plan, a full LLM pipeline, and an explicit no-write dry run behind a single command.
+
+### registerInit
+
+```ts
+export function registerInit(program: Command): void {
+```
+
+`registerInit` attaches `livewiki init` with `--batch` (full LLM pipeline), `--plan` (heuristic plan, no LLM, no writes), `--no-refine` (Commander maps this to `refine === false`), and `--concurrency` (validated 1..16 by core). The handler resolves the repo root, calls `runInit`, emits JSON or human output, and propagates `result.batchExitCode` to `process.exitCode` outside `--json` mode (always 0 in JSON mode, following the batch CLI convention). On caught errors it sets `process.exitCode = 1` rather than calling `process.exit(1)` (FIX L rev2: avoid libuv `STATUS_STACK_BUFFER_OVERRUN` when Node has pending async handles).
+
+### formatHuman
+
+```ts
+function formatHuman(result: { plan?: InitPlanReport; filesWritten: string[]; batchSummary?: { runId: number; status: string; tasksDone: number; tasksFailed: number }; batchExitCode?: 0 | 1 | 2; skipp
+```
+
+`formatHuman` renders the init result for human output. It includes the optional plan report, the list of files written, the batch summary (when `--batch` is used), and the various `skipped…` slots describing flows/auxiliary/topics hubs and candidate flow/topic plans that init deliberately skipped.
+
+## Install subcommand
+<!-- lw:anchors packages/cli/src/commands/install.ts#formatDetectionHuman packages/cli/src/commands/install.ts#formatPlanHuman packages/cli/src/commands/install.ts#formatResultJson packages/cli/src/commands/install.ts#formatResultsHuman packages/cli/src/commands/install.ts#promptYesNo packages/cli/src/commands/install.ts#readSources packages/cli/src/commands/install.ts#registerInstall -->
+
+The `install` subcommand wires livewiki hooks, the shared skill, and (optionally) the MCP template into one or more known coding-agent installations. It is fail-closed on unknown agents, supports a fully non-interactive path via `--yes`, and offers a print-only dry run via `--print` so users can audit writes before committing.
+
+### registerInstall
+
+```ts
+export function registerInstall(program: Command): void {
+```
+
+`registerInstall` attaches `livewiki install` with `--agents <csv>`, `--yes`, `--print`, and `--write-pointer`. It validates `--agents` against `AGENT_REGISTRY` and exits 2 on any unknown value (exit 2 is reserved for invalid `--agents`). The handler honors `LIVEWIKI_HOME` to override `os.homedir()` so tests/smoke runs can point at a throwaway HOME. Without `--yes` and outside TTY it fails closed; `--print` is a full dry-run with zero writes. Exit codes are 0 (including "nothing to do"), 1 (write refusal/error), 2 (invalid `--agents`).
+
+### readSources
+
+```ts
+async function readSources(): Promise<InstallSources> {
+```
+
+`readSources` loads the install sources (MCP template, hook templates, shared skill) bundled with the CLI package. The sources are then passed to `planInstall` so the action handler stays a thin coordinator.
+
+### promptYesNo
+
+```ts
+async function promptYesNo(question: string): Promise<boolean> {
+```
+
+`promptYesNo` runs the interactive y/N prompt for confirmation. It is the shared counterpart to the `--yes` script-friendly flag.
+
+### formatDetectionHuman
+
+```ts
+function formatDetectionHuman(
+```
+
+`formatDetectionHuman` renders the detection table (one row per known agent, indicating whether it was detected and where). It is emitted both on the dry-run path and before the confirmation prompt on the apply path.
+
+### formatPlanHuman
+
+```ts
+function formatPlanHuman(plan: readonly InstallAction[], toInstall: readonly AgentId[]): string {
+```
+
+`formatPlanHuman` renders the planned `InstallAction` list alongside the targeted `AgentId` set. It is paired with `formatDetectionHuman` so the user sees both the detection results and the exact writes before confirming.
+
+### formatResultJson
+
+```ts
+function formatResultJson(r: { action: InstallAction; applied: boolean; detail?: string }) {
+```
+
+`formatResultJson` shapes the per-action JSON entry (`action`, `applied`, optional `detail`). It is consumed by the `--json` emit path inside `registerInstall`.
+
+### formatResultsHuman
+
+```ts
+function formatResultsHuman(
+```
+
+`formatResultsHuman` renders the human summary after `applyInstall` returns, showing each action's outcome. It pairs with `formatResultJson` to keep the JSON and human output describing the same per-action truth.
+
+## Pointer subcommand
+<!-- lw:anchors packages/cli/src/commands/pointer.ts#_internal packages/cli/src/commands/pointer.ts#formatPointerResult packages/cli/src/commands/pointer.ts#formatStatusHuman packages/cli/src/commands/pointer.ts#promptYesNo packages/cli/src/commands/pointer.ts#registerPointer -->
+
+The `pointer` subcommand manages the agent-facing block (`<!-- livewiki:pointer -->`) that downstream agents consume. Per Inviolable rule #2, every write — insert or remove — requires an explicit opt-in (`--write-pointer` or `--yes`) or an interactive confirmation on a TTY; the read-only status path is the only mode that touches zero bytes.
+
+### registerPointer
+
+```ts
+export function registerPointer(program: Command): void {
+```
+
+`registerPointer` attaches `livewiki pointer` and enforces Inviolable rule #2: pointer writes are never automatic and require either `--write-pointer`/`--yes` or an interactive confirmation on a TTY. The `--remove` branch is treated as destructive and re-prompts even when an explicit flag is present, while still requiring `--write-pointer` or `--yes` in non-TTY mode. `--file` is validated against `POINTER_FILES` (AGENTS.md or CLAUDE.md) and exits 1 on an unknown value. No positional args means status-only (read-only).
+
+### promptYesNo
+
+```ts
+async function promptYesNo(question: string): Promise<boolean> {
+```
+
+`promptYesNo` is the pointer's interactive confirmation helper, used by the insert and remove paths. It is the local counterpart to the `--yes`/`--write-pointer` opt-in flags.
+
+### formatPointerResult
+
+```ts
+function formatPointerResult(
+```
+
+`formatPointerResult` renders the result of `insertPointer` / `removePointer` for human output. It accepts an `operation` label so the same formatter covers both the inserted and removed flows.
+
+### formatStatusHuman
+
+```ts
+function formatStatusHuman(status: { present: boolean; file: PointerFile | null; inner?: string }): string {
+```
+
+`formatStatusHuman` renders the read-only status view (no flags) for the pointer, showing whether the block is present, which file holds it, and (when relevant) the inner content. It is paired with `formatPointerResult` for symmetry.
+
+### _internal
+
+```ts
+export const _internal = { nodeFs };
+```
+
+`_internal` is the cross-package seam for tests; it re-exports `nodeFs` so suite code can substitute a stub filesystem when exercising the pointer handlers without touching the production FS.
+
+## Serve subcommand
 <!-- lw:anchors packages/cli/src/commands/serve.ts#registerServe -->
 
-`livewiki serve` is registered as a Phase 4 stub today. The full implementation will start the MCP server on stdio with six tools (`livewiki_quickstart`, `livewiki_read`, `livewiki_search`, `livewiki_debt`, `livewiki_write_doc`, `livewiki_resolve_debt`).
+The `serve` subcommand is the planned MCP stdio entry point. Until Phase 4 ships, it returns a structured stub payload via `makeStubAction` so downstream consumers can detect the unimplemented state without parsing stderr.
+
+### registerServe
 
 ```ts
-export function registerServe(program: Command): void
+export function registerServe(program: Command): void {
 ```
 
-`registerServe` delegates to `makeStubAction({ name: "serve", phase: 4, planned: "..." })`. It accepts `--json` and `--repo` from the parent program via `optsWithGlobals()`; the stub action emits a structured `ok: false` payload with `stub`, `phase`, `repoRoot`, and the `planned` description, and exits 0 — the command was executed, it is just not implemented yet. When Phase 4 lands the caller replaces the stub with the real action, keeping the same `(options, command) => Promise<void>` shape.
+`registerServe` attaches `livewiki serve`, which today is a Phase 4 stub handled by `makeStubAction({ name: "serve", phase: 4, planned: "MCP server stdio with 6 tools (livewiki_quickstart/read/search/debt/write_doc/resolve_debt)" })`. When the MCP server implementation lands, the stub is replaced with a real action that keeps the same `(cmd: Command) => Promise<void>` shape.
 
-## `status` — debt, undocumented symbols, and `--diff` preview
-
+## Status subcommand
 <!-- lw:anchors packages/cli/src/commands/status.ts#registerStatus -->
 
-`livewiki status` reports the open debt, undocumented symbols, and pending batch from Phase 1/2, and supports `--diff` as a read-only preview of anchors the uncommitted working-tree diff would invalidate (backlog #5).
+The `status` subcommand is the cheap, read-only debt snapshot that hooks and CI call between indexer runs. It powers the `--diff` pre-commit preview and the top-N debt list, both of which are computed in core so the handler stays a thin formatter.
+
+### registerStatus
 
 ```ts
-export function registerStatus(program: Command): void
+export function registerStatus(program: Command): void {
 ```
 
-The action uses `optsWithGlobals()` to read `--json` and `--repo`. `--top <n>` (default `10`) controls how many files appear in the top list and is parsed with `Number.parseInt`. When `--diff` is passed, `previewWorkingTreeDebt(repoRoot)` is called; if it returns `notGitRepo`, the action writes either the JSON `{ ok: false, error: "not_a_git_repo", diffPreview }` payload or the human `formatDiffPreviewHuman(preview)` to stderr/stderr-derived output and sets `process.exitCode = 1` (no stack trace). Otherwise it delegates to `runStatus(repoRoot, { topN })` from `@livewiki/core/status` and emits either JSON or the human formatter output. The catch branch writes to stderr and sets `process.exitCode = 1`, letting Node drain pending I/O.
+`registerStatus` attaches `livewiki status` with `--top <n>` (default 10) and `--diff` (read-only pre-commit preview of anchors the uncommitted working-tree diff would invalidate). The `--diff` branch uses `previewWorkingTreeDebt` and degrades to exit 1 + a structured error when the repo is not a git repo (never a stack trace). On caught errors the handler writes to stderr and sets `process.exitCode = 1` so Node can drain pending I/O before exit.
 
-## `stub` — helper for Phase-0 command placeholders
-
+## Stub helper
 <!-- lw:anchors packages/cli/src/commands/stub.ts#makeStubAction -->
 
-`stub.ts` is the shared helper for commands that are wired into the CLI but not yet implemented. It guarantees the stub honors `--json` / `--repo` (via `optsWithGlobals()`), emits structured output, and exits 0 — the command was executed, it is just a placeholder.
+`stub.ts` provides the single shared action factory used by every Phase-N placeholder. Centralizing the stub shape keeps the JSON contract stable across commands and makes the "this command is not yet implemented" state machine-readable.
+
+### makeStubAction
 
 ```ts
-export function makeStubAction(info: StubInfo): (options: Record<string, unknown>, command: Command) => Promise<void>
+export function makeStubAction(info: StubInfo) {
 ```
 
-`StubInfo` carries `{ name, phase, planned }`. The returned action reads options via `command.optsWithGlobals<StubOptions>()`, resolves the repo root via `resolveRepoRoot(opts.repo)`, and emits either the JSON `{ ok: false, stub, phase, repoRoot, message, planned }` or the human `livewiki <name>: stub (Fase <phase> ...)` line via `emit`. Only `serve` currently uses it; once each phase lands, the caller swaps the stub for the real action while preserving the `(options, command) => Promise<void>` signature.
+`makeStubAction` builds a Commander action handler for unimplemented subcommands. Each stub honors global `--json` and `--repo`, emits a structured `{ ok: false, stub, phase, repoRoot, message, planned }` payload, and exits with code 0 (the command was executed — only the SPEC phase is missing). Once a phase ships, the caller replaces `makeStubAction(...)` with the real implementation while keeping the same `(cmd: Command) => Promise<void>` signature.
 
-## `update` — incremental debt work package
+## Update subcommand
+<!-- lw:anchors packages/cli/src/commands/update.ts#formatHuman packages/cli/src/commands/update.ts#registerUpdate -->
 
-<!-- lw:anchors packages/cli/src/commands/update.ts#registerUpdate packages/cli/src/commands/update.ts#formatHuman -->
+The `update` subcommand is the Phase 5 incremental entry point: it records write-back metrics, exposes a work package for an in-session agent to pay down debt, and explicitly rejects the `--llm` shortcut in favor of `batch resume` / `init --batch`.
 
-`livewiki update` is the heart of the Phase 5 incremental mode: with no flags it emits a work package (debt + snippets + validAnchors + estimated tokens) for the in-session agent to pay the debt; with `--llm` it delegates to the batch orchestrator (Phase 3, full mode); with `--record-write <tokens>` it accounts for docs written back so the economy ratio (`write` vs. `package`) can be tracked in `.livewiki/` and surfaced by `status --json`.
+### registerUpdate
 
 ```ts
-export function registerUpdate(program: Command): void
+export function registerUpdate(program: Command): void {
 ```
 
-The action handles three paths in order: `--record-write` parses the token count with `Number.parseInt`, rejects non-negative-integer input via stderr + `process.exitCode = 1`, and (because `bytes` are not available at the CLI layer) estimates `bytes = tokens * 4` before calling `recordDocWrittenBack`; `--llm` writes an explanatory message to stderr and exits 1 (delegation is performed by `batch resume` / `init --batch`, not silently here); the default path parses `--snippet-window <lines>` (default `20`), calls `loadWorkPackage(repoRoot, ...)` only when `Number.isFinite(snippetWindow) && snippetWindow > 0`, and emits the package via `formatHuman`.
+`registerUpdate` attaches `livewiki update`, the Phase 5 incremental entry point. It handles three modes:
+
+- `--record-write <tokens>` records a write-back metric (validates a non-negative integer) and exits; bytes are estimated at 4 chars/token.
+- `--llm` is rejected with a stderr hint pointing at `batch resume` / `init --batch` (exit 1) since incremental → full-mode delegation is not implemented in this handler.
+- The default mode loads a work package via `loadWorkPackage` with `--snippet-window` (default 20) and emits it for the in-session agent to pay the debt.
+
+Exit codes follow the init/batch pattern: 0 on success, 1 on usage or state error (repo not initialized).
+
+### formatHuman
 
 ```ts
-export function formatHuman(pkg: Awaited<ReturnType<typeof loadWorkPackage>>): string
+export function formatHuman(pkg: Awaited<ReturnType<typeof loadWorkPackage>>): string {
 ```
 
-The human formatter is the only formatter exported for `update`. Exit codes follow the `init`/`batch` convention: `0` on success (package emitted or write recorded), `1` on usage or state errors (e.g. repo not initialized).
+`formatHuman` renders the work package for human output. It surfaces the debt list, snippets, valid anchors, estimated tokens, and the economy-vs-full-read summary (`~50KB of medium source ≈ 12500 tokens`) that frames the incremental-mode thesis.
 
-## `verify` — validate wiki against the index
-
+## Verify subcommand
 <!-- lw:anchors packages/cli/src/commands/verify.ts#registerVerify -->
 
-`livewiki verify` checks anchors, altered manual blocks, and internal links against the canonical index. It is designed to be CI-friendly: non-zero exit on failure.
+The `verify` subcommand is the integrity gate that compares the rendered wiki against the live anchor ledger and source tree. It is safe to run at any time and is the CI signal of choice for detecting drift between code and documentation.
+
+### registerVerify
 
 ```ts
-export function registerVerify(program: Command): void
+export function registerVerify(program: Command): void {
 ```
 
-The action delegates to `runVerify(repoRoot)` from `@livewiki/core/verify`. Any thrown error is caught, written to stderr, and `process.exitCode = 1` is set so Node drains pending stderr I/O before exiting (mirroring the `init`/`status` pattern). On the success path the result is emitted as either JSON or the `formatVerifyHuman(result)` human output, and `process.exitCode = 1` is set when `!result.ok` so CI sees the failure without inspecting JSON.
+`registerVerify` attaches `livewiki verify`, which validates the wiki against the index: broken anchors, altered manual blocks, and internal links. The handler wraps `runVerify` in a try/catch and sets `process.exitCode = 1` rather than calling `process.exit(1)` (FIX L rev2: drain pending I/O). On success it emits JSON or human output; on `result.ok === false` it sets `process.exitCode = 1` so CI can detect failures.
 
-## `view` — build the self-contained static site
+## View subcommand
+<!-- lw:anchors packages/cli/src/commands/view.ts#openBrowser packages/cli/src/commands/view.ts#registerView -->
 
-<!-- lw:anchors packages/cli/src/commands/view.ts#registerView packages/cli/src/commands/view.ts#openBrowser -->
+The `view` subcommand builds a self-contained static site from the canonical `livewiki/` wiki, optionally opens it in the platform browser, and pins badge freshness to a configurable window. It is the human-facing counterpart to `verify`: where `verify` is the integrity gate, `view` is the renderable artifact.
 
-`livewiki view` is the Phase 7 command: it builds a self-contained static site (HTML + CSS + JS) with client-side search and Mermaid diagrams from the canonical `livewiki/`, writing to `.livewiki/site/` by default or `--out <dir>` for publication elsewhere, and opens it in the system browser unless `--no-open` is passed. `--badge-days <n>` (default `7`, `0` disables) sets the git-history window for the new/updated freshness badges. `--ref <tag|sha>` builds the site from the wiki as of that git ref (read-only — artifacts are enumerated with `git ls-tree` and read with `git show`, the working tree is never touched), and combining it with `--out` keeps two versions side by side. The site path is always printed.
+### registerView
 
 ```ts
-export function registerView(program: Command): void
-function openBrowser(target: string): boolean
+export function registerView(program: Command): void {
 ```
 
-The action validates `--badge-days` first — it must be a non-negative integer; on failure the action writes either `emitJson({ ok: false, error: { code: "invalid_badge_days", detail } })` or `emitHuman("livewiki view: FAILED [invalid_badge_days] ...")` and sets `process.exitCode = 1` before doing any build. On success it calls `buildSite({ repoRoot, outDir?, template: "agent" | "docs", badgeDays, ref? })`, computes `indexHtml = path.join(result.outDir, "index.html")`, and (unless `--no-open` → `opts.open === false`) calls `openBrowser(indexHtml)`. The result is emitted via `emitJson` / `emitHuman`; exit codes are `0` on success and `1` on `ViewError` or any other failure (an unresolvable `--ref` surfaces as a `ViewError` with code `invalid_ref`; uses `process.exitCode`, never `process.exit`, per FIX L rev2).
+`registerView` attaches `livewiki view`, which builds a self-contained static site from the canonical `livewiki/` wiki. Options: `--template <agent|docs>`, `--out <dir>` (default `.livewiki/site/`), `--badge-days <n>` (default 7; 0 disables), `--ref <tag|sha>` (read-only build from a git ref without touching the working tree), and `--no-open`. `--badge-days` is validated as a non-negative integer; an invalid value emits `{ ok: false, error: { code: "invalid_badge_days", detail } }` and exits 1. On caught errors the handler distinguishes `ViewError` (carrying `err.code`) from generic throws and emits either `{ code, detail }` or `view_failed`. Exit codes are 0 on success, 1 on failure. The path to `index.html` is always printed.
 
-`openBrowser` dispatches a detached, unref'd, `stdio: "ignore"`, `shell: false` child process — `cmd /c start "" <target>` on Windows, `open <target>` on macOS, `xdg-open <target>` elsewhere. The `child.on("error", () => {})` handler swallows spawn failures so a missing opener never fails the command (the path has already been printed); the function returns `true` even on failure to keep the human/JSON output symmetric with the success case.
+### openBrowser
+
+```ts
+function openBrowser(target: string): boolean {
+```
+
+`openBrowser` spawns the platform opener (`start` on Windows, `open` on macOS, `xdg-open` elsewhere) with `shell: false`, `detached: true`, and unref'd stdio so the CLI can exit without waiting for the browser. It is best-effort: a missing opener never fails the command because the path has already been printed, and the boolean return surfaces to `registerView` for the `opened` field of the JSON output.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency
-- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency
-- [Anchor ledger and artifact repair](core-src-01.md) — dependency
+- Flow: [CLI command surface to core pipeline wiring](flows/cli-src-to-core-src-02.md)
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependency
+- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md) — dependency
+- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md) — dependency
 
-> Coverage note: this module's source (12 files, ~74k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (12 files, ~75k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

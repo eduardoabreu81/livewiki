@@ -1,368 +1,249 @@
 ---
-title: Livewiki core src 07
+title: "Core source utilities for orientation, output budgeting, parsing, pointer blocks, presets, and pricing"
 owner: generated
 anchors:
-  - packages/core/src/imports.ts#collectImports
-  - packages/core/src/imports.ts#collectImportsForFiles
-  - packages/core/src/imports.ts#extractImportsFromTree
-  - packages/core/src/indexer.test.ts#activeSymbolsForKey
-  - packages/core/src/indexer.test.ts#rationalesForFile
-  - packages/core/src/indexer.ts#BINARY_SNIFF_BYTES
-  - packages/core/src/indexer.ts#MAX_FILE_BYTES
-  - packages/core/src/indexer.ts#ensureLivewikiDir
-  - packages/core/src/indexer.ts#formatHuman
-  - packages/core/src/indexer.ts#orchestrateIndex
-  - packages/core/src/indexer.ts#run
-  - packages/core/src/init.ts#buildPlan
-  - packages/core/src/init.ts#escapeHtmlId
-  - packages/core/src/init.ts#formatNeighbors
-  - packages/core/src/init.ts#generateArchitectureOverview
-  - packages/core/src/init.ts#readFlowPageOwner
-  - packages/core/src/init.ts#regenerateArchitectureOverview
-  - packages/core/src/init.ts#runInit
-  - packages/core/src/init.ts#syncClassDiagrams
-  - packages/core/src/init.ts#syncStaleFlowArtifacts
-  - packages/core/src/init.ts#syncStaleTopicArtifacts
-  - packages/core/src/install.test.ts#writeHome
-  - packages/core/src/install.ts#AGENT_REGISTRY
-  - packages/core/src/install.ts#SHARED_SKILL_TARGET
-  - packages/core/src/install.ts#TOML_BLOCK_END
-  - packages/core/src/install.ts#TOML_BLOCK_START
-  - packages/core/src/install.ts#applyInstall
-  - packages/core/src/install.ts#buildLocalCommandEntry
-  - packages/core/src/install.ts#buildMcpEntry
-  - packages/core/src/install.ts#deepEqual
-  - packages/core/src/install.ts#detectAgents
-  - packages/core/src/install.ts#getAgentDefinition
-  - packages/core/src/install.ts#isPlainObject
-  - packages/core/src/install.ts#mergeClaudeCodeSettings
-  - packages/core/src/install.ts#mergeMcpServersJson
-  - packages/core/src/install.ts#mergeTomlManagedBlock
-  - packages/core/src/install.ts#pathExists
-  - packages/core/src/install.ts#planAgentHook
-  - packages/core/src/install.ts#planGitHook
-  - packages/core/src/install.ts#planInstall
-  - packages/core/src/install.ts#planMcpConfig
-  - packages/core/src/install.ts#planPointer
-  - packages/core/src/install.ts#planSkill
-  - packages/core/src/install.ts#readIfExists
-  - packages/core/src/install.ts#renderTomlManagedBlock
-  - packages/core/src/install.ts#renderYamlManagedBlock
-  - packages/core/src/install.ts#stopEntryCommands
-  - packages/core/src/install.ts#stripJsoncComments
-  - packages/core/src/key-leak.test.ts#assertCanaryNotPresent
-  - packages/core/src/key-leak.test.ts#generate
-  - packages/core/src/manifest.test.ts#writeLivewikiFile
+  - packages/core/src/orientation.ts#PURPOSE_MAX_CHARS
+  - packages/core/src/orientation.ts#clipSentence
+  - packages/core/src/orientation.ts#detectSurfaces
+  - packages/core/src/orientation.ts#extractPurpose
+  - packages/core/src/orientation.ts#extractRepoOrientation
+  - packages/core/src/orientation.ts#findFastPathSection
+  - packages/core/src/orientation.ts#findPrimaryReadme
+  - packages/core/src/orientation.ts#isBadgeOrLinkOnlyLine
+  - packages/core/src/orientation.ts#isListLeadIn
+  - packages/core/src/orientation.ts#isMeaningfulProse
+  - packages/core/src/orientation.ts#readBounded
+  - packages/core/src/orientation.ts#readdirNames
+  - packages/core/src/orientation.ts#stripHtmlTags
+  - packages/core/src/output-budget.ts#MODULE_OUTPUT_BUDGET_OPTIONS
+  - packages/core/src/output-budget.ts#TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS
+  - packages/core/src/output-budget.ts#computeDynamicOutputTokenBudget
+  - packages/core/src/parser.ts#_grammarToExtensionForTest
+  - packages/core/src/parser.ts#grammarForExtension
+  - packages/core/src/parser.ts#grammarState
+  - packages/core/src/parser.ts#grammarsDir
+  - packages/core/src/parser.ts#initParser
+  - packages/core/src/parser.ts#listSupportedGrammars
+  - packages/core/src/parser.ts#loadLanguage
+  - packages/core/src/parser.ts#parseSource
+  - packages/core/src/pointer.ts#POINTER_END
+  - packages/core/src/pointer.ts#POINTER_FILES
+  - packages/core/src/pointer.ts#POINTER_START
+  - packages/core/src/pointer.ts#_internal
+  - packages/core/src/pointer.ts#applyPointerRemove
+  - packages/core/src/pointer.ts#applyPointerReplace
+  - packages/core/src/pointer.ts#buildPointerBlock
+  - packages/core/src/pointer.ts#ensurePointerFile
+  - packages/core/src/pointer.ts#findPointerBlock
+  - packages/core/src/pointer.ts#insertPointer
+  - packages/core/src/pointer.ts#pickPointerFile
+  - packages/core/src/pointer.ts#readPointerStatus
+  - packages/core/src/pointer.ts#removePointer
+  - packages/core/src/presets.ts#AVAILABLE_PRESETS
+  - packages/core/src/presets.ts#PRESET_TABLE
+  - packages/core/src/presets.ts#UnknownPresetError
+  - packages/core/src/presets.ts#UnknownPresetError.constructor
+  - packages/core/src/presets.ts#isKnownPreset
+  - packages/core/src/presets.ts#resolvePreset
+  - packages/core/src/presets.ts#resolveProviderConfig
+  - packages/core/src/pricing.ts#PRICING_REFERENCE_DATE
+  - packages/core/src/pricing.ts#PRICING_TABLE
+  - packages/core/src/pricing.ts#calculateCostUsd
+  - packages/core/src/pricing.ts#formatCost
+  - packages/core/src/pricing.ts#lookupPricing
 ---
 
-# Livewiki core src 07
+# Core source utilities for orientation, output budgeting, parsing, pointer blocks, presets, and pricing
 
-This page documents the livewiki core source slice covering imports parsing, the indexer entry point, the `init` command pipeline, the `install` agent registry and merge adapters, and the regression helpers used by the indexer/install/key-leak/manifest test suites.
+This module page documents the deterministic helpers that sit under the livewiki core: pulling first-paragraph purpose from a repository's README, sizing LLM output budgets per page, wrapping web-tree-sitter with a grammar cache, writing the opt-in `livewiki:start/end` pointer block to `AGENTS.md`/`CLAUDE.md`, embedding the provider preset table, and computing reported USD cost from token usage.
 
 ## When to use this page
 
-- **Trace** how an import statement in a TypeScript or Python source file becomes an `ExtractedImport` record and feeds the module graph.
-- **Configure or debug** the `livewiki install` flow by mapping each registered agent to its MCP entry shape, merge adapter, and skill target.
-- **Verify** the regression guarantees enforced by the `indexer`, `install`, `key-leak`, and `manifest` test fixtures.
-- **Understand** the orchestration performed by `runInit`, `run`, `planInstall`, and `applyInstall` when scaffolding or updating a wiki.
+- **Reach for `extractRepoOrientation`** when a workflow needs README purpose, root-surface hints, and a fast-path section heading without invoking an LLM.
+- **Compute a content-scaled token budget** with `computeDynamicOutputTokenBudget` and one of the two presets (`MODULE_OUTPUT_BUDGET_OPTIONS` or `TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS`) instead of a flat cap.
+- **Insert or remove the opt-in pointer block** in `AGENTS.md`/`CLAUDE.md` via `insertPointer`/`removePointer`, status-check with `readPointerStatus`, and pick the canonical target file with `pickPointerFile`.
+- **Resolve a provider preset or override** with `resolvePreset`/`resolveProviderConfig`, and look up USD cost of a model call with `lookupPricing`/`calculateCostUsd`/`formatCost`.
 
 ## How it fits
 
-The `packages/core/src` slice ties the lower-level safe-io, hashing, parsing, and SQLite layers (re-exported through `packages/core/src/index.ts`) to the user-facing `init` and `install` commands. `imports.ts` produces the deterministic import graph consumed by `modules.ts` during init; `indexer.ts` walks the repository and persists symbols and rationales into `.livewiki/index.db`; `init.ts` rebuilds diagrams, navigation hubs, and the architecture overview from that index; `install.ts` operates outside the repo allowlist to detect and configure supported coding agents.
+This module lives under `packages/core/src/` and groups six cooperating files that the indexer and CLI call between them. `orientation.ts` reads the repository root for deterministic, free evidence (a README purpose paragraph plus ordered entry-point hints from well-known root files); `output-budget.ts` sizes LLM `max_tokens` per page from anchor count and source chars; `parser.ts` wraps `web-tree-sitter` with a per-grammar `Language` cache loaded from vendored `.wasm` files; `pointer.ts` is the file I/O path solely for the opt-in `livewiki:start/end` block in `AGENTS.md`/`CLAUDE.md`; `presets.ts` is the embedded provider table and override expansion; `pricing.ts` is the embedded USD/1M-token table and the lookup/format helpers that turn real token usage into the reported cost. The module exports both pure helpers (testable on strings) and async disk functions that hold the only `allowPointer` exception against the livewiki safe-write rules.
 
-## Imports extraction
+## Diagram
 
-<!-- lw:anchors packages/core/src/imports.ts#collectImports packages/core/src/imports.ts#collectImportsForFiles packages/core/src/imports.ts#extractImportsFromTree -->
-
-The imports module turns a source file's tree-sitter tree into `ExtractedImport` records. The pure parser path operates on an already-parsed tree, while the high-level entry point lazily initializes the parser and reads content from disk for a batch of files.
-
-```ts
-export function extractImportsFromTree(tree: Tree, lang: string): ExtractedImport[]
+```mermaid
+%% livewiki/diagrams/core-src-07.mmd
 ```
 
-`extractImportsFromTree` walks the tree and emits entries for TypeScript `import_statement` and `export_statement` nodes (re-exports included), plus Python `import_statement` and `import_from_statement` nodes. TS source strings are unquoted; Python absolute dotted `from` targets (e.g. `from app.services import bgm`) are excluded from the `names` list by start/end index comparison, so `names` only contains the symbols the user actually imported. The function performs no I/O — it is the right call when callers already hold a parsed tree.
+## Repository orientation
+<!-- lw:anchors packages/core/src/orientation.ts#PURPOSE_MAX_CHARS packages/core/src/orientation.ts#extractRepoOrientation packages/core/src/orientation.ts#findPrimaryReadme packages/core/src/orientation.ts#readdirNames packages/core/src/orientation.ts#readBounded packages/core/src/orientation.ts#extractPurpose packages/core/src/orientation.ts#stripHtmlTags packages/core/src/orientation.ts#isListLeadIn packages/core/src/orientation.ts#isBadgeOrLinkOnlyLine packages/core/src/orientation.ts#isMeaningfulProse packages/core/src/orientation.ts#clipSentence packages/core/src/orientation.ts#findFastPathSection packages/core/src/orientation.ts#detectSurfaces -->
+
+The orientation helpers turn the repository root into deterministic, free product-orientation evidence — no LLM, no writes. The exported entry point is `extractRepoOrientation(absRoot)`, which on a missing or unreadable README degrades every field to `null` or empty rather than throwing. The purpose excerpt is bounded by `PURPOSE_MAX_CHARS` (600 chars):
 
 ```ts
-export async function collectImports(
-  relPath: string,
-  content: string,
-): Promise<ExtractedImport[]>
+export const PURPOSE_MAX_CHARS = 600;
 ```
 
-`collectImports` initializes the parser once (cached) and parses the source from the file extension. When the source fails to parse, the function returns an empty array — graceful degradation rather than a throw, so callers in the indexing pipeline can keep moving.
+### Primary README selection
+
+`findPrimaryReadme(root)` picks the README in a stable order: `README.md`, then `README.en.md`, then any other `README*.{md,markdown}` at the root sorted case-insensitively. The directory listing is read through `readdirNames(root)`, which returns file names (filtered by `entry.isFile()`) and returns `[]` on any read error rather than propagating the failure.
+
+### Bounded README read
+
+`readBounded(absFile)` reads the README through a 256 KiB cap so the evidence stays near the top of the file. Files at or below the cap are read whole; larger files are opened, the first `README_MAX_BYTES` are read with `handle.read`, and the handle is closed in a `finally`.
+
+### Purpose extraction
 
 ```ts
-export async function collectImportsForFiles(
+export function extractPurpose(markdown: string): string | null
 ```
 
-`collectImportsForFiles` reads each repo-relative file from disk and extracts its imports, returning the per-file map. The rationale evidence notes that this helper was hoisted out of `batch.ts` so the on-demand status risk analysis recomputes the same map; imports are never persisted (plan option A). Unreadable or unparseable files are skipped — they do not abort the batch.
+`extractPurpose` walks the README line by line, tracking fenced code and multi-line HTML openers, and accumulates the first paragraph with enough real prose. Markdown and HTML headings (`# …`, `<h1>`–`<h6>`), thematic breaks, list items, badge/image/link-only lines, and fenced code blocks are skipped. Container blocks (`<div>`, `<p>`, `<section>`, …) are traversed: `stripHtmlTags(text)` removes every HTML tag so only the text content remains. A candidate ending with a colon (checked by `isListLeadIn`) is treated as a list lead-in and scanning continues. `isMeaningfulProse` enforces a min character floor and the presence of at least one letter.
 
-## Indexer entry point
-
-<!-- lw:anchors packages/core/src/indexer.ts#BINARY_SNIFF_BYTES packages/core/src/indexer.ts#MAX_FILE_BYTES packages/core/src/indexer.ts#ensureLivewikiDir packages/core/src/indexer.ts#formatHuman packages/core/src/indexer.ts#orchestrateIndex packages/core/src/indexer.ts#run -->
-
-The indexer is the single repository-wide walk that produces the SQLite index. It is invoked by `init` and by the CLI's `index` subcommand.
+### Sentence clipping
 
 ```ts
-export const MAX_FILE_BYTES = 1024 * 1024;
-export const BINARY_SNIFF_BYTES = 8 * 1024;
+export function clipSentence(text: string, maxChars: number = PURPOSE_MAX_CHARS): string
 ```
 
-`MAX_FILE_BYTES` and `BINARY_SNIFF_BYTES` define the upper byte limits enforced during scanning: files larger than `MAX_FILE_BYTES` are skipped, and the first `BINARY_SNIFF_BYTES` of each candidate are sniffed for binary markers before parsing. Both are one-sided upper bounds; they do not impose a minimum size.
+`clipSentence` returns the original text when it fits the cap, otherwise clips at the last sentence boundary inside the cap (period, exclamation, question mark, including CJK variants, with optional closing quote/bracket). If no sentence boundary sits at or below the cap, it falls back to the last word boundary and appends an ellipsis.
+
+### Fast-path section detection
+
+`findFastPathSection(markdown)` scans the first ATX-style heading whose text matches `/quick ?start|getting started|installation|setup|run locally|local development|usage/i` and returns its heading text.
+
+### Surface hints
+
+`detectSurfaces(root)` returns an ordered list of one-line entry-point hints generated from well-known root files: `main.py`, `manage.py`, `package.json` (with `bin`/`main`), `Dockerfile*`, `pyproject.toml`, `go.mod`, `Cargo.toml`. An unreadable or malformed `package.json` is swallowed and yields no surface hint.
+
+## Output budget
+<!-- lw:anchors packages/core/src/output-budget.ts#MODULE_OUTPUT_BUDGET_OPTIONS packages/core/src/output-budget.ts#TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS packages/core/src/output-budget.ts#computeDynamicOutputTokenBudget -->
+
+The output-budget module computes a content-scaled `maxTokens` instead of a flat cap, so a module with many anchors does not silently starve against an 8192 ceiling.
+
+### Preset options
 
 ```ts
-export async function run(repoRoot: string, opts: IndexOptions = {}): Promise<IndexResult>
+export const MODULE_OUTPUT_BUDGET_OPTIONS: OutputBudgetOptions
+export const TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS: OutputBudgetOptions
 ```
 
-`run` is the public entry point that opens the SQLite database, ensures `.livewiki/` exists, then delegates to `orchestrateIndex` for the actual walk. The function honors the EOL-insensitive hashing strategy documented in the module header so symbol byte ranges, hashes, and anchor realignment all share the same coordinate system; legacy DBs from before the normalized-hash switch are silently migrated without emitting artificial debt.
+`MODULE_OUTPUT_BUDGET_OPTIONS` is the preset for module pages, flow pages, and individual topic-page prose (`base: 2048`, `perAnchor: 300`, `floor: 4096`, `ceiling: 32_768`). `TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS` is the preset for the topic-plan LLM refine pass — a compact structured payload, not final prose (`base: 1024`, `perAnchor: 40`, `floor: 4096`, `ceiling: 32_768`).
+
+### Budget computation
 
 ```ts
-async function orchestrateIndex(
+export function computeDynamicOutputTokenBudget(
+  signals: OutputBudgetSignals,
+  opts: OutputBudgetOptions,
+): number
 ```
 
-`orchestrateIndex` drives the walk → read → hash → parse → extract → upsert pipeline inside a single SQLite transaction. Per-file accounting distinguishes `filesScanned`, `filesAdded`, `filesUpdated`, `filesUnchanged`, and `filesDeleted`, and the same shape is reported per symbol. Failures in any single file do not abort the whole run; they are reflected in the result.
+`computeDynamicOutputTokenBudget` computes `base + perAnchor * anchorCount` (with `anchorCount` clamped at zero), optionally adds `ceil(anchorSourceChars / 40)` when `signals.anchorSourceChars` is supplied, rounds up to the nearest 256 (`TOKEN_ROUNDING_STEP`), and finally clamps the result into `[floor, ceiling]`. The `anchorSourceChars` step approximates 40 source chars per output token because the page summarizes rather than copies.
+
+## Tree-sitter parser
+<!-- lw:anchors packages/core/src/parser.ts#initParser packages/core/src/parser.ts#grammarsDir packages/core/src/parser.ts#loadLanguage packages/core/src/parser.ts#grammarForExtension packages/core/src/parser.ts#grammarState packages/core/src/parser.ts#parseSource packages/core/src/parser.ts#listSupportedGrammars packages/core/src/parser.ts#_grammarToExtensionForTest -->
+
+The parser module wraps `web-tree-sitter` with a per-grammar `Language` cache and a vendored `.wasm` directory resolved relative to the package's own `package.json`.
+
+### Initialization
 
 ```ts
-async function ensureLivewikiDir(absRoot: string, quiet: boolean): Promise<void>
+export async function initParser(): Promise<void>
 ```
 
-`ensureLivewikiDir` auto-creates `.livewiki/` when missing and emits an informational note suggesting `livewiki init` only when the `livewiki/` directory itself is also absent — exit 0 in that case.
+`initParser` is idempotent: the first call stores `Parser.init()` in `initPromise`, and subsequent calls return the same promise without re-initializing the WASM runtime.
+
+### Grammar directory
+
+`grammarsDir()` resolves the `grammars/` directory by trying `./package.json` (dev: `src/`) then `../package.json` (build: `dist/`) via `createRequire(import.meta.url)`. If neither resolves, the function throws because it cannot locate the package.
+
+### Grammar loading and parsing
+
+`loadLanguage(name)` looks up `tree-sitter-<name>.wasm` in `grammarsDir()`, checks existence synchronously, and on a miss throws because the grammar is not vendored in this build. The resolved `Language` is cached in a `Map<string, Language>` so subsequent calls return the cached instance. `parseSource(ext, source)` calls `initParser`, looks up the grammar by lowercased extension through `grammarForExtension`, throws when no grammar is mapped, otherwise parses with a fresh `Parser` and throws when tree-sitter returns `null` (so the caller never has to handle a null tree).
+
+### Introspection
+
+`listSupportedGrammars()` lists the `.wasm` files in `grammarsDir()` (returning `[]` when the directory is absent) and strips the `tree-sitter-` prefix and `.wasm` suffix. `grammarState()` returns the rich grammar-set state used by the indexer to direct re-parses — a `map` of extension-to-grammar and an `artifacts` map of grammar name to the sha256 of its vendored `.wasm` (or `"missing"` when absent). `_grammarToExtensionForTest` is a test-only helper that returns the first extension mapped to a given grammar name.
+
+## Pointer block
+<!-- lw:anchors packages/core/src/pointer.ts#POINTER_START packages/core/src/pointer.ts#POINTER_END packages/core/src/pointer.ts#POINTER_FILES packages/core/src/pointer.ts#pickPointerFile packages/core/src/pointer.ts#buildPointerBlock packages/core/src/pointer.ts#findPointerBlock packages/core/src/pointer.ts#applyPointerReplace packages/core/src/pointer.ts#applyPointerRemove packages/core/src/pointer.ts#insertPointer packages/core/src/pointer.ts#removePointer packages/core/src/pointer.ts#readPointerStatus packages/core/src/pointer.ts#ensurePointerFile packages/core/src/pointer.ts#_internal -->
+
+The pointer module is the only file I/O path that touches `AGENTS.md`/`CLAUDE.md` — every other write goes through `safe-io.ts` with its standard allowlist. The markers are stable strings and any parser may depend on them:
 
 ```ts
-export function formatHuman(result: IndexResult): string
+export const POINTER_START = "<!-- livewiki:start -->";
+export const POINTER_END = "<!-- livewiki:end -->";
+export const POINTER_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
 ```
 
-`formatHuman` renders an `IndexResult` as a multi-line, human-readable summary suitable for CLI output.
+### File selection and block construction
 
-## Init command pipeline
+`pickPointerFile(hasAgentsMd, hasClaudeMd, requested)` returns the explicit `requested` if provided, otherwise prefers `AGENTS.md` when present, else `CLAUDE.md` when present, else `AGENTS.md` as the create target. `buildPointerBlock()` returns the standard block: the two markers surrounding one short PT-BR paragraph and one link to `livewiki/quickstart.md`. The text is intentionally short — agents and humans who read the file see the pointer and follow the link.
 
-<!-- lw:anchors packages/core/src/init.ts#buildPlan packages/core/src/init.ts#escapeHtmlId packages/core/src/init.ts#formatNeighbors packages/core/src/init.ts#generateArchitectureOverview packages/core/src/init.ts#readFlowPageOwner packages/core/src/init.ts#regenerateArchitectureOverview packages/core/src/init.ts#runInit packages/core/src/init.ts#syncClassDiagrams packages/core/src/init.ts#syncStaleFlowArtifacts packages/core/src/init.ts#syncStaleTopicArtifacts -->
+### Pure block parsing and transformation
 
-`init.ts` is the entry point for `livewiki init`, supporting `--plan`, `--batch`, and `--no-refine` flags. It is intentionally split so that `--plan` never requires LLM credentials and never writes files.
+`findPointerBlock(content)` locates the first `livewiki:start` and `livewiki:end` markers (tolerating whitespace around either marker's tag content), returns `{ startIdx, endIdx, inner }`, or `null` when either marker is absent. A truncated block (start without end) is treated as absent so corrupt documents are not damaged. `applyPointerReplace(content, newBlock)` appends `newBlock` when no block exists or substitutes the first block in place; if the substituted string equals the input, it returns `action: "unchanged"` so callers can skip a no-op write. `applyPointerRemove(content)` removes the block and trims one adjacent newline so the surrounding whitespace does not grow.
+
+### Disk operations
+
+`insertPointer(repoRoot, opts)` resolves the repo root, picks the target file via `pickPointerFile` (with `safeIo.exists` checks that swallow errors as `false`), double-validates the file against `POINTER_FILES`, reads the existing content via `safe-io` with `allowPointer: true`, applies `applyPointerReplace`, and writes only when the action is not `unchanged`. The returned `PointerInsertResult` reports the chosen file, the action (`inserted`/`replaced`/`unchanged`), and the bytes written (zero when `unchanged`). `removePointer(repoRoot, opts)` mirrors that flow with `applyPointerRemove`, reporting `replaced` with non-zero bytes when the block was actually removed and `unchanged` otherwise. `readPointerStatus(repoRoot, opts)` checks the requested file first, or both `POINTER_FILES` when no file is requested, returning the file holding the block plus the inner content trimmed (or `file: null` when neither file contains a block). `ensurePointerFile(repoRoot, file)` writes an empty file when the targeted pointer file is absent. `_internal` re-exports the `node:fs/promises` module so the file is the only consumer of `allowPointer` paths.
+
+## Provider presets
+<!-- lw:anchors packages/core/src/presets.ts#PRESET_TABLE packages/core/src/presets.ts#AVAILABLE_PRESETS packages/core/src/presets.ts#UnknownPresetError packages/core/src/presets.ts#UnknownPresetError.constructor packages/core/src/presets.ts#resolvePreset packages/core/src/presets.ts#resolveProviderConfig packages/core/src/presets.ts#isKnownPreset -->
+
+The presets module is the embedded provider table referenced by `.livewiki/config.json`. Each preset carries the adapter, base URL, env var name, default pricing, operational notes, and a default thinking policy — `provider` config can override the adapter, and `config.pricing` overrides the per-model dollar figures.
+
+### Preset table
 
 ```ts
-export async function runInit(opts: InitOptions): Promise<InitResult>
+export const PRESET_TABLE: Record<PresetName, ProviderPreset>
+export const AVAILABLE_PRESETS: readonly PresetName[]
 ```
 
-`runInit` is the top-level orchestrator: when `plan` is set it returns an `InitPlanReport` without writing; otherwise it indexes the repository (via `runIndexer`), applies deterministic layouts and manifest writes, and — only when `batch` is set — hands off to the batch LLM pipeline. The function reports `batchExitCode` derived from `statusToExitCode` in `core/batch.ts` (the single source of truth for exit code semantics). R10.1 C notes that ownership-protected hubs are surfaced via `skippedFlowsHub` rather than silently skipped.
+`PRESET_TABLE` covers ten providers: `anthropic` (Anthropic Messages), `openai`, `openrouter`, `deepseek`, `kimi`, `minimax` (Anthropic-compat endpoint, so the anthropic adapter is used for prompt caching), `gemini`, `nvidia` (NIM), `ollama` (local, `localhost:11434`), and `lmstudio` (local, `localhost:1234`). Local providers report input/output of zero rather than omitting prices so the cost report is explicit. `AVAILABLE_PRESETS` is the ordered list used for `--help` and error messages.
+
+### Error and resolution
 
 ```ts
-async function buildPlan(
+export class UnknownPresetError extends Error {
+  constructor(name: string, available: readonly string[])
+}
 ```
 
-`buildPlan` computes the deterministic module plan used by `--plan` and by the layout phase. It applies heuristics for module identification, edge resolution, prioritization, unique deterministic IDs, oversized-module splits, and post-conditions like `assertExactPathPartition` and `assertUniqueModuleIds`.
+`UnknownPresetError` extends `Error`, sets `name = "UnknownPresetError"`, and exposes the unknown name plus the available list in its message. `resolvePreset(name)` looks up the preset in `PRESET_TABLE` and throws `UnknownPresetError` when the name is not a `PresetName`. `isKnownPreset(name)` is a non-throwing check that returns `name is PresetName` via `Object.prototype.hasOwnProperty.call`. `resolveProviderConfig({ preset?, provider?, baseUrl?, pricing? })` resolves the preset when `preset` is set (and lets `provider` override the adapter), covers the legacy path that only sets `provider` (throwing for an unknown adapter), and throws when neither is set because callers must catch that earlier in `validateConfigForBatch`.
+
+## Pricing
+<!-- lw:anchors packages/core/src/pricing.ts#PRICING_REFERENCE_DATE packages/core/src/pricing.ts#PRICING_TABLE packages/core/src/pricing.ts#lookupPricing packages/core/src/pricing.ts#calculateCostUsd packages/core/src/pricing.ts#formatCost -->
+
+The pricing module is the embedded USD-per-1M-token table and the lookup/format helpers that turn real token usage into the reported cost. The reference date stamps every report so the user knows whether the prices are fresh:
 
 ```ts
-export async function regenerateArchitectureOverview(
+export const PRICING_REFERENCE_DATE = "2026-07-09";
 ```
+
+### Embedded table
+
+`PRICING_TABLE` covers the MVP models — the Anthropic Claude 4.5 family (`claude-opus-4-5`, `claude-sonnet-5`, `claude-haiku-4`) and the OpenAI-compat MVP entries (`gpt-4o`, `gpt-4o-mini`) — in USD per 1,000,000 tokens. Models not in the table can be added via `.livewiki/config.json` `pricing` overrides.
+
+### Lookup and cost
 
 ```ts
-async function generateArchitectureOverview(opts: {
+export function lookupPricing(model: string, override?: PricingOverride): PricingLookup
+export function calculateCostUsd(
+  inputTokens: number,
+  outputTokens: number,
+  model: string,
+  override?: PricingOverride,
+): { input: number; output: number; total: number; refDate: string } | null
+export function formatCost(cost: { total: number } | null, model: string): string
 ```
 
-`generateArchitectureOverview` builds the `livewiki/architecture/overview.md` artifact from the current index. `regenerateArchitectureOverview` wraps it and is the version other sync routines call after the layout phase. The `init-overview.test.ts` excerpt proves the per-module class-diagram link only appears when the underlying `.classes.mmd` file actually exists on disk; modules with zero classes receive no link, and stale `.mmd` files left over from earlier runs are pruned while unrelated custom `.mmd` files are preserved.
-
-```ts
-export async function syncClassDiagrams(
-```
-
-```ts
-export async function syncStaleFlowArtifacts(
-```
-
-```ts
-export async function syncStaleTopicArtifacts(
-```
-
-`syncClassDiagrams` reconciles `livewiki/diagrams/<slug>.classes.mmd` files with the current set of modules, creating one per module that actually contains classes. `syncStaleFlowArtifacts` and `syncStaleTopicArtifacts` walk their respective subtrees and remove or refresh artifacts whose owning source modules are gone, while respecting the ownership check `readFlowPageOwner` performs on each candidate page.
-
-```ts
-function readFlowPageOwner(content: string): "generated" | "other"
-```
-
-`readFlowPageOwner` inspects a flow page's frontmatter to decide whether the page is generated by livewiki (frontmatter `owner: generated`) or written by a human or in a mixed/unparseable state. R10.1 C relies on this to refuse silent overwrites of human-authored flow hubs.
-
-```ts
-function formatNeighbors(
-```
-
-```ts
-function escapeHtmlId(s: string): string
-```
-
-`formatNeighbors` formats neighbor descriptors used by the architecture overview, and `escapeHtmlId` produces HTML-safe identifiers from arbitrary strings — these are emitted as anchor IDs that the markdown generator links against.
-
-## Install: agent registry and merge adapters
-
-<!-- lw:anchors packages/core/src/install.ts#AGENT_REGISTRY packages/core/src/install.ts#SHARED_SKILL_TARGET packages/core/src/install.ts#TOML_BLOCK_END packages/core/src/install.ts#TOML_BLOCK_START packages/core/src/install.ts#applyInstall packages/core/src/install.ts#buildLocalCommandEntry packages/core/src/install.ts#buildMcpEntry packages/core/src/install.ts#deepEqual packages/core/src/install.ts#detectAgents packages/core/src/install.ts#getAgentDefinition packages/core/src/install.ts#isPlainObject packages/core/src/install.ts#mergeClaudeCodeSettings packages/core/src/install.ts#mergeMcpServersJson packages/core/src/install.ts#mergeTomlManagedBlock packages/core/src/install.ts#pathExists packages/core/src/install.ts#planAgentHook packages/core/src/install.ts#planGitHook packages/core/src/install.ts#planInstall packages/core/src/install.ts#planMcpConfig packages/core/src/install.ts#planPointer packages/core/src/install.ts#planSkill packages/core/src/install.ts#readIfExists packages/core/src/install.ts#renderTomlManagedBlock packages/core/src/install.ts#renderYamlManagedBlock packages/core/src/install.ts#stopEntryCommands packages/core/src/install.ts#stripJsoncComments -->
-
-`install.ts` is the implementation of `livewiki install`. Every write target lives outside the repository allowlist (home-directory agent configs), so the module deliberately bypasses `safe-io`; the bytes of every write are computed up front by `planInstall` and the CLI surfaces them through `--print` before any write occurs.
-
-```ts
-export const AGENT_REGISTRY: readonly AgentDefinition[]
-```
-
-```ts
-export const SHARED_SKILL_TARGET = ".agents/skills/document-as-you-go/SKILL.md";
-```
-
-```ts
-export const TOML_BLOCK_START = "# livewiki:start";
-export const TOML_BLOCK_END = "# livewiki:end";
-```
-
-`AGENT_REGISTRY` is the read-only list of supported coding agents and their probe/merge metadata. The registry explicitly excludes `minimax`/`mmx` — that CLI is an LLM provider with no MCP-host convention, so `livewiki install` has nothing to configure. `SHARED_SKILL_TARGET` is the path agents that honor `~/.agents/skills/` are pointed at. `TOML_BLOCK_START` and `TOML_BLOCK_END` are the sentinel lines used to delimit the managed block that the install pipeline injects into Codex's `config.toml`.
-
-```ts
-export function getAgentDefinition(id: string): AgentDefinition | undefined
-```
-
-```ts
-export async function detectAgents(opts: {
-```
-
-`getAgentDefinition` looks up an agent by id. `detectAgents` probes both home-directory config files and PATH binaries (Windows variants like `.cmd` included) and returns a per-agent detection result with `detected` plus an `evidence` list. The `install.test.ts` excerpt verifies that detected agents cite a specific evidence line (e.g. `config found: ~/.claude`) and that undetected agents report both the missing config probe and the missing PATH binary.
-
-```ts
-export function buildMcpEntry(repoRoot: string): McpEntry
-```
-
-```ts
-export function buildLocalCommandEntry(repoRoot: string): LocalCommandMcpEntry
-```
-
-`buildMcpEntry` constructs the standard MCP entry used by JSON-shaped configs. `buildLocalCommandEntry` builds the local-command variant used by agents whose config shape is `json-local-command` (opencode).
-
-```ts
-function isPlainObject(v: unknown): v is Record<string, unknown>
-```
-
-```ts
-function deepEqual(a: unknown, b: unknown): boolean
-```
-
-`isPlainObject` is a guard used by the JSON merge adapters to identify object nodes that should be recursed into rather than replaced wholesale. `deepEqual` compares two values structurally; both helpers together let the merger skip no-op writes when the livewiki entry is already byte-identical.
-
-```ts
-export function stripJsoncComments(text: string): string
-```
-
-`stripJsoncComments` is the string-aware JSONC comment stripper used for agents whose config files allow JSONC. Comment-aware stripping preserves string contents; a rewrite after stripping re-emits plain JSON, and the action reason surfaces the comment loss to the user.
-
-```ts
-export function mergeMcpServersJson(
-```
-
-```ts
-export function mergeTomlManagedBlock(
-```
-
-```ts
-export function mergeClaudeCodeSettings(
-```
-
-`mergeMcpServersJson` produces a result object describing whether the merged MCP servers JSON should be written, skipped, or refused, and supplies the new content payload. `mergeTomlManagedBlock` is the equivalent for Codex's `config.toml`, working on a delimited block delimited by `TOML_BLOCK_START`/`TOML_BLOCK_END` without parsing TOML. `mergeClaudeCodeSettings` merges the shipped Stop-hook template into the agent's settings while preserving unrelated keys.
-
-```ts
-export function renderTomlManagedBlock(repoRoot: string): string
-```
-
-```ts
-export function renderYamlManagedBlock(repoRoot: string): string
-```
-
-`renderTomlManagedBlock` and `renderYamlManagedBlock` produce the canonical managed-block payloads (TOML for Codex, YAML for Hermes) that the merger later diffs against on-disk content.
-
-```ts
-function stopEntryCommands(entry: unknown): string[]
-```
-
-`stopEntryCommands` extracts the command strings from a Claude Code `Stop`-hook entry so the merger can decide whether an existing livewiki hook already matches.
-
-```ts
-async function pathExists(abs: string): Promise<boolean>
-```
-
-```ts
-async function readIfExists(abs: string): Promise<string | null>
-```
-
-`pathExists` and `readIfExists` are the file-system primitives shared by every planner and merger; `readIfExists` returns `null` instead of throwing when the file is missing.
-
-```ts
-async function planMcpConfig(
-```
-
-```ts
-async function planAgentHook(
-```
-
-```ts
-async function planSkill(
-```
-
-```ts
-async function planGitHook(
-```
-
-```ts
-async function planPointer(
-```
-
-`planMcpConfig`, `planAgentHook`, `planSkill`, `planGitHook`, and `planPointer` each compute the actions for one facet of the install. Together they cover MCP server entries, the Claude Code Stop hook, the shared skill file at `SHARED_SKILL_TARGET`, the git post-commit hook template, and the opt-in `AGENTS.md`/`CLAUDE.md` pointer. The pointer is gated by `writePointer: true`; without it the action is `requires-opt-in` and `applyInstall` never writes it. The planners refuse rather than merge when a foreign file is present at the target.
-
-```ts
-export async function planInstall(opts: PlanInstallOptions): Promise<InstallAction[]>
-```
-
-```ts
-export async function applyInstall(
-```
-
-`planInstall` is the orchestrator: it returns an exhaustive list of `InstallAction` items that the CLI shows before writing. `applyInstall` is the write phase; it executes only the actions that were approved, applies the safety rule that an existing foreign git hook, an unparseable JSON config, or a different file at the skill target is a refusal rather than a merge attempt, and requires explicit opt-in for pointer writes.
-
-## Test regression helpers
-
-<!-- lw:anchors packages/core/src/indexer.test.ts#activeSymbolsForKey packages/core/src/indexer.test.ts#rationalesForFile packages/core/src/install.test.ts#writeHome packages/core/src/key-leak.test.ts#assertCanaryNotPresent packages/core/src/key-leak.test.ts#generate packages/core/src/manifest.test.ts#writeLivewikiFile -->
-
-The test suites share small filesystem and assertion helpers that show up across the indexer, install, key-leak, and manifest specs.
-
-```ts
-async function activeSymbolsForKey(key: string): Promise<ActiveSymbolRow[]>
-```
-
-```ts
-async function rationalesForFile(path: string): Promise<RationaleQueryRow[]>
-```
-
-`activeSymbolsForKey` opens the indexer database in read-only mode and selects the rows from `symbols` whose `status` is `active` for the given key. `rationalesForFile` reads the rationales attached to a file path so indexer tests can assert on the persisted rationale evidence.
-
-```ts
-async function writeHome(rel: string, content: string): Promise<void>
-```
-
-`writeHome` writes a fixture file into a per-test home directory under the path `rel`, creating any missing parent directories — the install suite uses it to stage `~/.claude`, `~/.codex`, and other agent configs before calling `detectAgents` and the merger.
-
-```ts
-function assertCanaryNotPresent(value: string, context: string): void
-```
-
-```ts
-async generate() {
-```
-
-`assertCanaryNotPresent` is the gatekeeper of the key-leak regression suite. It scans a string for the canary value `KEY-LEAK-CANARY-DONOTUSE-7f3a` and throws with the context label when the canary appears, so any test that exercises error messages, JSON serializations, console captures, or adapter stack traces must not include the canary. The companion `generate` method is the body hook called by the suite to drive LLM adapter paths with the canary key set.
-
-```ts
-async function writeLivewikiFile(relPath: string, content: string): Promise<void>
-```
-
-`writeLivewikiFile` writes a file under `livewiki/` (or any repo-relative path) for the manifest suite, creating the parent directory on demand. The suite uses it to stage pages, assert that `computeSnapshotHash` is stable and changes when content changes, and confirm that the manifest file itself is excluded from the snapshot hash.
+`lookupPricing` returns the override first if present, then the embedded entry, and otherwise returns `{ tokensOnly: true }` so the report can show tokens without inventing a USD number. `calculateCostUsd` returns `null` for an unknown model (so the report never quotes a fabricated cost) and otherwise scales the input and output tokens by the per-1M figures into `input`, `output`, `total`, and `refDate`. `formatCost` returns the literal `(no price for model X)` when the cost is `null` and `$$<total.toFixed(4)>` otherwise, making the absence of data explicit.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
-- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency
-- [core prompts, presets, pricing, and README export](core-src-10.md) — dependent
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependency and dependent
+- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md) — dependency
+- [core topics, understanding, update metrics, update, and verify](core-src-10.md) — dependent
 <!-- livewiki:navigate:end -->

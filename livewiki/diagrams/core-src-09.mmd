@@ -1,0 +1,23 @@
+flowchart LR
+  safeio["safe-io.ts"]
+  secg["section-guard.ts"]
+  stat["status.ts"]
+  sym["symbols.ts"]
+  db["db.ts (index)"]
+  cfg["config.ts"]
+  risk["risk.ts"]
+  mask["markdown-mask.ts"]
+  wts["web-tree-sitter"]
+  fs["node:fs/promises"]
+  walk["walker.ts (EXTENSION_LANG)"]
+  upd["update-metrics.ts"]
+  stat --> safeio
+  stat --> db
+  stat --> cfg
+  stat --> risk
+  stat --> walk
+  stat --> upd
+  secg --> mask
+  safeio --> fs
+  sym --> wts
+  safeio -.allowlist.-> safeio

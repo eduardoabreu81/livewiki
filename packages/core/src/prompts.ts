@@ -927,6 +927,7 @@ export function buildStage2RefinePrompt(
     `- Output JSON only. No prose. No markdown fences.`,
     `- Schema: { "modules": [{ "id": "<slug>", "paths": ["<rel/path>", ...], "displayTitle": "<optional concise responsibility title>" }, ...] }`,
     `- You MAY rename modules, merge adjacent ones, or split large ones.`,
+    `- EXCEPTION: files belonging to automated tests (the heuristic puts them in modules whose id ends with "-tests") must stay in test-only modules. Never merge a test file into a module with product code; never move a test file out of a test-only module. You MAY rename or merge test-only modules among themselves.`,
     `- displayTitle is optional presentation metadata. When supplied, make it a concise human responsibility title and never the stable id alone. Omitting it is valid.`,
     `- Every original path must appear in EXACTLY one module's paths list.`,
     `- "id" must be a valid slug (lowercase, alphanumeric + hyphens).`,

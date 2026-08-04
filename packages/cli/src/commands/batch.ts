@@ -55,8 +55,12 @@ export function registerBatch(program: Command): void {
         opts.concurrency !== undefined ? Number(opts.concurrency) : undefined;
 
       try {
-        // No args: status of the last run
-        if (args.length === 0) {
+        // No args (and no --only): status of the last run. The --only
+        // branch below must win when the flag is present — otherwise
+        // `batch --only <target>` (without a positional runId) silently
+        // printed status and reran NOTHING (found 2026-08-04: three
+        // "rehearsal" invocations in a row were status reads).
+        if (args.length === 0 && !opts.only) {
           const report = await buildStatusReport(absRoot);
           emit(json, report, formatStatusHuman(report));
           return setExitCode(absRoot, report.run.status, json);
@@ -98,12 +102,10 @@ export function registerBatch(program: Command): void {
           return setExitCode(absRoot, result.status, json);
         }
 
-        // batch --only <target> <runId>
+        // batch --only <target> [<runId>] — runId is accepted for
+        // symmetry with `status`/`resume` but runOnly always resumes the
+        // LAST run's task (core picks it); a missing runId is fine.
         if (opts.only) {
-          const runIdStr = args[0];
-          if (runIdStr === undefined || Number.isNaN(parseInt(runIdStr, 10))) {
-            throw new Error("usage: livewiki batch --only <target> <runId>");
-          }
           const result = await runOnly({
             repoRoot: absRoot,
             onlyTarget: opts.only,

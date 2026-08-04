@@ -155,6 +155,24 @@ describe("config.loadConfig", () => {
     );
     await expect(loadConfig(repoRoot)).rejects.toThrow(/invalid pathRoles key/);
   });
+
+  it("validates moduleMaxDiagramNodes/moduleMaxDiagramEdges (own module budget, 2026-08-04)", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ moduleMaxDiagramNodes: 30, moduleMaxDiagramEdges: 40 }),
+      "utf8",
+    );
+    const cfg = await loadConfig(repoRoot);
+    expect(cfg.moduleMaxDiagramNodes).toBe(30);
+    expect(cfg.moduleMaxDiagramEdges).toBe(40);
+
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ moduleMaxDiagramNodes: 0 }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/moduleMaxDiagramNodes/);
+  });
 });
 
 describe("config.saveConfig + loadConfig round-trip", () => {

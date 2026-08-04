@@ -1,187 +1,241 @@
 ---
-title: Stage 4 artifact validator and auxiliary page assembly
+title: Batch orchestration, status reporting, and graph analysis core
 owner: generated
 anchors:
-  - packages/core/src/artifact.ts#DEGRADED_NOTICE_PREFIX
-  - packages/core/src/artifact.ts#FLOW_DIAGRAM_SOURCE_MAX_CHARS
-  - packages/core/src/artifact.ts#boundedOffendingExcerpt
-  - packages/core/src/artifact.ts#buildDegradedNotice
-  - packages/core/src/artifact.ts#checkRequiredFlowOpening
-  - packages/core/src/artifact.ts#checkRequiredPageOpening
-  - packages/core/src/artifact.ts#checkRequiredTopicOpening
-  - packages/core/src/artifact.ts#countFlowDiagramElements
-  - packages/core/src/artifact.ts#countFlowchartElements
-  - packages/core/src/artifact.ts#countLines
-  - packages/core/src/artifact.ts#countSequenceElements
-  - packages/core/src/artifact.ts#countStateElements
-  - packages/core/src/artifact.ts#dropDegradedNoticeLines
-  - packages/core/src/artifact.ts#err
-  - packages/core/src/artifact.ts#extractDegradedTitle
-  - packages/core/src/artifact.ts#extractInlineFlowDiagram
-  - packages/core/src/artifact.ts#findExactOpeningH2
-  - packages/core/src/artifact.ts#findFirstTodoPlaceholder
-  - packages/core/src/artifact.ts#findNextH2
-  - packages/core/src/artifact.ts#findNextImplementationHeading
-  - packages/core/src/artifact.ts#findOpeningHeadingCandidate
-  - packages/core/src/artifact.ts#findOriginalLineEnd
-  - packages/core/src/artifact.ts#findOriginalLineStart
-  - packages/core/src/artifact.ts#firstPresentIndex
-  - packages/core/src/artifact.ts#flowDiagramPlaceholder
-  - packages/core/src/artifact.ts#flowSectionEnd
-  - packages/core/src/artifact.ts#flowSectionProseFailure
-  - packages/core/src/artifact.ts#hasRealProse
-  - packages/core/src/artifact.ts#lastHeadingBefore
-  - packages/core/src/artifact.ts#markDegradedArtifact
-  - packages/core/src/artifact.ts#normalizeStage4Artifact
-  - packages/core/src/artifact.ts#offendingHeading
-  - packages/core/src/artifact.ts#openingSnippet
-  - packages/core/src/artifact.ts#proseBlockFailure
-  - packages/core/src/artifact.ts#slugifyHeading
-  - packages/core/src/artifact.ts#validateExactTopicList
-  - packages/core/src/artifact.ts#validateStage4Artifact
-  - packages/core/src/auxiliary-page.test.ts#assertValid
-  - packages/core/src/auxiliary-page.test.ts#module
-  - packages/core/src/auxiliary-page.ts#disambiguateHeadings
-  - packages/core/src/auxiliary-page.ts#generateAuxiliaryModulePage
-  - packages/core/src/auxiliary-page.ts#howItFitsParagraph
-  - packages/core/src/auxiliary-page.ts#humanizeModuleId
-  - packages/core/src/auxiliary-page.ts#referenceParagraph
-  - packages/core/src/batch-community.test.ts#MockLlm
-  - packages/core/src/batch-community.test.ts#MockLlm.generate
-  - packages/core/src/batch-community.test.ts#readStage2Checkpoint
-  - packages/core/src/batch-community.test.ts#writeDivergentFixture
-  - packages/core/src/batch-concurrency.test.ts#FailingMockLlm
-  - packages/core/src/batch-concurrency.test.ts#FailingMockLlm.calledModuleIds
-  - packages/core/src/batch-concurrency.test.ts#FailingMockLlm.generate
-  - packages/core/src/batch-concurrency.test.ts#ValidMockLlm
-  - packages/core/src/batch-concurrency.test.ts#ValidMockLlm.calledModuleIds
-  - packages/core/src/batch-concurrency.test.ts#ValidMockLlm.constructor
-  - packages/core/src/batch-concurrency.test.ts#ValidMockLlm.generate
-  - packages/core/src/batch-concurrency.test.ts#createRepo
-  - packages/core/src/batch-concurrency.test.ts#makeRepo
-  - packages/core/src/batch-repair.test.ts#ProgrammableMockLlm
-  - packages/core/src/batch-repair.test.ts#ProgrammableMockLlm.generate
-  - packages/core/src/batch-repair.test.ts#expectJoinedAttempts
-  - packages/core/src/batch-repair.test.ts#makeBothFailingPage
-  - packages/core/src/batch-repair.test.ts#makeInvalidPage
-  - packages/core/src/batch-repair.test.ts#makeRelaxedOnlyPage
-  - packages/core/src/batch-repair.test.ts#makeStrictFailingPage
-  - packages/core/src/batch-repair.test.ts#makeValidPage
-  - packages/core/src/batch-repair.test.ts#readStage4Checkpoint
-  - packages/core/src/batch-review.test.ts#MockLlm
-  - packages/core/src/batch-review.test.ts#MockLlm.generate
-  - packages/core/src/batch-review.test.ts#executablePlanPaths
-  - packages/core/src/batch-review.test.ts#makeCompactAuxiliaryPage
-  - packages/core/src/batch-review.test.ts#seedFiveFileRepo
-  - packages/core/src/batch-review.test.ts#stage2ErrorCode
+  - packages/core/src/batch-state.ts#DIAGNOSTIC_MAX_ERRORS
+  - packages/core/src/batch-state.ts#DIAGNOSTIC_TEXT_CAP
+  - packages/core/src/batch-state.ts#summarizeDiagnosticErrors
+  - packages/core/src/batch-status.ts#aggregateUsageFromCheckpoint
+  - packages/core/src/batch-status.ts#buildStatusReport
+  - packages/core/src/batch-status.ts#emptyStageUsage
+  - packages/core/src/batch-status.ts#listRuns
+  - packages/core/src/batch-status.ts#mergeStageUsage
+  - packages/core/src/batch-status.ts#parseRunSummary
+  - packages/core/src/batch-status.ts#safeJsonParse
+  - packages/core/src/batch.ts#EmptyPipelineError
+  - packages/core/src/batch.ts#EmptyPipelineError.constructor
+  - packages/core/src/batch.ts#TaskError
+  - packages/core/src/batch.ts#TaskError.constructor
+  - packages/core/src/batch.ts#accumulateUsage
+  - packages/core/src/batch.ts#aggregateTotals
+  - packages/core/src/batch.ts#attemptStage4Generation
+  - packages/core/src/batch.ts#attemptStage5Generation
+  - packages/core/src/batch.ts#attemptTopicGeneration
+  - packages/core/src/batch.ts#attemptUnderstandingGeneration
+  - packages/core/src/batch.ts#buildFairTruncatedSource
+  - packages/core/src/batch.ts#buildFlowDocContext
+  - packages/core/src/batch.ts#buildModuleDocContext
+  - packages/core/src/batch.ts#buildResult
+  - packages/core/src/batch.ts#buildSurgicalEvidenceSlice
+  - packages/core/src/batch.ts#buildTopicDocContext
+  - packages/core/src/batch.ts#computeCostFromUsage
+  - packages/core/src/batch.ts#createOrGetTask
+  - packages/core/src/batch.ts#diagnosticAttempt
+  - packages/core/src/batch.ts#drainPendingMetrics
+  - packages/core/src/batch.ts#emptyUsage
+  - packages/core/src/batch.ts#extractManualBlocksBySection
+  - packages/core/src/batch.ts#finalizeRun
+  - packages/core/src/batch.ts#forceOwnerInFrontmatter
+  - packages/core/src/batch.ts#getFileIdsForModule
+  - packages/core/src/batch.ts#getModuleSymbolRows
+  - packages/core/src/batch.ts#getOrCreateTask
+  - packages/core/src/batch.ts#getRationaleEvidenceForPaths
+  - packages/core/src/batch.ts#injectManualBlocksBySection
+  - packages/core/src/batch.ts#isRelaxedEligible
+  - packages/core/src/batch.ts#orchestrate
+  - packages/core/src/batch.ts#prepareSurgicalRepair
+  - packages/core/src/batch.ts#readOwnerFromFrontmatter
+  - packages/core/src/batch.ts#resetTaskToPending
+  - packages/core/src/batch.ts#resolveOutputTokenBudget
+  - packages/core/src/batch.ts#resumeBatch
+  - packages/core/src/batch.ts#rollbackWrittenArtifacts
+  - packages/core/src/batch.ts#runBatch
+  - packages/core/src/batch.ts#runOnly
+  - packages/core/src/batch.ts#runSemanticTopicStage
+  - packages/core/src/batch.ts#runUnderstandingStage
+  - packages/core/src/batch.ts#safeJsonParse
+  - packages/core/src/batch.ts#sectionRangeOf
+  - packages/core/src/batch.ts#slugifyHeadingText
+  - packages/core/src/batch.ts#statusToExitCode
+  - packages/core/src/batch.ts#summarizeLlmDiagnosticError
+  - packages/core/src/batch.ts#summarizeVerifyDiagnosticErrors
+  - packages/core/src/batch.ts#topicAttemptDiagnostic
+  - packages/core/src/batch.ts#topicPlanDiagnostic
+  - packages/core/src/batch.ts#tryWriteAndVerify
+  - packages/core/src/batch.ts#tryWriteFlowAndVerify
+  - packages/core/src/batch.ts#tryWriteModuleDiagramAndVerify
+  - packages/core/src/batch.ts#understandingAttemptDiagnostic
+  - packages/core/src/batch.ts#validateRefinedModules
+  - packages/core/src/batch.ts#verifyIssuesToValidationErrors
+  - packages/core/src/blast-radius.ts#computeBlastRadius
+  - packages/core/src/blast-radius.ts#findAffectedPages
+  - packages/core/src/call-resolution.ts#computeCallerCentrality
+  - packages/core/src/call-resolution.ts#computeCrossModuleCallees
+  - packages/core/src/call-resolution.ts#resolveCalls
+  - packages/core/src/change-impact.ts#IMPACT_BUDGETS
+  - packages/core/src/change-impact.ts#computeChangeImpact
+  - packages/core/src/change-impact.ts#computeDirectImporters
+  - packages/core/src/change-impact.ts#emptyImpact
+  - packages/core/src/change-impact.ts#indexDbExists
+  - packages/core/src/change-impact.ts#seedFromDebt
+  - packages/core/src/community.ts#comparePartitions
+  - packages/core/src/community.ts#detectFileCommunities
 ---
 
-# Stage 4 artifact validator and auxiliary page assembly
+# Batch orchestration, status reporting, and graph analysis core
 
-This module normalizes LLM stage-4 output, validates the resulting Markdown artifact against the closed anchor contract, and assembles auxiliary (`fixture` | `tooling` | `docs`) module pages deterministically, without an LLM call.
+This page is the reference for the batch pipeline orchestrator, status aggregator, call-graph resolver, blast-radius walker, change-impact package, and deterministic community detection in `packages/core/src`.
 
 ## When to use this page
 
-- **Read** `normalizeStage4Artifact` and `validateStage4Artifact` when diagnosing a stage-4 repair-loop failure or audit finding.
-- **Read** `generateAuxiliaryModulePage` when adding or changing a non-product module page.
-- **Run** the batch and review test suites when modifying repair, concurrency, or community detection behavior.
+- **Run or resume** the multi-stage documentation batch via `runBatch`, `resumeBatch`, or `runOnly` and inspect the consolidated `BatchRunResult`.
+- **Interpret** `BatchStatusReport` totals, per-stage, per-module, and per-task usage from `livewiki batch <run>` and `listRuns`.
+- **Diagnose** changed-symbol impact on docs through `computeChangeImpact` (working-tree or debt mode), with bounded sections and pre-cap totals.
+- **Inspect** the call graph and reachability with `resolveCalls`, `computeBlastRadius`, `computeCallerCentrality`, and `computeCrossModuleCallees`.
 
 ## How it fits
 
-Inside `packages/core/src`, this module sits at the seam between the LLM stages and the disk checkpoint. `artifact.ts` enforces the closed-anchor contract the orchestrator and reviewer rely on: frontmatter `owner: generated`, dual completeness of frontmatter `anchors:` and `lw:anchors` markers, no banned TODO/placeholder, fully closed Markdown, and the stage-5 flow opening contract when `context.pageKind === "flow"`. `auxiliary-page.ts` consumes the same index the main pipeline builds and emits fully compliant Markdown for non-product modules, bypassing the LLM stage-4 loop that used to drift from the exact shape. The remaining test files (`batch-community`, `batch-concurrency`, `batch-context`, `batch-repair`, `batch-review`) drive the integration behaviour of `runBatch` end-to-end against programmable LLM mocks.
+This module sits at the orchestration layer of `packages/core/src`. `batch.ts` drives the five-stage documentation pipeline and persists checkpoints; `batch-state.ts` defines the checkpoint, usage-history, and diagnostic shapes; `batch-status.ts` reads the persistence tables and emits the human-facing report. Around them, `blast-radius.ts` answers "what would break if I change symbol X", `call-resolution.ts` back-fills resolved callee keys and exposes cross-module/centrality signals, `change-impact.ts` composes changed-symbol, affected-pages, importers, and snippets into a bounded package, and `community.ts` cross-checks the stage-2 heuristic partition against a deterministic label-propagation of the import graph. The diagram below shows the high-level wiring among these files; consumers in `packages/cli`, `packages/mcp`, and Phase-5 navigation are not drawn.
 
-## Stage-4 normalization and degraded marking
-<!-- lw:anchors packages/core/src/artifact.ts#normalizeStage4Artifact packages/core/src/artifact.ts#DEGRADED_NOTICE_PREFIX packages/core/src/artifact.ts#buildDegradedNotice packages/core/src/artifact.ts#dropDegradedNoticeLines packages/core/src/artifact.ts#extractDegradedTitle packages/core/src/artifact.ts#markDegradedArtifact -->
+## Diagram
 
-`normalizeStage4Artifact(raw)` strips one leading `<think>…</think>` block, rejects an unclosed `<think>` and any reasoning-only response, and unwraps one outer ` ```markdown ` / ` ```md ` fence before handing the result to the validator.
-
-```ts
-export function normalizeStage4Artifact(raw: string): NormalizeResult
+```mermaid
+%% livewiki/diagrams/core-src-02.mmd
 ```
 
-`DEGRADED_NOTICE_PREFIX` is the literal marker the degraded-notice machinery anchors on:
+## Diagnostic error shaping
+
+<!-- lw:anchors packages/core/src/batch-state.ts#DIAGNOSTIC_MAX_ERRORS packages/core/src/batch-state.ts#DIAGNOSTIC_TEXT_CAP packages/core/src/batch-state.ts#summarizeDiagnosticErrors packages/core/src/batch.ts#summarizeLlmDiagnosticError packages/core/src/batch.ts#summarizeVerifyDiagnosticErrors packages/core/src/batch.ts#verifyIssuesToValidationErrors packages/core/src/batch.ts#diagnosticAttempt packages/core/src/batch.ts#topicPlanDiagnostic packages/core/src/batch.ts#topicAttemptDiagnostic packages/core/src/batch.ts#understandingAttemptDiagnostic -->
+
+The diagnostic layer caps the size of any structured error payload persisted into a checkpoint. The two exported constants set the upper bound on the count of errors and on the length of each truncated string field:
 
 ```ts
-export const DEGRADED_NOTICE_PREFIX = "> **Degraded page** —";
+export const DIAGNOSTIC_MAX_ERRORS = 50;
+export const DIAGNOSTIC_TEXT_CAP = 200;
 ```
 
-`markDegradedArtifact(content)` prepends a degraded banner so downstream consumers can detect it without re-deriving the state. `buildDegradedNotice(title)` constructs the banner string, `extractDegradedTitle(yamlBlock, body)` recovers the original page title, and `dropDegradedNoticeLines(text)` strips the banner back out. None of these helpers is documented as accepting malformed input beyond the visible prefix contract, so callers must only apply them to Markdown that already conforms to the auxiliary page shape.
+`summarizeDiagnosticErrors` slices its `ReadonlyArray<ArtifactValidationError>` input to `DIAGNOSTIC_MAX_ERRORS`, truncates `offending` (when present) and `message` to `DIAGNOSTIC_TEXT_CAP` per entry, and reports the dropped count as `truncatedErrorCount`. On the orchestration side, `summarizeLlmDiagnosticError`, `summarizeVerifyDiagnosticErrors`, `verifyIssuesToValidationErrors`, and the per-stage probes `topicPlanDiagnostic`, `topicAttemptDiagnostic`, and `understandingAttemptDiagnostic` produce the bounded summaries that `diagnosticAttempt` records as a `DiagnosticAttempt`.
 
-## Stage-4 artifact validator
-<!-- lw:anchors packages/core/src/artifact.ts#validateStage4Artifact packages/core/src/artifact.ts#validateExactTopicList packages/core/src/artifact.ts#checkRequiredPageOpening packages/core/src/artifact.ts#checkRequiredTopicOpening packages/core/src/artifact.ts#checkRequiredFlowOpening packages/core/src/artifact.ts#findExactOpeningH2 packages/core/src/artifact.ts#findOpeningHeadingCandidate packages/core/src/artifact.ts#findNextH2 packages/core/src/artifact.ts#findNextImplementationHeading packages/core/src/artifact.ts#firstPresentIndex packages/core/src/artifact.ts#findFirstTodoPlaceholder packages/core/src/artifact.ts#hasRealProse packages/core/src/artifact.ts#flowSectionEnd packages/core/src/artifact.ts#flowSectionProseFailure packages/core/src/artifact.ts#proseBlockFailure packages/core/src/artifact.ts#offendingHeading packages/core/src/artifact.ts#openingSnippet packages/core/src/artifact.ts#err packages/core/src/artifact.ts#lastHeadingBefore packages/core/src/artifact.ts#findOriginalLineStart packages/core/src/artifact.ts#findOriginalLineEnd packages/core/src/artifact.ts#countLines packages/core/src/artifact.ts#boundedOffendingExcerpt packages/core/src/artifact.ts#slugifyHeading -->
+## Batch state shape
 
-`validateStage4Artifact` is the closed-list gate every generated page must pass.
+<!-- lw:anchors packages/core/src/batch.ts#runBatch packages/core/src/batch.ts#resumeBatch packages/core/src/batch.ts#runOnly packages/core/src/batch.ts#orchestrate packages/core/src/batch.ts#runSemanticTopicStage packages/core/src/batch.ts#runUnderstandingStage packages/core/src/batch.ts#attemptStage4Generation packages/core/src/batch.ts#attemptStage5Generation packages/core/src/batch.ts#attemptTopicGeneration packages/core/src/batch.ts#attemptUnderstandingGeneration packages/core/src/batch.ts#buildTopicDocContext packages/core/src/batch.ts#buildFlowDocContext packages/core/src/batch.ts#buildModuleDocContext packages/core/src/batch.ts#getFileIdsForModule packages/core/src/batch.ts#getModuleSymbolRows packages/core/src/batch.ts#getRationaleEvidenceForPaths packages/core/src/batch.ts#buildFairTruncatedSource packages/core/src/batch.ts#resetTaskToPending packages/core/src/batch.ts#getOrCreateTask packages/core/src/batch.ts#createOrGetTask packages/core/src/batch.ts#resolveOutputTokenBudget packages/core/src/batch.ts#isRelaxedEligible packages/core/src/batch.ts#prepareSurgicalRepair packages/core/src/batch.ts#buildSurgicalEvidenceSlice packages/core/src/batch.ts#injectManualBlocksBySection packages/core/src/batch.ts#extractManualBlocksBySection packages/core/src/batch.ts#sectionRangeOf packages/core/src/batch.ts#slugifyHeadingText packages/core/src/batch.ts#readOwnerFromFrontmatter packages/core/src/batch.ts#forceOwnerInFrontmatter packages/core/src/batch.ts#validateRefinedModules packages/core/src/batch.ts#rollbackWrittenArtifacts packages/core/src/batch.ts#tryWriteAndVerify packages/core/src/batch.ts#tryWriteFlowAndVerify packages/core/src/batch.ts#tryWriteModuleDiagramAndVerify packages/core/src/batch.ts#finalizeRun packages/core/src/batch.ts#drainPendingMetrics packages/core/src/batch.ts#buildResult packages/core/src/batch.ts#statusToExitCode packages/core/src/batch.ts#EmptyPipelineError packages/core/src/batch.ts#EmptyPipelineError.constructor packages/core/src/batch.ts#TaskError packages/core/src/batch.ts#TaskError.constructor packages/core/src/batch.ts#safeJsonParse packages/core/src/batch.ts#emptyUsage packages/core/src/batch.ts#accumulateUsage packages/core/src/batch.ts#aggregateTotals packages/core/src/batch.ts#computeCostFromUsage -->
+
+`batch-state.ts` defines the canonical types persisted into `batch_tasks.checkpoint_json`. The accent of the schema is the `usageHistory: UsageAttempt[]` convention: every task that calls an LLM appends a new attempt rather than overwriting, so retry-aware aggregation is a sum over the list. When `usageKnown === false` (e.g. client timeout), `usage` is `null` and aggregators must not invent zero tokens — they merely propagate `usageIncomplete`. `DiagnosticAttempt` is the corresponding per-attempt diagnostic record (`outcome`, `promptKind`, `errors` capped to `DIAGNOSTIC_MAX_ERRORS`, candidate hash) and joins `UsageAttempt` one-to-one on `attempt`.
 
 ```ts
-export function validateStage4Artifact(
+export async function runBatch(opts: BatchOptions): Promise<BatchRunResult> {
+export async function resumeBatch(opts: BatchOptions): Promise<BatchRunResult> {
+export async function runOnly(opts: BatchOptions): Promise<BatchRunResult> {
+async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 ```
 
-It returns a `ValidateResult` listing structured `ArtifactValidationError` codes; an empty list means the artifact is accepted. The visible contract requires:
+`runBatch` drives the full five-stage pipeline, `resumeBatch` resumes from an existing checkpoint, and `runOnly` re-runs a single task (preserving `lw:manual` byte-for-byte, refusing `owner: human`). All three funnel into the internal `orchestrate`, which schedules stages 2–5 (semantic topics via `runSemanticTopicStage`, understanding via `runUnderstandingStage`, plus stage-4 and stage-5 generation).
 
-- a valid `---` frontmatter with an explicit `owner: generated` line and an `anchors:` list (when the closed list is non-empty);
-- every frontmatter `anchors:` key AND every `lw:anchors` section-marker key to be in the closed list, with completeness as two independent requirements (frontmatter alone and section markers alone must each contain every closed key exactly once);
-- no duplicate keys in the frontmatter list and no key appearing in more than one section marker;
-- every anchored section to be followed by real prose before the next heading, marker, or end of page;
-- a fully closed Markdown body (no unclosed fences or inline-code spans);
-- no `TODO`/`TBD` placeholders outside fenced or inline code;
-- rejection of any `lw:manual` block in the body.
+The stage-4 path calls `attemptStage4Generation`, which can delegate to `attemptTopicGeneration` / `attemptUnderstandingGeneration` for the topic and understanding lanes. The stage-5 path calls `attemptStage5Generation`, which composes page + companion inline diagram. Contexts are built through `buildModuleDocContext`, `buildTopicDocContext`, and `buildFlowDocContext`, all of which consume the fair-truncated source from `buildFairTruncatedSource`, the rationale evidence rows from `getRationaleEvidenceForPaths`, the symbol rows from `getModuleSymbolRows`, and the file id list from `getFileIdsForModule`. `resolveOutputTokenBudget` picks an output budget per attempt, and `isRelaxedEligible` decides whether a task may complete under the degraded contract.
 
-The helpers around it cooperate to produce the structured diagnostics: `checkRequiredPageOpening`, `checkRequiredTopicOpening`, and `checkRequiredFlowOpening` enforce the opening contract for module, topic, and flow page kinds respectively; `validateExactTopicList` enforces topic evidence coverage; `findExactOpeningH2`, `findOpeningHeadingCandidate`, `findNextH2`, `findNextImplementationHeading`, and `firstPresentIndex` walk the heading skeleton; `findFirstTodoPlaceholder`, `hasRealProse`, `flowSectionEnd`, `flowSectionProseFailure`, `proseBlockFailure`, `offendingHeading`, `openingSnippet`, `err`, and `lastHeadingBefore` build the diagnostic payload; and `findOriginalLineStart`, `findOriginalLineEnd`, `countLines`, `boundedOffendingExcerpt`, and `slugifyHeading` trim the offending excerpt to a fixed-width, line-anchored snippet suitable for repair prompts.
+Surgical repair is a separate code path: `prepareSurgicalRepair` produces an evidence slice from `buildSurgicalEvidenceSlice`, the orchestrator runs a single bounded repair prompt, and `injectManualBlocksBySection` re-merges `lw:manual` blocks into the new page using `extractManualBlocksBySection`, `sectionRangeOf`, and `slugifyHeadingText`. Owner policy is enforced through `readOwnerFromFrontmatter` and `forceOwnerInFrontmatter` (the latter stamps `owner: generated` or `owner: mixed` when missing or wrong).
 
-## Flow diagram source and element counting
-<!-- lw:anchors packages/core/src/artifact.ts#FLOW_DIAGRAM_SOURCE_MAX_CHARS packages/core/src/artifact.ts#flowDiagramPlaceholder packages/core/src/artifact.ts#extractInlineFlowDiagram packages/core/src/artifact.ts#countFlowDiagramElements packages/core/src/artifact.ts#countFlowchartElements packages/core/src/artifact.ts#countSequenceElements packages/core/src/artifact.ts#countStateElements -->
+Task lifecycle helpers — `getOrCreateTask`, `createOrGetTask`, `resetTaskToPending`, `validateRefinedModules` — wrap SQLite calls. Write-time guard helpers do the transactional dance: `tryWriteAndVerify`, `tryWriteModuleDiagramAndVerify`, and `tryWriteFlowAndVerify` write then verify, while `rollbackWrittenArtifacts` restores snapshots on failure. `safeJsonParse<T>(s: string): T | null` and the usage helpers (`emptyUsage`, `accumulateUsage`, `aggregateTotals`, `computeCostFromUsage`) provide the deterministic accumulation of `StageUsage` totals; `computeCostFromUsage` returns `null` when the model is not in the pricing table.
 
-The flow-opening contract binds the diagram section to an exact placeholder and counts its elements. The source budget is a fixed upper bound:
+Two named errors make failure modes explicit: `EmptyPipelineError` (no flow candidates; raised as a recoverable error inside the orchestrator) and `TaskError { code, message, failedAt? }` (stored in checkpoint when a task fails). `finalizeRun`, `drainPendingMetrics`, `buildResult`, and `statusToExitCode` complete the run lifecycle and translate `BatchRunStatus` into a CLI exit code.
+
+## Status reporting
+
+<!-- lw:anchors packages/core/src/batch-status.ts#buildStatusReport packages/core/src/batch-status.ts#listRuns packages/core/src/batch-status.ts#emptyStageUsage packages/core/src/batch-status.ts#aggregateUsageFromCheckpoint packages/core/src/batch-status.ts#mergeStageUsage packages/core/src/batch-status.ts#safeJsonParse packages/core/src/batch-status.ts#parseRunSummary -->
+
+`batch-status.ts` reads `batch_runs` + `batch_tasks` and aggregates them into the public `BatchStatusReport`. Its public entry points are:
 
 ```ts
-export const FLOW_DIAGRAM_SOURCE_MAX_CHARS = 8000;
+export async function buildStatusReport(
+  repoRoot: string,
+  runId: number | null = null,
+): Promise<BatchStatusReport> {
+export async function listRuns(repoRoot: string): Promise<Array<{
+  id: number;
+  startedAt: number;
+  finishedAt: number | null;
+  status: string;
+  startedBy: string;
+}>>;
 ```
 
-`flowDiagramPlaceholder(slug)` renders the required placeholder for a given flow slug, `extractInlineFlowDiagram` pulls a fenced `mermaid` block out of the diagram section, and `countFlowDiagramElements` dispatches to `countFlowchartElements`, `countSequenceElements`, or `countStateElements` based on the diagram kind. The visible source enforces the upper bound only; it does not impose a lower bound on diagram source length.
+`buildStatusReport` resolves the run (defaulting to the most recent), iterates every `batch_tasks` row, parses each `checkpoint_json` through `safeJsonParse<TaskCheckpoint>` (returning `null` for malformed JSON without throwing), and folds usage into three buckets: `totals` (run-wide), `byStage` (keyed by `StageUsage`), and `byModule` (only for stage-4 tasks, since stages 1/3 do not call the LLM and stage 5 is flows/topics). The aggregation helpers are `emptyStageUsage` (zero row with `costUsd: null`), `aggregateUsageFromCheckpoint` (sums `usageHistory` over known attempts only, flipping on `usageIncomplete` when any attempt is unknown), and `mergeStageUsage` (combines two `StageUsage` rows). `parseRunSummary` defensively parses `run.summary_json` into a `BatchRunSummary`, tolerating `null` and malformed JSON by returning `null` rather than throwing.
 
-## Auxiliary page assembly
-<!-- lw:anchors packages/core/src/auxiliary-page.ts#generateAuxiliaryModulePage packages/core/src/auxiliary-page.ts#howItFitsParagraph packages/core/src/auxiliary-page.ts#referenceParagraph packages/core/src/auxiliary-page.ts#disambiguateHeadings packages/core/src/auxiliary-page.ts#humanizeModuleId -->
+Per-task reports include an additive `diagnosticHistory` (only when the checkpoint has it) and `communityCrossCheck` (only when present), both gated through `...(?cond ? { ... } : {})` so older checkpoints serialize byte-stably. Failures are deduplicated into `failures: FailureReportItem[]` with a ready-to-run `retryCommand`.
 
-`generateAuxiliaryModulePage` is the deterministic alternative to the LLM stage-4 loop for non-product modules:
+## Call graph: resolution and reachability
+
+<!-- lw:anchors packages/core/src/call-resolution.ts#resolveCalls packages/core/src/call-resolution.ts#computeCallerCentrality packages/core/src/call-resolution.ts#computeCrossModuleCallees packages/core/src/blast-radius.ts#computeBlastRadius packages/core/src/blast-radius.ts#findAffectedPages -->
+
+`call-resolution.ts` back-fills `calls.resolved_callee_key` for rows the indexer inserted with `NULL`, in two unambiguous-match stages:
 
 ```ts
-export function generateAuxiliaryModulePage(opts: {
+export function resolveCalls(db: Database.Database): ResolveCallsResult
+export function computeCallerCentrality(db: Database.Database): Map<string, number>
+export function computeCrossModuleCallees(
+  db: Database.Database,
+  modules: ReadonlyArray<{ id: string; paths: readonly string[] }>,
+): Set<string>
 ```
 
-For an `AuxiliaryRole` of `"fixture"`, `"tooling"`, or `"docs"`, the function emits a full Markdown artifact: frontmatter with `owner: generated`, an `anchors:` list populated from `closedKeyList` (omitted when the list is empty), the required opening structure, and one H3 + reference paragraph per indexed symbol. `howItFitsParagraph(module, roleLabel)` renders the prose that fits under the `## How it fits` heading and selects `"file"` versus `"files"` based on the module's path count; `referenceParagraph(module, roleLabel, symbol)` builds the per-symbol paragraph and truncates the signature so the paragraph stays under the 500-character single-paragraph limit while preserving backtick balance. `disambiguateHeadings(symbols)` appends the file basename to H3 titles when two symbols share a name across files, and `humanizeModuleId(id)` produces the deterministic fallback title used when no stage-2 `displayTitle` was accepted.
+Step 1 resolves same-file callers (a candidate whose `file_id` matches the call's `file_id`); step 2 resolves globally unique callee names. Both steps require exactly one matching active `function`/`export` row — zero or many candidates leave the column `NULL` rather than guessing. Confidence tags are stamped at extraction time and never changed here; only `'extracted'` rows participate in `computeCallerCentrality` (a god-node-lite proxy counting distinct callers) and `computeCrossModuleCallees` (keys with at least one `'extracted'` resolved edge crossing a module boundary).
 
-## Auxiliary page contract tests
-<!-- lw:anchors packages/core/src/auxiliary-page.test.ts#module packages/core/src/auxiliary-page.test.ts#assertValid -->
+`blast-radius.ts` answers the documentation-flavored reachability question by walking the resolved `calls` edges backward from a symbol, breadth-first, and intersecting with the `anchors`/`doc_pages` join:
 
-`module(overrides)` is a `Partial<Module>` test factory defaulting to a single-path fixture module with one symbol, and `assertValid(artifact, closedKeyList, moduleId, moduleRole)` runs `normalizeStage4Artifact` and `validateStage4Artifact` against the artifact and asserts both calls return no errors. The visible tests cover full-contract auxiliary pages, zero-symbol empty closed lists, H3 disambiguation across files, signature backtick stripping, oversized reference paragraph truncation, the humanized-id fallback, and the stage-2 `displayTitle` override.
+```ts
+export function computeBlastRadius(
+  db: Database.Database,
+  symbolKey: string,
+  opts: BlastRadiusOptions = {},
+): BlastRadiusResult
+function findAffectedPages(db: Database.Database, symbolKeys: string[]): AffectedPage[]
+```
 
-## Stage-2 community cross-check tests
-<!-- lw:anchors packages/core/src/batch-community.test.ts#MockLlm packages/core/src/batch-community.test.ts#MockLlm.generate packages/core/src/batch-community.test.ts#writeDivergentFixture packages/core/src/batch-community.test.ts#readStage2Checkpoint -->
+`computeBlastRadius` BFS-expands from `symbolKey` through `caller_key` whose `resolved_callee_key` equals the current frontier node, bucketing depth-1 hits into `directCallers` and depth ≥ 2 into `transitiveCallers`. Defaults cap the walk at `maxDepth = 5` and `maxNodes = 200`; when either bound binds, `truncated` flips to `true`. `callerConfidence` (schema v7) records whether each collected edge was `'extracted'` or `'inferred'`. `findAffectedPages` runs a single `IN (...)` join against `anchors × doc_pages`, groups rows by `wikiPath`, and emits `{ wikiPath, citedSymbolKeys }`.
 
-`MockLlm` is an offline `LlmClient` that synthesizes a closed-anchor module page by extracting `- <key>` lines from the user prompt and emitting a fixed-shape artifact with `owner: generated`. Its `generate(req)` increments `callCount` and returns a deterministic `GenerateResult`. The `writeDivergentFixture(repoRoot)` helper lays out a `src/a/{x,y}.ts` and `src/b/z.ts` tree where the directory heuristic disagrees with the import graph (x and z import each other while y is isolated). `readStage2Checkpoint(repoRoot)` opens `.livewiki/index.db` in read-only mode and parses the stage-2 `checkpoint_json` into a `TaskCheckpoint`.
+## Change impact and community cross-check
 
-## Stage-4 worker pool tests
-<!-- lw:anchors packages/core/src/batch-concurrency.test.ts#ValidMockLlm packages/core/src/batch-concurrency.test.ts#ValidMockLlm.constructor packages/core/src/batch-concurrency.test.ts#ValidMockLlm.generate packages/core/src/batch-concurrency.test.ts#ValidMockLlm.calledModuleIds packages/core/src/batch-concurrency.test.ts#FailingMockLlm packages/core/src/batch-concurrency.test.ts#FailingMockLlm.generate packages/core/src/batch-concurrency.test.ts#FailingMockLlm.calledModuleIds packages/core/src/batch-concurrency.test.ts#createRepo packages/core/src/batch-concurrency.test.ts#makeRepo -->
+<!-- lw:anchors packages/core/src/change-impact.ts#computeChangeImpact packages/core/src/change-impact.ts#IMPACT_BUDGETS packages/core/src/change-impact.ts#emptyImpact packages/core/src/change-impact.ts#seedFromDebt packages/core/src/change-impact.ts#computeDirectImporters packages/core/src/change-impact.ts#indexDbExists packages/core/src/community.ts#detectFileCommunities packages/core/src/community.ts#comparePartitions -->
 
-`ValidMockLlm` records every prompt and tracks in-flight call depth to assert pool parallelism; its `constructor(private readonly delayMs = 5) {}` introduces artificial latency so concurrent workers overlap. `ValidMockLlm.generate(req)` returns a valid closed-anchor page keyed to the module id extracted from `# Module:` in the prompt, and `calledModuleIds()` returns the distinct module ids this mock received in stage-4 prompts. `FailingMockLlm` has the same shape but emits a bogus anchor key so every task exhausts its repair budget; its `calledModuleIds()` mirrors the valid variant. `createRepo(moduleIds)` seeds a fresh temp directory with one tiny module per id plus a `.livewiki/config.json` disabling stage 5, and `makeRepo(moduleIds)` wraps `createRepo` while registering the directory for `afterEach` cleanup.
+`change-impact.ts` composes three deterministic signals — changed symbols, affected anchors/pages, and direct importers — plus on-demand snippets, into one bounded package:
 
-## Stage-4 repair loop tests
-<!-- lw:anchors packages/core/src/batch-repair.test.ts#ProgrammableMockLlm packages/core/src/batch-repair.test.ts#ProgrammableMockLlm.generate packages/core/src/batch-repair.test.ts#makeValidPage packages/core/src/batch-repair.test.ts#makeInvalidPage packages/core/src/batch-repair.test.ts#makeStrictFailingPage packages/core/src/batch-repair.test.ts#makeRelaxedOnlyPage packages/core/src/batch-repair.test.ts#makeBothFailingPage packages/core/src/batch-repair.test.ts#readStage4Checkpoint packages/core/src/batch-repair.test.ts#expectJoinedAttempts -->
+```ts
+export const IMPACT_BUDGETS = {
+  maxSymbols: 50,
+  maxPages: 20,
+  maxSnippets: 10,
+  maxImporters: 25,
+} as const;
+export async function computeChangeImpact(
+  repoRoot: string,
+  opts: ChangeImpactOptions = {},
+): Promise<ChangeImpact>
+```
 
-`ProgrammableMockLlm` consumes a queued response per call, can throw on selected indices, and (with `autoPageFromPrompt = true`) auto-generates a valid closed-anchor page from the keys parsed out of the prompt. `ProgrammableMockLlm.generate(req)` records the prompt, advances `callCount`, and returns the next response or the last one as a fallback. `makeValidPage(closedKeyList)` builds a closed-anchor module artifact with the standard opening; `makeInvalidPage(uniqueText)` produces a header-only artifact that fails validation; `makeStrictFailingPage`, `makeRelaxedOnlyPage`, and `makeBothFailingPage` construct the three failure shapes used by recovery-tier tests. `readStage4Checkpoint(root, target)` opens the SQLite checkpoint for a specific stage-4 target and parses the `checkpoint_json`, and `expectJoinedAttempts(checkpoint)` asserts that `diagnosticHistory` and `usageHistory` have equal length with matching `attempt` indices.
+`computeChangeImpact` dispatches on `opts.mode` (`"working-tree"` defaults to a `git diff HEAD` preview via `previewWorkingTreeDebt`; `"debt"` reads open debt rows through `seedFromDebt`). Working-tree mode degrades to `emptyImpact(mode, true)` (`notGitRepo: true`, empty impact) when the diff cannot be produced — it does not throw. Each section caps independently via `IMPACT_BUDGETS`; if any cap binds, `truncated: true` and the `totals` block carries the pre-cap counts. Dependencies are recomputed through `computeDirectImporters(absRoot, new Set(changedFiles))`, but only when `indexDbExists(absRoot)` returns `true`. Snippets reuse `snippetForSymbol` from `update.ts` (no duplication), with `SNIPPET_WINDOW` as the default line window.
 
-## Review-finding regression tests
-<!-- lw:anchors packages/core/src/batch-review.test.ts#MockLlm packages/core/src/batch-review.test.ts#MockLlm.generate packages/core/src/batch-review.test.ts#makeCompactAuxiliaryPage packages/core/src/batch-review.test.ts#seedFiveFileRepo packages/core/src/batch-review.test.ts#stage2ErrorCode packages/core/src/batch-review.test.ts#executablePlanPaths -->
+`community.ts` runs label propagation over the undirected file import graph as a deterministic diagnostic against the stage-2 heuristic partition:
 
-`MockLlm` produces either a compact auxiliary page, a stage-4 module page from the prompt's closed keys, or a queued response, and records every usage tuple in `costInputs`. `MockLlm.generate(req)` increments `callCount` and returns the next queued response or synthesizes one based on whether the prompt mentions the compact auxiliary contract. `makeCompactAuxiliaryPage(closedKeys)` builds a reference-style auxiliary artifact with one H3 per key. `seedFiveFileRepo()` prepares a five-file repository fixture, `stage2ErrorCode()` reads the recorded stage-2 error code from the checkpoint, and `executablePlanPaths()` enumerates the executable plan paths used by the reviewer regression suite.
+```ts
+export function detectFileCommunities(
+  filePaths: string[],
+  edges: ResolvedImportEdge[],
+): Map<string, string>
+export function comparePartitions(
+  modules: Array<Pick<Module, "id" | "paths">>,
+  communities: Map<string, string>,
+): CommunityCrossCheckReport
+```
+
+Propagation visits nodes in `localeCompare` order over up to `MAX_PASSES = 10` passes, adopts the highest-count neighbor label (ties broken by the smallest label), and exits early when a pass changes nothing. The community is the winning label (a path), and `comparePartitions` emits one `perModule` row (`dominantCommunity`, `dominantShare`) plus a global `disagreementCount` and `verdict` (`"agree"` | `"divergent"`). Communities are diagnostic only — the heuristic partition always wins; never feed communities back as modules.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
-- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency
-- [Anchor ledger and artifact repair](core-src-01.md) — dependency
+- Flow: [CLI command surface to core pipeline wiring](flows/cli-src-to-core-src-02.md)
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependency and dependent
+- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md) — dependency
+- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md) — dependency
 
-> Coverage note: this module's source (7 files, ~319k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
+> Coverage note: this module's source (7 files, ~322k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

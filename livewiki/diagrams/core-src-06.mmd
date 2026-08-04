@@ -1,0 +1,33 @@
+flowchart LR
+  subgraph modules["packages/core/src/modules.ts"]
+    identify["identifyModulesHeuristic / classifyPathRole"]
+    split["splitOversizedModules / splitOneModule"]
+    chunk["chunkFlatBucket / groupPathsByNextSegment"]
+    dedup["makeUniqueDeterministicIds / assertUniqueModuleIds / assertExactPathPartition"]
+    edges["resolveModuleEdges / resolveRelativeImport"]
+    titleIn["applyRefinedDisplayTitles"]
+  end
+  subgraph navigation["packages/core/src/navigation.ts"]
+    loaders["loadModulePresentations / loadFlowPresentations / loadTopicPresentations"]
+    digests["parseModuleOpening / loadModuleDigests"]
+    pages["generateQuickstart / generateTasksPage"]
+    indexes["generateFlowsIndex / generateTopicsIndex / generateAuxiliaryIndex"]
+    sync["syncFlowsIndexHub / syncTopicsIndexHub / syncAuxiliaryIndexHub"]
+    inject["updateModuleNavigateBlocks / updateFlowTopicLinks / selectRelatedModules / moduleSourceExceedsBudget"]
+    titles["buildDisplayTitleFallbacks"]
+  end
+  identify --> split
+  split --> chunk
+  split --> dedup
+  identify --> dedup
+  identify --> edges
+  edges --> inject
+  titleIn --> titles
+  loaders --> titles
+  loaders --> pages
+  loaders --> indexes
+  digests --> pages
+  pages --> indexes
+  indexes --> sync
+  inject --> loaders
+  inject --> digests

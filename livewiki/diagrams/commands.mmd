@@ -1,0 +1,48 @@
+graph TD
+  subgraph cli_commands[packages/cli/src/commands]
+    batch["batch.ts"]
+    export_["export.ts"]
+    index_["index-cmd.ts"]
+    init["init.ts"]
+    install["install.ts"]
+    pointer["pointer.ts"]
+    serve["serve.ts"]
+    status["status.ts"]
+    stub["stub.ts"]
+    update["update.ts"]
+    verify["verify.ts"]
+    view["view.ts"]
+  end
+  output["../output.js"]
+  core["@livewiki/core/*"]
+  commander["commander Command"]
+  serve --> stub
+  batch --> core
+  batch --> output
+  export_ --> core
+  export_ --> output
+  index_ --> core
+  init --> core
+  init --> output
+  install --> core
+  install --> output
+  pointer --> core
+  pointer --> output
+  status --> core
+  update --> core
+  update --> status
+  update --> output
+  verify --> core
+  view --> core
+  view --> output
+  batch --> commander
+  export_ --> commander
+  index_ --> commander
+  init --> commander
+  install --> commander
+  pointer --> commander
+  serve --> commander
+  status --> commander
+  update --> commander
+  verify --> commander
+  view --> commander

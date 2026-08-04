@@ -1,280 +1,216 @@
 ---
-title: Core runtime config, schema, diagrams, diff preview, and export
+title: Init, install, manifest, markdown-mask, and mermaid-validator support
 owner: generated
 anchors:
-  - packages/core/src/config.ts#CONFIG_DEFAULTS
-  - packages/core/src/config.ts#CONFIG_FILENAME
-  - packages/core/src/config.ts#CONFIG_PATH
-  - packages/core/src/config.ts#MAX_TIMEOUT_MS
-  - packages/core/src/config.ts#MissingProviderConfigError
-  - packages/core/src/config.ts#MissingProviderConfigError.constructor
-  - packages/core/src/config.ts#applyDefaults
-  - packages/core/src/config.ts#assertValidTimeoutMs
-  - packages/core/src/config.ts#loadConfig
-  - packages/core/src/config.ts#resolveBaseUrl
-  - packages/core/src/config.ts#resolveExtraIgnores
-  - packages/core/src/config.ts#resolveProviderFromConfig
-  - packages/core/src/config.ts#saveConfig
-  - packages/core/src/config.ts#validateConfigForBatch
-  - packages/core/src/config.ts#validateConfigShape
-  - packages/core/src/db.ts#CURRENT_SCHEMA_VERSION
-  - packages/core/src/db.ts#MIGRATION_SQL_V3
-  - packages/core/src/db.ts#SCHEMA_SQL
-  - packages/core/src/db.ts#SCHEMA_VERSION_KEY
-  - packages/core/src/db.ts#migrateV3ToV4
-  - packages/core/src/db.ts#migrateV4ToV5
-  - packages/core/src/db.ts#migrateV5ToV6
-  - packages/core/src/db.ts#migrateV6ToV7
-  - packages/core/src/db.ts#migrationsFor
-  - packages/core/src/db.ts#openIndex
-  - packages/core/src/db.ts#postV3Migrations
-  - packages/core/src/diagrams.ts#STRUCTURE_MAX_EDGES
-  - packages/core/src/diagrams.ts#buildCollapsedStructureLines
-  - packages/core/src/diagrams.ts#buildExactStructureLines
-  - packages/core/src/diagrams.ts#classIdentity
-  - packages/core/src/diagrams.ts#escapeLabel
-  - packages/core/src/diagrams.ts#generateClassDiagram
-  - packages/core/src/diagrams.ts#generateModulesGraph
-  - packages/core/src/diagrams.ts#generateStructure
-  - packages/core/src/diagrams.ts#mermaidId
-  - packages/core/src/diagrams.ts#mermaidMemberName
-  - packages/core/src/diagrams.ts#moduleSlug
-  - packages/core/src/diff-preview.test.ts#git
-  - packages/core/src/diff-preview.test.ts#gitCommitAll
-  - packages/core/src/diff-preview.test.ts#gitInit
-  - packages/core/src/diff-preview.test.ts#setupBaseline
-  - packages/core/src/diff-preview.test.ts#writeRepoFile
-  - packages/core/src/diff-preview.ts#MOVED_SCOPE_NOTE
-  - packages/core/src/diff-preview.ts#formatDiffPreviewHuman
-  - packages/core/src/diff-preview.ts#parseGitDiffOutput
-  - packages/core/src/diff-preview.ts#previewWorkingTreeDebt
-  - packages/core/src/diff-preview.ts#runGitDiff
-  - packages/core/src/export.test.ts#bodyOf
-  - packages/core/src/export.test.ts#detectSymlinkSupport
-  - packages/core/src/export.test.ts#listDest
-  - packages/core/src/export.test.ts#readDest
-  - packages/core/src/export.test.ts#writeWiki
-  - packages/core/src/export.ts#EXPORT_TARGETS
-  - packages/core/src/export.ts#ExportError
-  - packages/core/src/export.ts#ExportError.constructor
-  - packages/core/src/export.ts#GENERATED_MARKER_PREFIX
-  - packages/core/src/export.ts#GENERATED_MARKER_SUFFIX
-  - packages/core/src/export.ts#buildMarker
-  - packages/core/src/export.ts#detectMarker
-  - packages/core/src/export.ts#ensureExtension
-  - packages/core/src/export.ts#enumerateDestination
-  - packages/core/src/export.ts#enumerateSourcePages
-  - packages/core/src/export.ts#errMessage
-  - packages/core/src/export.ts#exportWiki
-  - packages/core/src/export.ts#flattenPath
-  - packages/core/src/export.ts#parseLinkHref
-  - packages/core/src/export.ts#renderMarkdownHeader
-  - packages/core/src/export.ts#replaceMermaidPlaceholder
-  - packages/core/src/export.ts#resolveLinkSource
-  - packages/core/src/export.ts#rewriteInternalLinks
-  - packages/core/src/export.ts#splitRawFrontmatter
-  - packages/core/src/export.ts#stripAnchorMarkers
-  - packages/core/src/export.ts#stripAnchorsField
-  - packages/core/src/export.ts#transformMarkdownPage
-  - packages/core/src/export.ts#transformMermaidPage
-  - packages/core/src/export.ts#transformPage
-  - packages/core/src/export.ts#validateTarget
-  - packages/core/src/flow-diagram.test.ts#candidate
-  - packages/core/src/flow-diagram.test.ts#chainIr
-  - packages/core/src/flow-diagram.test.ts#mod
+  - packages/core/src/init.ts#buildPlan
+  - packages/core/src/init.ts#escapeHtmlId
+  - packages/core/src/init.ts#formatNeighbors
+  - packages/core/src/init.ts#generateArchitectureOverview
+  - packages/core/src/init.ts#readFlowPageOwner
+  - packages/core/src/init.ts#regenerateArchitectureOverview
+  - packages/core/src/init.ts#runInit
+  - packages/core/src/init.ts#syncClassDiagrams
+  - packages/core/src/init.ts#syncStaleFlowArtifacts
+  - packages/core/src/init.ts#syncStaleTopicArtifacts
+  - packages/core/src/init.ts#syncStaleModulePages
+  - packages/core/src/install.ts#AGENT_REGISTRY
+  - packages/core/src/install.ts#SHARED_SKILL_TARGET
+  - packages/core/src/install.ts#TOML_BLOCK_END
+  - packages/core/src/install.ts#TOML_BLOCK_START
+  - packages/core/src/install.ts#applyInstall
+  - packages/core/src/install.ts#buildLocalCommandEntry
+  - packages/core/src/install.ts#buildMcpEntry
+  - packages/core/src/install.ts#deepEqual
+  - packages/core/src/install.ts#detectAgents
+  - packages/core/src/install.ts#getAgentDefinition
+  - packages/core/src/install.ts#isPlainObject
+  - packages/core/src/install.ts#mergeClaudeCodeSettings
+  - packages/core/src/install.ts#mergeMcpServersJson
+  - packages/core/src/install.ts#mergeTomlManagedBlock
+  - packages/core/src/install.ts#pathExists
+  - packages/core/src/install.ts#planAgentHook
+  - packages/core/src/install.ts#planGitHook
+  - packages/core/src/install.ts#planInstall
+  - packages/core/src/install.ts#planMcpConfig
+  - packages/core/src/install.ts#planPointer
+  - packages/core/src/install.ts#planSkill
+  - packages/core/src/install.ts#readIfExists
+  - packages/core/src/install.ts#renderTomlManagedBlock
+  - packages/core/src/install.ts#renderYamlManagedBlock
+  - packages/core/src/install.ts#stopEntryCommands
+  - packages/core/src/install.ts#stripJsoncComments
+  - packages/core/src/manifest.ts#MANIFEST_REL_PATH
+  - packages/core/src/manifest.ts#MANIFEST_VERSION
+  - packages/core/src/manifest.ts#buildManifest
+  - packages/core/src/manifest.ts#computeSnapshotHash
+  - packages/core/src/manifest.ts#listFiles
+  - packages/core/src/manifest.ts#manifestsEqual
+  - packages/core/src/manifest.ts#pendingBatchEqual
+  - packages/core/src/manifest.ts#readManifest
+  - packages/core/src/manifest.ts#writeManifestIfChanged
+  - packages/core/src/markdown-mask.ts#boundedExcerpt
+  - packages/core/src/markdown-mask.ts#consumeFenceLine
+  - packages/core/src/markdown-mask.ts#createFenceState
+  - packages/core/src/markdown-mask.ts#hasUnclosedFence
+  - packages/core/src/markdown-mask.ts#hasUnclosedMarkdown
+  - packages/core/src/markdown-mask.ts#maskCodeSpans
+  - packages/core/src/markdown-mask.ts#maskCodeSpansPreservingLength
+  - packages/core/src/markdown-mask.ts#maskFencedCodeBlocks
+  - packages/core/src/markdown-mask.ts#maskFencedCodeBlocksPreservingLength
+  - packages/core/src/markdown-mask.ts#maskInlineCode
+  - packages/core/src/markdown-mask.ts#unclosedMarkdownDiagnostic
+  - packages/core/src/mermaid-validator.ts#parseWithTemporaryDom
+  - packages/core/src/mermaid-validator.ts#restoreGlobal
+  - packages/core/src/mermaid-validator.ts#validateMermaidSyntax
 ---
 
-# Core runtime config, schema, diagrams, diff preview, and export
+# Init, install, manifest, markdown-mask, and mermaid-validator support
 
-This module groups the livewiki core runtime surfaces that operate below the LLM: per-repo config loading, the SQLite index schema and migrations, deterministic Mermaid generators, a read-only working-tree debt preview, and the deterministic exporter from `livewiki/` into target wiki trees.
+This page documents the core support layer that backs the `livewiki init` and `livewiki install` commands, the on-disk `livewiki/.manifest.json` snapshot, and the Markdown and Mermaid validation helpers shared across the verification pipeline.
 
 ## When to use this page
 
-- **Configure** the per-repo `.livewiki/config.json` (load, validate, default-merge, save).
-- **Inspect or evolve** the SQLite index schema and migration ladder in `db.ts`.
-- **Generate** deterministic Mermaid diagrams (structure, module graph, class) without an LLM.
-- **Preview** which wiki pages a working tree change would invalidate before committing, or **export** the `livewiki/` snapshot to `generic`, `github-wiki`, or `gitlab-wiki` destinations under `.livewiki/export/<target>/`.
+- Read `init` before changing how `livewiki init` builds the deterministic wiki layout.
+- Read `install` before changing agent detection probes, MCP merge adapters, or the opt-in pointer.
+- Read `manifest` before changing `livewiki/.manifest.json` schema, hashing, or the anti-loop guard.
 
 ## How it fits
 
-These files live in `packages/core/src/` and are imported by the orchestrator and CLI commands. `config.ts` is the read/write surface for `.livewiki/config.json`. `db.ts` is opened by the indexer, the anchor ledger, and the diff preview. `diagrams.ts` produces `livewiki/architecture/structure.mmd`, `livewiki/architecture/modules.mmd`, and per-module class diagrams; its tests live alongside in `diagrams.test.ts`. `diff-preview.ts` reuses the indexer's read/parse/extract path against the working tree and runs SELECTs only; `flow-diagram.test.ts` is a sibling test file that builds the FlowchartIR / Module / FlowCandidate fixtures the diagram generators are exercised against. `export.ts` reads `livewiki/` and writes to `.livewiki/export/<target>/` through the `safe-io` allowlist.
+The `init` module is the principal entry point of the `livewiki init` command. It ensures `.livewiki/` and `livewiki/` exist (and that `.livewiki/` is gitignored), indexes the repo, computes a deterministic module plan via `buildPlan`, then writes the layout. With `--plan` it stops before any write and returns an `InitPlanReport`; without `--plan` it generates `structure.mmd`, `modules.mmd`, one `diagrams/<slug>.classes.mmd` per module via `syncClassDiagrams`, and the manifest via `manifest.ts`, then reconciles the flows, topics, and auxiliary index hubs with on-disk ownership so human-owned hubs surface as `skippedFlowsHub`, `skippedTopicsHub`, or `skippedAuxiliaryHub` instead of being silently overwritten. With `--batch` it forwards to the batch pipeline (not in this module) and reports the batch summary plus `batchExitCode`.
 
-## Config: load, validate, default, save
+The `install` module is the registry-and-merger half of `livewiki install`. A pure-data `AGENT_REGISTRY` describes detection probes, MCP config shape, hook templates, and skill consumption; pure helpers (`buildMcpEntry`, `buildLocalCommandEntry`, `stripJsoncComments`) produce the documented MCP entry and prepare JSONC for parsing. The `plan*` family composes detection and adapter results into `InstallAction[]`; `applyInstall` performs them. Home-dir writes deliberately bypass `safe-io` (which only knows repo-internal paths), and refusal semantics keep foreign files, unparseable JSON, or non-equal `livewiki` entries from being clobbered.
 
-<!-- lw:anchors packages/core/src/config.ts#CONFIG_DEFAULTS packages/core/src/config.ts#CONFIG_FILENAME packages/core/src/config.ts#CONFIG_PATH packages/core/src/config.ts#MAX_TIMEOUT_MS packages/core/src/config.ts#MissingProviderConfigError packages/core/src/config.ts#MissingProviderConfigError.constructor packages/core/src/config.ts#applyDefaults packages/core/src/config.ts#assertValidTimeoutMs packages/core/src/config.ts#loadConfig packages/core/src/config.ts#resolveBaseUrl packages/core/src/config.ts#resolveExtraIgnores packages/core/src/config.ts#resolveProviderFromConfig packages/core/src/config.ts#saveConfig packages/core/src/config.ts#validateConfigForBatch packages/core/src/config.ts#validateConfigShape -->
+The `manifest` module is the read, write, and equality layer for `livewiki/.manifest.json` (schema `MANIFEST_VERSION`, relative path `MANIFEST_REL_PATH`). It exposes a corruption-tolerant `readManifest`, a deterministic `computeSnapshotHash` over `livewiki/` excluding the manifest itself, and `writeManifestIfChanged` which is the anti-loop guard: it only rewrites when content actually changes (ignoring `updatedAt`), keeping CI `git diff` clean.
 
-The config schema keeps every field optional. `language` is the only field with an explicit default (`"en"`); the rest are deliberately undefined so the user is forced to choose without a silent fallback.
+The `markdown-mask` module provides small, deterministic Markdown masking helpers used by verify, artifact, and anchor pipelines. It distinguishes three masking modes (blank-out, length-preserving blank-out, length-preserving inline-code-only), exposes `hasUnclosedMarkdown` as the structural truncation signal, and produces a deterministic `unclosedMarkdownDiagnostic` with kind, line number, bounded excerpt, and exact delimiter length.
 
-```ts
-export const MAX_TIMEOUT_MS = 2_147_483_647;
-export const CONFIG_PATH = CONFIG_REL_PATH;
-export const CONFIG_FILENAME = nodePath.basename(CONFIG_REL_PATH);
-export const CONFIG_DEFAULTS = {
-  // (defaults table; only `language` carries an explicit "en" default)
-};
+The `mermaid-validator` module is a thin, process-wide isolation layer around Mermaid's parser. It serializes calls behind a single promise queue, swaps `window` and `document` for a temporary `jsdom` instance per parse, and restores the previous globals in `finally` so concurrent or interleaved validations do not corrupt host state.
+
+## Diagram
+
+```mermaid
+%% livewiki/diagrams/core-src-05.mmd
 ```
 
-- `export const MAX_TIMEOUT_MS = 2_147_483_647;` is the upper bound checked by `assertValidTimeoutMs`.
-- `export async function loadConfig(repoRoot: string): Promise<LivewikiConfig> {` reads `.livewiki/config.json` and validates the parsed shape.
-- `export function applyDefaults(config: LivewikiConfig): LivewikiConfig {` returns a config with default fields filled in.
-- `export async function saveConfig(`, `export function resolveProviderFromConfig(`, `export function resolveBaseUrl(config: LivewikiConfig): string {`, `export function resolveExtraIgnores(config: LivewikiConfig): readonly string[] {` round out the read/write/derivation surface.
-- `function validateConfigShape(parsed: unknown): LivewikiConfig {` is the internal shape gate that runs before defaults are applied.
-- `export function validateConfigForBatch(repoRoot: string, config: LivewikiConfig): void {` throws `MissingProviderConfigError` when the batch path requires `provider`/`model` and they are absent.
-- `export class MissingProviderConfigError extends Error {` carries the repo root and missing field list. `constructor(repoRoot: string, missingFields: Array<"provider" | "model">) {` builds the user-facing message pointing at `.livewiki/config.json`.
-- `export function assertValidTimeoutMs(v: unknown): asserts v is number {` rejects values outside `0..MAX_TIMEOUT_MS` and non-integers.
+## Init entry point and plan builder
 
-Note on bounds: `assertValidTimeoutMs` enforces the upper end at `MAX_TIMEOUT_MS`; the visible source describes `0` as a separate "disable client abort" sentinel rather than a lower-bounded range. API keys are deliberately never stored in this file — only env vars hold credentials, so the config can be versioned without leaking secrets.
+<!-- lw:anchors packages/core/src/init.ts#runInit packages/core/src/init.ts#buildPlan packages/core/src/init.ts#escapeHtmlId packages/core/src/init.ts#formatNeighbors packages/core/src/init.ts#readFlowPageOwner -->
 
-## SQLite index: schema, version, migrations
+`runInit` is the principal entry point of `livewiki init`. The full signature shown in the symbol table is `export async function runInit(opts: InitOptions): Promise<InitResult>`. It guarantees `.livewiki/`, `livewiki/`, `livewiki/architecture/`, and `livewiki/diagrams/` exist, ensures `.livewiki/` is gitignored, loads config once, runs the indexer and ledger, then calls `buildPlan` to assemble the module and edge surface.
 
-<!-- lw:anchors packages/core/src/db.ts#CURRENT_SCHEMA_VERSION packages/core/src/db.ts#MIGRATION_SQL_V3 packages/core/src/db.ts#SCHEMA_SQL packages/core/src/db.ts#SCHEMA_VERSION_KEY packages/core/src/db.ts#migrateV3ToV4 packages/core/src/db.ts#migrateV4ToV5 packages/core/src/db.ts#migrateV5ToV6 packages/core/src/db.ts#migrateV6ToV7 packages/core/src/db.ts#migrationsFor packages/core/src/db.ts#openIndex packages/core/src/db.ts#postV3Migrations -->
+In `plan` mode it returns immediately with `filesWritten: []` and the `InitPlanReport` (modules, edges, ordered, totalSymbols, totalFiles) — no LLM, no writes. Outside plan mode it generates `structure.mmd`, `modules.mmd`, reconciles class diagrams via `syncClassDiagrams`, then assembles the flows, topics, and auxiliary index hubs. Hubs owned by humans (or unparseable) are preserved and surfaced through `skippedFlowsHub`, `skippedTopicsHub`, and `skippedAuxiliaryHub` rather than silently overwritten.
 
-The index is a derived cache: deleting `.livewiki/` lets `reindex` rebuild it from the markdown source of truth.
+The visible code never throws on hub ownership mismatch — it converts that into a structured field on `InitResult`. With `--batch`, `runInit` reports the batch runId, status, done, and failed summary and `batchExitCode` (mapped by the batch module, not here).
 
-```ts
-export const CURRENT_SCHEMA_VERSION = 8;
-export const SCHEMA_VERSION_KEY = "schema_version";
-export const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS files (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  path TEXT NOT NULL UNIQUE,
-  ...
-);
-...
-`;
-export const MIGRATION_SQL_V3 = `...`;
-```
+`buildPlan` is the private module-plan builder consumed by `runInit`. The symbol table lists its signature as `async function buildPlan(`. It produces the same `{ symbols, pathRoleConfig, filePaths, modules, edges, ordered, totalSymbols, totalFiles }` shape used by both `--plan` and the layout-writing branch, so init and batch (when it eventually loads the plan) cannot disagree on the configured `ignores` and split thresholds.
 
-- `export function openIndex(dbPath: string): Database.Database {` opens the SQLite handle, creates the schema, runs migrations, and stamps `SCHEMA_VERSION_KEY = String(CURRENT_SCHEMA_VERSION)`.
-- `export function migrationsFor(`, `export function postV3Migrations(` select the migration steps to apply based on the current stored version.
-- `export function migrateV3ToV4(db: Database.Database): void {`, `export function migrateV4ToV5(db: Database.Database): void {`, `export function migrateV5ToV6(db: Database.Database): void {`, `export function migrateV6ToV7(db: Database.Database): void {`, `export function migrateV7ToV8(db: Database.Database): void {` apply each step in order; each one only mutates tables that are present (an `if` guard skips the step when its target table is missing).
-- Schema v8 adds `debt.doc_page_id` — the durable page reference for a debt row, which survives anchor removal (like `debt.symbol_key` before it). `migrateV7ToV8` is idempotent (`PRAGMA table_info` guard before `ALTER TABLE ADD COLUMN`) and backfills `doc_page_id` from the anchor rows that still exist.
-- `SCHEMA_SQL` is idempotent — running it on an already-populated DB is a no-op, and the partial unique index on `symbols(key) WHERE status = 'active'` is what lets the indexer soft-delete and re-insert without violating uniqueness.
-- `journal_mode = WAL` and `foreign_keys = ON` are enforced by `openIndex`; the accompanying test forces a write and checkpoints the WAL.
+`readFlowPageOwner` inspects a flow page's body and returns `"generated"` when automation owns the file or `"other"` for human, mixed, or unparseable content. The symbol table gives no full signature, so behavior is limited to what is visible: a literal string return narrowed to those two possibilities. This is what allows `runInit` to preserve human-owned hubs and surface them as `skippedFlowsHub` rather than overwrite them.
 
-## Diagram generators
+`escapeHtmlId` and `formatNeighbors` are the small helper pair used when the generated architecture pages render module IDs as HTML anchors and list adjacency strings. They keep the rendered output stable across runs of the same module plan, which is what keeps the manifest `snapshotHash` byte-stable and CI anti-loop clean.
 
-<!-- lw:anchors packages/core/src/diagrams.ts#STRUCTURE_MAX_EDGES packages/core/src/diagrams.ts#buildCollapsedStructureLines packages/core/src/diagrams.ts#buildExactStructureLines packages/core/src/diagrams.ts#classIdentity packages/core/src/diagrams.ts#escapeLabel packages/core/src/diagrams.ts#generateClassDiagram packages/core/src/diagrams.ts#generateModulesGraph packages/core/src/diagrams.ts#generateStructure packages/core/src/diagrams.ts#mermaidId packages/core/src/diagrams.ts#mermaidMemberName packages/core/src/diagrams.ts#moduleSlug -->
+## Diagram generation and stale artifact sync
 
-All output here is deterministic; no LLM is involved.
+<!-- lw:anchors packages/core/src/init.ts#syncClassDiagrams packages/core/src/init.ts#generateArchitectureOverview packages/core/src/init.ts#regenerateArchitectureOverview packages/core/src/init.ts#syncStaleFlowArtifacts packages/core/src/init.ts#syncStaleTopicArtifacts packages/core/src/init.ts#syncStaleModulePages -->
 
-```ts
-export const STRUCTURE_MAX_EDGES = 450;
-export function generateStructure(filePaths: string[]): string { ... }
-function buildExactStructureLines(filePaths: string[]): { lines: string[]; edgeCount: number } { ... }
-function buildCollapsedStructureLines(filePaths: string[]): string[] { ... }
-export function generateModulesGraph(edges: ModuleGraphEdge[]): string { ... }
-export function generateClassDiagram(module: Module, symbols: SymbolRow[]): string { ... }
-export function moduleSlug(value: string): string { ... }
-function classIdentity(path: string, className: string): string { ... }
-function mermaidId(value: string): string { ... }
-function mermaidMemberName(value: string): string { ... }
-function escapeLabel(value: string): string { ... }
-```
+`syncClassDiagrams` synchronizes the generated class-diagram surface for one complete module plan: `.classes.mmd` files under `livewiki/diagrams/` are owned by this deterministic generator; other files in that directory are preserved. The same call removes files left behind by an older plan (e.g. `src.classes.mmd` after IDs become `core-src-*`).
 
-- `export const STRUCTURE_MAX_EDGES = 450;` is the budget — Mermaid's parser rejects diagrams over 500 edges by default and `maxEdges` is a secure config; 450 leaves headroom for livewiki's own verify.
-- `export function generateStructure(filePaths: string[]): string {` runs in `graph LR` orientation. When the exact graph fits under the budget, it emits every directory and file as a node with deduped parent→child edges; otherwise it collapses to per-directory nodes plus a `dir/… (N files)` node per directory. Orientation is LR (vertical growth) rather than TD to match the natural page-scroll direction.
-- `export function generateModulesGraph(edges: ModuleGraphEdge[]): string {` emits `graph LR` with deduplicated `from --> to` edges; an empty edge list renders the `No module edges detected` placeholder.
-- `export function generateClassDiagram(module: Module, symbols: SymbolRow[]): string {` returns `""` for modules with zero classes; otherwise emits a `classDiagram` with `direction TB` (sparse class lists would otherwise render as a tiny row), with classes keyed by `classIdentity(path, className)` so same-named classes in different files get distinct IDs.
-- `export function moduleSlug(value: string): string {` lowercases, strips diacritics via NFD, collapses non-alphanumerics to `-`, and trims leading/trailing dashes — used for the per-module `livewiki/diagrams/<module-slug>.classes.mmd` filenames.
-- `function escapeLabel(value: string): string {` and `function mermaidId(value: string): string {` are the safety nets: Mermaid would otherwise break on raw quotes inside labels, so any string crossing the boundary is normalised.
+`generateArchitectureOverview` is the architecture-page renderer; `regenerateArchitectureOverview` re-runs it against the current index. They share the `formatNeighbors` and `escapeHtmlId` helper pair documented in the previous section.
 
-## Diff preview: read-only working-tree debt
+`syncStaleFlowArtifacts`, `syncStaleTopicArtifacts`, and `syncStaleModulePages` are the deterministic surface trims paired with the corresponding generators: they remove artifacts whose owning plan entry no longer exists, so a re-init never leaves the wiki with pages that reference deleted modules, flows, or topics. Each returns the written paths for `runInit` to record on `filesWritten`.
 
-<!-- lw:anchors packages/core/src/diff-preview.ts#MOVED_SCOPE_NOTE packages/core/src/diff-preview.ts#formatDiffPreviewHuman packages/core/src/diff-preview.ts#parseGitDiffOutput packages/core/src/diff-preview.ts#previewWorkingTreeDebt packages/core/src/diff-preview.ts#runGitDiff packages/core/src/diff-preview.test.ts#git packages/core/src/diff-preview.test.ts#gitCommitAll packages/core/src/diff-preview.test.ts#gitInit packages/core/src/diff-preview.test.ts#setupBaseline packages/core/src/diff-preview.test.ts#writeRepoFile -->
+## Agent registry
 
-This is a pre-commit preview only — it never writes, never updates anchors, and never mutates the index.
+<!-- lw:anchors packages/core/src/install.ts#AGENT_REGISTRY packages/core/src/install.ts#getAgentDefinition packages/core/src/install.ts#SHARED_SKILL_TARGET -->
 
-```ts
-export const MOVED_SCOPE_NOTE =
-  "renames (`moved`) are detected by the post-commit ledger (`livewiki index`), not by this preview";
-export function parseGitDiffOutput(text: string): string[] { ... }
-function runGitDiff(absRoot: string): Promise<string | null> { ... }
-export async function previewWorkingTreeDebt(repoRoot: string): Promise<DiffPreviewResult> { ... }
-export function formatDiffPreviewHuman(result: DiffPreviewResult): string { ... }
-```
+`AGENT_REGISTRY` is the pure-data list of `AgentDefinition`s that `livewiki install` knows how to detect and configure. The visible signature in the symbol table is `export const AGENT_REGISTRY: readonly AgentDefinition[] = [`. Each entry binds `id` and `displayName` to a set of home-relative `configProbes`, PATH `binProbes`, the MCP config location and `shape` (`json-mcpServers`, `json-local-command`, `toml-managed-block`, `yaml-managed-block`), and optional flags such as `hasStopHookTemplate` (claude-code) and `usesSharedSkills`. Agents deliberately omitted from the registry (e.g. mmx/minimax) are documented in the surrounding comment.
 
-- `export function parseGitDiffOutput(text: string): string[] {` turns `git diff --name-only` text into a sorted, deduped list of repo-relative posix paths, tolerating blank lines and CRLF.
-- `function runGitDiff(absRoot: string): Promise<string | null> {` spawns a single `git -c core.quotepath=false diff --name-only --relative HEAD` with `shell: false`. ANY failure — git missing, not a repo, no HEAD yet, non-zero exit — resolves to `null` rather than throwing, and the caller degrades to `notGitRepo: true`.
-- `export async function previewWorkingTreeDebt(repoRoot: string): Promise<DiffPreviewResult> {` returns `{ notGitRepo, changedFiles, pages }`. With `notGitRepo: true`, the result is `{ notGitRepo: true, changedFiles: [], pages: [] }` — an early return, not a throw. Otherwise it recomputes working-tree symbols for each changed file via the indexer's own read/parse/extract path, then runs the ledger's exact rule: missing → `deleted`, hash mismatch → `changed`. Files the indexer itself would skip (over `MAX_FILE_BYTES`, NUL byte, unreadable) are excluded from the comparison so their anchors are not false-flagged. `moved` is out of scope here — `MOVED_SCOPE_NOTE` carries that caveat into the human output.
-- `export function formatDiffPreviewHuman(result: DiffPreviewResult): string {` formats the structured result for the CLI; the clean-tree branch prints the `working tree clean vs anchors` marker.
-- The tests stand up real temp git repos: `function git(args: string[]): void {`, `function gitInit(): void {`, `function gitCommitAll(message: string): void {`, `async function writeRepoFile(rel: string, content: string): Promise<void> {`, and `async function setupBaseline(): Promise<void> {`. `setupBaseline` commits `.gitignore`, two TypeScript files, and matching `livewiki/` pages, then runs the real indexer + anchor ledger so `anchors.symbol_hash_at_doc` matches `symbols.content_hash` for every anchor — the hash equivalence that the clean-tree test asserts.
+`getAgentDefinition` returns the entry for a given `id` or `undefined` when no agent matches. The signature in the symbol table is `export function getAgentDefinition(id: string): AgentDefinition | undefined {`.
 
-## Export: deterministic transformation to target wikis
+`SHARED_SKILL_TARGET` is the home-relative path the shared skill is copied to. The signature in the symbol table is `export const SHARED_SKILL_TARGET = ".agents/skills/document-as-you-go/SKILL.md";`. Agents with `usesSharedSkills: true` consume this directory; others do not see the skill at all.
 
-<!-- lw:anchors packages/core/src/export.ts#EXPORT_TARGETS packages/core/src/export.ts#ExportError packages/core/src/export.ts#ExportError.constructor packages/core/src/export.ts#GENERATED_MARKER_PREFIX packages/core/src/export.ts#GENERATED_MARKER_SUFFIX packages/core/src/export.ts#buildMarker packages/core/src/export.ts#detectMarker packages/core/src/export.ts#ensureExtension packages/core/src/export.ts#enumerateDestination packages/core/src/export.ts#enumerateSourcePages packages/core/src/export.ts#errMessage packages/core/src/export.ts#exportWiki packages/core/src/export.ts#flattenPath packages/core/src/export.ts#parseLinkHref packages/core/src/export.ts#renderMarkdownHeader packages/core/src/export.ts#replaceMermaidPlaceholder packages/core/src/export.ts#resolveLinkSource packages/core/src/export.ts#rewriteInternalLinks packages/core/src/export.ts#splitRawFrontmatter packages/core/src/export.ts#stripAnchorMarkers packages/core/src/export.ts#stripAnchorsField packages/core/src/export.ts#transformMarkdownPage packages/core/src/export.ts#transformMermaidPage packages/core/src/export.ts#transformPage packages/core/src/export.ts#validateTarget packages/core/src/export.test.ts#bodyOf packages/core/src/export.test.ts#detectSymlinkSupport packages/core/src/export.test.ts#listDest packages/core/src/export.test.ts#readDest packages/core/src/export.test.ts#writeWiki -->
+## Detection
 
-The export reads `livewiki/`, transforms each page, and writes to `.livewiki/export/<target>/`. It never touches the source.
+<!-- lw:anchors packages/core/src/install.ts#detectAgents packages/core/src/install.ts#pathExists -->
 
-```ts
-export const EXPORT_TARGETS: readonly ExportTarget[] = [
-  "generic",
-  "github-wiki",
-  "gitlab-wiki",
-] as const;
-export const GENERATED_MARKER_PREFIX = "<!-- livewiki:generated source=\"livewiki/";
-export const GENERATED_MARKER_SUFFIX = "\" -->";
-export class ExportError extends Error {
-  public readonly issues: ExportIssue[];
-  constructor(issues: ExportIssue[]) { ... }
-}
-export function validateTarget(target: string): ExportTarget { ... }
-export async function exportWiki(opts: ExportOptions): Promise<ExportResult> { ... }
-async function enumerateSourcePages( ... ) { ... }
-function flattenPath(rel: string, target: ExportTarget): string { ... }
-function buildMarker(sourceRel: string): string { ... }
-function splitRawFrontmatter(source: string): { ... } { ... }
-function stripAnchorsField(frontmatterBlock: string): string { ... }
-function renderMarkdownHeader(source: string, sourceRel: string): string { ... }
-function detectMarker(text: string): string | null { ... }
-async function enumerateDestination( ... ) { ... }
-function transformPage( ... ) { ... }
-function transformMermaidPage(page: SourcePage): string { ... }
-function transformMarkdownPage( ... ) { ... }
-function stripAnchorMarkers(body: string): string { ... }
-function replaceMermaidPlaceholder( ... ) { ... }
-function parseLinkHref(href: string): ParsedLink { ... }
-function rewriteInternalLinks( ... ) { ... }
-function resolveLinkSource(pathPart: string, sourceRel: string): string { ... }
-function ensureExtension(path: string): string { ... }
-function errMessage(err: unknown): string { ... }
-```
+`detectAgents` probes the filesystem (no `spawn`) for every entry in `AGENT_REGISTRY`. The signature in the symbol table is `export async function detectAgents(opts: { home: string; pathEnv: string; }): Promise<Record<AgentId, AgentDetection>>`. For each agent it records both hits and misses in `evidence` — a `config found: ~/.claude` line or `bin not found on PATH: codex` line — so the CLI can show why an agent was or was not selected.
 
-- `export const EXPORT_TARGETS: readonly ExportTarget[] = [` enumerates the three supported targets. `export function validateTarget(target: string): ExportTarget {` throws `ExportError` (with `code: "invalid_target"`) for anything else.
-- The home-page rename per target lives next to `EXPORT_TARGETS`: `generic` keeps `quickstart.md`, `github-wiki` becomes `Home.md`, `gitlab-wiki` becomes `home.md`.
-- `export const GENERATED_MARKER_PREFIX = "<!-- livewiki:generated source=\"livewiki/";` and `export const GENERATED_MARKER_SUFFIX = "\" -->";` define the marker every exported page carries so a re-export can identify its own prior output. `function buildMarker(sourceRel: string): string {` assembles the marker for a given source path; `function detectMarker(text: string): string | null {` parses it back out of a destination file's header (the search is bounded to a small header window of lines).
-- `export class ExportError extends Error {` carries the structured `issues: ExportIssue[]`. `constructor(issues: ExportIssue[]) {` joins each issue's `code` and `detail` into the message.
-- `export async function exportWiki(opts: ExportOptions): Promise<ExportResult> {` runs the full preflight-then-write pipeline: enumerate source pages, flatten their paths per target, transform each page, preflight against the destination (collisions, symlink escapes, missing diagrams, broken internal links), and only then write. A preflight failure leaves the destination unchanged; an unforeseen filesystem failure during write or removal may leave the export partially updated (the command returns exit 1 and an idempotent rerun repairs it — that is the explicit, honest contract).
-- `async function enumerateSourcePages(` reads `livewiki/` through `safeIo.resolveAndValidate`; direct `nodeFs.readdir` is only used after safe-io has accepted the directory. Each page's rel is computed against the realpath-canonicalized wiki root (`safeLivewikiDir`), not the lexical repo root — the two differ on macOS (`/var` → `/private/var`) and Windows 8.3 paths, where the lexical comparison used to poison every downstream read and the export died with `empty_source`.
-- `function flattenPath(rel: string, target: ExportTarget): string {` collapses directory prefixes into a flat filename per target, and a collision raises `flattening_collision` before any write.
-- `function transformPage(` dispatches to `function transformMarkdownPage(` (which calls `function splitRawFrontmatter(source: string): { ... }`, `function stripAnchorsField(frontmatterBlock: string): string {` to remove the `anchors:` field, `function renderMarkdownHeader(source: string, sourceRel: string): string {`, `function stripAnchorMarkers(body: string): string {`, `function rewriteInternalLinks(` (which delegates to `function parseLinkHref(href: string): ParsedLink {`, `function resolveLinkSource(pathPart: string, sourceRel: string): string {`, `function ensureExtension(path: string): string {`)) or `function transformMermaidPage(page: SourcePage): string {` (which calls `function replaceMermaidPlaceholder(`).
-- `async function enumerateDestination(` reads `.livewiki/export/<target>/` to classify each existing entry as an ordinary file with a marker, an ordinary file without a marker, or unsafe (symlink, directory, special file, unreadable). `--force` overwrites only ordinary files lacking a matching marker; unsafe entries never get force-overwritten.
-- `function errMessage(err: unknown): string {` is the standard unknown-error stringifier used by the export's write paths.
-- The tests stand up real temp dirs per case (`async function writeWiki(rel: string, content: string): Promise<void> {`, `async function readDest(target: ExportTarget, name: string): Promise<string | null> {`, `async function listDest(target: ExportTarget): Promise<string[]> {`, `async function bodyOf(transformed: string): Promise<string> {`); `async function detectSymlinkSupport(): Promise<boolean> {` is run once at boot, and on any non-Windows host that reports `false` the suite throws — that is the cross-platform CI contract for the symlink-escape regression coverage. On Windows the symlink-sensitive cases use `it.runIf(canSymlink)` and skip; on Unix the host's inability to create symlinks is treated as a CI contract violation, not a harmless skip.
+`pathExists` is the small `node:fs/promises` wrapper behind detection. The signature in the symbol table is `async function pathExists(abs: string): Promise<boolean> {`. It resolves to `true` on a successful `access` and to `false` on any thrown error; nothing in the visible code makes it reject. Binary probing also walks PATH directories and the `BIN_VARIANTS` list (`""`, `.cmd`, `.exe`, `.ps1`) so Windows installations are not falsely reported missing.
 
-## Flow diagram test helpers
+## MCP entry builders and merge adapters
 
-<!-- lw:anchors packages/core/src/flow-diagram.test.ts#candidate packages/core/src/flow-diagram.test.ts#chainIr packages/core/src/flow-diagram.test.ts#mod -->
+<!-- lw:anchors packages/core/src/install.ts#buildMcpEntry packages/core/src/install.ts#buildLocalCommandEntry packages/core/src/install.ts#stripJsoncComments packages/core/src/install.ts#mergeMcpServersJson packages/core/src/install.ts#mergeClaudeCodeSettings packages/core/src/install.ts#renderTomlManagedBlock packages/core/src/install.ts#renderYamlManagedBlock packages/core/src/install.ts#mergeTomlManagedBlock packages/core/src/install.ts#TOML_BLOCK_START packages/core/src/install.ts#TOML_BLOCK_END packages/core/src/install.ts#isPlainObject packages/core/src/install.ts#deepEqual packages/core/src/install.ts#stopEntryCommands -->
 
-These helpers build the inputs the flow-diagram generator is exercised against.
+`buildMcpEntry` and `buildLocalCommandEntry` produce the documented MCP server entry. The symbol-table signatures are `export function buildMcpEntry(repoRoot: string): McpEntry {` and `export function buildLocalCommandEntry(repoRoot: string): LocalCommandMcpEntry {`. The JSON-shaped entry uses `{ command: "npx", args: ["-y", "@livewiki/mcp", "--repo", "<absolute-repo>"] }`; the local-command entry (`opencode`) wraps the same argv as a single array and sets `enabled: true`.
 
-```ts
-function chainIr(ids: string[]): FlowchartIR { ... }
-function mod(id: string, paths: string[], displayTitle?: string): Module { ... }
-function candidate(overrides: Partial<FlowCandidate> & { moduleIds: string[] }): FlowCandidate { ... }
-```
+`stripJsoncComments` removes `//` line and `/* ... */` block comments outside string literals, preserving newlines so line numbers survive. The signature in the symbol table is `export function stripJsoncComments(text: string): string {`. Inside an open string the scanner treats `//`, `*`, and escape sequences as data, so `//` inside a quoted string is never stripped.
 
-- `function chainIr(ids: string[]): FlowchartIR {` builds a linear-chain `FlowchartIR` (`A -> B -> C -> ...`) for an array of node ids — used to assert edge count and node count.
-- `function mod(id: string, paths: string[], displayTitle?: string): Module {` constructs a `Module` with the minimum required fields; `displayTitle` is only included in the object when provided, so tests can exercise both the titled and the id-only fallback branches.
-- `function candidate(overrides: Partial<FlowCandidate> & { moduleIds: string[] }): FlowCandidate {` returns a `FlowCandidate` with the empty default signals (`{ entry: [], persistence: [], external: [] }`) and any caller-supplied overrides applied on top.
+`mergeMcpServersJson` and `mergeClaudeCodeSettings` are the JSON-side mergers. They delegate structural equality to `isPlainObject` and `deepEqual`. The symbol table gives only `export function mergeMcpServersJson(` and `export function mergeClaudeCodeSettings(` (both incomplete). Both surface a `MergeResult` with `status: "write" | "skip" | "refuse"` and a `reason`, and refuse — rather than merge — when the existing file is unparseable or already contains a non-equal `livewiki` entry.
+
+`renderTomlManagedBlock` and `renderYamlManagedBlock` produce the exact bytes of the delimited block (`TOML_BLOCK_START = "# livewiki:start"`, `TOML_BLOCK_END = "# livewiki:end"`, signatures `export const TOML_BLOCK_START = "# livewiki:start";` and `export const TOML_BLOCK_END = "# livewiki:end";`) that `mergeTomlManagedBlock` then splices into an existing Codex TOML or Hermes YAML config. There is no TOML or YAML parser in this module: the merge is a pure string splice inside the managed-block delimiters, and files outside the delimiters are never touched.
+
+`isPlainObject` narrows `unknown` to `Record<string, unknown>` and rejects arrays and primitives. `deepEqual` walks arrays and plain objects recursively; the visible code returns `true` when both operands are `===`, when both are arrays of equal length with pairwise equal elements, or when both are plain objects with the same key set and pairwise equal values; otherwise it returns `false`.
+
+`stopEntryCommands` flattens the `Stop` hook entry (claude-code) into a list of command strings used by `mergeClaudeCodeSettings` to detect duplicates. The symbol table gives no full signature; behavior is limited to flattening one hook entry's commands into a `string[]`.
+
+## Plan and apply
+
+<!-- lw:anchors packages/core/src/install.ts#planMcpConfig packages/core/src/install.ts#planAgentHook packages/core/src/install.ts#planSkill packages/core/src/install.ts#planGitHook packages/core/src/install.ts#planPointer packages/core/src/install.ts#planInstall packages/core/src/install.ts#applyInstall packages/core/src/install.ts#readIfExists -->
+
+The `plan*` family composes detection and adapter results into `InstallAction[]`. `planInstall` is the orchestrator (signature `export async function planInstall(opts: PlanInstallOptions): Promise<InstallAction[]>`); `planMcpConfig`, `planAgentHook`, `planSkill`, `planGitHook`, and `planPointer` each cover one target. They share `readIfExists` (signature `async function readIfExists(abs: string): Promise<string | null> {`) which returns the existing file body or `null` when the target is missing, so a plan can distinguish "create new" from "merge into existing" before any write.
+
+The pointer is opt-in: it only appears as a writable action when the caller passes `writePointer: true`. Without that flag it stays `requires-opt-in` and `applyInstall` never writes it — preserving the safety model that everything outside the repo allowlist must be opt-in.
+
+`applyInstall` consumes the `InstallAction[]` produced by `planInstall`. The symbol table gives only `export async function applyInstall(` (signature incomplete). The visible code does not show the body, but the surrounding design guarantees that a `refuse` action never becomes a write and that home-dir writes deliberately bypass `safe-io` (which only knows repo-internal paths).
+
+## Manifest schema, hash, and equality
+
+<!-- lw:anchors packages/core/src/manifest.ts#MANIFEST_VERSION packages/core/src/manifest.ts#MANIFEST_REL_PATH packages/core/src/manifest.ts#readManifest packages/core/src/manifest.ts#computeSnapshotHash packages/core/src/manifest.ts#listFiles packages/core/src/manifest.ts#writeManifestIfChanged packages/core/src/manifest.ts#manifestsEqual packages/core/src/manifest.ts#pendingBatchEqual packages/core/src/manifest.ts#buildManifest -->
+
+The manifest schema version is `MANIFEST_VERSION = 1` and the relative path is `MANIFEST_REL_PATH = "livewiki/.manifest.json"` (`export const MANIFEST_VERSION = 1;`, `export const MANIFEST_REL_PATH = "livewiki/.manifest.json";`). The on-disk shape is `{ version, lastDocumentedCommit, snapshotHash, updatedAt, pendingBatch }`.
+
+`readManifest` is tolerant of corruption. The signature in the symbol table is `export async function readManifest(repoRoot: string): Promise<LivewikiManifest | null> {`. It returns `null` if the file is missing, if the `exists` probe throws, if JSON parsing throws, or if `version` or `snapshotHash` are not the expected types — instead of propagating the error to the caller.
+
+`computeSnapshotHash` walks `livewiki/` recursively (via `listFiles`), filters out the manifest itself, sorts the relative paths alphabetically, then computes a single `sha256` over `relpath\n<sha256(content)>\n` for each file, concatenated. The signature in the symbol table is `export async function computeSnapshotHash(repoRoot: string): Promise<string> {`. Determinism comes from the explicit sort; `nodeFs.readdir` order is not relied on.
+
+`writeManifestIfChanged` is the anti-loop guard. The signature in the symbol table is `export async function writeManifestIfChanged(`. It reads the current manifest, compares via `manifestsEqual`, and returns `false` without touching the file when content matches. Only on a real change does it `JSON.stringify` and write via `safeIo.writeText`.
+
+`manifestsEqual` deliberately ignores `updatedAt` so a re-compute of the timestamp does not invalidate the equality check; `pendingBatchEqual` compares the four scalar fields of a `PendingBatchRef` (or treats `null === null` as equal). `buildManifest` constructs a fresh manifest with `updatedAt = new Date().toISOString()`.
+
+## Markdown code masking
+
+<!-- lw:anchors packages/core/src/markdown-mask.ts#maskCodeSpans packages/core/src/markdown-mask.ts#maskCodeSpansPreservingLength packages/core/src/markdown-mask.ts#maskFencedCodeBlocks packages/core/src/markdown-mask.ts#maskFencedCodeBlocksPreservingLength packages/core/src/markdown-mask.ts#maskInlineCode packages/core/src/markdown-mask.ts#createFenceState packages/core/src/markdown-mask.ts#consumeFenceLine packages/core/src/markdown-mask.ts#boundedExcerpt -->
+
+The masking layer has three surface helpers: `maskCodeSpans` (signature `export function maskCodeSpans(text: string): string {`) blanks fenced blocks then blanks inline code; `maskCodeSpansPreservingLength` (signature `export function maskCodeSpansPreservingLength(text: string): string {`) replaces the same characters with spaces so byte offsets survive into the masked view; `maskInlineCode` (signature `export function maskInlineCode(text: string): string {`) handles only inline code following the CommonMark rule that the closing delimiter must match the opening run length, leaving unmatched backtick runs literal so `hasUnclosedMarkdown` can detect them.
+
+`maskFencedCodeBlocks` splits on `/\r?\n/` (CRLF-safe) and runs `consumeFenceLine` per line; lines inside a fence become `""`. `maskFencedCodeBlocksPreservingLength` walks the string preserving `\r\n` boundaries and replaces consumed lines with spaces of the same width. The state machine — `createFenceState` returning `{ inFence, fenceChar, fenceLen }` and `consumeFenceLine(line, state): boolean` — is the only piece shared between the blanking and length-preserving variants.
+
+`boundedExcerpt` is the helper that centers the diagnostic excerpt on a delimiter offset, so a 500-character line whose opening fence sits past column 200 still produces an excerpt that visibly contains the delimiter.
+
+## Unclosed-construct detection and diagnostics
+
+<!-- lw:anchors packages/core/src/markdown-mask.ts#hasUnclosedFence packages/core/src/markdown-mask.ts#hasUnclosedMarkdown packages/core/src/markdown-mask.ts#unclosedMarkdownDiagnostic -->
+
+`hasUnclosedFence` (signature `export function hasUnclosedFence(text: string): boolean {`) returns true when the fence state machine ends still inside a fence. `hasUnclosedMarkdown` (signature `export function hasUnclosedMarkdown(text: string): boolean {`) adds the inline-code check: after masking fenced blocks and running `maskInlineCode`, any surviving backtick in the result is an unmatched inline run. The signal is structural, not a length heuristic — a well-formed document ends with zero unmatched backticks.
+
+`unclosedMarkdownDiagnostic` (signature `export function unclosedMarkdownDiagnostic(`) returns `null` on a well-formed body or an `UnclosedMarkdownDiagnostic` with `kind: "fence" | "inline-code"`, a 1-based `lineNumber`, a `boundedExcerpt`, and the exact `delimiterLength`. For the fence case it remembers the line where the opening delimiter was matched; for the inline-code case it uses the length-preserving mask so the surviving backtick index maps 1:1 to the original body (including on CRLF input) and then translates that index back to a line number, an offset within that line, and the run length starting at the offset.
+
+## Mermaid validator isolation
+
+<!-- lw:anchors packages/core/src/mermaid-validator.ts#validateMermaidSyntax packages/core/src/mermaid-validator.ts#parseWithTemporaryDom packages/core/src/mermaid-validator.ts#restoreGlobal -->
+
+`validateMermaidSyntax` (signature `export function validateMermaidSyntax(source: string): Promise<string | null> {`) serializes calls behind a module-level promise queue and always returns a string diagnostic or `null` — it does not throw on a Mermaid parse failure. `parseWithTemporaryDom` (signature `async function parseWithTemporaryDom(source: string): Promise<string | null> {`) installs the shared `parserDom` as `window` and `document` on `globalThis`, lazy-loads `mermaid` and calls `mermaid.parse(source)`, then unconditionally restores prior globals in `finally`.
+
+`restoreGlobal` (signature `function restoreGlobal(`) restores the previous `window` and `document` exactly: if the global existed before the call it is reassigned to its previous value, otherwise it is deleted. This makes nested or interleaved validations safe — the process-wide globals never observe a half-installed DOM.
+
+The visible code contains a single `catch` in `parseWithTemporaryDom` that converts any thrown error into the returned diagnostic string; nothing else in the visible source throws, so the only visible failure shape is `error instanceof Error ? error.message : String(error)`.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [CLI to persistence flow — entry through `livewiki batch` to the SQLite index](flows/cli-src-01-to-core-src-05.md)
-- [Core batch pipeline and call-graph analytics](core-src-04.md) — dependency and dependent
-- [Core source module 09 — orientation, parser, pointer, output budget, navigation](core-src-09.md) — dependency and dependent
-- [Anchor ledger and artifact repair](core-src-01.md) — dependency and dependent
+- Flow: [CLI command surface to core pipeline wiring](flows/cli-src-to-core-src-02.md)
+- [core indexing, imports, flows, and frontmatter](core-src-04.md) — dependency and dependent
+- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md) — dependency and dependent
+- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md) — dependency and dependent
 
 > Coverage note: this module's source (5 files, ~90k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.
 <!-- livewiki:navigate:end -->

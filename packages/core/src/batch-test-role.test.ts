@@ -187,4 +187,57 @@ describe("batch — #24 test-role classification", () => {
     expect(only.removedStalePages).toBeUndefined();
     expect(await exists("livewiki/ghost-only.md")).toBe(true);
   });
+
+  it("refine cannot undo the test split: mixed modules are rejected, heuristic kept", async () => {
+    // Found by the paid rehearsal (2026-08-04): MiniMax-M3's refine pass
+    // merged login.test.ts back into the product module. The validator
+    // must reject the whole refine (heuristic wins, no abort).
+    const mergingRefine = JSON.stringify({
+      modules: [
+        { id: "auth", paths: ["src/auth/login.ts", "src/auth/login.test.ts"] },
+        { id: "utils", paths: ["src/utils/helper.ts"] },
+      ],
+    });
+    class RefineMock extends TestRoleMockLlm {
+      override async generate(req: GenerateRequest): Promise<GenerateResult> {
+        if (req.user.includes("# Heuristic module grouping:")) {
+          this.callLog.push(req.user);
+          return {
+            content: mergingRefine,
+            usage: { inputTokens: 10, outputTokens: 10, model: this.model },
+          };
+        }
+        return super.generate(req);
+      }
+    }
+    const refineLlm = new RefineMock();
+    const result = await runBatch({
+      repoRoot,
+      llmClient: refineLlm,
+      noRefine: false,
+      skipManifestWrite: true,
+    });
+    expect(result.status).toBe("completed");
+
+    // Heuristic partition kept: the test module exists and cost zero LLM
+    // calls (1 refine + 2 product modules = 3 calls total).
+    expect(refineLlm.callLog).toHaveLength(3);
+    expect(await exists("livewiki/auth-tests.md")).toBe(true);
+    const authPage = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    expect(authPage).not.toContain("login.test.ts");
+
+    // The stage-2 checkpoint records the rejection as degradation, not failure.
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+    try {
+      const row = db
+        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 2")
+        .get() as { checkpoint_json: string };
+      const cp = JSON.parse(row.checkpoint_json) as { status: string; error?: { code: string } };
+      expect(cp.status).toBe("done");
+      expect(cp.error?.code).toBe("refine_mixed_test_role");
+    } finally {
+      db.close();
+    }
+  });
 });

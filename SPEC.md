@@ -357,7 +357,8 @@ pre-flag behavior.
   `<slug>.classes.mmd` name, and flow diagrams keep `flow-<slug>.mmd`), and
   the on-disk page carries only the exact `%% livewiki/diagrams/<slug>.mmd`
   placeholder line. The diagram is gated pre-write by the Mermaid parser
-  and the reused `flowMaxDiagramNodes`/`flowMaxDiagramEdges` budgets, and
+  and the module's own `moduleMaxDiagramNodes` (24) /
+  `moduleMaxDiagramEdges` (32) budgets, and
   page + diagram land (and roll back) in one transactional write, reusing
   the stage-5 flow dual-artifact machinery; the stage-4 error-only verify
   gate is preserved. Validation failures feed the bounded repair loop with
@@ -708,7 +709,10 @@ responses carry no hints. The table is pure presentation-layer data
    change makes a root-level `owner: generated` module page stale (its
    module no longer exists), a full batch run removes it and re-runs the
    ledger; human/mixed/ownerless/unparseable pages are preserved and
-   reported. `--only` runs never remove stale pages.
+   reported. `--only` runs never remove stale pages. The stage-2 LLM
+   refine may rename/merge/split modules but may NOT undo the test split:
+   a refined module mixing a test-role path with non-test paths is
+   rejected (`refine_mixed_test_role`) and the heuristic partition wins.
 
    **Two content layers (roadmap):** (A) structural/agent pages (dirs, symbols,
    import links, anchors — verifiable); (B) optional later human/product
