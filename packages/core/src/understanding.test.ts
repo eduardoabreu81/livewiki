@@ -416,4 +416,22 @@ describe("understanding prompt builders", () => {
     expect(prompt.user).toContain("core/db.ts");
     expect(prompt.user).toContain("# Corrected complete Markdown understanding page");
   });
+
+  it("length violations get a scoped numeric directive, not a rewrite request (2026-08-04 failure class)", () => {
+    const evidenceBlock = renderUnderstandingEvidence(makeEvidence());
+    const prompt = buildUnderstandingRepairPrompt(
+      evidenceBlock,
+      makeValidPage(),
+      [{ code: "purpose_too_long", message: "the purpose paragraph is 731 characters (maximum 600)" }],
+      8_000,
+      "en",
+      { attempt: 1, total: 2 },
+    );
+    expect(prompt.system).toContain("[purpose_too_long]");
+    expect(prompt.system).toContain("shorten ONLY the purpose paragraph");
+    expect(prompt.system).toContain("Change nothing else");
+    expect(prompt.system).not.toContain("do not work around it by deleting");
+    // The length rule carries the salience fix in both prompt kinds.
+    expect(prompt.system).toContain("aim for 400–550");
+  });
 });

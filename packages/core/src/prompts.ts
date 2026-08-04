@@ -1680,7 +1680,7 @@ export function buildSurgicalRepairPrompt(
  */
 export const UNDERSTANDING_PAGE_PROMPT_RULES = [
   `- After the frontmatter, write exactly: an H1 human-meaningful title naming the repository's product; then ONE prose paragraph stating what the repository is, whom it serves, and the main way it is used; then optionally ONE H2 \`Key surfaces\` section with a flat bullet list of the main user-facing surfaces (entry points, CLIs, services, containers). Nothing else — no other sections, no extra paragraphs.`,
-  `- The purpose paragraph is between 40 and 600 characters. Key surfaces is at most 10 bullets, each at most 160 characters.`,
+  `- The purpose paragraph is between 40 and 600 characters — aim for 400–550 and COUNT the characters before returning; overshooting the maximum is the most common rejection of this page. Key surfaces is at most 10 bullets, each at most 160 characters.`,
   `- NEVER use inline code, fenced code blocks, Markdown links, or images anywhere: this page synthesizes purpose in plain prose and does not document symbols. Name files, commands, and tools as plain words.`,
   `- The frontmatter carries exactly: \`title\` (matching the H1), \`owner: generated\`, \`kind: understanding\`, and \`updated\` (the current date supplied in the user message). No \`anchors\` key, no \`lw:anchors\` markers, no \`lw:manual\` block anywhere.`,
   `- Every claim must trace to the supplied evidence inventory: the accepted module pages' responsibility sentences, the flow pages, the topic pages, and the detected entry points. When the evidence cannot support a claim, omit the claim — never guess.`,
@@ -1736,6 +1736,15 @@ export function buildUnderstandingRepairPrompt(
   const isFinal = attempt >= total;
   const errorLines = errors.map((error) => {
     const messageSafe = neutralizeUntrustedControlMarkers(error.message);
+    // Length violations get a scoped directive (2026-08-04: two full-context
+    // repairs still overshot, then the model flailed and dropped the
+    // frontmatter — narrow the edit, don't ask for a rewrite).
+    if (error.code === "purpose_too_long") {
+      return `- [${error.code}]: ${messageSafe} — ACTION: shorten ONLY the purpose paragraph by deleting its least essential clauses (keep it ONE paragraph, keep the repository's core identity and audience). Change nothing else — not the frontmatter, not the H1, not Key surfaces.`;
+    }
+    if (error.code === "purpose_too_short") {
+      return `- [${error.code}]: ${messageSafe} — ACTION: expand ONLY the purpose paragraph with one more evidence-backed clause (whom it serves or how it is used). Change nothing else — not the frontmatter, not the H1, not Key surfaces.`;
+    }
     return `- [${error.code}]: ${messageSafe} — ACTION: fix exactly this contract violation and return the complete corrected page; do not work around it by deleting the purpose or the surfaces wholesale.`;
   });
   return {
