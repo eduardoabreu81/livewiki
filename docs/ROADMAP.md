@@ -790,6 +790,37 @@ community-aware chunk boundaries vs post-split LLM naming only. Not a
 anchors in product pages, zero tokens on tests); this is the residual
 half with a different cause.
 
+### 26. Metadata-boosted ranking for `livewiki_search` (post-beta)
+
+Source: Cloudflare Agents Week 2026 scan (2026-08-04,
+[AI Search post](https://blog.cloudflare.com/ai-search-agent-primitive/)) —
+query-time relevance boosting on document metadata (`boost_by`). Our
+equivalent, fully deterministic and zero-LLM: boost product-tier pages
+over auxiliary/test-role pages and fresh pages over stale ones in the
+FTS5 result ranking. Small, testable, keeps the offline posture.
+(Their RRF/vector hybrid is NOT adopted — embeddings conflict with the
+deterministic/offline promise; see "Evaluated and rejected".)
+
+### 27. Trigram / partial-match search for identifiers (post-beta)
+
+Source: same scan — Cloudflare's guidance is porter for prose, trigram
+for code ("conf" matches "configuration"). Our identifier-split FTS5
+table covers camelCase/PascalCase/snake_case boundaries but not
+arbitrary substrings. FTS5 has no native trigram tokenizer, so this is
+real work (custom token table or external tokenizer); candidate only,
+evaluate demand first.
+
+### 28. Validation severity lifecycle: report-only → blocking (post-beta)
+
+Source: Cloudflare Codex post
+([engineering-standards-enforcement](https://blog.cloudflare.com/engineering-standards-enforcement/)) —
+RFCs ship `approved` (non-blocking findings) and are promoted to
+`enforced` (blocking) only after teams absorb them. Our analogue: new
+artifact/verify validation codes enter as report-only and become
+blocking in a later release, so tightening a contract never
+retroactively breaks existing user wikis. Small; protects the exact
+pain we hit every time a new validation code lands.
+
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
 - **Committed graph/cache artifact in the repo** (their
