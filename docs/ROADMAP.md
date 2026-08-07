@@ -5,54 +5,93 @@
 > phases (Phase 6 export, Phase 7 viewer) and records why rejected ideas
 > were rejected, so they are not re-litigated.
 
-## Current execution order (see AGENTS.md)
+## Execution queue (priority order)
 
-> **Reconciled 2026-08-04** (maintainer decision; supersedes 2026-08-03):
-> the 2026-08-03 pre-beta queue (#17 viewer stamp+links, #18 `view
-> --ref`, #19 Go / #20 Rust / #21 Java tier-1, #23 understanding, #22
-> CodeWiki-grade format) is DONE, and the P1 grammar-relabel bug from the
-> external re-review is fixed and committed (`ef403aa` — grammar-state
-> tracking via `meta.grammar_state`: grammar added / removed / remapped /
-> version-bumped all direct one-run re-parses). The remaining pre-beta
-> queue (reconciled 2026-08-04, maintainer decision): #24 test-role
-> classification DONE (acceptance verified — zero test anchors in product
-> pages, migration batch `96b2008`) → **#25 semantic partition of
-> oversized modules (promoted to PRE-BETA — "Core source — part 7 of 11"
-> is the showcase wiki's own headline) + the `purpose_too_long`
-> understanding-task failure class (surfaced by the migration batch,
-> recovered via `--only`, never root-caused) → beta launch** (naming
-> decided 2026-08-04: keep `@livewiki`, MIT, 0.1.0, publish with
-> `pnpm publish -r`; CI green-run evidence collection underway, 3
-> consecutive matrix runs as of 96b2008). #6 v2 (pay-variant) and the
-> optional hardening list stay post-beta.
-> items 1–5 below are DONE (acceptance E2E passed with exit 0; the blind
-> dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45 weighted at
-> ~6% of its token cost; R11-A validated and kept; commit/push done).
-> The active queue is now: **Phase 6 export-target validation (DONE
-> 2026-07-26: generic/github-wiki/gitlab-wiki on a real corpus) → Phase 7
-> local viewer → cross-platform CI (last) → post-Phase-7 backlog below.**
-> Also delivered beyond this plan: tier-2 universal prose floor, closed
-> repair contract, rationale evidence, risk-weighted debt ordering, MCP
-> workflow hints, the recovery tier (surgical repair + relaxed completion
-> round), product-first quickstart orientation, concept-topic coverage,
-> nav/clarity hardening, and the concern-topic refine pin.
+> Source of truth for WHAT COMES NEXT. Phase status lives in `AGENTS.md`
+> §Status; the numbered item bodies further down hold the evidence.
+> **Reordered 2026-08-07** — this section had accreted reconciliation notes
+> from three separate dates and no longer told a reader what to do next.
+> The provenance was not discarded; it moved to "Decision history" below.
 
+### P0 — pre-beta (blocks launch)
 
-1. Review the uncommitted R10/R10.1 + R11-NAV body. R11-NAV's deterministic
-   intent routes and auxiliary de-emphasis are implemented and green; strict
-   autonomous paid-E2E acceptance remains open.
-2. Run one fresh standalone-provider acceptance E2E only after explicit
-   at-the-moment authorization. Do not use a rerun-to-green loop.
-3. After review, decide separately whether to commit/push and launch the beta.
-4. Review the R11-A concept-topic implementation now present in the working
-   tree; validation and any launch-gate decision remain separate.
-5. Revise the blind-evaluation instrument before using scores for another
-   product decision.
-6. Phase 6 Lot 6A follow-up — manually validate the remaining local export
-   targets after `generic` (already implemented and locally validated).
-7. Cross-platform/GitHub validation after the local product flows pass.
-8. Phase 7 — local viewer + templates (self-contained static site, client-side
-   search, rendered Mermaid, no executable template code).
+1. **#29 real repository page units** — DESIGN written, no implementation
+   authorized. Supersedes #25. Two of its six open questions are
+   structural, not implementation detail (what a folder page holds;
+   whether tests keep their own pages at all), so the item has no honest
+   estimate until they close. Design:
+   `docs/plans/2026-08-07-real-repository-page-units.md`.
+2. **`syncStaleModulePages` keep-set** — a hazard, not yet its own item,
+   and it survives ANY page scheme: the keep-set is `${module.id}.md`, so
+   the first full batch after page paths stop being module ids deletes the
+   wiki. The pages are `owner: generated`, so the ownership guard does not
+   save them. Must land WITH #29.
+3. **`purpose_too_long` live validation** — the deterministic hardening
+   landed in `755bd2a`; the failure class has not been re-observed under a
+   real understanding rerun. Validation only, no code planned.
+
+### P1 — beta launch
+
+4. Green matrix repetition (3+ consecutive runs), the maintainer's
+   `npm pack` pass, then `pnpm publish -r`. Naming and metadata were
+   decided 2026-08-04 and have been ready since `ef403aa`: keep
+   `@livewiki`, MIT, 0.1.0, engines >=24, grammars in the tarball.
+
+### P2 — post-beta (decided, written, unscheduled)
+
+5. **#6 v2** — pay-variant: `update --llm` + draft PR on detected debt.
+6. **#26** — metadata-boosted ranking for `livewiki_search`: product tier
+   over auxiliary, fresh over stale. Deterministic, zero LLM.
+7. **#28** — validation severity lifecycle: new codes enter report-only
+   and become blocking later, so tightening a contract never
+   retroactively breaks an existing user wiki.
+8. **`orchestrate()` split** — P4 code health. `batch.ts` is 6,432 lines;
+   the reviewer called it "next cycle's parking brake".
+9. Housekeeping: `filesDeleted` recount guard (cosmetic), dependency
+   modernization (commander/vitest/better-sqlite3/typescript), vitest
+   parallelism cap + linter, PT-BR comment normalization,
+   `understanding.md` stale cleanup.
+
+### P3 — candidates and watch-list (need evidence before promotion)
+
+10. **#27** — trigram / partial-match identifier search. Candidate ONLY:
+    FTS5 has no native trigram tokenizer, so this is real work (custom
+    token table or external tokenizer). Evaluate demand first.
+11. Per-section diagrams — only if users ask.
+12. Tier-1 language expansion beyond Go/Rust/Java — usage-driven; the
+    pattern is already proven ×3.
+13. Git-pinned evidence verification.
+14. Optional: voice/subtitle false-claim frontier (`app-services-03`
+    hotspot).
+15. **Unfiled, surfaced by the #29 rehearsal (2026-08-07)**: 35 of 90
+    product files have no test at all. The tool discovers this
+    deterministically at zero token cost and currently says nothing about
+    it. Product feature (report coverage gaps) or noise — undecided, and
+    deliberately not filed as an item until someone decides.
+
+### Decision history (provenance; do not re-litigate)
+
+- **2026-08-07** — #25 superseded by #29 without implementation. Renaming
+  chunk buckets treated a symptom; the page unit itself is fabricated.
+- **2026-08-04** — pre-beta queue reconciled: #24 test-role classification
+  DONE (zero test anchors in product pages, migration batch `96b2008`);
+  #25 promoted PRE-BETA (later superseded). Beta naming decided: keep
+  `@livewiki`, MIT, 0.1.0, `pnpm publish -r`.
+- **2026-08-03** — the previous pre-beta queue (#17 viewer stamp + links,
+  #18 `view --ref`, #19 Go / #20 Rust / #21 Java tier-1, #23
+  understanding, #22 CodeWiki-grade format) closed DONE. The P1
+  grammar-relabel bug from the external re-review was fixed in `ef403aa`
+  (grammar-state tracking via `meta.grammar_state`: grammar added,
+  removed, remapped, or version-bumped all force a one-run re-parse).
+- **Earlier** — Phases 6 (export targets) and 7 (local viewer) closed, as
+  did cross-platform CI. Delivered beyond the original plan: tier-2
+  universal prose floor, closed repair contract, rationale evidence,
+  risk-weighted debt ordering, MCP workflow hints, the recovery tier
+  (surgical repair + relaxed completion round), product-first quickstart
+  orientation, concept-topic coverage, nav/clarity hardening, and the
+  concern-topic refine pin. The acceptance E2E passed with exit 0 and the
+  blind dual-eval A/B cycle closed the gap to OpenWiki to Δ0.40–0.45
+  weighted at ~6% of its token cost.
 
 The independent quality review vs frozen OpenWiki
 (`docs/benchmarks/2026-07-10-minimax-m3/QUALITY-REVIEW-V18.md`) is **complete**.
@@ -132,7 +171,13 @@ review and validation; it preserves the
 distinction between rejected automatic mega-call-graphs and approved, bounded
 semantic synthesis.
 
-## Approved backlog (post Phase 7, in priority order)
+## Item register (numbered; evidence and status per item)
+
+> Numeric order, NOT priority — priority lives in the execution queue at
+> the top of this file. These bodies are the record: what each item was,
+> why it was approved, and the evidence it closed on. Items 1–24 are DONE,
+> #25 is SUPERSEDED, and #26–#29 are open.
+
 
 Source: maintainer-approved evaluation (2026-07-13) of
 [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp),
@@ -773,7 +818,17 @@ the repo's `changed` doc debt is paid AFTER #24 lands — repartition
 first, then pay, to avoid spending tokens on pages that will stop
 existing.
 
-### 25. Semantic partition of oversized modules (PRE-BETA)
+### 25. Semantic partition of oversized modules (SUPERSEDED by #29, 2026-08-07)
+
+> Closed without implementation. The maintainer review of 2026-08-07
+> established that renaming chunk buckets treats a symptom: the defect is
+> that the page unit is invented, not that its name is mechanical. See
+> #29 and `docs/plans/2026-08-07-real-repository-page-units.md`. The
+> deterministic foundation written for this item (`page-slug.ts` + 35
+> green tests) was never wired into any caller and was deleted at the
+> 2026-08-07 wrap; its value was the dry-run that made the unit defect
+> visible, preserved in this item's design doc.
+
 
 Source: the "names that say nothing" half of the 2026-08-03 P2 finding —
 `core-src-07`, "core-src-06 stage-5 internals". The original diagnosis
@@ -820,6 +875,49 @@ artifact/verify validation codes enter as report-only and become
 blocking in a later release, so tightening a contract never
 retroactively breaks existing user wikis. Small; protects the exact
 pain we hit every time a new validation code lands.
+
+### 29. Real repository page units (PRE-BETA) — supersedes #25
+
+Source: maintainer review 2026-08-07. #25 was scoped as "rename the
+mechanical page names"; the review established that the names were a
+symptom and the defect is the page UNIT. `core-src-03` exists nowhere in
+the repository — it is bucket 3 of an 80-symbol cut, and the wiki
+presents eleven fabricated units as if they were the code's
+organization. Every anchor resolves and `verify` reports zero, but the
+STRUCTURE is invented, and "present only what is real" governs structure
+as much as prose. Renaming would have made it worse: `core-src-03.md` is
+ugly but honest (the `03` announces the slice), while
+`config-index-export-diagrams-diff-preview.md` presents an arbitrary
+bucket as a coherent module — a plausible name over a fabricated unit,
+which is the exact failure the tool exists to prevent.
+
+Principle: **chunking is a generation concern, a page is a presentation
+concern**; today they are the same object. Chunking stays (budget, retry
+granularity, `--only`) but stops reaching disk. A page's unit becomes a
+file or a folder — things that exist.
+
+Measured deterministically over this repo's index (zero tokens, design
+doc `docs/plans/2026-08-07-real-repository-page-units.md`): content is
+ALREADY complete (`core-src-03` documents 80 of its files' 80 symbols —
+this is a reorganization, not a content expansion); 90 file pages + 31
+folder pages = 121 against today's 50 averaging 4.4 stapled files; ZERO
+files exceed `maxModuleSymbols: 80` (max 55 — the budget was blown by
+grouping files, never by a file); source bytes are the real pressure
+(`batch.ts` 262KB); and the product↔test pairing becomes verifiable —
+55 of 86 test files pair 1:1 by name, 20 more by prefix, 11 match
+nothing, and 35 product files have no test at all (a true fact the
+current structure hides).
+
+Open: what the folder page holds (a synthesis, not a concatenation — a
+new LLM call per folder); whether tests keep their own pages at all
+(#24 gave them pages as a side effect, not by reader demand); the 11
+unmatched test suites; `batch.ts`'s internal split; the 33 inert files;
+and cost (estimated 1.5x the 731k full batch — an estimate, to be
+measured on one folder before committing). Carries the
+`syncStaleModulePages` hazard, which survives ANY scheme: its keep-set is
+`${module.id}.md`, so the first full batch after page paths stop being
+module ids deletes the wiki (`owner: generated` pages, the ownership
+guard does not save them).
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 

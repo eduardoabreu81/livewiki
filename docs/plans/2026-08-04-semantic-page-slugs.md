@@ -1,6 +1,18 @@
 # Semantic page slugs (#25) — design
 
-> Status: DRAFT for maintainer review. No implementation authorized.
+> Status: SUPERSEDED 2026-08-07 by #29
+> (`2026-08-07-real-repository-page-units.md`). Closed without shipping:
+> the deterministic foundation (`page-slug.ts` + 35 green tests) was built
+> and deleted the same day, never wired into a caller. Renaming chunk
+> buckets treats a symptom — the defect is
+> that the page unit is invented, not that its name is mechanical. A
+> semantic name over an arbitrary bucket is worse than `core-src-03.md`,
+> which at least announces the slice.
+>
+> Kept as the record of HOW that was established. Decisions 1–4 (2026-08-04)
+> and 5–6 (2026-08-07) are historical. The dry-run below is what made the
+> unit defect visible and remains useful evidence; the hazard section
+> survives the supersession and is carried into #29.
 > Origin: P2 residual (external re-review 2026-08-03), promoted PRE-BETA by
 > maintainer decision 2026-08-04. External measurement 2026-08-04 killed
 > two of the three original levers and added the rename-first candidate.
@@ -124,6 +136,69 @@ risk surface and most of the open questions below.
    pinned by the same sticky frontmatter rule — if the pairing later
    breaks, the slug STAYS (stability over freshness; the name may age,
    it never churns).
+
+## Hazard found while landing the foundation (2026-08-07)
+
+`syncStaleModulePages` (`init.ts`) builds its keep-set as
+`${module.id}.md` and DELETES every other `owner: generated` root page —
+that is the #24 migration path for partition changes. Once pages live at
+semantic slugs, every renamed page looks stale to it: the first full batch
+after shape A would delete the entire wiki, and the pages are `owner:
+generated`, so the ownership guard does not save them.
+
+The shared path resolver is therefore a PREREQUISITE of shape A, not a
+follow-up refactor: the keep-set must be built from resolved page paths,
+not from ids. The same applies to every surface that reconstructs
+`livewiki/<id>.md` today — `navigation.ts` (5 sites), `topics.ts`,
+`init.ts` artifact links, and the stage-4/repair prompt headers in
+`prompts.ts`.
+
+## Decisions taken (maintainer, 2026-08-07 — design met the repo)
+
+Both surfaced while landing the deterministic foundation; both change what
+the migration actually renames, so neither was decided in code.
+
+5. **ID-leaking titles: strip the label prefix deterministically.** Chunked
+   modules carry the ordinal INTO the title, in two forms present in this
+   repo's own wiki: `"Core Source 03: Config, Index, …"` (colon) and
+   `"core-src-06 — module identification, …"` (spaced dash). Slugifying
+   verbatim would publish the mechanical name the item exists to remove, so
+   `stripModuleIdPrefix` drops the leading label. The rule is deliberately
+   narrow and fails closed: the module id must END in an ordinal, the label
+   must END in the same number (numeric compare, `3` == `03`), and every
+   remaining label word must align positionally with the id's word — equal,
+   a prefix, or an abbreviation (`src` → `Source`). A bare hyphen is never a
+   separator; only a SPACED dash counts, or `core-src-06` would decapitate
+   itself. "Auth: login and session" (id `auth`, no ordinal) is untouched.
+6. **Chunked test modules keep `<id>.md` and are reported.** Decision 4
+   assumes a 1:1 product↔test pair, but chunking splits the two sides
+   INDEPENDENTLY — 11 `core-src-NN` against 7 `core-src-tests-NN` — so there
+   is no single product page to mirror. Pairing by ordinal was rejected: the
+   file sets do not correspond, so `<core-src-03-slug>-tests.md` would
+   assert a coverage relationship that does not exist. These keep the
+   known-safe `<id>.md` and are surfaced as validation items, exactly like a
+   collision loser (decision 3). Non-chunked pairs (`mcp-src-tests`,
+   `cli-src-tests`, `llm-tests`) mirror normally.
+
+## Dry-run over this repo (2026-08-07, read-only, zero tokens)
+
+Foundation output on the 50 module pages currently on disk — the "preview
+before executing" gate from open question 6:
+
+- **27 renamed** (24 `title`, 3 `mirror`), **23 keep `<id>.md`**.
+- **Zero product `core-src-NN.md` survive** — all 11 resolve to semantic
+  slugs, so the acceptance criterion's collision-loser escape hatch is not
+  needed on this repo.
+- The 23 kept split into two populations: the 7 chunked test pages
+  (`no-mirror`, decision 6) and 16 pages whose title ALREADY slugifies to
+  their id (`cmd`, `lib`, `docs`, `scripts`, the `sample-*-repo*` fixtures)
+  — nothing to rename, not a fallback.
+- **50 pages → 50 distinct paths**: no collision on this repo.
+- **Zero non-generated owners**: the migration is rule-#6 clean here; no
+  human or mixed page is touched.
+- Longest slug 70 chars, inside the 72-char bound. One title truncates on a
+  word boundary (`core-src-08` loses a trailing "debt ranking"); readable,
+  and the bound stays until a real case argues otherwise.
 
 ## Acceptance criteria
 
