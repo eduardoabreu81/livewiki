@@ -60,6 +60,12 @@ const VALID_UNDERSTANDING_PAGE = [
   "This test repository exercises the batch pipeline with a small product surface.",
   "",
 ].join("\n");
+/**
+ * Valid folder-purpose paragraph (#29) returned outside mock
+ * instrumentation. Plain prose, 40-800 chars, no headings/fences/links.
+ */
+const VALID_FOLDER_PURPOSE =
+  "This directory holds the authentication module: login, logout, and session token handling for the product.";
 
 class ProgrammableMockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
@@ -85,6 +91,20 @@ class ProgrammableMockLlm implements LlmClient {
     if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
       return {
         content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }    // #29: answer folder-purpose prompts (product folder pages) with a
+    // valid plain paragraph OUTSIDE this mock's instrumentation — folder
+    // tasks have their own bounded slots and would otherwise consume the
+    // response queue this suite scripts for the file-page task. Matches
+    // both the initial prompt ("purpose paragraph of ONE folder page")
+    // and the repair prompt ("folder purpose paragraph").
+    if (
+      req.system.includes("purpose paragraph of ONE folder page") ||
+      req.system.includes("folder purpose paragraph")
+    ) {
+      return {
+        content: VALID_FOLDER_PURPOSE,
         usage: { inputTokens: 100, outputTokens: 50, model: this.model },
       };
     }
@@ -158,7 +178,7 @@ function makeInvalidPage(uniqueText: string): string {
 
 async function readStage4Checkpoint(
   root: string,
-  target = "auth",
+  target = "auth/login",
 ): Promise<TaskCheckpoint> {
   const Database = (await import("better-sqlite3")).default;
   const db = new Database(nodePath.join(root, ".livewiki/index.db"), {
@@ -250,7 +270,7 @@ describe("batch X — repair success (Criterion #6)", () => {
     ]);
     expectJoinedAttempts(checkpoint);
 
-    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(page).toContain("The literal delimiter &#96;&#96;&#96; is documented here;");
     expect(page).toContain("`commands.md` stays paired while &#96;orphan remains visible.");
     expect(page).toContain(`<!-- lw:anchors ${closedKeys[1]} -->`);
@@ -288,7 +308,7 @@ describe("batch X — repair success (Criterion #6)", () => {
     ]);
     expectJoinedAttempts(checkpoint);
 
-    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(page).toContain(
       `<!-- lw:anchors ${closedKeys.join(" ")} -->\n\n` +
         "These anchors identify indexed symbols whose implementation is part of this module.",
@@ -353,7 +373,7 @@ describe("batch X — repair success (Criterion #6)", () => {
     ]);
     expectJoinedAttempts(checkpoint);
 
-    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(page).toContain(codeExample);
     expect(page).toContain(firstMarker);
     expect(page).toContain(`<!-- lw:anchors ${closedKeys[1]} -->`);
@@ -412,7 +432,7 @@ describe("batch X — repair success (Criterion #6)", () => {
     ]);
     expectJoinedAttempts(checkpoint);
 
-    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(page).toContain(preservedContent);
     expect(page).toContain(codeExample);
     expect(page.match(/<!-- lw:manual -->/g) ?? []).toHaveLength(0);
@@ -447,7 +467,7 @@ describe("batch X — repair success (Criterion #6)", () => {
     try {
       const task = db
         .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?")
-        .get("auth") as { checkpoint_json: string };
+        .get("auth/login") as { checkpoint_json: string };
       const checkpoint = JSON.parse(task.checkpoint_json) as {
         usageHistory: Array<{ stopReason?: StopReason; rawStopReason?: string }>;
       };
@@ -521,7 +541,7 @@ describe("batch X — repair success (Criterion #6)", () => {
     try {
       const task = db
         .prepare("SELECT * FROM batch_tasks WHERE stage = 4 AND target = ?")
-        .get("auth") as { checkpoint_json: string | null };
+        .get("auth/login") as { checkpoint_json: string | null };
       const cp = JSON.parse(task.checkpoint_json!) as {
         status: string;
         attempt: number;
@@ -545,8 +565,8 @@ describe("batch X — repair success (Criterion #6)", () => {
     expect(result.circuitBreakerTriggered).toBe(false);
     // Totals include the usage of the 2 calls (200 input + 100 output)
     // +100/+50: the stage-5c understanding task succeeds with one call.
-    expect(result.totals.inputTokens).toBe(300);
-    expect(result.totals.outputTokens).toBe(150);
+    expect(result.totals.inputTokens).toBe(400);
+    expect(result.totals.outputTokens).toBe(200);
 
     const checkpoint = await readStage4Checkpoint(repoRoot);
     expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual([
@@ -724,7 +744,7 @@ describe("batch X — repair success (Criterion #6)", () => {
   it("repairs a product title equal to the module ID through its mechanical ACTION", async () => {
     const keys = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
     const valid = makeValidPage(keys);
-    llm.responses = [valid.replace("title: test", "title: auth"), valid];
+    llm.responses = [valid.replace("title: test", "title: auth/login"), valid];
 
     const result = await runBatch({
       repoRoot,
@@ -917,7 +937,7 @@ describe("stage-4 per-attempt diagnostics", () => {
       repoRoot,
       llmClient: retryLlm,
       noRefine: true,
-      onlyTarget: "auth",
+      onlyTarget: "auth/login",
       skipManifestWrite: true,
       relaxedRound: false,
       maxRepairAttempts: 0,
@@ -1067,7 +1087,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
     expect(result.circuitBreakerTriggered).toBe(false);
 
     // Page NEVER persisted (artifact never passed validator → never wrote)
-    const wikiPath = nodePath.join(repoRoot, "livewiki/auth.md");
+    const wikiPath = nodePath.join(repoRoot, "livewiki/auth/login.md");
     await expect(nodeFs.access(wikiPath)).rejects.toThrow();
 
     // Checkpoint has 3 usage entries (all with real usage, no fake duplicate)
@@ -1077,7 +1097,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
     try {
       const task = db
         .prepare("SELECT * FROM batch_tasks WHERE stage = 4 AND target = ?")
-        .get("auth") as { checkpoint_json: string | null };
+        .get("auth/login") as { checkpoint_json: string | null };
       const cp = JSON.parse(task.checkpoint_json!) as {
         status: string;
         attempt: number;
@@ -1220,7 +1240,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
       repoRoot,
       llmClient: retryLlm,
       noRefine: true,
-      onlyTarget: "auth",
+      onlyTarget: "auth/login",
       skipManifestWrite: true,
       relaxedRound: false,
       maxRepairAttempts: 2,
@@ -1240,7 +1260,7 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
         .prepare(
           "SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?",
         )
-        .get("auth") as { checkpoint_json: string };
+        .get("auth/login") as { checkpoint_json: string };
       const cp = JSON.parse(row.checkpoint_json) as {
         attempt: number;
         usageHistory: Array<{
@@ -1306,13 +1326,16 @@ describe("batch X — repair exhausted (Criterion #7)", () => {
     const cumulativeInput = 6 * 100;
     const cumulativeOutput = 6 * 50;
     const stage4 = report.byStage["4"]!;
-    expect(stage4.inputTokens).toBe(cumulativeInput);
-    expect(stage4.outputTokens).toBe(cumulativeOutput);
-    const authMod = report.byModule.find((m) => m.module === "auth")!;
+    // #29: stage 4 also ran ONE folder-purpose call in run 1 (+100/+50).
+    expect(stage4.inputTokens).toBe(cumulativeInput + 100);
+    expect(stage4.outputTokens).toBe(cumulativeOutput + 50);
+    const authMod = report.byModule.find((m) => m.module === "auth/login")!;
     expect(authMod.inputTokens).toBe(cumulativeInput);
     expect(authMod.outputTokens).toBe(cumulativeOutput);
-    expect(report.totals.inputTokens).toBe(cumulativeInput);
-    expect(report.totals.outputTokens).toBe(cumulativeOutput);
+    // +100/+50 again: stage-5c understanding ran in the full run (the
+    // accepted folder page is synthesis evidence).
+    expect(report.totals.inputTokens).toBe(cumulativeInput + 200);
+    expect(report.totals.outputTokens).toBe(cumulativeOutput + 100);
   });
 });
 
@@ -1354,7 +1377,7 @@ describe("batch D3 — guard-rails under the new oversized-candidate gate", () =
       repoRoot,
       llmClient: retryLlm,
       noRefine: true,
-      onlyTarget: "auth",
+      onlyTarget: "auth/login",
       skipManifestWrite: true,
       maxRepairAttempts: 2,
     });
@@ -1382,8 +1405,8 @@ describe("batch D3 — guard-rails under the new oversized-candidate gate", () =
     // accounting.
     const { buildStatusReport } = await import("./batch-status.js");
     const report = await buildStatusReport(repoRoot);
-    expect(report.totals.inputTokens).toBe(400);
-    expect(report.totals.outputTokens).toBe(200);
+    expect(report.totals.inputTokens).toBe(500);
+    expect(report.totals.outputTokens).toBe(250);
   });
 });
 
@@ -1405,7 +1428,7 @@ describe("batch X — owner: human is untouchable (Criterion #8)", () => {
       "<!-- /lw:manual -->",
       "",
     ].join("\n");
-    await safeIo.writeText(repoRoot, "livewiki/auth.md", humanPage);
+    await safeIo.writeText(repoRoot, "livewiki/auth/login.md", humanPage);
 
     // LLM that would return something completely different — MUST NOT be called
     llm.responses = ["OVERWRITTEN — should not appear"];
@@ -1422,7 +1445,7 @@ describe("batch X — owner: human is untouchable (Criterion #8)", () => {
     expect(llm.callCount).toBe(0);
 
     // Page preserved byte-for-byte
-    const onDisk = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const onDisk = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(onDisk).toBe(humanPage);
     expect(onDisk).toContain("owner: human");
     expect(onDisk).toContain("PROTECTED CONTENT");
@@ -1435,7 +1458,7 @@ describe("batch X — owner: human is untouchable (Criterion #8)", () => {
     try {
       const task = db
         .prepare("SELECT * FROM batch_tasks WHERE stage = 4 AND target = ?")
-        .get("auth") as { checkpoint_json: string | null };
+        .get("auth/login") as { checkpoint_json: string | null };
       const cp = JSON.parse(task.checkpoint_json!) as {
         status: string;
         error: { code: string };
@@ -1473,7 +1496,7 @@ describe("batch X — lw:manual blocks preserved byte-for-byte", () => {
       "",
     ].join("\n");
     await safeIo.mkdir(repoRoot, ".livewiki");
-    await safeIo.writeText(repoRoot, "livewiki/auth.md", existingPage);
+    await safeIo.writeText(repoRoot, "livewiki/auth/login.md", existingPage);
 
     // LLM returns page WITHOUT manual block (expected: LLM does not write manual)
     llm.responses = [
@@ -1490,7 +1513,7 @@ describe("batch X — lw:manual blocks preserved byte-for-byte", () => {
     expect(result.status).toBe("completed");
 
     // Page regenerated BUT the original manual block is there, byte-for-byte
-    const onDisk = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const onDisk = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(onDisk).toContain(manualContent);
     expect(onDisk).toContain("<!-- lw:manual -->");
     expect(onDisk).toContain("<!-- /lw:manual -->");
@@ -1521,7 +1544,7 @@ describe("batch X — verify failure rollbacks a new page", () => {
             {
               severity: "error",
               code: "broken_anchor",
-              wikiPath: "livewiki/auth.md",
+              wikiPath: "livewiki/auth/login.md",
               detail: "broken anchor (injected by test)",
             },
           ],
@@ -1548,7 +1571,7 @@ describe("batch X — verify failure rollbacks a new page", () => {
       expect(runVerifySpy).toHaveBeenCalled();
 
       // Page NEVER persisted (was removed by the rollback)
-      const wikiPath = nodePath.join(repoRoot, "livewiki/auth.md");
+      const wikiPath = nodePath.join(repoRoot, "livewiki/auth/login.md");
       await expect(nodeFs.access(wikiPath)).rejects.toThrow();
 
       // Status reflects the failure
@@ -1595,6 +1618,8 @@ describe("batch X W — unique module IDs before stage 4", () => {
         // Roadmap #22: pin the pre-#22 stage-4 format (see beforeEach note).
         moduleDiagrams: false,
         deepHierarchy: false,
+        // #29: disable fixture/tooling classification so all five files
+        // stay product (bare `tests/` dirs are deliberately not tests).
         pathRoles: { fixturePatterns: [], toolingPatterns: [] },
       }),
       "utf8",
@@ -1607,31 +1632,53 @@ describe("batch X W — unique module IDs before stage 4", () => {
       skipManifestWrite: true,
     });
 
-    // Status: completed (5 tasks done, 0 fails)
+    // Status: completed (10 unit tasks done, 0 fails)
     expect(result.failures).toEqual([]);
     expect(result.status).toBe("completed");
-    // 5 module tasks + the stage-5c understanding task.
-    expect(result.byModule).toHaveLength(6);
-    expect(result.failures).toHaveLength(0);
+    // 5 file units + 5 folder units + the stage-5c understanding task.
+    expect(result.byModule).toHaveLength(11);
 
-    // 5 distinct pages (not 1!) — no overwrite
-    const livewikiDir = nodePath.join(repoRoot, "livewiki");
-    const entries = await nodeFs.readdir(livewikiDir);
-    const mdFiles = entries.filter((e) => e.endsWith(".md"));
-    expect(mdFiles.length).toBeGreaterThanOrEqual(5);
-
-    // Each page has frontmatter owner: generated (from the LLM)
-    for (const f of mdFiles) {
-      if (f === "quickstart.md" || f === ".manifest.json") continue;
-      const content = await nodeFs.readFile(nodePath.join(livewikiDir, f), "utf8");
-      expect(content).toMatch(/owner: generated/);
+    // #29: 5 directories with leaf "src" → 5 wave-expanded folder units
+    // (cli-src, core-src, fixtures-src, mcp-src, scripts-src) + 5 file
+    // units (<folder>/auth). All ids distinct — no overwrite.
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), { readonly: true });
+    try {
+      const tasks = db
+        .prepare("SELECT target, status FROM batch_tasks WHERE stage = 4 ORDER BY target")
+        .all() as Array<{ target: string; status: string }>;
+      const targets = tasks.map((t) => t.target);
+      expect(new Set(targets).size).toBe(targets.length);
+      expect(tasks.every((t) => t.status === "done")).toBe(true);
+      const folderTargets = targets.filter((t) => !t.includes("/"));
+      expect(folderTargets).toEqual([
+        "cli-src",
+        "core-src",
+        "fixtures-src",
+        "mcp-src",
+        "scripts-src",
+      ]);
+      const fileTargets = targets.filter((t) => t.includes("/"));
+      expect(fileTargets).toEqual([
+        "cli-src/auth",
+        "core-src/auth",
+        "fixtures-src/auth",
+        "mcp-src/auth",
+        "scripts-src/auth",
+      ]);
+    } finally {
+      db.close();
     }
 
-    // Unique IDs: MUST NOT have two pages with the same id
-    const moduleIds = mdFiles
-      .filter((f) => f !== "quickstart.md" && f !== ".manifest.json")
-      .map((f) => f.replace(/\.md$/, ""));
-    expect(new Set(moduleIds).size).toBe(moduleIds.length);
+    // Each file unit has its own page (livewiki/<folder>/auth.md) with
+    // frontmatter owner: generated (from the LLM) — 5 distinct pages.
+    for (const folder of ["cli-src", "core-src", "fixtures-src", "mcp-src", "scripts-src"]) {
+      const content = await nodeFs.readFile(
+        nodePath.join(repoRoot, "livewiki", folder, "auth.md"),
+        "utf8",
+      );
+      expect(content).toMatch(/owner: generated/);
+    }
   });
 });
 
@@ -1660,7 +1707,7 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
     try {
       const task = db
         .prepare("SELECT * FROM batch_tasks WHERE stage = 4 AND target = ?")
-        .get("auth") as { checkpoint_json: string | null };
+        .get("auth/login") as { checkpoint_json: string | null };
       const cp = JSON.parse(task.checkpoint_json!) as {
         usageHistory: Array<{ usage: { inputTokens: number; model: string } }>;
       };
@@ -1675,8 +1722,8 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
       db.close();
     }
 
-    // Run totals = sum of usageHistory = 2 * 100 + 100 understanding = 300 input
-    expect(result.totals.inputTokens).toBe(300);
+    // Run totals = 2 * 100 file-page calls + 100 folder purpose + 100 understanding = 400 input
+    expect(result.totals.inputTokens).toBe(400);
   });
 
   it("LLM call failed → ZERO-usage entry preserved (1x), no duplicate after real response", async () => {
@@ -1704,7 +1751,7 @@ describe("batch X — usageHistory without fake duplicate zero-usage", () => {
     try {
       const task = db
         .prepare("SELECT * FROM batch_tasks WHERE stage = 4 AND target = ?")
-        .get("auth") as { checkpoint_json: string | null };
+        .get("auth/login") as { checkpoint_json: string | null };
       const cp = JSON.parse(task.checkpoint_json!) as {
         status: string;
         usageHistory: Array<{
@@ -1788,6 +1835,17 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
       if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
         return {
           content: VALID_UNDERSTANDING_PAGE,
+          usage: { inputTokens: 100, outputTokens: 50, model: llm.model },
+        };
+      }
+      // #29: folder-purpose prompts get a valid plain paragraph outside
+      // this override's counting (same convention as understanding).
+      if (
+        req.system.includes("purpose paragraph of ONE folder page") ||
+        req.system.includes("folder purpose paragraph")
+      ) {
+        return {
+          content: VALID_FOLDER_PURPOSE,
           usage: { inputTokens: 100, outputTokens: 50, model: llm.model },
         };
       }
@@ -1875,16 +1933,17 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
           "SELECT COUNT(*) as c FROM batch_tasks WHERE stage = 4 AND status = 'done'",
         )
         .get() as { c: number };
-      expect(done.c).toBe(1);
+      // The surviving file unit plus the two folder tasks.
+      expect(done.c).toBe(3);
     } finally {
       db.close();
     }
 
     // Totals incomplete when timeout present
     expect(result.totals.usageIncomplete).toBe(true);
-    // known module success + the stage-5c understanding call
-    expect(result.totals.inputTokens).toBe(200);
-    expect(result.totals.outputTokens).toBe(100);
+    // known file-unit success + 2 folder-purpose calls + the stage-5c understanding call
+    expect(result.totals.inputTokens).toBe(400);
+    expect(result.totals.outputTokens).toBe(200);
     expect(result.totals.models).not.toContain("(no usage)");
     expect(result.totals.models).not.toContain("(call failed)");
 
@@ -1901,8 +1960,8 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
     // Successful module still has known tokens
     const doneTask = report.tasks.find((t) => t.status === "done" && t.stage === 4);
     expect(doneTask!.inputTokens).toBe(100);
-    // +100: the stage-5c understanding task succeeds with one call.
-    expect(report.totals.inputTokens).toBe(200);
+    // +200: two folder-purpose calls; +100: the stage-5c understanding task succeeds with one call.
+    expect(report.totals.inputTokens).toBe(400);
   });
 
   it("network failure without usage → usage null / usageKnown false / incomplete", async () => {
@@ -1950,7 +2009,8 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
     expect(result.totals.usageIncomplete).toBe(true);
     expect(result.totals.costUsd).toBeNull();
     expect(result.totals.models).not.toContain("(call failed)");
-    expect(result.totals.models).toEqual([]);
+    // The folder-purpose call succeeded (mock bypass) — its model is real usage.
+    expect(result.totals.models).toEqual(["claude-test-mock"]);
   });
 
   it("timeout-only status rebuild: costUsd null never 0", async () => {
@@ -1959,6 +2019,24 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
       force: true,
     });
     llm.generate = async (req) => {
+      // Stage 5c: valid page outside this override's counting.
+      if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
+        return {
+          content: VALID_UNDERSTANDING_PAGE,
+          usage: { inputTokens: 100, outputTokens: 50, model: llm.model },
+        };
+      }
+      // #29: folder-purpose prompts get a valid plain paragraph outside
+      // this override's counting — only the file-unit call times out.
+      if (
+        req.system.includes("purpose paragraph of ONE folder page") ||
+        req.system.includes("folder purpose paragraph")
+      ) {
+        return {
+          content: VALID_FOLDER_PURPOSE,
+          usage: { inputTokens: 100, outputTokens: 50, model: llm.model },
+        };
+      }
       llm.callLog.push({ system: req.system, user: req.user });
       llm.callCount++;
       throw new LlmTimeoutError("openai-compat", 300_000);
@@ -1976,10 +2054,13 @@ describe("batch — llm_timeout is terminal (no repair loop)", () => {
     const report = await buildStatusReport(repoRoot);
     const t4 = report.byStage["4"];
     expect(t4).toBeDefined();
-    expect(t4!.inputTokens).toBe(0);
-    expect(t4!.outputTokens).toBe(0);
+    // #29: the stage-4 aggregate includes the successful folder-purpose
+    // call (100/50, real model); the FAILED file task below still
+    // reports 0 tokens / costUsd null / usageIncomplete.
+    expect(t4!.inputTokens).toBe(100);
+    expect(t4!.outputTokens).toBe(50);
     expect(t4!.costUsd).toBeNull();
-    expect(t4!.models).toEqual([]);
+    expect(t4!.models).toEqual(["claude-test-mock"]);
     expect(t4!.usageIncomplete).toBe(true);
     expect(report.totals.costUsd).toBeNull();
     expect(report.totals.usageIncomplete).toBe(true);
@@ -2098,7 +2179,7 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
     try {
       const task = db
         .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?")
-        .get("auth") as { checkpoint_json: string };
+        .get("auth/login") as { checkpoint_json: string };
       const cp = JSON.parse(task.checkpoint_json) as {
         status: string;
         attempt: number;
@@ -2382,7 +2463,7 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
     try {
       const row = db
         .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?")
-        .get("auth") as { checkpoint_json: string };
+        .get("auth/login") as { checkpoint_json: string };
       const cpRaw = row.checkpoint_json;
       const reparsed = JSON.parse(cpRaw) as typeof checkpoint;
       expect(reparsed.diagnosticHistory).toEqual(checkpoint.diagnosticHistory);
@@ -2401,7 +2482,7 @@ describe("batch D2 — v11 evidence replay (recovery via one repair)", () => {
     // (additive field — no existing field changes shape or meaning).
     const { buildStatusReport } = await import("./batch-status.js");
     const report = await buildStatusReport(repoRoot);
-    const authTask = report.tasks.find((t) => t.target === "auth" && t.stage === 4);
+    const authTask = report.tasks.find((t) => t.target === "auth/login" && t.stage === 4);
     expect(authTask).toBeDefined();
     // The task has 2 attempts; the cumulative usage reflects 2
     // real LLM calls (no fake duplicate zero-usage).
@@ -2429,8 +2510,9 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
 
     expect(result.status).toBe("completed_with_failures");
     expect(llm.callCount).toBe(5);
-    expect(result.totals.inputTokens).toBe(500);
-    expect(result.totals.outputTokens).toBe(250);
+    // 5 file-task calls + 1 folder purpose + 1 stage-5c understanding.
+    expect(result.totals.inputTokens).toBe(700);
+    expect(result.totals.outputTokens).toBe(350);
 
     const checkpoint = await readStage4Checkpoint(repoRoot);
     expect(checkpoint.diagnosticHistory?.map((entry) => entry.outcome)).toEqual(
@@ -2491,9 +2573,9 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       undefined,
       undefined,
     ]);
-    // +100/+50: the stage-5c understanding task succeeds with one call.
-    expect(result.totals.inputTokens).toBe(400);
-    expect(result.totals.outputTokens).toBe(200);
+    // +100/+50 folder purpose, +100/+50: the stage-5c understanding task succeeds with one call.
+    expect(result.totals.inputTokens).toBe(500);
+    expect(result.totals.outputTokens).toBe(250);
     expectJoinedAttempts(checkpoint);
   });
 
@@ -2604,7 +2686,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       repoRoot,
       llmClient: retryLlm,
       noRefine: true,
-      onlyTarget: "auth",
+      onlyTarget: "auth/login",
       skipManifestWrite: true,
       relaxedRound: false,
       maxRepairAttempts: 0,
@@ -2650,7 +2732,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
     try {
       db.prepare(
         "UPDATE batch_tasks SET checkpoint_json = ? WHERE stage = 4 AND target = ?",
-      ).run(JSON.stringify(legacyCheckpoint), "auth");
+      ).run(JSON.stringify(legacyCheckpoint), "auth/login");
     } finally {
       db.close();
     }
@@ -2663,7 +2745,7 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
       repoRoot,
       llmClient: retryLlm,
       noRefine: true,
-      onlyTarget: "auth",
+      onlyTarget: "auth/login",
       skipManifestWrite: true,
       relaxedRound: false,
       maxRepairAttempts: 0,
@@ -2685,80 +2767,60 @@ describe("Lot I — bounded non-consuming retries for incomplete responses", () 
   });
 });
 
-describe("Lot N — stage-2 display title plumbing", () => {
-  it("carries an accepted title into stage 4, the run summary, Tasks, and Overview", async () => {
-    const title = "Authentication session responsibilities";
-    const validPage = makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"])
-      .replace("title: test", `title: ${title}`)
-      .replace("# test", `# ${title}`);
+describe("Lot N — deterministic stage 2 (#29: no LLM refine) and page-unit navigation", () => {
+  it("stage 2 never calls the LLM, even without --no-refine, and persists done with zero usage", async () => {
     llm.responses = [
-      JSON.stringify({
-        modules: [{
-          id: "auth",
-          paths: ["src/auth/login.ts"],
-          displayTitle: title,
-        }],
-      }),
-      validPage,
-    ];
-
-    const result = await runBatch({
-      repoRoot,
-      llmClient: llm,
-      noRefine: false,
-      skipManifestWrite: true,
-    });
-
-    expect(result.status).toBe("completed");
-    expect(llm.callCount).toBe(2);
-    expect(llm.callLog[1]?.user).toContain(`# Suggested display title (presentation only; improve it if the source supports a clearer responsibility): ${title}`);
-
-    const Database = (await import("better-sqlite3")).default;
-    const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), { readonly: true });
-    try {
-      const row = db.prepare("SELECT summary_json FROM batch_runs ORDER BY id DESC LIMIT 1").get() as { summary_json: string };
-      const summary = JSON.parse(row.summary_json) as {
-        modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }>;
-      };
-      expect(summary.modulesRefined).toEqual([{
-        id: "auth",
-        paths: ["src/auth/login.ts"],
-        displayTitle: title,
-      }]);
-    } finally {
-      db.close();
-    }
-
-    expect(await safeIo.readText(repoRoot, "livewiki/tasks.md")).toContain(`[${title}](auth.md)`);
-    expect(await safeIo.readText(repoRoot, "livewiki/architecture/overview.md")).toContain(`### ${title}`);
-  });
-
-  it("does not reject an exact partition when displayTitle is malformed", async () => {
-    llm.responses = [
-      JSON.stringify({
-        modules: [{ id: "auth", paths: ["src/auth/login.ts"], displayTitle: 42 }],
-      }),
       makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
     ];
 
     const result = await runBatch({
       repoRoot,
       llmClient: llm,
-      noRefine: false,
+      noRefine: false, // backward-compatible no-op: stage 2 is deterministic (#29)
       skipManifestWrite: true,
     });
+
     expect(result.status).toBe("completed");
+    // Exactly ONE instrumented call: the file-page task (the folder-purpose
+    // and stage-5c understanding answers bypass instrumentation). No refine
+    // call exists — the single prompt is the stage-4 file prompt.
+    expect(llm.callCount).toBe(1);
+    expect(llm.callLog[0]?.user).toContain("# File: src/auth/login.ts");
 
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), { readonly: true });
     try {
       const stage2 = db.prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 2").get() as { checkpoint_json: string };
-      expect(JSON.parse(stage2.checkpoint_json).error).toBeUndefined();
-      const run = db.prepare("SELECT summary_json FROM batch_runs ORDER BY id DESC LIMIT 1").get() as { summary_json: string };
-      expect(JSON.parse(run.summary_json).modulesRefined[0].displayTitle).toBeUndefined();
+      const cp2 = JSON.parse(stage2.checkpoint_json) as {
+        status: string;
+        usageHistory: unknown[];
+        error?: unknown;
+      };
+      expect(cp2.status).toBe("done");
+      expect(cp2.usageHistory).toEqual([]);
+      expect(cp2.error).toBeUndefined();
     } finally {
       db.close();
     }
+  });
+
+  it("Tasks and Overview link the real page units (folder index pages)", async () => {
+    llm.responses = [
+      makeValidPage(["src/auth/login.ts#login", "src/auth/login.ts#logout"]),
+    ];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+    expect(result.status).toBe("completed");
+
+    expect(await safeIo.readText(repoRoot, "livewiki/tasks.md")).toContain("](auth/index.md)");
+    expect(await safeIo.readText(repoRoot, "livewiki/architecture/overview.md")).toContain(
+      "[module page](../auth/index.md)",
+    );
   });
 });
 
@@ -2869,7 +2931,7 @@ describe("batch X — write/verify exception rolls the page back (R10.1 A)", () 
       expect(llm.callCount).toBe(1); // terminal for the task — no repair retry
 
       // The candidate page NEVER persisted (exception rollback removed it).
-      const wikiPath = nodePath.join(repoRoot, "livewiki/auth.md");
+      const wikiPath = nodePath.join(repoRoot, "livewiki/auth/login.md");
       await expect(nodeFs.access(wikiPath)).rejects.toThrow();
 
       const checkpoint = await readStage4Checkpoint(repoRoot);
@@ -2919,7 +2981,7 @@ describe("batch X — write/verify exception rolls the page back (R10.1 A)", () 
       expect(result.status).toBe("aborted");
       expect(result.failures).toHaveLength(1);
       expect(result.failures[0]?.error.code).toBe("rollback_failed");
-      expect(result.failures[0]?.module).toBe("auth");
+      expect(result.failures[0]?.module).toBe("auth/login");
 
       // The SECOND module never reached the LLM.
       expect(llm.callCount).toBe(1);
@@ -2933,7 +2995,7 @@ describe("batch X — write/verify exception rolls the page back (R10.1 A)", () 
           .prepare("SELECT target, status FROM batch_tasks WHERE stage = 4 ORDER BY target")
           .all() as Array<{ target: string; status: string }>;
         expect(tasks.length).toBe(1);
-        expect(tasks[0]?.target).toBe("auth");
+        expect(tasks[0]?.target).toBe("auth/login");
         expect(tasks[0]?.status).toBe("failed");
       } finally {
         db.close();
@@ -3002,19 +3064,19 @@ describe("batch recovery tier — relaxed completion round (Component 2)", () =>
     // Done, NOT a failure — the exit code stays 0 for a degraded-only run.
     expect(result.status).toBe("completed");
     expect(result.failures).toEqual([]);
-    // The relaxed module task + the stage-5c understanding task.
-    expect(result.tasksDone).toBe(2);
+    // The relaxed file task + the folder task + the stage-5c understanding task.
+    expect(result.tasksDone).toBe(3);
     expect(result.tasksFailed).toBe(0);
     expect(llm.callCount).toBe(4); // 1 initial + 2 repairs + 1 relaxed
-    expect(result.degradedPages).toEqual(["livewiki/auth.md"]);
+    expect(result.degradedPages).toEqual(["livewiki/auth/login.md"]);
     // Exact accounting: the relaxed attempt is a normal billed attempt.
-    // +100/+50: the stage-5c understanding task succeeds with one call.
-    expect(result.totals.inputTokens).toBe(500);
-    expect(result.totals.outputTokens).toBe(250);
+    // +100/+50 folder purpose; +100/+50: the stage-5c understanding task succeeds with one call.
+    expect(result.totals.inputTokens).toBe(600);
+    expect(result.totals.outputTokens).toBe(300);
 
     // The page on disk carries the frontmatter flag + the reader notice
     // as the FIRST body line.
-    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(page).toContain("quality: degraded");
     const bodyStart = page.indexOf("\n---\n") + "\n---\n".length;
     expect(page.slice(bodyStart).startsWith(`\n${DEGRADED_NOTICE_PREFIX}`)).toBe(true);
@@ -3032,7 +3094,7 @@ describe("batch recovery tier — relaxed completion round (Component 2)", () =>
 
     // The run summary persisted the degraded pages (batch status surface).
     const report = await buildStatusReport(repoRoot);
-    expect(report.run.summary?.degradedPages).toEqual(["livewiki/auth.md"]);
+    expect(report.run.summary?.degradedPages).toEqual(["livewiki/auth/login.md"]);
   });
 
   it("llm_timeout is in the no-relax set: original failure, no relaxed call", async () => {

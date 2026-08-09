@@ -30,17 +30,16 @@ import { ensureGitignoreEntries } from "./gitignore.js";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
 import {
-  identifyModulesHeuristic,
   resolveModuleEdges,
   prioritizeModules,
   makeUniqueDeterministicIds,
-  splitOversizedModules,
   assertExactPathPartition,
   assertUniqueModuleIds,
   classifyModuleRole,
   type PathRoleConfig,
   type Module,
 } from "./modules.js";
+import { planPageUnits } from "./page-units.js";
 import { loadConfig, applyDefaults, resolveExtraIgnores, type LivewikiConfig } from "./config.js";
 import { collectImports } from "./imports.js";
 import { parseFrontmatter } from "./frontmatter.js";
@@ -561,40 +560,80 @@ export interface StaleModulePageSyncResult {
 /** Deterministic root-level pages that are never module pages. */
 const DETERMINISTIC_ROOT_PAGES = new Set(["quickstart.md", "tasks.md", "understanding.md"]);
 
+/** Reserved livewiki/ hubs with their own stale-sync machinery. */
+const RESERVED_WIKI_HUBS = new Set([
+  "topics",
+  "flows",
+  "architecture",
+  "diagrams",
+  "auxiliary",
+]);
+
 /**
- * #24 (2026-08-04): removes root-level module pages whose module is no
- * longer in the current partition — the migration path for partition
- * changes (test-role split, pattern/config changes). Same ownership
- * contract as syncStaleFlowArtifacts: a page is removed ONLY when its
- * frontmatter parses and declares exactly `owner: generated`; human,
- * mixed, unparseable, or ownerless pages are preserved byte-for-byte.
+ * #29 (2026-08-08): removes generated page-unit pages whose unit is no
+ * longer in the current plan — the migration path for partition changes.
+ * The keep-set is built from RESOLVED PAGE PATHS (never from module ids —
+ * the pre-#29 `${module.id}.md` keep-set would have deleted the whole wiki
+ * the moment page paths stopped being module ids, and the pages are
+ * `owner: generated`, so the ownership guard would not have saved them).
  *
- * Callers must pass the run's EFFECTIVE module list (post-refine) and
- * must NOT call this from a plain init or an `--only` run: those derive
- * the heuristic partition, which may differ from a previously
- * LLM-refined one and would make valid pages look stale.
+ * Scope: file/folder unit pages only — `livewiki/<folder>/index.md`,
+ * `livewiki/<folder>/<file>.md`, and legacy root-level module pages
+ * (`livewiki/<id>.md`, stale by definition under #29). Deterministic root
+ * pages and the reserved hubs (topics/, flows/, architecture/, diagrams/,
+ * auxiliary/) are out of scope and never touched. Same ownership contract
+ * as syncStaleFlowArtifacts: a page is removed ONLY when its frontmatter
+ * parses and declares exactly `owner: generated`; human, mixed,
+ * unparseable, or ownerless pages are preserved byte-for-byte.
+ *
+ * Callers must pass the run's EFFECTIVE keep-set and must NOT call this
+ * from a plain init or an `--only` run: those derive a plan that may
+ * differ from a previously accepted one and would make valid pages look
+ * stale.
  */
 export async function syncStaleModulePages(
   repoRoot: string,
-  modules: Module[],
+  keepPagePaths: ReadonlySet<string>,
 ): Promise<StaleModulePageSyncResult> {
   const absRoot = nodePath.resolve(repoRoot);
-  // Module pages are written with the RAW module id (batch.ts:
-  // `livewiki/${module.id}.md`), so the keep set uses ids verbatim.
-  const keep = new Set(modules.map((module) => `${module.id}.md`));
   const removed: string[] = [];
   const wikiDir = "livewiki";
   const absWiki = await safeIo.resolveAndValidate(absRoot, wikiDir);
-  for (const entry of await nodeFs.readdir(absWiki, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    if (DETERMINISTIC_ROOT_PAGES.has(entry.name)) continue;
-    if (keep.has(entry.name)) continue;
-    const relPath = `${wikiDir}/${entry.name}`;
-    const content = await safeIo.readText(absRoot, relPath).catch(() => null);
-    if (content === null || readFlowPageOwner(content) !== "generated") continue;
-    await safeIo.remove(absRoot, relPath);
-    removed.push(relPath);
-  }
+
+  const walk = async (relDir: string): Promise<void> => {
+    const absDir = relDir === "" ? absWiki : nodePath.join(absWiki, relDir);
+    let entries;
+    try {
+      entries = await nodeFs.readdir(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (RESERVED_WIKI_HUBS.has(entry.name)) continue;
+        await walk(rel);
+        // Remove the directory when every page inside was removed (or it
+        // was already empty) — a stale folder shell must not survive.
+        try {
+          const rest = await nodeFs.readdir(nodePath.join(absWiki, rel));
+          if (rest.length === 0) await nodeFs.rmdir(nodePath.join(absWiki, rel));
+        } catch {
+          // best-effort
+        }
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      if (relDir === "" && DETERMINISTIC_ROOT_PAGES.has(entry.name)) continue;
+      const relPath = `${wikiDir}/${rel}`;
+      if (keepPagePaths.has(relPath)) continue;
+      const content = await safeIo.readText(absRoot, relPath).catch(() => null);
+      if (content === null || readFlowPageOwner(content) !== "generated") continue;
+      await safeIo.remove(absRoot, relPath);
+      removed.push(relPath);
+    }
+  };
+  await walk("");
   return { removed: removed.sort() };
 }
 
@@ -653,32 +692,35 @@ async function buildPlan(
       const p = s.key.split("#")[0]!;
       symbolCountByPath.set(p, (symbolCountByPath.get(p) ?? 0) + 1);
     }
-    // Review finding #2: apply the W gate (plan-wide uniqueness) BEFORE
-    // resolving edges and prioritizing — so module identity is the same
-    // across all derived artifacts (modules.mmd, quickstart.md, overview.md,
-    // regenerator, and batch_tasks.target).
-    const heuristicModules = identifyModulesHeuristic(filePaths, symbolCountByPath, rawConfig.pathRoles);
-    // Unique first, then split oversized, then unique again (see batch.ts).
-    // Prefer config thresholds when present so init --plan matches batch.
-    // The config is loaded ONCE in `runInit` and forwarded here — we do
-    // NOT re-load from disk. applyDefaults fills in only the unset
-    // thresholds; a malformed JSON error already raised in runInit
-    // (T0 fail-closed) so we never silently swallow config errors here.
-    const splitOpts: Parameters<typeof splitOversizedModules>[1] = {
-      symbolCountByPath,
-    };
+    // #29: real page units — one folder module per real directory (the
+    // analysis surface), unique by construction from the planner. There is
+    // no size-based split anymore (chunking is a generation concern, D2)
+    // and no LLM refine (real units are not refinable).
     const cfg = applyDefaults(rawConfig);
-    if (cfg.maxModuleFiles !== undefined) {
-      splitOpts!.maxFiles = cfg.maxModuleFiles;
-    }
-    if (cfg.maxModuleSymbols !== undefined) {
-      splitOpts!.maxSymbols = cfg.maxModuleSymbols;
-    }
-    let modules = makeUniqueDeterministicIds(heuristicModules);
-    modules = splitOversizedModules(modules, splitOpts);
+    const sizeRows = db
+      .prepare("SELECT path, size FROM files WHERE status = 'active'")
+      .all() as Array<{ path: string; size: number }>;
+    const sizeByPath = new Map(sizeRows.map((r) => [r.path, r.size]));
+    const pageUnitsPlan = planPageUnits(
+      { filePaths, symbolCountByPath, sizeByPath },
+      {
+        ...(rawConfig.pathRoles !== undefined ? { pathRoles: rawConfig.pathRoles } : {}),
+        ...(cfg.fileSplitSourceBytes !== undefined
+          ? { fileSplitSourceBytes: cfg.fileSplitSourceBytes }
+          : {}),
+      },
+    );
+    let modules: Module[] = pageUnitsPlan.folderUnits.map((folder) => ({
+      id: folder.id,
+      paths: folder.entries.map((e) => e.filePath),
+      symbolCount: folder.entries.reduce(
+        (acc, e) => acc + (symbolCountByPath.get(e.filePath) ?? 0),
+        0,
+      ),
+    }));
     // Partition vs original indexed inventory (same contract as batch).
-    assertExactPathPartition(modules, filePaths);
     modules = makeUniqueDeterministicIds(modules);
+    assertExactPathPartition(modules, filePaths);
     assertUniqueModuleIds(modules);
 
     // Collect imports to build the graph
@@ -910,7 +952,7 @@ async function generateArchitectureOverview(opts: {
       for (const path of [...m.paths].sort().slice(0, 3)) lines.push(`- \`${path}\``);
       lines.push("");
       const artifactLinks: string[] = [];
-      if (presentation.pageExists) artifactLinks.push(`[module page](../${m.id}.md)`);
+      if (presentation.pageExists) artifactLinks.push(`[module page](../${m.id}/index.md)`);
       if (classDiagramExists) artifactLinks.push(`[class diagram](${classDiagramPath})`);
       if (artifactLinks.length > 0) lines.push(`Available artifacts: ${artifactLinks.join(" · ")}`, "");
       lines.push(`Dependencies: ${formatNeighbors(dependencies, presentations)}`, "");
@@ -969,7 +1011,7 @@ function formatNeighbors(
   return related.map((item) => {
     const presentation = presentations.get(item.moduleId)!;
     return presentation.pageExists
-      ? `[${presentation.displayTitle}](../${item.moduleId}.md)`
+      ? `[${presentation.displayTitle}](../${item.moduleId}/index.md)`
       : `${presentation.displayTitle} (page unavailable)`;
   }).join(", ");
 }

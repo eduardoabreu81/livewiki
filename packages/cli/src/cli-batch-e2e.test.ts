@@ -133,6 +133,34 @@ function understandingResponse(req: { system: string; user: string }): StubRespo
   };
 }
 
+/**
+ * #29 folder unit: the model writes ONLY the folder purpose paragraph
+ * (plain prose, 40–800 chars, no frontmatter/headings/links/fences). The
+ * call is recognizable by the system prompt ("purpose paragraph of ONE
+ * folder page"; the repair variant says "folder purpose paragraph"). It is
+ * answered here, OUTSIDE any per-test file-page instrumentation — tests
+ * that count calls must bucket it separately.
+ */
+const FOLDER_PURPOSE_PARAGRAPH =
+  "This directory holds product source files whose behavior is documented by the file pages in this folder.";
+
+function folderPurposeResponse(req: { system: string; user: string }): StubResponse | null {
+  if (
+    !req.system.includes("purpose paragraph of ONE folder page") &&
+    !req.system.includes("folder purpose paragraph")
+  ) {
+    return null;
+  }
+  return {
+    status: 200,
+    body: {
+      content: [{ type: "text", text: FOLDER_PURPOSE_PARAGRAPH }],
+      model: "claude-test-mock",
+      usage: { input_tokens: 60, output_tokens: 30 },
+    },
+  };
+}
+
 function defaultHandler(
   req: { system: string; user: string },
   opts: { failNTimes?: number } = {},
@@ -146,10 +174,21 @@ function defaultHandler(
   }
   const understanding = understandingResponse(req);
   if (understanding) return understanding;
-  const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
-  const closedKeys = closedKeysFromPrompt(req.user, moduleId);
+  const folderPurpose = folderPurposeResponse(req);
+  if (folderPurpose) return folderPurpose;
+  // #29: stage-4 page units are FILES — the user prompt carries
+  // `# File: <repoPath>` (single-path units). `# Module:` remains only as a
+  // fallback for multi-path prompts; folder units and stage 2 never reach
+  // this handler.
+  const filePath = req.user.match(/# File: ([^\s]+)/)?.[1] ?? null;
+  const moduleId = filePath ?? req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
+  const fileBase =
+    filePath !== null
+      ? (filePath.split("/").pop() ?? filePath).replace(/\.[^.]+$/, "")
+      : moduleId;
+  const closedKeys = closedKeysFromPrompt(req.user, fileBase);
   const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
-  const displayTitle = `${moduleId.replace(/-/g, " ")} responsibilities`;
+  const displayTitle = `${fileBase.replace(/-/g, " ")} responsibilities`;
   const primaryTask = moduleId.includes("provider")
     ? "Add or configure a provider."
     : moduleId.includes("verify")
@@ -269,13 +308,19 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       const result = await r;
       expect(result.status, `init falhou: ${result.stderr}`).toBe(0);
 
-      // Wiki pages geradas
-      expect(await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8")).toMatch(
-        /title: auth/,
-      );
+      // Wiki pages geradas (#29: file page + folder page per directory)
       expect(
-        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/utils.md"), "utf8"),
-      ).toMatch(/title: utils/);
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8"),
+      ).toMatch(/title: login/);
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/utils/helper.md"), "utf8"),
+      ).toMatch(/title: helper/);
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/index.md"), "utf8"),
+      ).toContain("owner: generated");
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/utils/index.md"), "utf8"),
+      ).toContain("owner: generated");
 
       // Diagramas
       expect(
@@ -291,8 +336,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       ).toMatch(/Architecture overview/);
       const tasks = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8");
       expect(tasks).toContain("owner: generated");
-      expect(tasks).toMatch(/\[[^\]]+\]\(auth\.md\)/);
-      expect(tasks).toMatch(/\[[^\]]+\]\(utils\.md\)/);
+      // #29: tasks.md links FOLDER pages (`<folderId>/index.md`).
+      expect(tasks).toMatch(/\[[^\]]+\]\(auth\/index\.md\)/);
+      expect(tasks).toMatch(/\[[^\]]+\]\(utils\/index\.md\)/);
 
       // Manifest
       const manifest = JSON.parse(
@@ -315,15 +361,19 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         "Repository facts",
       ]);
       for (const moduleId of ["auth", "utils"]) {
-        const page = await nodeFs.readFile(nodePath.join(repoRoot, `livewiki/${moduleId}.md`), "utf8");
+        // #29: the Navigate block lives on the FOLDER page.
+        const page = await nodeFs.readFile(
+          nodePath.join(repoRoot, `livewiki/${moduleId}/index.md`),
+          "utf8",
+        );
         expect(page).toContain("## Navigate");
         expect(page).toContain("<!-- livewiki:navigate:start -->");
         expect(page).toContain("<!-- livewiki:navigate:end -->");
         // C1: page-specific links only — the universal hub triple lives in
         // the quickstart and must not be repeated on module pages.
-        expect(page).not.toContain("[Quickstart](quickstart.md)");
-        expect(page).not.toContain("[Tasks](tasks.md)");
-        expect(page).not.toContain("[Architecture](architecture/overview.md)");
+        expect(page).not.toContain("[Quickstart](../quickstart.md)");
+        expect(page).not.toContain("[Tasks](../tasks.md)");
+        expect(page).not.toContain("[Architecture](../architecture/overview.md)");
       }
 
       // Status report
@@ -351,10 +401,13 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
 
       // Key-leak: NENHUMA string da chave aparece em nenhum arquivo gerado
       const allFiles = [
-        "livewiki/auth.md",
-        "livewiki/utils.md",
+        "livewiki/auth/login.md",
+        "livewiki/auth/index.md",
+        "livewiki/utils/helper.md",
+        "livewiki/utils/index.md",
         "livewiki/quickstart.md",
         "livewiki/tasks.md",
+        "livewiki/understanding.md",
         "livewiki/architecture/structure.mmd",
         "livewiki/architecture/modules.mmd",
         "livewiki/architecture/overview.md",
@@ -374,18 +427,22 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     // tightest budgets under pnpm -r parallel load (2026-08-04).
   });
 
-  it("init --batch --no-refine skips stage-2 LLM (zero stage-2 tokens and stub calls)", async () => {
-    // Regression: Commander maps --no-refine → opts.refine === false; CLI must
-    // pass noRefine: true into runInit. Without the fix, stage 2 still calls LLM.
+  it("init --batch --no-refine is a no-op: stage 2 never calls the LLM (zero stage-2 tokens)", async () => {
+    // #29: stage 2 is the deterministic real-units planner — there is no
+    // stage-2 LLM refine anymore, so --no-refine is accepted for backward
+    // compatibility and changes nothing. The refine-marker bucket must stay
+    // at zero and stage-2 tokens must be zero.
     await writeCode("src/auth/login.ts", "export function login() { return 'auth'; }");
     await writeCode("src/utils/helper.ts", "export function help() { return 'utils'; }");
 
     let stage2Calls = 0;
-    let stage4Calls = 0;
+    let filePageCalls = 0;
+    let folderCalls = 0;
+    let otherCalls = 0;
     stub.setHandler((req) => {
       if (req.user.includes("Heuristic module grouping")) {
         stage2Calls++;
-        // If this fires under --no-refine, the wiring is still broken.
+        // Dead under #29 — if this ever fires, the wiring regressed.
         return {
           status: 200,
           body: {
@@ -395,7 +452,13 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
           },
         };
       }
-      stage4Calls++;
+      if (req.user.includes("# File: ")) filePageCalls++;
+      else if (
+        req.system.includes("purpose paragraph of ONE folder page") ||
+        req.system.includes("folder purpose paragraph")
+      )
+        folderCalls++;
+      else otherCalls++;
       return defaultHandler(req);
     });
 
@@ -415,18 +478,24 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
 
       // No stage-2 refine HTTP call at all
       expect(stage2Calls, "stage-2 refine must not call the stub under --no-refine").toBe(0);
-      // Stage 4 still documents modules
-      expect(stage4Calls).toBeGreaterThanOrEqual(2);
-      expect(stub.callCount() - callsBefore).toBe(stage4Calls);
-      expect(stub.callCount() - callsBefore).toBeGreaterThan(0);
+      // Stage 4 documents the two file units; each product folder adds
+      // exactly one folder-purpose call; the understanding task is the
+      // remaining call. No hidden calls beyond those buckets.
+      expect(filePageCalls).toBeGreaterThanOrEqual(2);
+      expect(folderCalls).toBe(2);
+      expect(otherCalls).toBe(1);
+      expect(stub.callCount() - callsBefore).toBe(filePageCalls + folderCalls + otherCalls);
 
-      // Heuristic pages still produced
+      // Real-unit pages produced (#29: file page + folder page)
       expect(
-        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8"),
-      ).toMatch(/title: auth/);
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8"),
+      ).toMatch(/title: login/);
       expect(
-        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/utils.md"), "utf8"),
-      ).toMatch(/title: utils/);
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/utils/helper.md"), "utf8"),
+      ).toMatch(/title: helper/);
+      expect(
+        await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/index.md"), "utf8"),
+      ).toContain("owner: generated");
 
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       expect(status.status, status.stderr).toBe(0);
@@ -436,8 +505,8 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       };
       expect(report.run.status).toBe("completed");
       const stage2 = report.byStage["2"] ?? { inputTokens: 0, outputTokens: 0 };
-      expect(stage2.inputTokens, "stage 2 input tokens must be 0 with --no-refine").toBe(0);
-      expect(stage2.outputTokens, "stage 2 output tokens must be 0 with --no-refine").toBe(0);
+      expect(stage2.inputTokens, "stage 2 input tokens must be 0 (deterministic planner)").toBe(0);
+      expect(stage2.outputTokens, "stage 2 output tokens must be 0 (deterministic planner)").toBe(0);
       // Stage 4 still spent tokens
       const stage4 = report.byStage["4"];
       expect(stage4).toBeDefined();
@@ -447,7 +516,10 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   });
 
-  it("init --batch without --no-refine still invokes stage-2 refine", async () => {
+  it("init --batch without --no-refine ALSO makes zero stage-2 LLM calls (deterministic planner)", async () => {
+    // #29: the stage-2 LLM refine is gone for good — real page units are
+    // not refinable. Without the flag the run must behave identically: no
+    // refine prompt, zero stage-2 tokens, same real units on disk.
     await writeCode("src/auth/login.ts", "export function login() { return 'auth'; }");
     await writeCode("src/utils/helper.ts", "export function help() { return 'utils'; }");
 
@@ -482,17 +554,18 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
       expect(r.status, `init --batch failed: ${r.stderr}`).toBe(0);
-      expect(stage2Calls, "default init --batch must call stage-2 refine").toBeGreaterThanOrEqual(1);
+      expect(stage2Calls, "stage 2 must never call the LLM, even without --no-refine").toBe(0);
 
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       expect(status.status, status.stderr).toBe(0);
       const report = JSON.parse(status.stdout) as {
         byStage: Record<string, { inputTokens: number; outputTokens: number }>;
+        run: { status: string };
       };
-      const stage2 = report.byStage["2"];
-      expect(stage2).toBeDefined();
-      expect(stage2!.inputTokens).toBeGreaterThan(0);
-      expect(stage2!.outputTokens).toBeGreaterThan(0);
+      expect(report.run.status).toBe("completed");
+      const stage2 = report.byStage["2"] ?? { inputTokens: 0, outputTokens: 0 };
+      expect(stage2.inputTokens).toBe(0);
+      expect(stage2.outputTokens).toBe(0);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
@@ -509,14 +582,15 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       expect(r1.status, r1.stderr).toBe(0);
       const callsAfterInit = stub.callCount();
 
-      // Re-run one task in the initial run.
+      // Re-run one task in the initial run. #29: the stage-4 task target is
+      // the file-unit id (`<folderId>/<fileBase>`).
       const rerun = await runCli([
         "--json",
         "--repo",
         repoRoot,
         "batch",
         "--only",
-        "auth",
+        "auth/login",
         "1",
       ]);
       expect(rerun.status, rerun.stderr).toBe(0);
@@ -524,11 +598,11 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       // Pelo menos 1 chamada extra pro mock LLM
       expect(stub.callCount()).toBeGreaterThan(callsAfterInit);
 
-      // Status mostra attempt >= 2 na task 'auth'
+      // Status mostra attempt >= 2 na task 'auth/login'
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       const report = JSON.parse(status.stdout);
       const authTask = report.tasks.find(
-        (t: { target: string; stage: number }) => t.target === "auth" && t.stage === 4,
+        (t: { target: string; stage: number }) => t.target === "auth/login" && t.stage === 4,
       );
       expect(authTask).toBeDefined();
       expect(authTask.attempts).toBeGreaterThanOrEqual(2);
@@ -554,14 +628,14 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       const callsAfterInit = stub.callCount();
 
       // NO positional runId — must still rerun the task, not print status.
-      const rerun = await runCli(["--json", "--repo", repoRoot, "batch", "--only", "auth"]);
+      const rerun = await runCli(["--json", "--repo", repoRoot, "batch", "--only", "auth/login"]);
       expect(rerun.status, rerun.stderr).toBe(0);
       expect(stub.callCount()).toBeGreaterThan(callsAfterInit);
 
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       const report = JSON.parse(status.stdout);
       const authTask = report.tasks.find(
-        (t: { target: string; stage: number }) => t.target === "auth" && t.stage === 4,
+        (t: { target: string; stage: number }) => t.target === "auth/login" && t.stage === 4,
       );
       expect(authTask).toBeDefined();
       expect(authTask.attempts).toBeGreaterThanOrEqual(2);
@@ -616,19 +690,18 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
   }, 60_000);
 
   it("(O) init --batch completed_with_failures → exit code 1 (sem --json)", async () => {
-    // Cenário: 3 módulos, falha só no 1º da etapa 4 → circuit breaker não
+    // Cenário: 3 file units, falha só no 1º da etapa 4 → circuit breaker não
     // dispara (1 < 3 consecutivas, < 50%), mas o run termina com N-1 done + 1
     // failed → status=completed_with_failures → exit 1.
-    // Importante: NÃO falhar na etapa 2 (refine) — refine é opt-in/degradável
-    // (correção #5) e falha vira heurística sem afetar status do run.
-    // Diferenciamos por marker do prompt: etapa 4 tem `# Module: <id>`.
+    // #29: etapa 2 é o planner determinístico (sem LLM); diferenciamos a
+    // etapa 4 pelo marker do prompt de file unit: `# File: <repoPath>`.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
     await writeCode("src/api/y.ts", "export function c() {}");
 
     stub.setHandler((req) => {
-      // Falha apenas na 1ª chamada de etapa 4 (módulos). Refine passa.
-      if (req.user.includes("# Module: auth")) {
+      // Falha apenas na task do file unit auth/login (initial + repairs).
+      if (req.user.includes("# File: src/auth/login.ts")) {
         return { status: 500, body: { error: "simulated transient failure" } };
       }
       return defaultHandler(req);
@@ -733,8 +806,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       );
       expect(overview).toContain("Module ID: `auth`");
       expect(overview).toContain("Module ID: `utils`");
-      expect(overview).toMatch(/\[module page\]\(\.\.\/auth\.md\)/);
-      expect(overview).toMatch(/\[module page\]\(\.\.\/utils\.md\)/);
+      // #29: the module page link points at the FOLDER page.
+      expect(overview).toMatch(/\[module page\]\(\.\.\/auth\/index\.md\)/);
+      expect(overview).toMatch(/\[module page\]\(\.\.\/utils\/index\.md\)/);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
@@ -758,8 +832,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(quickstart).toContain("[Architecture overview](architecture/overview.md)");
     expect(overview).toContain('<a id="auth"></a>');
     // R10.1 E: tasks.md has no `Module ID:` line — before the page exists,
-    // the stable id is carried by the unavailable-entry path.
-    expect(tasks).toContain("Page unavailable: `livewiki/auth.md`");
+    // the stable id is carried by the unavailable-entry path. #29: the page
+    // path is the FOLDER page (`<folderId>/index.md`).
+    expect(tasks).toContain("Page unavailable: `livewiki/auth/index.md`");
     expect(tasks).not.toContain("Module ID:");
     expect(tasks).not.toContain("](auth.md)");
   });
@@ -829,8 +904,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     const report = JSON.parse(r.stdout);
     expect(report.plan).toBeDefined();
     expect(report.plan.modules.length).toBeGreaterThan(0);
-    // Não tocou em livewiki/auth.md (--plan é só plano)
-    await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/foo.md"))).rejects.toThrow();
+    // Não tocou na file page do unit (--plan é só plano). #29: o unit de
+    // `src/foo.ts` é `src/foo` → `livewiki/src/foo.md`.
+    await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/src/foo.md"))).rejects.toThrow();
   });
 
   it("init sem --batch funciona SEM config LLM (sem LLM calls)", async () => {
@@ -856,8 +932,11 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     const verify = await runCli(["--json", "--repo", repoRoot, "verify"]);
     expect(verify.status, verify.stderr).toBe(0);
     expect(JSON.parse(verify.stdout).issues).toEqual([]);
-    // Sem module pages (não chamou LLM)
-    await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/foo.md"))).rejects.toThrow();
+    // Sem file/folder pages (não chamou LLM). #29: o unit de `src/foo.ts`
+    // seria `src/foo` → `livewiki/src/foo.md`; a folder page seria
+    // `livewiki/src/index.md`.
+    await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/src/foo.md"))).rejects.toThrow();
+    await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/src/index.md"))).rejects.toThrow();
   });
 
   it("init --batch SEM config LLM falha com mensagem clara apontando pro config", async () => {
@@ -925,17 +1004,24 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     const tasks = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8");
     expect(quickstart).toContain("[Tasks](tasks.md)");
     expect(quickstart).toMatch(/## Document a repo[\s\S]*`livewiki init`[\s\S]*`livewiki init --batch`/);
-    expect(tasks).toContain("[providers responsibilities](providers.md)");
-    expect(tasks).not.toContain("This page documents the indexed responsibilities of providers.");
-    expect(tasks).toContain("[verify responsibilities](verify.md)");
-    expect(tasks).not.toContain("This page documents the indexed responsibilities of verify.");
-    // tasks.md copies no module-page prose at all: neither the responsibility
-    // sentence nor the `When to use this page` bullets (duplicate-prose audit).
+    // #29: tasks.md links FOLDER pages (`<folderId>/index.md`).
+    expect(tasks).toMatch(/\[[^\]]+\]\(providers\/index\.md\)/);
+    expect(tasks).toMatch(/\[[^\]]+\]\(verify\/index\.md\)/);
+    expect(tasks).toMatch(/\[[^\]]+\]\(batch\/index\.md\)/);
+    // tasks.md copies no page prose at all: neither the folder purpose
+    // paragraph nor the file-page opening/bullets (duplicate-prose audit).
+    expect(tasks).not.toContain(FOLDER_PURPOSE_PARAGRAPH);
+    expect(tasks).not.toContain("This page documents the indexed responsibilities of");
     expect(tasks).not.toContain("- Add or configure a provider.");
     expect(tasks).not.toContain("- Diagnose a failed verify.");
 
     for (const moduleId of ["providers", "batch", "verify"]) {
-      const page = await nodeFs.readFile(nodePath.join(repoRoot, `livewiki/${moduleId}.md`), "utf8");
+      // #29: `index.ts` always takes the extension suffix — the unsuffixed
+      // path would collide with the folder page.
+      const page = await nodeFs.readFile(
+        nodePath.join(repoRoot, `livewiki/${moduleId}/index-ts.md`),
+        "utf8",
+      );
       const when = page.indexOf("## When to use this page");
       const how = page.indexOf("## How it fits");
       const marker = page.indexOf("<!-- lw:anchors ");
@@ -943,6 +1029,12 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       expect(how).toBeGreaterThan(when);
       expect(marker).toBeGreaterThan(how);
       expect(page).toContain(`src/${moduleId}/index.ts#`);
+      // The folder page exists and links the file page.
+      const folder = await nodeFs.readFile(
+        nodePath.join(repoRoot, `livewiki/${moduleId}/index.md`),
+        "utf8",
+      );
+      expect(folder).toContain("[index.ts](index-ts.md)");
     }
 
     const verify = await runCli(["--json", "--repo", repoRoot, "verify"]);
@@ -973,14 +1065,14 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       const initReport = JSON.parse(initR.stdout);
       expect(initReport.batchSummary.status).toBe("completed");
 
-      // 2. Overview.md existe com os links emitidos
+      // 2. Overview.md existe com os links emitidos (#29: folder pages)
       const overview = await nodeFs.readFile(
         nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
         "utf8",
       );
-      expect(overview).toMatch(/\[module page\]\(\.\.\/auth\.md\)/);
-      expect(overview).toMatch(/\[module page\]\(\.\.\/utils\.md\)/);
-      expect(overview).toMatch(/\[module page\]\(\.\.\/api\.md\)/);
+      expect(overview).toMatch(/\[module page\]\(\.\.\/auth\/index\.md\)/);
+      expect(overview).toMatch(/\[module page\]\(\.\.\/utils\/index\.md\)/);
+      expect(overview).toMatch(/\[module page\]\(\.\.\/api\/index\.md\)/);
 
       // 3. Verify limpo: exit 0 + zero issues
       const verifyR = await runCli(["--json", "--repo", repoRoot, "verify"]);
@@ -1024,11 +1116,11 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       "export function peerImpl() { return 'peer'; }",
     );
 
-    // Track every module the stub saw, then assert the ignored ones
-    // never appeared.
+    // Track every file unit the stub saw, then assert the ignored ones
+    // never appeared. #29: stage-4 prompts carry `# File: <repoPath>`.
     const seenModules: string[] = [];
     stub.setHandler((req) => {
-      const match = req.user.match(/# Module: ([^\s]+)/);
+      const match = req.user.match(/# File: ([^\s]+)/);
       if (match) seenModules.push(match[1]!);
       return defaultHandler(req);
     });
@@ -1065,8 +1157,8 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         expect(e).not.toMatch(/benchmarks|openwiki|raw/i);
       }
 
-      // The LLM was only asked to document the product module.
-      expect(seenModules).toEqual(["auth"]);
+      // The LLM was only asked to document the product file unit.
+      expect(seenModules).toEqual(["src/auth/login.ts"]);
 
       // Verify passes clean — no broken_internal_link / broken_anchor.
       const verR = await runCli(["--json", "--repo", repoRoot, "verify"]);

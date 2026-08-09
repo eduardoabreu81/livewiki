@@ -175,6 +175,15 @@ describe("batch-status — H6 backward compatibility (no diagnosticHistory)", ()
             stopReason: "complete",
           };
         }
+        // #29 folder task: the LLM writes ONLY the purpose paragraph.
+        if (/purpose paragraph/.test(req.system)) {
+          return {
+            content:
+              "This directory holds the authentication module: login and logout entry points.",
+            usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+            stopReason: "complete",
+          };
+        }
         return {
           content: [
             "---",
@@ -220,7 +229,7 @@ describe("batch-status — H6 backward compatibility (no diagnosticHistory)", ()
     expect(result.status).toBe("completed");
 
     const report = await buildStatusReport(repoRoot);
-    const authTask = report.tasks.find((t) => t.target === "auth");
+    const authTask = report.tasks.find((t) => t.target === "auth/login");
     expect(authTask).toBeDefined();
     expect(authTask!.diagnosticHistory).toBeDefined();
     expect(authTask!.diagnosticHistory).toHaveLength(1);
@@ -377,6 +386,15 @@ describe("batch-status — JSON shape guard (additive field only)", () => {
             stopReason: "complete",
           };
         }
+        // #29 folder task: the LLM writes ONLY the purpose paragraph.
+        if (/purpose paragraph/.test(req.system)) {
+          return {
+            content:
+              "This directory holds the authentication module: login and logout entry points.",
+            usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+            stopReason: "complete",
+          };
+        }
         return {
           content: [
             "---",
@@ -422,7 +440,7 @@ describe("batch-status — JSON shape guard (additive field only)", () => {
     expect(result.status).toBe("completed");
 
     const report = await buildStatusReport(repoRoot);
-    const authTask = report.tasks.find((t) => t.target === "auth");
+    const authTask = report.tasks.find((t) => t.target === "auth/login");
     expect(authTask).toBeDefined();
     expect(authTask!.diagnosticHistory).toBeDefined();
     expect(authTask!.diagnosticHistory).toHaveLength(1);

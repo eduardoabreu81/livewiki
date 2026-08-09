@@ -2327,7 +2327,7 @@ anchors:
 ## Related pages
 
 - [Topics hub](index.md)
-- [mod-a module](../mod-a.md)
+- [mod-a module](../mod-a/index.md)
 `;
 
   it("topic: the reduced section set with bullets passes relaxed, fails strict", () => {
@@ -2425,7 +2425,7 @@ Change requires updating the cited symbol and its module page.
 ## Related pages
 
 - [Topics hub](index.md)
-- [mod-a module](../mod-a.md)
+- [mod-a module](../mod-a/index.md)
 `;
 
   it("flags a Markdown link to a source path as topic_source_link", () => {
@@ -2456,7 +2456,7 @@ Change requires updating the cited symbol and its module page.
 
   it("accepts wiki-artifact and external links in prose", () => {
     const page = topicPage(
-      "See [the module page](../mod-a.md), [the diagram](../diagrams/flow-x.mmd), and [the upstream docs](https://example.com/docs).",
+      "See [the module page](../mod-a/index.md), [the diagram](../diagrams/flow-x.mmd), and [the upstream docs](https://example.com/docs).",
     );
     const result = validateStage4Artifact(page, topicKeys, ctx);
     expect(result.errors.some((e) => e.code === "topic_source_link")).toBe(false);

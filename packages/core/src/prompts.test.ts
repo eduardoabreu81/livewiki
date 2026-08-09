@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   buildStage4Prompt,
-  buildStage2RefinePrompt,
   buildQuickstartPrompt,
   buildOverviewPrompt,
   buildRepairPrompt,
@@ -736,37 +735,6 @@ describe("prompts — untrusted content neutralization (source / priorCandidate)
     expect(stage4.user).not.toContain("fake-key");
     expect(stage4.user).not.toContain("not-a-real-key");
     expect(stage4.user).not.toMatch(/\.\.\./);
-  });
-});
-
-describe("prompts — stage 2 refine", () => {
-  it("output JSON only (sem markdown fence)", () => {
-    const r = buildStage2RefinePrompt([sampleModule]);
-    expect(r.system).toMatch(/JSON only/);
-    expect(r.system).toMatch(/No markdown fences/);
-  });
-
-  it("schema documentado no system prompt", () => {
-    const r = buildStage2RefinePrompt([sampleModule]);
-    expect(r.system).toMatch(/"id"/);
-    expect(r.system).toMatch(/"paths"/);
-    expect(r.system).toMatch(/"displayTitle"/);
-    expect(r.system).toMatch(/optional presentation metadata/);
-  });
-
-  it("regra 'every original path appears in EXACTLY one module'", () => {
-    const r = buildStage2RefinePrompt([sampleModule]);
-    expect(r.system).toMatch(/EXACTLY one module/);
-  });
-
-  it("lista heurística de módulos aparece no user prompt", () => {
-    const mods: Module[] = [
-      { id: "auth", paths: ["src/auth/a.ts"], symbolCount: 3 },
-      { id: "utils", paths: ["src/utils/x.ts"], symbolCount: 1 },
-    ];
-    const r = buildStage2RefinePrompt(mods);
-    expect(r.user).toContain("auth");
-    expect(r.user).toContain("utils");
   });
 });
 

@@ -107,6 +107,13 @@ export interface LivewikiConfig {
    */
   maxModuleSymbols?: number;
   /**
+   * #29: source-bytes threshold above which a file page is generated
+   * plan-then-write (plan pass + per-section passes, assembled
+   * deterministically — the split never reaches disk). Default 60,000
+   * (aligned with the stage-4 context char budget). Set 0 to disable.
+   */
+  fileSplitSourceBytes?: number;
+  /**
    * Thinking control for openai-compat providers that support it.
    * - disabled: send thinking off (MiniMax-M3)
    * - adaptive: allow thinking
@@ -333,6 +340,8 @@ export const CONFIG_DEFAULTS = {
   /** Structural split thresholds for oversized modules. */
   maxModuleFiles: 12,
   maxModuleSymbols: 80,
+  /** #29: plan-then-write threshold for oversized single-file pages. */
+  fileSplitSourceBytes: 60_000,
   /**
    * Default LLM HTTP timeout (ms). Applied when config omits timeoutMs.
    * Local providers may set 900_000; 0 disables the abort timer.
@@ -466,6 +475,7 @@ export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
     outputTokenStrategy: CONFIG_DEFAULTS.outputTokenStrategy,
     maxModuleFiles: CONFIG_DEFAULTS.maxModuleFiles,
     maxModuleSymbols: CONFIG_DEFAULTS.maxModuleSymbols,
+    fileSplitSourceBytes: CONFIG_DEFAULTS.fileSplitSourceBytes,
     timeoutMs: CONFIG_DEFAULTS.timeoutMs,
     maxFlows: CONFIG_DEFAULTS.maxFlows,
     flowMaxAnchors: CONFIG_DEFAULTS.flowMaxAnchors,
@@ -663,6 +673,15 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       );
     }
     out.maxModuleSymbols = v;
+  }
+  if (obj["fileSplitSourceBytes"] !== undefined) {
+    const v = obj["fileSplitSourceBytes"];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `invalid fileSplitSourceBytes: must be a non-negative integer, got ${JSON.stringify(v)}`,
+      );
+    }
+    out.fileSplitSourceBytes = v;
   }
   if (obj["thinking"] !== undefined) {
     const v = obj["thinking"];

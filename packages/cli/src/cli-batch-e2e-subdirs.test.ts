@@ -6,12 +6,13 @@
  * apontando pra stub local, key só no env. Esse cenário EXPLICITAMENTE expõe os
  * bugs que o fixture flat do cli-batch-e2e.test.ts não cobre.
  *
- * Cobertura:
- *   H — init --batch com subdiretórios + imports cruzados gera TODAS as páginas
- *       (não termina com 0 páginas + exit 0 quando modules > 0).
- *   I — refinamento LLM que devolve {"modules":[]} é rejeitado; heurística vence.
- *   J — checkpoint do stage 2 é JSON válido E o summary_json do run tem os
- *       módulos refinados; leitor de status parseia corretamente (usage > 0).
+ * Cobertura (contrato #29 — real page units: um FILE unit por arquivo com
+ * símbolos, um FOLDER unit por diretório real; stage 2 é determinístico e
+ * NÃO existe refine LLM):
+ *   H — init --batch com subdiretórios + imports cruzados gera TODAS as
+ *       páginas de unidade real (file pages + folder pages), não 0.
+ *   I — stage 2 não faz NENHUMA chamada LLM: o planner determinístico
+ *       particiona o inventário e o summary reflete as pastas reais.
  *   K — imports NodeNext ../utils/crypto.js resolvem pra crypto.ts (edges > 0).
  *   L — batch sem config LLM falha com mensagem clara E exit 1 (não crasha
  *       com exit -1073740791 do libuv).
@@ -129,11 +130,39 @@ function understandingResponse(req: { system: string; user: string }): StubRespo
   };
 }
 
-/** Gera doc Markdown válido pra qualquer módulo (mesmo formato do E2E da Fase 3). */
+/** Gera doc Markdown válido pra qualquer file unit (mesmo formato do E2E da Fase 3). */
 function defaultHandler(req: { system: string; user: string }): StubResponse | null {
   const understanding = understandingResponse(req);
   if (understanding) return understanding;
-  const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
+  // #29 folder page: the model writes ONLY the purpose paragraph (plain
+  // prose, 40–800 chars, no headings/frontmatter/links); the skeleton is
+  // deterministic. Initial system carries "purpose paragraph of ONE folder
+  // page"; the repair variant carries "folder purpose paragraph".
+  if (
+    req.system.includes("purpose paragraph of ONE folder page") ||
+    req.system.includes("folder purpose paragraph")
+  ) {
+    return {
+      status: 200,
+      body: {
+        choices: [{
+          message: {
+            role: "assistant",
+            content:
+              "This directory groups product source files whose documented responsibilities are covered by the file pages it contains.",
+          },
+        }],
+        usage: { prompt_tokens: 1000, completion_tokens: 200 },
+        model: "gpt-test-mock",
+      },
+    };
+  }
+  // #29: file-unit prompts carry `# File: <repoPath>` (single-path units);
+  // the legacy `# Module: <id>` line only appears for multi-path prompts.
+  const moduleId =
+    req.user.match(/# Module: ([^\s]+)/)?.[1] ??
+    req.user.match(/# File: ([^\s]+)/)?.[1] ??
+    "unknown";
   const closedKeys = closedKeysFromPrompt(req.user, moduleId);
   const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
   const displayTitle = `${moduleId.replace(/-/g, " ")} responsibilities`;
@@ -169,38 +198,6 @@ Some prose about ${moduleId}.
       usage: { prompt_tokens: 1000, completion_tokens: 200 },
       model: "gpt-test-mock",
     },
-  };
-}
-
-/**
- * Detector de stage 2 (refine-modules). O prompt do stage 2 (`buildStage2RefinePrompt`)
- * tem "# Heuristic module grouping:" no user — string única que NÃO aparece no
- * prompt do stage 4 ("# Module: <id>"). Usar essa string evita o bug anterior
- * com regex `refine.*modules` que falhava por causa de `.` não casar newline.
- */
-function isStage2RefinePrompt(user: string): boolean {
-  return user.includes("Heuristic module grouping");
-}
-
-/** Stage 2 refine-modules: detecta prompt de refinamento e devolve `modules`. */
-function makeRefineHandler(refinedModules: Array<{ id: string; paths: string[] }>) {
-  return function (req: { system: string; user: string }): StubResponse | null {
-    if (isStage2RefinePrompt(req.user)) {
-      return {
-        status: 200,
-        body: {
-          choices: [{
-            message: {
-              role: "assistant",
-              content: JSON.stringify({ modules: refinedModules }),
-            },
-          }],
-          usage: { prompt_tokens: 1000, completion_tokens: 200 },
-          model: "gpt-test-mock",
-        },
-      };
-    }
-    return defaultHandler(req);
   };
 }
 
@@ -284,11 +281,7 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       "export function hashPassword(p: string): string { return 'h:' + p; }\nexport function sign(data: string): string { return 's:' + data; }",
     );
 
-    stub.setHandler(makeRefineHandler([
-      { id: "auth", paths: ["src/auth/login.ts", "src/auth/session.ts"] },
-      { id: "billing", paths: ["src/billing/invoice.ts"] },
-      { id: "utils", paths: ["src/utils/crypto.ts"] },
-    ]));
+    stub.setHandler(defaultHandler);
 
     await writeOpenAiConfig("gpt-test-mock", stub.url);
     process.env["OPENAI_API_KEY"] = "test-canary-H-DONOTLEAK";
@@ -296,12 +289,16 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
       expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
 
-      // 3 páginas geradas (não 0!)
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth.md"))).resolves.toBeUndefined();
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/billing.md"))).resolves.toBeUndefined();
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/utils.md"))).resolves.toBeUndefined();
+      // #29 real units: 4 file pages + 3 folder pages (não 0!)
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/login.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/session.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/index.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/billing/invoice.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/billing/index.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/utils/crypto.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/utils/index.md"))).resolves.toBeUndefined();
 
-      // status report: run completed, 3 tasks de stage 4, usage > 0
+      // status report: run completed, 7 stage-4 tasks (unit ids as targets), usage > 0
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       expect(status.status).toBe(0);
       const report = JSON.parse(status.stdout);
@@ -309,43 +306,42 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       const stage4Tasks = report.tasks.filter(
         (t: { stage: number }) => t.stage === 4,
       );
-      expect(stage4Tasks.length, "esperava 3 tasks de stage 4").toBe(3);
+      expect(stage4Tasks.length, "esperava 7 tasks de stage 4 (4 file + 3 folder units)").toBe(7);
       const doneTasks = stage4Tasks.filter((t: { status: string }) => t.status === "done");
-      expect(doneTasks.length, "esperava 3 tasks de stage 4 com status done").toBe(3);
-      // Usage do stage 2 tem que aparecer (1000/200 do stub)
+      expect(doneTasks.length, "esperava 7 tasks de stage 4 com status done").toBe(7);
+      // #29: the stage-4 task target IS the unit id (file `auth/login`, folder `auth`).
+      const targets = stage4Tasks.map((t: { target: string }) => t.target).sort();
+      expect(targets).toEqual([
+        "auth",
+        "auth/login",
+        "auth/session",
+        "billing",
+        "billing/invoice",
+        "utils",
+        "utils/crypto",
+      ]);
+      // #29: stage 2 is the deterministic planner — exactly one task, done,
+      // with ZERO LLM tokens (no refine call exists anymore).
       const stage2Tasks = report.tasks.filter((t: { stage: number }) => t.stage === 2);
       expect(stage2Tasks.length).toBe(1);
       const stage2 = stage2Tasks[0];
-      // FIX J (rev2): status report expõe inputTokens/outputTokens agregados
-      // (não usageHistory). Antes da fix, o JSON corrompido zerava isso.
-      expect(stage2.inputTokens, "stage 2 inputTokens > 0 (regressão do achado J)").toBeGreaterThan(0);
-      expect(stage2.outputTokens, "stage 2 outputTokens > 0 (regressão do achado J)").toBeGreaterThan(0);
+      expect(stage2.status).toBe("done");
+      expect(stage2.inputTokens, "stage 2 determinístico: zero tokens de LLM").toBe(0);
+      expect(stage2.outputTokens, "stage 2 determinístico: zero tokens de LLM").toBe(0);
     } finally {
       delete process.env.OPENAI_API_KEY;
     }
   }, 60_000);
 
-  it("I: refinamento LLM que devolve modules:[] é rejeitado; heurística vence", async () => {
+  it("I: stage 2 NÃO chama o LLM — o planner determinístico particiona em unidades reais", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
     await writeCode("src/billing/invoice.ts", "export function inv() {}");
     await writeCode("src/utils/crypto.ts", "export function c() {}");
 
-    // Stub devolve {"modules": []} no stage 2 — DEVE ser rejeitado, heurística mantém.
-    stub.setHandler((req) => {
-      if (isStage2RefinePrompt(req.user)) {
-        return {
-          status: 200,
-          body: {
-            choices: [{
-              message: { role: "assistant", content: '{"modules": []}' },
-            }],
-            usage: { prompt_tokens: 1000, completion_tokens: 200 },
-            model: "gpt-test-mock",
-          },
-        };
-      }
-      return defaultHandler(req);
-    });
+    // #29: não existe refine de stage 2. Qualquer chamada com o marcador do
+    // antigo prompt de refine ("Heuristic module grouping") falha o teste —
+    // o stub registra tudo e asserimos no fim.
+    stub.setHandler(defaultHandler);
 
     await writeOpenAiConfig("gpt-test-mock", stub.url);
     process.env["OPENAI_API_KEY"] = "test-canary-I-DONOTLEAK";
@@ -353,27 +349,44 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
       expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
 
-      // Heurística tem que ter vencido → 3 páginas geradas
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth.md"))).resolves.toBeUndefined();
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/billing.md"))).resolves.toBeUndefined();
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/utils.md"))).resolves.toBeUndefined();
+      // Real units: 3 file pages + 3 folder pages.
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/login.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/index.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/billing/invoice.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/billing/index.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/utils/crypto.md"))).resolves.toBeUndefined();
+      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/utils/index.md"))).resolves.toBeUndefined();
 
-      // No status: stage 2 task tem que registrar que o refinamento foi REJEITADO
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       const report = JSON.parse(status.stdout);
+      expect(report.run.status).toBe("completed");
+      // Stage 2: done, ZERO tokens — nenhuma chamada LLM saiu do stage 2.
       const stage2 = report.tasks.find(
         (t: { stage: number }) => t.stage === 2,
       );
       expect(stage2).toBeDefined();
-      // FIX I (rev2): erro registrado no checkpoint (refine_rejected_empty).
-      // Como o checkpoint é do orquestrador, expomos via `error` no TaskReportItem.
-      expect(stage2.error?.code, "stage 2 rejeita modules:[] do LLM").toMatch(/refine_rejected/);
-      expect(stage2.inputTokens, "stage 2 ainda foi chamado (LLM respondeu)").toBeGreaterThan(0);
-      // O importante: summary_json do run contém os 3 módulos heurísticos, não []
+      expect(stage2.status).toBe("done");
+      expect(stage2.inputTokens, "stage 2 determinístico não chama o LLM").toBe(0);
+      expect(stage2.outputTokens, "stage 2 determinístico não chama o LLM").toBe(0);
+      // E no transporte: nenhum prompt de refine chegou ao stub.
       expect(
-        report.run.summary?.modulesRefined?.length ?? 0,
-        "summary.modulesRefined > 0 (heurística mantida após rejeição)",
-      ).toBe(3);
+        stub.received().filter((c) => c.user.includes("Heuristic module grouping")).length,
+        "nenhum prompt de refine de stage 2 pode existir sob #29",
+      ).toBe(0);
+      // O summary reflete a partição determinística: as 3 pastas reais.
+      const refined = report.run.summary?.modulesRefined ?? [];
+      expect(
+        refined.map((m: { id: string }) => m.id).sort(),
+        "summary.modulesRefined = pastas reais do planner",
+      ).toEqual(["auth", "billing", "utils"]);
+      const pathsById = Object.fromEntries(
+        refined.map((m: { id: string; paths: string[] }) => [m.id, m.paths]),
+      );
+      expect(pathsById).toEqual({
+        auth: ["src/auth/login.ts"],
+        billing: ["src/billing/invoice.ts"],
+        utils: ["src/utils/crypto.ts"],
+      });
     } finally {
       delete process.env.OPENAI_API_KEY;
     }
@@ -389,10 +402,7 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       "export function hashPassword(p: string): string { return 'h:' + p; }",
     );
 
-    stub.setHandler(makeRefineHandler([
-      { id: "auth", paths: ["src/auth/login.ts"] },
-      { id: "utils", paths: ["src/utils/crypto.ts"] },
-    ]));
+    stub.setHandler(defaultHandler);
 
     await writeOpenAiConfig("gpt-test-mock", stub.url);
     process.env["OPENAI_API_KEY"] = "test-canary-K-DONOTLEAK";
@@ -432,9 +442,7 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
 
   it("M: filesWritten do init NÃO lista manifest que não foi regravado", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
-    stub.setHandler(makeRefineHandler([
-      { id: "auth", paths: ["src/auth/login.ts"] },
-    ]));
+    stub.setHandler(defaultHandler);
 
     await writeOpenAiConfig("gpt-test-mock", stub.url);
     process.env["OPENAI_API_KEY"] = "test-canary-M-DONOTLEAK";

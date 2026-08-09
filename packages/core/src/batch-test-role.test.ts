@@ -1,15 +1,20 @@
 /**
- * batch-test-role.test.ts — #24 (2026-08-04): test-role classification
- * end-to-end through the batch orchestrator (stub LLM, zero paid calls).
+ * batch-test-role.test.ts — #24 (2026-08-04) test-role classification
+ * end-to-end through the batch orchestrator (stub LLM, zero paid calls),
+ * rewritten for the #29 real-units contract (D3: ZERO test pages).
  *
  * Contracts covered:
- *   - co-located test files become their own `<id>-tests` module and are
- *     documented through the deterministic auxiliary channel — ZERO LLM
- *     calls for them, anchored page on disk;
+ *   - a 1:1 same-name test file (`login.test.ts` → `login.ts`) never gets
+ *     a page and never enters a product page's anchors: the product file
+ *     page gains a deterministic "## Tests" pointer appended AFTER
+ *     validation (never model prose);
  *   - a full run removes stale generated module pages from a previous
  *     partition (`removedStalePages`) and preserves human pages;
  *   - an `--only` run NEVER removes stale pages (its re-derived partition
- *     may differ from a previously refined one — footgun guard);
+ *     may differ from the persisted one — footgun guard);
+ *   - test-role exclusion is STRUCTURAL: there is no refine pass under
+ *     #29, so no LLM output can merge a test file back into a product
+ *     unit;
  *   - verify ends clean on the migrated wiki.
  */
 
@@ -71,10 +76,17 @@ class TestRoleMockLlm implements LlmClient {
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
     this.callLog.push(req.user);
-    return {
-      content: makeValidPage(parseClosedKeys(req.user)),
-      usage: { inputTokens: 100, outputTokens: 50, model: this.model },
-    };
+    const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+    // #29 folder page: the model writes ONLY the purpose paragraph
+    // (plain prose, 40–800 chars); the skeleton is deterministic.
+    if (req.system.includes("purpose paragraph of ONE folder page")) {
+      return {
+        content:
+          "This directory holds product source files whose documented responsibilities are covered by the file pages it groups.",
+        usage,
+      };
+    }
+    return { content: makeValidPage(parseClosedKeys(req.user)), usage };
   }
 }
 
@@ -132,7 +144,7 @@ describe("batch — #24 test-role classification", () => {
     return nodeFs.access(nodePath.join(repoRoot, rel)).then(() => true).catch(() => false);
   }
 
-  it("full run: test module documented with zero LLM calls; stale generated pages removed, human preserved", async () => {
+  it("full run: 1:1 test becomes a deterministic pointer on the product file page; stale generated pages removed, human preserved", async () => {
     // Leftovers from a previous partition.
     await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"), { recursive: true });
     await nodeFs.writeFile(nodePath.join(repoRoot, "livewiki/auth-01.md"), staleGeneratedPage(), "utf8");
@@ -146,16 +158,22 @@ describe("batch — #24 test-role classification", () => {
     });
 
     expect(result.status).toBe("completed");
-    // Product modules only: auth (login.ts) + utils. The auth-tests module
-    // went through the deterministic auxiliary channel — zero LLM calls.
-    expect(llm.callLog).toHaveLength(2);
+    // Two file pages (auth/login, utils/helper) + two folder-purpose
+    // paragraphs (auth, utils). The paired test file cost ZERO calls.
+    expect(llm.callLog).toHaveLength(4);
 
-    // Pages: product via LLM, tests via the auxiliary channel.
-    expect(await exists("livewiki/auth.md")).toBe(true);
-    expect(await exists("livewiki/utils.md")).toBe(true);
-    const testPage = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth-tests.md"), "utf8");
-    expect(testPage).toContain("automated tests");
-    expect(testPage).toContain("src/auth/login.test.ts#loginWorks");
+    // Pages: file pages ride the id-with-slash path; folder pages are the
+    // directory index. No test page exists anywhere.
+    expect(await exists("livewiki/auth/login.md")).toBe(true);
+    expect(await exists("livewiki/auth/index.md")).toBe(true);
+    expect(await exists("livewiki/utils/helper.md")).toBe(true);
+    expect(await exists("livewiki/utils/index.md")).toBe(true);
+    expect(await exists("livewiki/auth-tests.md")).toBe(false);
+    const filePage = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
+    expect(filePage).toContain("## Tests");
+    expect(filePage).toContain("Covered by `src/auth/login.test.ts` (same-name test file on disk).");
+    // The test file's symbols never enter the product page's anchor set.
+    expect(filePage).not.toContain("loginWorks");
 
     // Stale cleanup: generated leftover removed + surfaced; human preserved.
     expect(result.removedStalePages).toEqual(["livewiki/auth-01.md"]);
@@ -166,7 +184,7 @@ describe("batch — #24 test-role classification", () => {
     expect(verify.issues).toEqual([]);
   });
 
-  it("--only NEVER removes stale pages (partition may differ from a refined one)", async () => {
+  it("--only NEVER removes stale pages (partition may differ from a previously persisted one)", async () => {
     const full = await runBatch({
       repoRoot,
       llmClient: llm,
@@ -188,45 +206,29 @@ describe("batch — #24 test-role classification", () => {
     expect(await exists("livewiki/ghost-only.md")).toBe(true);
   });
 
-  it("refine cannot undo the test split: mixed modules are rejected, heuristic kept", async () => {
-    // Found by the paid rehearsal (2026-08-04): MiniMax-M3's refine pass
-    // merged login.test.ts back into the product module. The validator
-    // must reject the whole refine (heuristic wins, no abort).
-    const mergingRefine = JSON.stringify({
-      modules: [
-        { id: "auth", paths: ["src/auth/login.ts", "src/auth/login.test.ts"] },
-        { id: "utils", paths: ["src/utils/helper.ts"] },
-      ],
-    });
-    class RefineMock extends TestRoleMockLlm {
-      override async generate(req: GenerateRequest): Promise<GenerateResult> {
-        if (req.user.includes("# Heuristic module grouping:")) {
-          this.callLog.push(req.user);
-          return {
-            content: mergingRefine,
-            usage: { inputTokens: 10, outputTokens: 10, model: this.model },
-          };
-        }
-        return super.generate(req);
-      }
-    }
-    const refineLlm = new RefineMock();
+  it("test-role exclusion is structural: no refine pass exists to merge a test file back into a product unit", async () => {
+    // #29 removed the stage-2 LLM refine entirely, so the #24 rehearsal
+    // defect (MiniMax-M3 merging login.test.ts back into the product
+    // module) has no channel: the planner never assigns a test-role file
+    // to a file unit, and no LLM call can re-partition.
     const result = await runBatch({
       repoRoot,
-      llmClient: refineLlm,
+      llmClient: llm,
       noRefine: false,
       skipManifestWrite: true,
     });
     expect(result.status).toBe("completed");
 
-    // Heuristic partition kept: the test module exists and cost zero LLM
-    // calls (1 refine + 2 product modules = 3 calls total).
-    expect(refineLlm.callLog).toHaveLength(3);
-    expect(await exists("livewiki/auth-tests.md")).toBe(true);
-    const authPage = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
-    expect(authPage).not.toContain("login.test.ts");
+    // Zero refine/partition calls: only the 2 file pages + 2 folder
+    // paragraphs. No prompt carries a grouping proposal.
+    expect(llm.callLog).toHaveLength(4);
+    expect(llm.callLog.some((user) => user.includes("# Heuristic module grouping:"))).toBe(false);
 
-    // The stage-2 checkpoint records the rejection as degradation, not failure.
+    const authPage = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
+    expect(authPage).not.toContain("login.test.ts#");
+    expect(authPage).not.toContain("loginWorks");
+
+    // The stage-2 checkpoint is clean done — no degradation to record.
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
     try {
@@ -235,7 +237,7 @@ describe("batch — #24 test-role classification", () => {
         .get() as { checkpoint_json: string };
       const cp = JSON.parse(row.checkpoint_json) as { status: string; error?: { code: string } };
       expect(cp.status).toBe("done");
-      expect(cp.error?.code).toBe("refine_mixed_test_role");
+      expect(cp.error).toBeUndefined();
     } finally {
       db.close();
     }

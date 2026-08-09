@@ -15,17 +15,21 @@
 
 ### P0 — pre-beta (blocks launch)
 
-1. **#29 real repository page units** — DESIGN written, no implementation
-   authorized. Supersedes #25. Two of its six open questions are
-   structural, not implementation detail (what a folder page holds;
-   whether tests keep their own pages at all), so the item has no honest
-   estimate until they close. Design:
+1. **#29 real repository page units** — P0–P4 IMPLEMENTED (2026-08-09,
+   working tree, uncommitted): deterministic file+folder planner, file
+   pages with narrative contract, folder pages (skeleton + bounded purpose
+   paragraph), plan-then-write for oversized files, zero test pages (D3),
+   keep-set stale cleanup (item 2 below landed with it), full deterministic
+   gate green (core 1828 / CLI 126 / MCP 56), zero paid calls. Open:
+   **P5 paid rehearsal on the EXTERNAL MoneyPrinterTurbo-Plus clone**
+   (never the dogfood repo) + maintainer diff review before commit/push.
+   Supersedes #25. Design:
    `docs/plans/2026-08-07-real-repository-page-units.md`.
-2. **`syncStaleModulePages` keep-set** — a hazard, not yet its own item,
-   and it survives ANY page scheme: the keep-set is `${module.id}.md`, so
-   the first full batch after page paths stop being module ids deletes the
-   wiki. The pages are `owner: generated`, so the ownership guard does not
-   save them. Must land WITH #29.
+2. **`syncStaleModulePages` keep-set** — DONE with #29 P0 (2026-08-09):
+   the keep-set is built from the planner's resolved page paths
+   (`livewiki/<folder>/index.md` + `livewiki/<folder>/<file>.md`), the
+   walk is recursive, reserved hubs and deterministic root pages are
+   skipped, and empty folder shells are removed.
 3. **`purpose_too_long` live validation** — the deterministic hardening
    landed in `755bd2a`; the failure class has not been re-observed under a
    real understanding rerun. Validation only, no code planned.

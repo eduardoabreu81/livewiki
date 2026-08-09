@@ -53,6 +53,13 @@ function makeCompactAuxiliaryPage(closedKeys: string[]): string {
   ].join("\n");
 }
 
+/**
+ * Valid #29 folder-purpose paragraph: plain prose, 40–800 chars, no
+ * frontmatter/headings/fences/links/HTML comments/TODO.
+ */
+const VALID_FOLDER_PURPOSE =
+  "This directory holds the auth module: login, session, and token handling.";
+
 /** Valid stage-5c understanding page returned outside mock instrumentation. */
 const VALID_UNDERSTANDING_PAGE = [
   "---",
@@ -71,6 +78,10 @@ class MockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
   public callCount = 0;
+  /** #29: folder-purpose calls are real LLM calls, tracked separately. */
+  public folderPurposeCount = 0;
+  /** Index into `responses` — consumed only by page (non-folder) calls. */
+  private pageCallIndex = 0;
   public responses: string[] = [];
   public costInputs: Array<{ inputTokens: number; outputTokens: number; model: string }> = [];
 
@@ -85,13 +96,26 @@ class MockLlm implements LlmClient {
       };
     }
     this.callCount++;
+    // #29: a product folder task asks for ONE plain-prose purpose paragraph
+    // (system prompt: "Write the purpose paragraph of ONE folder page").
+    // Answering with a module page would fail validateFolderPurpose, so the
+    // mock discriminates on the system prompt and returns valid prose.
+    if (/purpose paragraph of ONE folder page/.test(req.system ?? "")) {
+      this.folderPurposeCount++;
+      const result: GenerateResult = {
+        content: VALID_FOLDER_PURPOSE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+      this.costInputs.push(result.usage);
+      return result;
+    }
     // Extract the closed key list from the user prompt (format "- <key>")
     const closedKeys: string[] = [];
     for (const line of req.user.split("\n")) {
       const m = /^- (\S+)$/.exec(line);
       if (m && m[1]) closedKeys.push(m[1]);
     }
-    const content = this.responses[this.callCount - 1] ??
+    const content = this.responses[this.pageCallIndex++] ??
       (closedKeys.length > 0
         ? /compact auxiliary contract/i.test(`${req.system}\n${req.user}`)
           ? makeCompactAuxiliaryPage(closedKeys)
@@ -179,8 +203,13 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
 
   for (const v of variants) {
     it(`detects owner: human with line endings ${v.name} and blocks BEFORE the LLM`, async () => {
+      // #29: the fixture yields TWO page units — the file page
+      // (`livewiki/auth/login.md`) and the folder page
+      // (`livewiki/auth/index.md`). Both are seeded owner: human so BOTH
+      // tasks refuse pre-LLM and the run makes zero LLM calls.
       await safeIo.mkdir(repoRoot, ".livewiki");
-      await safeIo.writeText(repoRoot, "livewiki/auth.md", v.page);
+      await safeIo.writeText(repoRoot, "livewiki/auth/login.md", v.page);
+      await safeIo.writeText(repoRoot, "livewiki/auth/index.md", v.page);
 
       llm.responses = ["OVERWRITTEN — should not appear"];
       const result = await runBatch({
@@ -190,14 +219,16 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
         skipManifestWrite: true,
       });
 
-      // ZERO LLM calls (refine skipped + owner:human blocks pre-LLM)
+      // ZERO LLM calls (owner:human blocks pre-LLM on both units)
       expect(llm.callCount).toBe(0);
-      // failure recorded as refused_human_page
+      // failure recorded as refused_human_page on both units
       expect(result.failures.length).toBeGreaterThan(0);
-      expect(result.failures[0]?.error.code).toBe("refused_human_page");
-      // Page preserved byte-for-byte (BOM included)
-      const onDisk = await safeIo.readText(repoRoot, "livewiki/auth.md");
-      expect(onDisk).toBe(v.page);
+      for (const f of result.failures) {
+        expect(f.error.code).toBe("refused_human_page");
+      }
+      // Pages preserved byte-for-byte (BOM included)
+      expect(await safeIo.readText(repoRoot, "livewiki/auth/login.md")).toBe(v.page);
+      expect(await safeIo.readText(repoRoot, "livewiki/auth/index.md")).toBe(v.page);
     });
   }
 
@@ -207,7 +238,7 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
     // still gets called, but `tryWriteAndVerify` preserves the manual
     // bytes byte-for-byte.
     await safeIo.mkdir(repoRoot, ".livewiki");
-    await safeIo.writeText(repoRoot, "livewiki/auth.md", "---\ntitle: x\nowner: mixed\n---\n");
+    await safeIo.writeText(repoRoot, "livewiki/auth/login.md", "---\ntitle: x\nowner: mixed\n---\n");
     llm.responses = []; // mock generates valid page from the prompt
     const result = await runBatch({
       repoRoot,
@@ -258,7 +289,7 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
     ].join("\n");
 
     await safeIo.mkdir(repoRoot, ".livewiki");
-    await safeIo.writeText(repoRoot, "livewiki/auth.md", existing);
+    await safeIo.writeText(repoRoot, "livewiki/auth/login.md", existing);
 
     // Mock LLM: produces a page with owner=generated, full closed-list
     // coverage, and NEW prose. Validator accepts it.
@@ -308,7 +339,7 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
     expect(result.status).toBe("completed");
 
     // Read the final page on disk.
-    const finalBytes = (await safeIo.readText(repoRoot, "livewiki/auth.md")) ?? "";
+    const finalBytes = (await safeIo.readText(repoRoot, "livewiki/auth/login.md")) ?? "";
     // 1. owner is forced back to `mixed`.
     expect(finalBytes).toMatch(/^owner:\s*mixed\b/m);
     expect(finalBytes).not.toMatch(/^owner:\s*generated\b/m);
@@ -323,7 +354,8 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
 
   it("corrupt frontmatter (unparseable) is refused as untrusted", async () => {
     await safeIo.mkdir(repoRoot, ".livewiki");
-    await safeIo.writeText(repoRoot, "livewiki/auth.md", "---\nbad: : :\n---\n");
+    await safeIo.writeText(repoRoot, "livewiki/auth/login.md", "---\nbad: : :\n---\n");
+    await safeIo.writeText(repoRoot, "livewiki/auth/index.md", "---\nbad: : :\n---\n");
     llm.responses = ["X"];
     const result = await runBatch({
       repoRoot,
@@ -332,8 +364,11 @@ describe("review #1 — owner: human is untouchable (LF, CRLF, BOM) with zero LL
       skipManifestWrite: true,
     });
     expect(llm.callCount).toBe(0);
-    // Corrupt frontmatter is treated as untrusted (refused)
-    expect(result.failures[0]?.error.code).toBe("refused_human_page");
+    // Corrupt frontmatter is treated as untrusted (refused) on every unit
+    expect(result.failures.length).toBeGreaterThan(0);
+    for (const f of result.failures) {
+      expect(f.error.code).toMatch(/^refused_(human|unparseable)_page$/);
+    }
   });
 });
 
@@ -374,13 +409,15 @@ describe("review #2 — unique IDs applied before edges/overview/tasks", () => {
     expect(overview).toMatch(/cli-src/);
     expect(overview).toMatch(/mcp-src/);
     const navigationTasks = await safeIo.readText(repoRoot, "livewiki/tasks.md");
-    // R10.1 E: tasks.md identity is the link target (no `Module ID:` line).
-    expect(navigationTasks).toContain("](core-src.md)");
-    expect(navigationTasks).toContain("](cli-src.md)");
-    expect(navigationTasks).toContain("](mcp-src.md)");
-    expect(navigationTasks).not.toContain("](src.md)");
+    // #29: tasks.md links the FOLDER pages (`<folderId>/index.md`); the
+    // colliding leaf "src" never appears as an id.
+    expect(navigationTasks).toContain("](core-src/index.md)");
+    expect(navigationTasks).toContain("](cli-src/index.md)");
+    expect(navigationTasks).toContain("](mcp-src/index.md)");
+    expect(navigationTasks).not.toContain("](src/index.md)");
 
-    // Task IDs in the DB
+    // Task IDs in the DB: file units first (`<folderId>/<fileBase>`), then
+    // the folder units (`<folderId>`).
     const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(dbPath, { readonly: true });
@@ -389,9 +426,14 @@ describe("review #2 — unique IDs applied before edges/overview/tasks", () => {
         .prepare("SELECT DISTINCT target FROM batch_tasks WHERE stage = 4")
         .all() as Array<{ target: string }>;
       const taskIds = new Set(tasks.map((t) => t.target));
+      // Folder units
       expect(taskIds.has("core-src")).toBe(true);
       expect(taskIds.has("cli-src")).toBe(true);
       expect(taskIds.has("mcp-src")).toBe(true);
+      // File units
+      expect(taskIds.has("core-src/a")).toBe(true);
+      expect(taskIds.has("cli-src/a")).toBe(true);
+      expect(taskIds.has("mcp-src/a")).toBe(true);
       // The leaf "src" alone is NOT among the tasks (collision was resolved)
       expect(taskIds.has("src")).toBe(false);
     } finally {
@@ -451,41 +493,54 @@ describe("review #3 — defensive collision finalizes the run as aborted", () =>
 
 // === Finding #4 — rollback failure is terminal (now for the ENTIRE RUN) ===
 describe("review #4 — rollback failure aborts the ENTIRE RUN (not best-effort)", () => {
-  it("rollback_failed aborts the run; second module never calls LLM and never writes", async () => {
-    // Reviewer revision: setup with 2 modules. The first (auth) has
-    // rollback_failed (safeIo.remove throws). The SECOND module (any
-    // other) MUST NOT be processed: zero LLM calls for it, zero
-    // page writes. The run is finalized as "aborted" and the only failure
-    // recorded is from the first module.
+  it("rollback_failed aborts the run; second unit never calls LLM and never writes", async () => {
+    // Reviewer revision: setup with 2 units. The first processed unit has
+    // rollback_failed (safeIo.remove throws). Every other unit MUST NOT be
+    // processed: zero LLM calls for it, zero page writes. The run is
+    // finalized as "aborted" and the only failure recorded is from the
+    // first unit.
 
-    // Setup: 2 modules. Add a second TS file.
+    // Setup: 2 folders. Add a second TS file.
+    // #29 units: file pages `auth/login` + `src/other`, folder pages
+    // `auth` + `src`.
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "src/other.ts"),
       "export function other() { return 'o'; }",
       "utf8",
     );
-    // Expected 2 heuristic modules: "auth" (from beforeEach) + "other"
 
-    // Mock verify to fail only for auth
+    // Mock verify: report a broken_anchor on EVERY wiki page currently on
+    // disk. tryWriteAndVerify scopes issues to the written artifact, so the
+    // page that was just written is the one that fails — whichever unit the
+    // deterministic queue processes first.
     const verifyModule = await import("./verify.js");
     const verifySpy = vi.spyOn(verifyModule, "run");
     verifySpy.mockImplementation(async (root: string) => {
-      // Verify reports broken_anchor for auth.md (the page that will be
-      // written). Since verify runs on the whole repo, it sees the issue
-      // of the page that was written.
-      // We need to simulate in a more controlled way: we make verify
-      // ALWAYS fail for auth.md and pass for other pages.
+      const wikiDir = nodePath.join(root, "livewiki");
+      const mdPages: string[] = [];
+      const walk = async (dir: string): Promise<void> => {
+        let entries;
+        try {
+          entries = await nodeFs.readdir(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          const abs = nodePath.join(dir, entry.name);
+          if (entry.isDirectory()) await walk(abs);
+          else if (entry.isFile() && entry.name.endsWith(".md")) mdPages.push(abs);
+        }
+      };
+      await walk(wikiDir);
       return {
         ok: false,
-        pagesChecked: 2,
-        issues: [
-          {
-            severity: "error",
-            code: "broken_anchor",
-            wikiPath: "livewiki/auth.md",
-            detail: "injected broken_anchor on auth",
-          },
-        ],
+        pagesChecked: mdPages.length,
+        issues: mdPages.map((abs) => ({
+          severity: "error" as const,
+          code: "broken_anchor",
+          wikiPath: nodePath.relative(root, abs).split(nodePath.sep).join("/"),
+          detail: "injected broken_anchor",
+        })),
       };
     });
 
@@ -494,7 +549,7 @@ describe("review #4 — rollback failure aborts the ENTIRE RUN (not best-effort)
       throw new Error("simulated rollback failure");
     });
 
-    // LLM mock that generates valid pages for ANY module
+    // LLM mock that generates valid pages for ANY unit
     // (auto-extracts closed keys)
     llm.responses = []; // empty → uses auto-extract in MockLlm
 
@@ -510,16 +565,16 @@ describe("review #4 — rollback failure aborts the ENTIRE RUN (not best-effort)
       // Run status: "aborted" (NOT "completed_with_failures")
       expect(result.status).toBe("aborted");
 
-      // Only 1 LLM call was made (auth) — the "other" module NEVER
-      // reached the LLM.
+      // Only 1 LLM call was made (the first file unit) — every other unit
+      // NEVER reached the LLM.
       expect(llm.callCount).toBe(1);
 
-      // Only 1 failure (auth with rollback_failed)
+      // Only 1 failure (first unit with rollback_failed)
       expect(result.failures.length).toBe(1);
       expect(result.failures[0]?.error.code).toBe("rollback_failed");
-      expect(result.failures[0]?.module).toBe("auth");
 
-      // Verify via DB: tasks of the run — "other" was NEVER created
+      // Verify via DB: exactly ONE stage 4 task exists — the queue stopped
+      // before creating any other unit's task.
       const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
       const Database = (await import("better-sqlite3")).default;
       const db = new Database(dbPath, { readonly: true });
@@ -527,10 +582,10 @@ describe("review #4 — rollback failure aborts the ENTIRE RUN (not best-effort)
         const tasks = db
           .prepare("SELECT target, status FROM batch_tasks WHERE stage = 4 ORDER BY target")
           .all() as Array<{ target: string; status: string }>;
-        // Only "auth" has a stage 4 task. "other" was NEVER created
         expect(tasks.length).toBe(1);
-        expect(tasks[0]?.target).toBe("auth");
         expect(tasks[0]?.status).toBe("failed");
+        // The failed task is the unit whose failure the run reported.
+        expect(tasks[0]?.target).toBe(result.failures[0]?.module);
       } finally {
         db.close();
       }
@@ -541,117 +596,96 @@ describe("review #4 — rollback failure aborts the ENTIRE RUN (not best-effort)
   });
 });
 
-// === Finding #6 — refinement: rejects modules with invented (empty) paths ===
-describe("review #6 — validateRefinedModules rejects modules with ALL paths invented", () => {
-  it("if LLM refines and proposes module with paths that don't exist in repo, heuristic is kept", async () => {
-    // Scenario: the LLM responds with modules whose `paths` don't exist
-    // in the repo (hallucination). validateRefinedModules must reject
-    // early (code `refine_invalid_module`) and the run continues with
-    // the heuristic — no stage 4 call with an empty module.
-    //
-    // Setup: spy on `attemptRefineModules` to return an invented JSON.
-    // Since the helper is internal, we check the validator's public
-    // function using the injection path: monkey-patch the LLM client
-    // so it returns a specific content.
-    //
-    // The LLM client is called inside `attemptRefineModules` with a
-    // system prompt from stage 2. We inspect the content that would be
-    // passed to the validator. To do that, we spy on the LLM and use
-    // an edge case: the LLM refines, but the content is the JSON below.
-
-    // The "refined" content must be parseable. paths=["made-up/file.ts"]
-    // doesn't exist in the repo (heuristicFiles won't have it).
-    const madeUpJson = JSON.stringify({
-      modules: [
-        { id: "made-up", paths: ["src/made-up.ts", "src/also-fake.ts"] },
-      ],
-    });
-
-    // Replace the llm to ALWAYS return the invented JSON in stage 2.
-    llm.responses = [madeUpJson, madeUpJson, madeUpJson]; // stage 2 + stage 4 (1) + ...
-
-    // Run the batch. Expected:
-    // - stage 2 task persists `error.code = "refine_invalid_module"`
-    // - stage 4 tasks created from the HEURISTIC (auth, login)
-    // - NO LLM call for the "made-up" module
+// === Finding #6 (reshaped by #29) — stage 2 is deterministic: no LLM refine ===
+// The pre-#29 stage-2 LLM refine (and its validateRefinedModules rejection
+// codes) was REMOVED: real repository units are not refinable. These tests
+// pin the replacement contract: stage 2 never calls the LLM, persists a
+// `done` checkpoint (with the optional community cross-check diagnostic),
+// and the stage-4 queue is exactly the real file/folder units.
+describe("review #6 — stage 2 has NO LLM refine: real units only (#29)", () => {
+  it("stage 2 makes zero LLM calls even with refine enabled (noRefine: false)", async () => {
+    // Pre-#29 this path called the LLM to refine the heuristic modules and
+    // validated the JSON. Now the planner is deterministic; `--no-refine`
+    // is a backward-compatible no-op.
     const result = await runBatch({
       repoRoot,
       llmClient: llm,
-      noRefine: false, // enable refine to test the path
+      noRefine: false, // refine "enabled" — must still make ZERO stage-2 calls
       skipManifestWrite: true,
     });
+    expect(result.status).toBe("completed");
 
-    // The run completed (heuristic + LLM) — not aborted
-    expect(["completed", "completed_with_failures"]).toContain(result.status);
-
-    // The "made-up" module NEVER appeared in stage 4 — only the heuristics
     const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(dbPath, { readonly: true });
     try {
-      const targets = db
-        .prepare("SELECT DISTINCT target FROM batch_tasks WHERE stage = 4 ORDER BY target")
-        .all() as Array<{ target: string }>;
-      const targetList = targets.map((t) => t.target);
-      // Heuristic has only 1 module (login.ts). The exact name
-      // (auth vs login) doesn't matter — what matters is that (a) there
-      // is a heuristic module AND (b) "made-up" is not present.
-      expect(targetList.length).toBeGreaterThanOrEqual(1);
-      expect(targetList).not.toContain("made-up");
-
-      // Stage 2 checkpoint has the rejection error
+      // Stage-2 task persisted as done, with NO LLM usage and NO error.
       const s2 = db
         .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 2")
         .get() as { checkpoint_json: string };
       const cp = JSON.parse(s2.checkpoint_json) as {
-        error?: { code: string; message: string };
+        status: string;
+        error?: { code: string };
+        usageHistory: unknown[];
       };
-      expect(cp.error?.code).toBe("refine_unknown_path");
-      expect(cp.error?.message).toMatch(/made-up|unknown path/);
+      expect(cp.status).toBe("done");
+      expect(cp.error).toBeUndefined();
+      expect(cp.usageHistory).toHaveLength(0);
+
+      // Stage-4 targets are exactly the real units of the fixture: the
+      // file page `auth/login` and the folder page `auth`. No refined id
+      // can ever enter the queue.
+      const targets = db
+        .prepare("SELECT DISTINCT target FROM batch_tasks WHERE stage = 4 ORDER BY target")
+        .all() as Array<{ target: string }>;
+      expect(targets.map((t) => t.target)).toEqual(["auth", "auth/login"]);
     } finally {
       db.close();
     }
+
+    // Exactly 2 LLM calls: 1 file page + 1 folder purpose. Any refine call
+    // would show up here.
+    expect(llm.callCount).toBe(2);
+    expect(llm.folderPurposeCount).toBe(1);
   });
 
-  it("if LLM refines and proposes module WITHOUT paths (pure hallucination), rejects early", async () => {
-    // Extreme edge case: the LLM emits a module with paths: [].
-    // This is worse than the previous case — no file, no anchor, no page.
-    const emptyJson = JSON.stringify({
-      modules: [{ id: "empty", paths: [] }],
-    });
-
-    llm.responses = [emptyJson, emptyJson, emptyJson, emptyJson];
-
+  it("the run summary persists the deterministic partition (modulesRefined = folder units)", async () => {
     const result = await runBatch({
       repoRoot,
       llmClient: llm,
       noRefine: false,
       skipManifestWrite: true,
     });
+    expect(result.status).toBe("completed");
 
-    // Complete run (heuristic was kept)
-    expect(["completed", "completed_with_failures"]).toContain(result.status);
-
-    // "empty" NEVER became a stage 4 task
     const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(dbPath, { readonly: true });
     try {
-      const targets = db
-        .prepare("SELECT DISTINCT target FROM batch_tasks WHERE stage = 4 ORDER BY target")
-        .all() as Array<{ target: string }>;
-      const targetList = targets.map((t) => t.target);
-      expect(targetList).not.toContain("empty");
-      // Heuristic intact
-      expect(targetList.length).toBeGreaterThanOrEqual(1);
+      const row = db
+        .prepare("SELECT summary_json FROM batch_runs ORDER BY id DESC LIMIT 1")
+        .get() as { summary_json: string };
+      const summary = JSON.parse(row.summary_json) as {
+        modulesRefined: Array<{ id: string; paths: string[] }> | null;
+      };
+      // The name is legacy — the content is the deterministic folder-unit
+      // partition, an EXACT cover of the indexed inventory.
+      expect(summary.modulesRefined).toEqual([
+        { id: "auth", paths: ["src/auth/login.ts"] },
+      ]);
     } finally {
       db.close();
     }
   });
 });
 
-// === T0 — refine must be an exact 100% partition of the indexed inventory ===
-describe("T0 refine exact 100% partition of indexed inventory", () => {
+// === T0 (reshaped by #29) — exact partition with NO size-based splitting ===
+// The pre-#29 refine-partition rejections (refine_incomplete_partition,
+// refine_duplicate_path, refine_unknown_path) died with the refine pass.
+// What remains worth pinning: the deterministic planner covers the indexed
+// inventory EXACTLY, and legacy size budgets (maxModuleFiles /
+// maxModuleSymbols) never split a real folder into `id-NN` chunks.
+describe("T0 — real-units partition is exact and never size-split (#29)", () => {
   const FILES = [
     "src/auth/login.ts",
     "src/auth/session.ts",
@@ -672,52 +706,8 @@ describe("T0 refine exact 100% partition of indexed inventory", () => {
     }
   }
 
-  async function stage2ErrorCode(): Promise<string | undefined> {
-    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
-    const Database = (await import("better-sqlite3")).default;
-    const db = new Database(dbPath, { readonly: true });
-    try {
-      const s2 = db
-        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 2")
-        .get() as { checkpoint_json: string };
-      const cp = JSON.parse(s2.checkpoint_json) as {
-        error?: { code: string };
-      };
-      return cp.error?.code;
-    } finally {
-      db.close();
-    }
-  }
-
-  async function executablePlanPaths(): Promise<string[]> {
-    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
-    const Database = (await import("better-sqlite3")).default;
-    const db = new Database(dbPath, { readonly: true });
-    try {
-      const row = db
-        .prepare("SELECT summary_json FROM batch_runs ORDER BY id DESC LIMIT 1")
-        .get() as { summary_json: string };
-      const summary = JSON.parse(row.summary_json) as {
-        modulesRefined: Array<{ id: string; paths: string[] }> | null;
-      };
-      return (summary.modulesRefined ?? []).flatMap((m) => m.paths).sort();
-    } finally {
-      db.close();
-    }
-  }
-
-  it("rejects ~80% coverage (missing 1 of 5) and preserves full heuristic paths", async () => {
+  it("a 5-file folder yields 5 file units + 1 folder unit, an exact inventory cover", async () => {
     await seedFiveFileRepo();
-    // 4/5 = 80% — old threshold would accept; exact partition must reject
-    const partial = JSON.stringify({
-      modules: [
-        {
-          id: "auth-partial",
-          paths: FILES.slice(0, 4),
-        },
-      ],
-    });
-    llm.responses = [partial];
 
     const result = await runBatch({
       repoRoot,
@@ -725,19 +715,52 @@ describe("T0 refine exact 100% partition of indexed inventory", () => {
       noRefine: false,
       skipManifestWrite: true,
     });
-    expect(["completed", "completed_with_failures"]).toContain(result.status);
-    expect(await stage2ErrorCode()).toBe("refine_incomplete_partition");
-    const planPaths = await executablePlanPaths();
-    expect(planPaths).toEqual([...FILES].sort());
-    expect(planPaths).toHaveLength(5);
+    expect(result.status).toBe("completed");
+
+    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const targets = db
+        .prepare("SELECT DISTINCT target FROM batch_tasks WHERE stage = 4 ORDER BY target")
+        .all() as Array<{ target: string }>;
+      const targetList = targets.map((t) => t.target);
+      // 5 file pages + 1 folder page — no `auth-01`-style chunks.
+      expect(targetList).toEqual([
+        "auth",
+        "auth/audit",
+        "auth/login",
+        "auth/roles",
+        "auth/session",
+        "auth/token",
+      ]);
+      expect(targetList.some((t) => /-\d+$/.test(t))).toBe(false);
+
+      // Exact partition: the folder unit's paths are exactly the 5 files.
+      const row = db
+        .prepare("SELECT summary_json FROM batch_runs ORDER BY id DESC LIMIT 1")
+        .get() as { summary_json: string };
+      const summary = JSON.parse(row.summary_json) as {
+        modulesRefined: Array<{ id: string; paths: string[] }> | null;
+      };
+      const planPaths = (summary.modulesRefined ?? []).flatMap((m) => m.paths).sort();
+      expect(planPaths).toEqual([...FILES].sort());
+    } finally {
+      db.close();
+    }
+
+    // 5 file-page calls + 1 folder-purpose call; zero stage-2 calls.
+    expect(llm.callCount).toBe(6);
+    expect(llm.folderPurposeCount).toBe(1);
   });
 
-  it("rejects true 99% coverage (99 of 100 indexed paths) and preserves full inventory", async () => {
-    // Explicit 99/100 — not a 4/5 stand-in. Reset tree so inventory is exactly 100 files.
+  it("a folder larger than the legacy maxModuleFiles budget is NOT split into chunks", async () => {
+    // 40 files > legacy maxModuleFiles (12): pre-#29 this folder became
+    // `bulk-01`…`bulk-04` chunks. #29 keeps ONE folder unit + 40 file units.
     await nodeFs.rm(nodePath.join(repoRoot, "src"), { recursive: true, force: true });
     await nodeFs.mkdir(nodePath.join(repoRoot, "src/bulk"), { recursive: true });
     const paths: string[] = [];
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 40; i++) {
       const rel = `src/bulk/f${String(i).padStart(3, "0")}.ts`;
       paths.push(rel);
       await nodeFs.writeFile(
@@ -746,71 +769,36 @@ describe("T0 refine exact 100% partition of indexed inventory", () => {
         "utf8",
       );
     }
-    const omitted = paths[50]!;
-    const kept = paths.filter((p) => p !== omitted);
-    expect(kept).toHaveLength(99);
-
-    const nearFull = JSON.stringify({
-      modules: [{ id: "bulk-almost", paths: kept }],
-    });
-    llm.responses = [nearFull];
 
     const result = await runBatch({
       repoRoot,
       llmClient: llm,
-      noRefine: false,
+      noRefine: true,
       skipManifestWrite: true,
     });
-    expect(["completed", "completed_with_failures"]).toContain(result.status);
-    expect(await stage2ErrorCode()).toBe("refine_incomplete_partition");
-    const planPaths = await executablePlanPaths();
-    expect(planPaths).toHaveLength(100);
-    expect(planPaths).toEqual([...paths].sort());
-    expect(planPaths).toContain(omitted);
-  });
+    expect(result.status).toBe("completed");
 
-  it("rejects duplicate path across refined modules and keeps heuristic", async () => {
-    await seedFiveFileRepo();
-    const dup = JSON.stringify({
-      modules: [
-        { id: "a", paths: [FILES[0], FILES[1], FILES[2]] },
-        { id: "b", paths: [FILES[2], FILES[3], FILES[4]] }, // FILES[2] duplicated
-      ],
-    });
-    llm.responses = [dup];
+    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const targets = db
+        .prepare("SELECT DISTINCT target FROM batch_tasks WHERE stage = 4 ORDER BY target")
+        .all() as Array<{ target: string }>;
+      const targetList = targets.map((t) => t.target);
+      // 40 file units + 1 folder unit = 41, and NO chunk ids.
+      expect(targetList).toHaveLength(41);
+      expect(targetList).toContain("bulk");
+      expect(targetList).toContain("bulk/f000");
+      expect(targetList).toContain("bulk/f039");
+      expect(targetList.some((t) => /-\d+$/.test(t))).toBe(false);
+    } finally {
+      db.close();
+    }
 
-    const result = await runBatch({
-      repoRoot,
-      llmClient: llm,
-      noRefine: false,
-      skipManifestWrite: true,
-    });
-    expect(["completed", "completed_with_failures"]).toContain(result.status);
-    expect(await stage2ErrorCode()).toBe("refine_duplicate_path");
-    expect(await executablePlanPaths()).toEqual([...FILES].sort());
-  });
-
-  it("rejects unknown path and keeps heuristic full inventory", async () => {
-    await seedFiveFileRepo();
-    const unknown = JSON.stringify({
-      modules: [
-        {
-          id: "auth",
-          paths: [...FILES, "src/auth/not-real.ts"],
-        },
-      ],
-    });
-    llm.responses = [unknown];
-
-    const result = await runBatch({
-      repoRoot,
-      llmClient: llm,
-      noRefine: false,
-      skipManifestWrite: true,
-    });
-    expect(["completed", "completed_with_failures"]).toContain(result.status);
-    expect(await stage2ErrorCode()).toBe("refine_unknown_path");
-    expect(await executablePlanPaths()).toEqual([...FILES].sort());
+    // 40 file-page calls + 1 folder-purpose call.
+    expect(llm.callCount).toBe(41);
+    expect(llm.folderPurposeCount).toBe(1);
   });
 });
 
@@ -889,7 +877,7 @@ describe("review #6 — attempts remain monotonic after --only/resume", () => {
     let task;
     try {
       task = db
-        .prepare("SELECT id, checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = 'auth'")
+        .prepare("SELECT id, checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = 'auth/login'")
         .get() as { id: number; checkpoint_json: string };
     } finally {
       db.close();
@@ -911,7 +899,7 @@ describe("review #6 — attempts remain monotonic after --only/resume", () => {
       llmClient: llm,
       noRefine: true,
       skipManifestWrite: true,
-      onlyTarget: "auth",
+      onlyTarget: "auth/login",
     });
     expect(r2.status).toBe("completed");
     expect(llm.callCount).toBe(1); // re-runs 1 task, 1 call
@@ -920,7 +908,7 @@ describe("review #6 — attempts remain monotonic after --only/resume", () => {
     db = new Database(dbPath, { readonly: true });
     try {
       task = db
-        .prepare("SELECT id, checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = 'auth'")
+        .prepare("SELECT id, checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = 'auth/login'")
         .get() as { id: number; checkpoint_json: string };
     } finally {
       db.close();
@@ -961,14 +949,14 @@ describe("review #6 — attempts remain monotonic after --only/resume", () => {
         llmClient: llm,
         noRefine: true,
         skipManifestWrite: true,
-        onlyTarget: "auth",
+        onlyTarget: "auth/login",
       });
     }
 
     const db = new Database(dbPath, { readonly: true });
     try {
       const task = db
-        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = 'auth'")
+        .prepare("SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = 'auth/login'")
         .get() as { checkpoint_json: string };
       const cp = JSON.parse(task.checkpoint_json) as {
         attempt: number;
@@ -1097,7 +1085,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
     // Mark that the function is tested indirectly in another test.
 
     // Direct test: use the full pipeline
-    await safeIo.writeText(repoRoot, "livewiki/auth.md", existing);
+    await safeIo.writeText(repoRoot, "livewiki/auth/login.md", existing);
     llm.responses = [newContent];
 
     await runBatch({
@@ -1108,7 +1096,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
     });
 
     // Read the generated page
-    const onDisk = await safeIo.readText(repoRoot, "livewiki/auth.md");
+    const onDisk = await safeIo.readText(repoRoot, "livewiki/auth/login.md");
 
     // MANUAL CONTENT survived byte-for-byte
     expect(onDisk).toContain("MANUAL CONTENT — must survive");
@@ -1167,7 +1155,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "",
     ].join("\n");
 
-    await safeIo.writeText(repoRoot, "livewiki/auth.md", existing);
+    await safeIo.writeText(repoRoot, "livewiki/auth/login.md", existing);
     llm.responses = [newContent];
 
     await runBatch({
@@ -1177,7 +1165,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       skipManifestWrite: true,
     });
 
-    const onDisk = await safeIo.readText(repoRoot, "livewiki/auth.md");
+    const onDisk = await safeIo.readText(repoRoot, "livewiki/auth/login.md");
     expect(onDisk).toContain("ORPHAN MANUAL");
   });
 
@@ -1265,7 +1253,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
       "",
     ].join("\n");
 
-    await safeIo.writeText(repoRoot, "livewiki/auth.md", existing);
+    await safeIo.writeText(repoRoot, "livewiki/auth/login.md", existing);
     llm.responses = [newContent];
 
     const result = await runBatch({
@@ -1280,7 +1268,7 @@ describe("review #7b — manual block preserves bytes and position (section)", (
     expect(result.status).toBe("completed");
     expect(result.failures).toHaveLength(0);
 
-    const onDisk = await safeIo.readText(repoRoot, "livewiki/auth.md");
+    const onDisk = await safeIo.readText(repoRoot, "livewiki/auth/login.md");
 
     // Both blocks present
     expect(onDisk).toContain(block1);
@@ -1417,7 +1405,7 @@ describe("review #10 — repair_exhausted preserves the structured diagnostics",
 
 // === Finding #11 (E2E) — init+batch: consistent identity ===
 describe("review #11 — E2E: plan, graph, overview, task IDs and pages share the same identity", () => {
-  it("all output artifacts reference the same module IDs (5 leaf 'src' collisions)", async () => {
+  it("all output artifacts reference the same unit IDs (5 leaf 'src' collisions)", async () => {
     // Setup: 5 packages with leaf "src" (benchmark scenario)
     for (const d of ["packages/core", "packages/cli", "packages/mcp", "tests/fixtures", "scripts"]) {
       const dir = nodePath.join(repoRoot, d, "src");
@@ -1440,15 +1428,15 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     });
 
     // Init already applied uniqueness (via buildPlan). R11-NAV keeps product
-    // modules in Tasks and moves auxiliary modules to one separate hub.
+    // folders in Tasks and moves auxiliary folders to one separate hub.
     const initQuickstart = await safeIo.readText(repoRoot, "livewiki/quickstart.md");
     expect(initQuickstart).toContain("[Tasks](tasks.md)");
     expect(initQuickstart).toContain("[Architecture overview](architecture/overview.md)");
     const initTasks = await safeIo.readText(repoRoot, "livewiki/tasks.md");
     const initTaskIds = new Set<string>();
-    // R10.1 E: before pages exist, tasks.md carries each stable id in the
-    // `Page unavailable` path (the `Module ID:` line is gone).
-    for (const m of initTasks.matchAll(/Page unavailable: `livewiki\/([\w-]+)\.md`/g)) {
+    // #29: before pages exist, tasks.md carries each stable folder id in the
+    // `Page unavailable` path — now the FOLDER page (`<id>/index.md`).
+    for (const m of initTasks.matchAll(/Page unavailable: `livewiki\/([\w-]+)\/index\.md`/g)) {
       if (m[1]) initTaskIds.add(m[1]);
     }
     expect(initTaskIds.size).toBe(3);
@@ -1475,27 +1463,39 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     });
     expect(result.failures).toEqual([]);
     expect(result.status).toBe("completed");
-    // Priority-0 fix: the 2 auxiliary modules (fixture + tooling) no longer
-    // call the LLM — they're assembled deterministically. Only the 3 product
-    // modules go through the stage-4 LLM loop.
-    expect(llm.callCount).toBe(3);
+    // #29: the 2 auxiliary folders (fixture + tooling) and their file pages
+    // are assembled deterministically — zero LLM. The 3 product folders cost
+    // 1 file-page call + 1 folder-purpose call each.
+    expect(llm.callCount).toBe(6);
+    expect(llm.folderPurposeCount).toBe(3);
     expect((await readManifest(repoRoot))?.snapshotHash).toBe(await computeSnapshotHash(repoRoot));
 
     // === Collect IDs from each FINAL surface ===
 
-    // 1. Pages on disk: livewiki/<id>.md
-    // (understanding.md is the stage-5c page — not a module page, excluded
-    // like quickstart/tasks)
+    // 1. Pages on disk (#29): `livewiki/<folderId>/index.md` (folder page,
+    //    surfaced as the bare folder id) and `livewiki/<folderId>/<file>.md`
+    //    (file page). Reserved hubs and deterministic root pages are not
+    //    unit pages.
+    const RESERVED = new Set(["topics", "flows", "architecture", "diagrams", "auxiliary"]);
+    const ROOT_PAGES = new Set(["quickstart.md", "tasks.md", "understanding.md", ".manifest.json"]);
+    const pageIds = new Set<string>();
     const livewikiDir = nodePath.join(repoRoot, "livewiki");
-    const pageFiles = (await nodeFs.readdir(livewikiDir)).filter(
-      (f) =>
-        f.endsWith(".md") &&
-        f !== "quickstart.md" &&
-        f !== "tasks.md" &&
-        f !== "understanding.md" &&
-        f !== ".manifest.json",
-    );
-    const pageIds = new Set(pageFiles.map((f) => f.replace(/\.md$/, "")));
+    const walkWiki = async (relDir: string): Promise<void> => {
+      const absDir = relDir === "" ? livewikiDir : nodePath.join(livewikiDir, relDir);
+      const entries = await nodeFs.readdir(absDir, { withFileTypes: true });
+      for (const entry of entries) {
+        const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`;
+        if (entry.isDirectory()) {
+          if (!RESERVED.has(entry.name)) await walkWiki(rel);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+        if (relDir === "" && ROOT_PAGES.has(entry.name)) continue;
+        const noExt = rel.replace(/\.md$/, "");
+        pageIds.add(noExt.endsWith("/index") ? noExt.slice(0, -"/index".length) : noExt);
+      }
+    };
+    await walkWiki("");
 
     // 2. Task IDs in batch_tasks.target
     const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
@@ -1522,14 +1522,15 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     const mmd = await safeIo.readText(repoRoot, "livewiki/architecture/modules.mmd");
     expect(mmd).not.toMatch(/^\s*src\s*\[/m);
 
-    // 4. R11-NAV routes product IDs through tasks.md and auxiliary IDs through
-    //    the single auxiliary hub. Both use the same stable IDs as pages/tasks.
+    // 4. R11-NAV routes product folder IDs through tasks.md and auxiliary
+    //    folder IDs through the single auxiliary hub. Both use the same
+    //    stable folder IDs as the folder pages (`<id>/index.md`).
     const quickstart = await safeIo.readText(repoRoot, "livewiki/quickstart.md");
     expect(quickstart).not.toMatch(/overview\.md#[\w-]+/);
     const tasks = await safeIo.readText(repoRoot, "livewiki/tasks.md");
     const navigationTaskIds = new Set<string>();
-    for (const m of tasks.matchAll(/\]\(([\w-]+)\.md\)/g)) {
-      if (m[1]) navigationTaskIds.add(m[1]);
+    for (const m of tasks.matchAll(/\]\(([\w-]+)\/index\.md\)/g)) {
+      if (m[1] && m[1] !== "auxiliary") navigationTaskIds.add(m[1]);
     }
     expect(navigationTaskIds.size).toBe(3);
     for (const id of navigationTaskIds) {
@@ -1537,7 +1538,7 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     }
     const auxiliary = await safeIo.readText(repoRoot, "livewiki/auxiliary/index.md");
     const auxiliaryIds = new Set<string>();
-    for (const m of auxiliary.matchAll(/\]\(\.\.\/([\w-]+)\.md\)/g)) {
+    for (const m of auxiliary.matchAll(/\]\(\.\.\/([\w-]+)\/index\.md\)/g)) {
       if (m[1]) auxiliaryIds.add(m[1]);
     }
     expect(auxiliaryIds.size).toBe(2);
@@ -1547,18 +1548,18 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     // module id lives in the architecture overview (asserted below).
     expect(tasks).not.toContain("Module ID:");
 
-    // 5. overview.md (regenerated by batch): lists pages with `[page](../<id>.md)`
+    // 5. overview.md (regenerated by batch): links `[module page](../<id>/index.md)`
     const overview = await safeIo.readText(repoRoot, "livewiki/architecture/overview.md");
     const overviewIds = new Set<string>();
-    for (const m of overview.matchAll(/\(\.\.\/([\w-]+)\.md\)/g)) {
-      if (m[1] && m[1] !== "quickstart" && m[1] !== "architecture-overview") {
+    for (const m of overview.matchAll(/\(\.\.\/([\w-]+)\/index\.md\)/g)) {
+      if (m[1] && m[1] !== "auxiliary") {
         overviewIds.add(m[1]);
       }
     }
     expect(overviewIds.size).toBe(3);
     expect(overview).toContain("[Auxiliary modules](../auxiliary/index.md)");
 
-    // 6. summary.modulesRefined (batch persisted): IDs of the run
+    // 6. summary.modulesRefined (batch persisted): the folder-unit partition
     const summaryIds = new Set(
       (runSummary.modulesRefined ?? []).map((m) => m.id),
     );
@@ -1566,19 +1567,29 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
 
     // === Critical IDs still match; primary overview/tasks intentionally carry
     // only the product subset while their union with the auxiliary hub is full. ===
-    expect(pageIds.size).toBe(5);
-    expect(taskIds.size).toBe(5);
+    // 5 folder pages + 5 file pages = 10 unit pages and 10 stage-4 tasks.
+    expect(pageIds.size).toBe(10);
+    expect(taskIds.size).toBe(10);
     expect(navigationIds.size).toBe(5);
     expect(overviewIds.size).toBe(3);
     expect(summaryIds.size).toBe(5);
 
-    // pages === tasks (batch creates pages based on module ID)
+    // pages === tasks (batch creates pages based on the unit ID)
     expect(taskIds).toEqual(pageIds);
-    // pages === all navigation targets (display titles never become identity)
-    expect(navigationIds).toEqual(pageIds);
+    // folder pages are exactly the units whose id has no file segment
+    const folderIds = new Set([...pageIds].filter((id) => !id.includes("/")));
+    expect(folderIds.size).toBe(5);
+    // every file page lives under one of the folder ids
+    for (const id of pageIds) {
+      if (id.includes("/")) {
+        expect(folderIds.has(id.slice(0, id.indexOf("/")))).toBe(true);
+      }
+    }
+    // folder pages === all navigation targets (display titles never become identity)
+    expect(navigationIds).toEqual(folderIds);
     // product Tasks === product overview; auxiliary pages stay one hop away.
     expect(overviewIds).toEqual(navigationTaskIds);
-    // pages === summary.modulesRefined (summary persists what was processed)
-    expect(summaryIds).toEqual(pageIds);
+    // folder pages === summary.modulesRefined (summary persists the partition)
+    expect(summaryIds).toEqual(folderIds);
   });
 });

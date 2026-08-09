@@ -1,75 +1,24 @@
 import { describe, it, expect } from "vitest";
 import {
-  identifyModulesHeuristic,
   resolveModuleEdges,
   prioritizeModules,
   makeUniqueDeterministicIds,
   assertUniqueModuleIds,
   DuplicateModuleIdError,
-  splitOversizedModules,
-  normalizeSplitLimits,
   assertExactPathPartition,
   ExactPartitionError,
-  refinePeerDirectoryFragmentationError,
-  SPLIT_AXIS_DISABLED,
   classifyPathRole,
   classifyModuleRole,
-  applyRefinedDisplayTitles,
 } from "./modules.js";
 import type { ExtractedImport } from "./imports.js";
 import type { Module } from "./modules.js";
 
-describe("modules.identifyModulesHeuristic", () => {
-  it("agrupa arquivos por diretório top-level", () => {
-    const mods = identifyModulesHeuristic([
-      "src/auth/foo.ts",
-      "src/auth/bar.ts",
-      "src/utils/helper.ts",
-    ]);
-    expect(mods.map((m) => m.id).sort()).toEqual(["auth", "utils"]);
-    expect(mods.find((m) => m.id === "auth")?.paths).toHaveLength(2);
-    expect(mods.find((m) => m.id === "utils")?.paths).toHaveLength(1);
-  });
-
-  it("arquivo na raiz vai pro módulo 'root'", () => {
-    const mods = identifyModulesHeuristic(["index.ts", "src/foo.ts"]);
-    const root = mods.find((m) => m.id === "root");
-    expect(root).toBeDefined();
-    expect(root?.paths).toContain("index.ts");
-  });
-
-  it("arquivo único na raiz usa basename como id (sem extensão)", () => {
-    const mods = identifyModulesHeuristic(["index.ts"]);
-    expect(mods[0]?.id).toBe("index");
-  });
-
-  it("conta símbolos ativos por módulo (entrada opcional)", () => {
-    const symbolCount = new Map([
-      ["src/auth/foo.ts", 3],
-      ["src/auth/bar.ts", 5],
-      ["src/utils/helper.ts", 2],
-    ]);
-    const mods = identifyModulesHeuristic(
-      ["src/auth/foo.ts", "src/auth/bar.ts", "src/utils/helper.ts"],
-      symbolCount,
-    );
-    expect(mods.find((m) => m.id === "auth")?.symbolCount).toBe(8);
-    expect(mods.find((m) => m.id === "utils")?.symbolCount).toBe(2);
-  });
-
-  it("ordenado por id (saída determinística)", () => {
-    const mods = identifyModulesHeuristic(["src/zzz/a.ts", "src/aaa/b.ts"]);
-    expect(mods.map((m) => m.id)).toEqual(["aaa", "zzz"]);
-  });
-});
-
 describe("modules.resolveModuleEdges", () => {
   it("gera edges entre módulos diferentes via imports relativos", () => {
-    const mods = identifyModulesHeuristic([
-      "src/auth/login.ts",
-      "src/auth/session.ts",
-      "src/utils/helper.ts",
-    ]);
+    const mods: Module[] = [
+      { id: "auth", paths: ["src/auth/login.ts", "src/auth/session.ts"], symbolCount: 2 },
+      { id: "utils", paths: ["src/utils/helper.ts"], symbolCount: 1 },
+    ];
     const importsByFile = new Map<string, ExtractedImport[]>([
       ["src/auth/login.ts", [{ source: "./session", kind: "ts-import" }]],
       ["src/auth/session.ts", [{ source: "../utils/helper", kind: "ts-import" }]],
@@ -86,7 +35,10 @@ describe("modules.resolveModuleEdges", () => {
   });
 
   it("ignora imports absolutos/node_modules (não viram edges internos)", () => {
-    const mods = identifyModulesHeuristic(["src/foo.ts", "src/utils/bar.ts"]);
+    const mods: Module[] = [
+      { id: "src", paths: ["src/foo.ts"], symbolCount: 1 },
+      { id: "utils", paths: ["src/utils/bar.ts"], symbolCount: 1 },
+    ];
     const importsByFile = new Map<string, ExtractedImport[]>([
       ["src/foo.ts", [{ source: "express", kind: "ts-import" }]],
     ]);
@@ -95,7 +47,9 @@ describe("modules.resolveModuleEdges", () => {
   });
 
   it("ignora self-loops (imports dentro do mesmo módulo)", () => {
-    const mods = identifyModulesHeuristic(["src/auth/login.ts", "src/auth/session.ts"]);
+    const mods: Module[] = [
+      { id: "auth", paths: ["src/auth/login.ts", "src/auth/session.ts"], symbolCount: 2 },
+    ];
     const importsByFile = new Map<string, ExtractedImport[]>([
       ["src/auth/login.ts", [{ source: "./session", kind: "ts-import" }]],
     ]);
@@ -104,7 +58,10 @@ describe("modules.resolveModuleEdges", () => {
   });
 
   it("dedup de edges paralelos (A→B aparece 1x mesmo com N imports)", () => {
-    const mods = identifyModulesHeuristic(["src/a/x.ts", "src/b/y.ts"]);
+    const mods: Module[] = [
+      { id: "a", paths: ["src/a/x.ts"], symbolCount: 1 },
+      { id: "b", paths: ["src/b/y.ts"], symbolCount: 1 },
+    ];
     const importsByFile = new Map<string, ExtractedImport[]>([
       [
         "src/a/x.ts",
@@ -123,7 +80,11 @@ describe("modules.resolveModuleEdges", () => {
 
 describe("modules.prioritizeModules", () => {
   it("ordena por centralidade (indegree) decrescente", () => {
-    const mods = identifyModulesHeuristic(["src/a/x.ts", "src/b/y.ts", "src/c/z.ts"]);
+    const mods: Module[] = [
+      { id: "a", paths: ["src/a/x.ts"], symbolCount: 1 },
+      { id: "b", paths: ["src/b/y.ts"], symbolCount: 1 },
+      { id: "c", paths: ["src/c/z.ts"], symbolCount: 1 },
+    ];
     const edges = [
       { from: "a", to: "c" },
       { from: "b", to: "c" },
@@ -134,27 +95,21 @@ describe("modules.prioritizeModules", () => {
   });
 
   it("empate em centralidade: maior symbolCount primeiro", () => {
-    const mods = identifyModulesHeuristic([
-      "src/small/x.ts",
-      "src/big/y.ts",
-      "src/dep/z.ts",
-    ]);
-    // symbolCount customizado via id (a heurística já ordenou alfabeticamente)
-    mods.find((m) => m.id === "small")!.symbolCount = 1;
-    mods.find((m) => m.id === "big")!.symbolCount = 100;
-    mods.find((m) => m.id === "dep")!.symbolCount = 0;
+    const mods: Module[] = [
+      { id: "big", paths: ["src/big/y.ts"], symbolCount: 100 },
+      { id: "dep", paths: ["src/dep/z.ts"], symbolCount: 0 },
+      { id: "small", paths: ["src/small/x.ts"], symbolCount: 1 },
+    ];
     // sem edges → todos centralidade 0; empate vai pro maior symbolCount
     const ordered = prioritizeModules(mods, []);
     expect(ordered[0]?.id).toBe("big");
   });
 
   it("product modules rank above fixtures even with a lower score", () => {
-    const mods = identifyModulesHeuristic([
-      "test/fixtures/big-fixture/x.ts",
-      "src/small-product/y.ts",
-    ]);
-    mods.find((m) => m.paths[0]?.includes("fixtures"))!.symbolCount = 1000;
-    mods.find((m) => m.paths[0]?.includes("src"))!.symbolCount = 1;
+    const mods: Module[] = [
+      { id: "big-fixture", paths: ["test/fixtures/big-fixture/x.ts"], symbolCount: 1000 },
+      { id: "small-product", paths: ["src/small-product/y.ts"], symbolCount: 1 },
+    ];
     // Sem edges (centralidade 0 pros dois) — fixture teria vencido por
     // The fixture won by symbolCount before role-aware ranking.
     const ordered = prioritizeModules(mods, []);
@@ -162,10 +117,10 @@ describe("modules.prioritizeModules", () => {
   });
 
   it("role-aware ranking reorders modules without removing any", () => {
-    const mods = identifyModulesHeuristic([
-      "test/fixtures/foo/x.ts",
-      "src/bar/y.ts",
-    ]);
+    const mods: Module[] = [
+      { id: "foo", paths: ["test/fixtures/foo/x.ts"], symbolCount: 1 },
+      { id: "bar", paths: ["src/bar/y.ts"], symbolCount: 1 },
+    ];
     const ordered = prioritizeModules(mods, []);
     expect(ordered.length).toBe(mods.length);
     expect(new Set(ordered.map((m) => m.id))).toEqual(new Set(mods.map((m) => m.id)));
@@ -252,252 +207,7 @@ describe("modules.classifyModuleRole", () => {
 // (packages/core/src, packages/cli/src, packages/mcp/src, ...) received
 // the same module ID. They shared one batch_task, overwrote
 // livewiki/src.md and corrupted accounting.
-describe("modules — splitOversizedModules (T0)", () => {
-  it("leaves small modules unchanged", () => {
-    const mods = [
-      { id: "auth", paths: ["src/auth/a.ts", "src/auth/b.ts"], symbolCount: 4 },
-    ];
-    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.id).toBe("auth");
-  });
-
-  it("chunks a pure flat directory into exact 12/12/1 with ordinal ids", () => {
-    const paths = Array.from({ length: 25 }, (_, i) =>
-      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
-    );
-    const mods = [{ id: "core-src", paths, symbolCount: 25 }];
-    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
-    expect(out).toHaveLength(3);
-    expect(out.map((m) => m.paths.length).sort((a, b) => b - a)).toEqual([
-      12, 12, 1,
-    ]);
-    expect(out.map((m) => m.id).sort()).toEqual([
-      "core-src-01",
-      "core-src-02",
-      "core-src-03",
-    ]);
-    // Must NOT be one module per file
-    expect(out.every((m) => m.paths.length === 1)).toBe(false);
-    const allPaths = out.flatMap((m) => m.paths).sort();
-    expect(allPaths).toEqual([...paths].sort());
-    assertExactPathPartition(out, paths);
-  });
-
-  it("mixed leaves + subdirectory: llm structural, peers flat-chunked", () => {
-    const leaves = Array.from({ length: 13 }, (_, i) =>
-      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
-    );
-    const llm = [
-      "packages/core/src/llm/index.ts",
-      "packages/core/src/llm/anthropic.ts",
-      "packages/core/src/llm/openai-compat.ts",
-    ];
-    const paths = [...leaves, ...llm];
-    const mods = [{ id: "core-src", paths, symbolCount: paths.length }];
-    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
-
-    const llmMod = out.find((m) => m.id === "core-src-llm");
-    expect(llmMod).toBeDefined();
-    expect(llmMod!.paths.sort()).toEqual([...llm].sort());
-
-    const leafMods = out.filter((m) => m.id !== "core-src-llm");
-    expect(leafMods.length).toBeGreaterThanOrEqual(1);
-    expect(leafMods.every((m) => m.paths.every((p) => !p.includes("/llm/")))).toBe(
-      true,
-    );
-    // No one-file-per-leaf explosion across all 13 peers as 13 modules
-    expect(leafMods.length).toBeLessThan(13);
-    assertExactPathPartition(out, paths);
-  });
-
-  it("splits true subdirectories and respects maxFiles recursively", () => {
-    const mods = [
-      {
-        id: "pkg",
-        paths: [
-          "pkg/a/x.ts",
-          "pkg/a/y.ts",
-          "pkg/b/z.ts",
-          "pkg/b/w.ts",
-          "pkg/b/v.ts",
-        ],
-        symbolCount: 5,
-      },
-    ];
-    const out = splitOversizedModules(mods, { maxFiles: 2, maxSymbols: 80 });
-    expect(out.length).toBeGreaterThan(1);
-    expect(out.every((m) => m.paths.length <= 2)).toBe(true);
-    // Must not use filenames as structural ids at the top level alone
-    assertExactPathPartition(out, mods[0]!.paths);
-  });
-
-  it("symbol-only overflow packs dual-axis chunks under maxSymbols", () => {
-    const paths = ["a/x.ts", "a/y.ts", "a/z.ts"];
-    const symbolCountByPath = new Map([
-      ["a/x.ts", 50],
-      ["a/y.ts", 50],
-      ["a/z.ts", 50],
-    ]);
-    const mods = [{ id: "a", paths, symbolCount: 150 }];
-    const out = splitOversizedModules(mods, {
-      maxFiles: 12,
-      maxSymbols: 80,
-      symbolCountByPath,
-    });
-    expect(out.length).toBeGreaterThan(1);
-    expect(
-      out.every((m) => {
-        if (m.unsplittable) return true;
-        return m.symbolCount <= 80;
-      }),
-    ).toBe(true);
-    assertExactPathPartition(out, paths);
-  });
-
-  it("atomic over-symbol file is marked unsplittable and kept", () => {
-    const paths = ["a/big.ts", "a/small.ts"];
-    const symbolCountByPath = new Map([
-      ["a/big.ts", 200],
-      ["a/small.ts", 1],
-    ]);
-    const mods = [{ id: "a", paths, symbolCount: 201 }];
-    const out = splitOversizedModules(mods, {
-      maxFiles: 12,
-      maxSymbols: 80,
-      symbolCountByPath,
-    });
-    const big = out.find((m) => m.paths.includes("a/big.ts"));
-    expect(big).toBeDefined();
-    expect(big!.unsplittable).toBe(true);
-    expect(big!.paths).toEqual(["a/big.ts"]);
-    assertExactPathPartition(out, paths);
-  });
-
-  it("maxFiles:0 alone disables the file axis (symbol axis still active)", () => {
-    const paths = Array.from({ length: 30 }, (_, i) => `src/f${i}.ts`);
-    const symbolCountByPath = new Map(paths.map((p) => [p, 1] as const));
-    const mods = [{ id: "src", paths, symbolCount: 30 }];
-    // 30 files but symbols total 30 < 80 → no symbol split; file axis off → 1 module
-    const out = splitOversizedModules(mods, {
-      maxFiles: 0,
-      maxSymbols: 80,
-      symbolCountByPath,
-    });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.paths).toHaveLength(30);
-  });
-
-  it("maxSymbols:0 alone disables the symbol axis (file axis still active)", () => {
-    const paths = Array.from({ length: 25 }, (_, i) => `src/f${i}.ts`);
-    const symbolCountByPath = new Map(paths.map((p) => [p, 100] as const));
-    const mods = [{ id: "src", paths, symbolCount: 2500 }];
-    const out = splitOversizedModules(mods, {
-      maxFiles: 12,
-      maxSymbols: 0,
-      symbolCountByPath,
-    });
-    // File axis only → 12/12/1 ordinals
-    expect(out).toHaveLength(3);
-    expect(out.every((m) => m.paths.length <= 12)).toBe(true);
-    expect(out.some((m) => m.unsplittable)).toBe(false);
-  });
-
-  it("maxFiles:0 and maxSymbols:0 together disable all size splits", () => {
-    const paths = Array.from({ length: 30 }, (_, i) => `src/f${i}.ts`);
-    const mods = [{ id: "src", paths, symbolCount: 30 }];
-    const out = splitOversizedModules(mods, { maxFiles: 0, maxSymbols: 0 });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.paths).toHaveLength(30);
-  });
-
-  it("preserves module symbolCount when path map is omitted and module stays intact", () => {
-    const mods = [
-      {
-        id: "auth",
-        paths: ["src/auth/a.ts", "src/auth/b.ts"],
-        symbolCount: 42,
-      },
-    ];
-    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.symbolCount).toBe(42);
-  });
-
-  it("chunking without symbolCountByPath zeros child symbolCounts (no aggregate claim)", () => {
-    const paths = Array.from({ length: 25 }, (_, i) =>
-      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
-    );
-    const mods = [{ id: "core-src", paths, symbolCount: 999 }];
-    // No symbolCountByPath — dual-axis file split still runs; children must not
-    // invent a redistribution of 999.
-    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
-    expect(out).toHaveLength(3);
-    expect(out.every((m) => m.symbolCount === 0)).toBe(true);
-    expect(out.reduce((a, m) => a + m.symbolCount, 0)).not.toBe(999);
-  });
-
-  it("normalizeSplitLimits maps 0 to disabled sentinel", () => {
-    const n = normalizeSplitLimits(0, 0);
-    expect(n.maxFiles).toBe(SPLIT_AXIS_DISABLED);
-    expect(n.maxSymbols).toBe(SPLIT_AXIS_DISABLED);
-    expect(normalizeSplitLimits(undefined, undefined)).toEqual({
-      maxFiles: 12,
-      maxSymbols: 80,
-    });
-  });
-
-  it("legitimate one-file module is preserved (not rejected by R1)", () => {
-    const mods = [
-      { id: "solo", paths: ["packages/solo/index.ts"], symbolCount: 3 },
-    ];
-    const out = splitOversizedModules(mods, { maxFiles: 12, maxSymbols: 80 });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.id).toBe("solo");
-    expect(out[0]!.paths).toEqual(["packages/solo/index.ts"]);
-  });
-
-  it("is deterministic under shuffled input order", () => {
-    const paths = Array.from({ length: 25 }, (_, i) =>
-      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
-    );
-    const forward = splitOversizedModules(
-      [{ id: "core-src", paths: [...paths], symbolCount: 25 }],
-      { maxFiles: 12, maxSymbols: 80 },
-    );
-    const reverse = splitOversizedModules(
-      [{ id: "core-src", paths: [...paths].reverse(), symbolCount: 25 }],
-      { maxFiles: 12, maxSymbols: 80 },
-    );
-    expect(reverse.map((m) => ({ id: m.id, paths: m.paths }))).toEqual(
-      forward.map((m) => ({ id: m.id, paths: m.paths })),
-    );
-  });
-
-  it("unique then split yields core-src ordinals not src-* file explosion", () => {
-    const corePaths = Array.from({ length: 25 }, (_, i) =>
-      `packages/core/src/f${String(i).padStart(2, "0")}.ts`,
-    );
-    const mods = [
-      { id: "src", paths: corePaths, symbolCount: 25 },
-      { id: "src", paths: ["packages/cli/src/cli.ts"], symbolCount: 1 },
-      { id: "src", paths: ["packages/mcp/src/server.ts"], symbolCount: 1 },
-    ];
-    let out = makeUniqueDeterministicIds(mods);
-    out = splitOversizedModules(out, { maxFiles: 12, maxSymbols: 80 });
-    out = makeUniqueDeterministicIds(out);
-    assertUniqueModuleIds(out);
-    assertExactPathPartition(
-      out,
-      mods.flatMap((m) => m.paths),
-    );
-    expect(out.some((m) => m.id.startsWith("core-src"))).toBe(true);
-    // No bare src-<filename> explosion from colliding leaf
-    expect(out.filter((m) => /^src-f\d+/.test(m.id))).toHaveLength(0);
-  });
-});
-
-describe("modules — exact partition + refine peer guard", () => {
+describe("modules — exact partition", () => {
   it("assertExactPathPartition rejects duplicates and missing paths", () => {
     expect(() =>
       assertExactPathPartition(
@@ -515,22 +225,6 @@ describe("modules — exact partition + refine peer guard", () => {
         ["x.ts", "y.ts"],
       ),
     ).toThrow(/missing/);
-  });
-
-  it("refinePeerDirectoryFragmentationError rejects peer split", () => {
-    const err = refinePeerDirectoryFragmentationError([
-      { id: "one", paths: ["src/a.ts"], symbolCount: 0 },
-      { id: "two", paths: ["src/b.ts"], symbolCount: 0 },
-    ]);
-    expect(err).toMatch(/fragment peer files/);
-  });
-
-  it("refinePeerDirectoryFragmentationError allows whole-dir modules", () => {
-    const err = refinePeerDirectoryFragmentationError([
-      { id: "src", paths: ["src/a.ts", "src/b.ts"], symbolCount: 0 },
-      { id: "lib", paths: ["lib/c.ts"], symbolCount: 0 },
-    ]);
-    expect(err).toBeNull();
   });
 });
 
@@ -842,59 +536,6 @@ describe("modules W — path→id mapping table (revision #1)", () => {
   });
 });
 
-describe("modules — advisory stage-2 display titles", () => {
-  const modules: Module[] = [
-    { id: "providers", paths: ["src/providers/index.ts"], symbolCount: 1 },
-    { id: "batch", paths: ["src/batch/index.ts"], symbolCount: 1 },
-  ];
-
-  it("accepts distinct concise responsibility titles without changing identity", () => {
-    const result = applyRefinedDisplayTitles(modules, [
-      { id: "providers", displayTitle: "Provider adapters and presets" },
-      { id: "batch", displayTitle: "Batch orchestration and recovery" },
-    ]);
-    expect(result.map(({ id, paths, displayTitle }) => ({ id, paths, displayTitle }))).toEqual([
-      { id: "providers", paths: ["src/providers/index.ts"], displayTitle: "Provider adapters and presets" },
-      { id: "batch", paths: ["src/batch/index.ts"], displayTitle: "Batch orchestration and recovery" },
-    ]);
-  });
-
-  it.each([
-    ["missing", undefined],
-    ["malformed", 42],
-    ["multiline", "Provider adapters\nand presets"],
-    ["stable id", "providers"],
-    ["generic", "module"],
-  ])("silently omits a %s title", (_case, displayTitle) => {
-    const result = applyRefinedDisplayTitles(modules, [
-      { id: "providers", displayTitle },
-      { id: "batch", displayTitle: "Batch orchestration and recovery" },
-    ]);
-    expect(result[0]?.displayTitle).toBeUndefined();
-    expect(result[1]?.displayTitle).toBe("Batch orchestration and recovery");
-  });
-
-  it("omits every member of a duplicate normalized-title group", () => {
-    const result = applyRefinedDisplayTitles(modules, [
-      { id: "providers", displayTitle: "Shared Responsibilities" },
-      { id: "batch", displayTitle: "shared responsibilities" },
-    ]);
-    expect(result.every((module) => module.displayTitle === undefined)).toBe(true);
-  });
-
-  it("is deterministic under candidate reordering and does not mutate modules", () => {
-    const snapshot = structuredClone(modules);
-    const candidates = [
-      { id: "providers", displayTitle: "Provider adapters and presets" },
-      { id: "batch", displayTitle: "Batch orchestration and recovery" },
-    ];
-    expect(applyRefinedDisplayTitles(modules, [...candidates].reverse())).toEqual(
-      applyRefinedDisplayTitles(modules, candidates),
-    );
-    expect(modules).toEqual(snapshot);
-  });
-});
-
 describe("modules — #24 test-role classification", () => {
   it("defaults: filename conventions across languages → test", () => {
     expect(classifyPathRole("src/auth/login.test.ts")).toBe("test");
@@ -936,59 +577,6 @@ describe("modules — #24 test-role classification", () => {
     expect(classifyPathRole("src/auth/login.test.ts", { testPatterns: ["specs/**"] })).toBe("product");
     expect(classifyPathRole("specs/login.ts", { testPatterns: ["specs/**"] })).toBe("test");
     expect(classifyPathRole("src/auth/login.test.ts", { testPatterns: [] })).toBe("product");
-  });
-
-  it("heuristic: co-located tests split into a sibling <id>-tests module (exact partition)", () => {
-    const mods = identifyModulesHeuristic([
-      "src/auth/login.ts",
-      "src/auth/session.ts",
-      "src/auth/login.test.ts",
-      "src/utils/helper.ts",
-    ]);
-    const auth = mods.find((m) => m.id === "auth");
-    const authTests = mods.find((m) => m.id === "auth-tests");
-    expect(auth?.paths).toEqual(["src/auth/login.ts", "src/auth/session.ts"]);
-    expect(authTests?.paths).toEqual(["src/auth/login.test.ts"]);
-    // The partition stays exact: every path appears in exactly one module.
-    expect(mods.flatMap((m) => m.paths).sort()).toEqual([
-      "src/auth/login.test.ts",
-      "src/auth/login.ts",
-      "src/auth/session.ts",
-      "src/utils/helper.ts",
-    ]);
-    expect(classifyModuleRole(auth!)).toBe("product");
-    expect(classifyModuleRole(authTests!)).toBe("test");
-  });
-
-  it("heuristic: a directory with ONLY test files yields only the -tests module", () => {
-    const mods = identifyModulesHeuristic([
-      "src/auth/login.test.ts",
-      "src/auth/session.test.ts",
-    ]);
-    expect(mods.map((m) => m.id)).toEqual(["auth-tests"]);
-  });
-
-  it("heuristic: symbolCount is split between the product and test modules", () => {
-    const counts = new Map([
-      ["src/auth/login.ts", 5],
-      ["src/auth/login.test.ts", 3],
-    ]);
-    const mods = identifyModulesHeuristic(
-      ["src/auth/login.ts", "src/auth/login.test.ts"],
-      counts,
-    );
-    expect(mods.find((m) => m.id === "auth")?.symbolCount).toBe(5);
-    expect(mods.find((m) => m.id === "auth-tests")?.symbolCount).toBe(3);
-  });
-
-  it("heuristic: pathRoleConfig is honored in the split", () => {
-    const mods = identifyModulesHeuristic(
-      ["src/auth/login.ts", "src/auth/login.test.ts"],
-      new Map(),
-      { testPatterns: [] },
-    );
-    expect(mods.map((m) => m.id)).toEqual(["auth"]);
-    expect(mods[0]?.paths).toHaveLength(2);
   });
 });
 

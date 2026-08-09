@@ -147,7 +147,7 @@ target-repo/
 │   │   ├── structure.mmd          # Mermaid org chart of directories/modules
 │   │   └── modules.mmd            # Mermaid dependency graph (imports)
 │   ├── diagrams/
-│   │   ├── <module>.classes.mmd   # per-module classDiagram (when classes exist)
+│   │   ├── <unit>.mmd             # per file/folder-unit diagram (moduleDiagrams)
 │   │   └── flow-<slug>.mmd        # companion diagram per flow page
 │   ├── flows/
 │   │   ├── index.md               # deterministic "How it works" hub
@@ -157,7 +157,8 @@ target-repo/
 │   │   └── <slug>-<hash>.md        # bounded cross-module behavioral contract
 │   ├── auxiliary/
 │   │   └── index.md               # deterministic non-product inventory
-│   ├── files/<path-slug>.md       # e.g. src-auth-login.md
+│   ├── <folder>/index.md          # folder page: purpose + deterministic file guide
+│   ├── <folder>/<file>.md         # file page: one per symbol-bearing product file
 │   └── decisions/<date>-<slug>.md
 └── .livewiki/
     ├── index.db
@@ -287,15 +288,12 @@ the current init/batch human and JSON result and is not persisted. A generated
 hub is removed when no auxiliary modules remain; a protected hub is never
 removed.
 
-Every module has a presentation-only `displayTitle`. The deterministic fallback
-uses the shortest unique directory context plus any split ordinal (for example,
-`Core source — part 3 of 5`) and is never merely the raw module id. An accepted
-module page's frontmatter title may replace the fallback for presentation.
-Stage 4 must emit a concise, human-meaningful responsibility title and must not
-use the stable `Module.id` alone as the product-page title. Stage 2 may suggest
-an optional `displayTitle` independently of `id`; a missing, malformed,
-duplicate, or low-quality suggestion degrades silently to the deterministic
-fallback and never rejects or changes an otherwise exact path partition.
+Every unit has a presentation-only `displayTitle`. The deterministic fallback
+uses the shortest unique directory context plus a part ordinal when sibling
+units share one (for example, `Core source — part 3 of 5`) and is never merely
+the raw unit id. An accepted page's frontmatter title may replace the fallback
+for presentation. Stage 4 must emit a concise, human-meaningful responsibility
+title and must not use the stable unit id alone as the product-page title.
 `displayTitle` has **no role** in:
 
 - the page filename (`livewiki/<module.id>.md`);
@@ -341,34 +339,34 @@ rather than claiming product prominence.
 
 ### Module page format flags (roadmap item 22)
 
-Two config flags revise the stage-4 module page contract (a
-prompt-contract revision on the existing module page kind, not a new page
+Two config flags revise the stage-4 file page contract (a
+prompt-contract revision on the existing file page kind, not a new page
 kind). Both default `true` (maintainer decision after the #22 A/B passed);
 with both explicitly set to `false` the contract is byte-identical to the
 pre-flag behavior.
 
-- `moduleDiagrams` (hard contract): every stage-4 module page carries ONE
+- `moduleDiagrams` (hard contract): every stage-4 file page carries ONE
   `## Diagram` H2 section, placed after `How it fits` and before the first
   implementation section, holding exactly one inline ```mermaid block drawn
-  by the model at module granularity (files, classes, or components as
+  by the model at file granularity (symbols, classes, or components as
   nodes). The orchestrator extracts the fence body to
-  `livewiki/diagrams/<slug>.mmd` (`<slug>` is the module slug the
-  deterministic class diagram uses — that diagram keeps the distinct
-  `<slug>.classes.mmd` name, and flow diagrams keep `flow-<slug>.mmd`), and
+  `livewiki/diagrams/<slug>.mmd` (`<slug>` is the unit slug — folder-unit
+  class diagrams keep the distinct `<slug>.classes.mmd` name, and flow
+  diagrams keep `flow-<slug>.mmd`), and
   the on-disk page carries only the exact `%% livewiki/diagrams/<slug>.mmd`
   placeholder line. The diagram is gated pre-write by the Mermaid parser
-  and the module's own `moduleMaxDiagramNodes` (24) /
+  and the unit's own `moduleMaxDiagramNodes` (24) /
   `moduleMaxDiagramEdges` (32) budgets, and
   page + diagram land (and roll back) in one transactional write, reusing
   the stage-5 flow dual-artifact machinery; the stage-4 error-only verify
   gate is preserved. Validation failures feed the bounded repair loop with
   classified directives (`module_diagram_placeholder`,
   `invalid_flow_diagram`, `flow_diagram_too_large` — the latter two are
-  live only for module pages, because the flow companion diagram is
+  live only for file pages, because the flow companion diagram is
   generated deterministically). The placeholder contract never relaxes
   under the relaxed completion round.
 - `deepHierarchy` (soft contract): the stage-4 prompt asks the model to
-  group a module with 8 or more symbols under concept-named H2 sections
+  group a file with 8 or more symbols under concept-named H2 sections
   with H3 symbol subsections instead of a flat symbol list. Guidance only —
   no new validation code; the marker, prose, and primary-section rules are
   unchanged.
@@ -382,14 +380,17 @@ modules do not receive individual cards there; when present, they are
 represented by their count and exactly one existence-gated link to
 `../auxiliary/index.md`.
 
-After stage 4, every existing `owner: generated` or `owner: mixed` module page
-gets a deterministic final `## Navigate` block. The block links to Quickstart,
-Tasks, Architecture, and at most three existing direct import-graph neighbors
-drawn from dependencies and dependents together. Related modules prefer product
-role, then existing prioritization order, and are deterministic under input
-reordering. The block has no anchors and no LLM-authored path. Rewriting it
-preserves every `lw:manual` block byte-for-byte and retains `owner: mixed`;
-`owner: human` pages are never modified.
+After stage 4, every existing `owner: generated` or `owner: mixed` folder
+page gets a deterministic final `## Navigate` block with PAGE-SPECIFIC links
+only: at most one flow page, up to two concept topics, and at most three
+existing direct import-graph neighbors drawn from dependencies and dependents
+together (the universal Quickstart/Tasks/Architecture triple lives in the
+quickstart — repeating it on every page was duplicate boilerplate). Related
+units prefer product role, then existing prioritization order, and are
+deterministic under input reordering. The block has no anchors and no
+LLM-authored path. Rewriting it preserves every `lw:manual` block
+byte-for-byte and retains `owner: mixed`; `owner: human` pages are never
+modified.
 
 ### Semantic product-flow layer
 
@@ -663,56 +664,41 @@ responses carry no hints. The table is pure presentation-layer data
 ## Batch pipeline (5 stages, resumable)
 
 1. **Scan**: full `index`; symbol snapshot.
-2. **Module identification**: grouping by directory + import graph (deterministic
-   heuristic; an LLM may refine module names/boundaries — 1 call). Oversized
-   modules are **split** into smaller units (by **true subdirectory** only —
-   peer leaf filenames are never structural groups — else stable dual-axis
-   file/symbol **chunks** with ordinal ids `parent-01`, `parent-02`, …) so
-   each stage-4 page can complete under the model output budget — thresholds:
-   `maxModuleFiles` / `maxModuleSymbols` in config (defaults 12 / 80; `0`
-   disables that axis). A single file over `maxModuleSymbols` is emitted as
-   `unsplittable` (batch continues; stage 4 bounds context). The plan is an
-   **exact partition** of indexed paths (each path in exactly one module) and
-   is deterministic under input reordering. Optional stage-2 LLM refine may
-   rename/merge whole directories only when it forms an **exact 100% partition**
-   of the indexed inventory (every path once; no missing, duplicate, unknown,
-   or empty modules). It **must not** fragment peer files under the same
-   parent directory (`refine_fragmented_peers`). Any refine rejection keeps
-   the full heuristic and does **not** abort the batch. The pre-stage-4
-   partition assert compares executable modules to the original indexed
-   `filePaths`, never to a post-refine subset. A deterministic community
+2. **Module identification — real page units (#29)**: a deterministic
+   planner partitions the indexed inventory into the units a human actually
+   opens: one **file unit** per symbol-bearing product file (page
+   `livewiki/<folder>/<file>.md`) and one **folder unit** per real directory
+   (page `livewiki/<folder>/index.md`). There is no size-based chunking and
+   no stage-2 LLM refine — real units are not refinable, so `--no-refine` is
+   a no-op and the legacy `maxModuleFiles`/`maxModuleSymbols` keys parse
+   but do not operate. The plan invariant is exact accounting, not a grouping:
+   every indexed file appears on exactly one real page (its own file page, or
+   a guide line on its folder page). Folder ids are deterministic stable
+   slugs: a unique directory leaf keeps its short id; colliding leaves use the
+   shortest unique path suffix. A file base named `index` always takes the
+   extension suffix (`index-ts`) so the file page never collides with its
+   own folder page; same-base collisions inside a folder (`a.ts` + `a.js`)
+   suffix every member. Duplicate ids are a hard pipeline error before
+   stage-4 tasks, LLM calls, or page writes: one unit id maps to exactly one
+   task target and one page. A deterministic community
    cross-check (`communityDetection`, boolean default `true`) clusters the
    file-level import graph by label propagation and compares the result
-   against the heuristic partition; the report (per-module dominant
+   against the folder partition; the report (per-module dominant
    community/share, disagreement count, `agree`/`divergent` verdict) is
    persisted in the stage-2 task checkpoint as DIAGNOSTIC ONLY — it never
-   changes the partition, the refine flow, the run status, or the exit
-   code, and any failure in the check itself degrades to "no report".
-   A refined module may also carry an optional presentation-only
-   `displayTitle`. Missing, malformed, duplicate, or low-quality title values
-   are discarded without rejecting the refined module partition; the
-   deterministic title fallback remains authoritative when no suggestion is
-   accepted. `--no-refine` does not use this channel.
-   Module IDs are deterministic, stable slugs. A unique directory leaf keeps
-   its short ID; colliding leaves use the shortest unique path suffix
-   (`core-src`, `cli-src`, `mcp-src`, expanding only when necessary). Order:
-   unique → split → exact-partition assert → unique → assert. Duplicate IDs
-   are a hard pipeline error before stage-4 tasks, LLM calls, or page writes:
-   one module ID maps to exactly one task target and one `livewiki/<id>.md`
-   page.
+   changes the partition, the run status, or the exit code, and any failure
+   in the check itself degrades to "no report".
 
-   **Test-role split (#24):** within each directory, files whose path role is
-   `test` are split into their own sibling module `<id>-tests` BEFORE
-   grouping, so co-located tests never inflate product modules. Test modules
-   stay in the index (anchors and `verify` keep working) and are documented
-   through the deterministic zero-token auxiliary channel. When a partition
-   change makes a root-level `owner: generated` module page stale (its
-   module no longer exists), a full batch run removes it and re-runs the
+   **Test-role handling (#24 → #29 D3):** test-role files never get pages. A
+   1:1 same-name test (`foo.test.ts` → `foo.ts`) is stated as fact on the
+   product file page through a deterministic `## Tests` pointer appended
+   after validation (never model prose); a prefix-only match is reported as
+   "likely", never asserted; a test matched by nothing is listed as an orphan
+   on its folder page. Test files stay in the index (anchors and `verify`
+   keep working). When a partition change makes a generated unit page stale
+   (its unit no longer exists), a full batch run removes it and re-runs the
    ledger; human/mixed/ownerless/unparseable pages are preserved and
-   reported. `--only` runs never remove stale pages. The stage-2 LLM
-   refine may rename/merge/split modules but may NOT undo the test split:
-   a refined module mixing a test-role path with non-test paths is
-   rejected (`refine_mixed_test_role`) and the heuristic partition wins.
+   reported. `--only` runs never remove stale pages.
 
    **Two content layers (roadmap):** (A) structural/agent pages (dirs, symbols,
    import links, anchors — verifiable); (B) optional later human/product
@@ -724,10 +710,24 @@ responses carry no hints. The table is pure presentation-layer data
    navigation, and compact-vs-product presentation depth only: they never remove files, modules, symbols, or closed-list
    obligations. The user can reorder/exclude (`--plan` shows the plan before
    running).
-4. **Coordinated documentation**: for each module (task): context = symbols +
-   relevant code (bounded by a configurable token budget) → LLM generates a page
-   with anchors → normalize and validate the artifact → transactional write +
-   `verify` → checkpoint. Failed/interrupted? the task stays resumable.
+4. **Coordinated documentation (#29 real units)**: file units drain first, then folder units
+   (a folder page cites its file pages' accepted openings, so files must land
+   first). **File page**: context = symbols +
+   the file's own full source
+   (bounded by a configurable token budget) → the LLM writes a mechanism
+   narrative with exact dual anchor coverage (frontmatter `anchors:` + section
+   markers over the file's closed key list) → normalize and validate the
+   artifact → transactional write + `verify` → checkpoint. A file whose source
+   exceeds `fileSplitSourceBytes` (default 60,000 bytes; `0` disables) is
+   written **plan-then-write**: pass 0 the page opening, pass 1 a JSON section
+   plan (exact partition of the closed key list; one retry, then a
+   deterministic "Part N" fallback), pass 2 one bounded call per section with
+   its full source slice — assembly, frontmatter, markers, and headings are
+   deterministic, never model output. **Folder page**: a deterministic
+   skeleton (the file guide is rendered from the planner's partition and links
+   only pages that exist on disk) plus ONE bounded LLM purpose paragraph
+   (40–800 chars); non-product folders are fully deterministic (zero tokens).
+   Failed/interrupted? the task stays resumable.
 
 Stage-4 output is an artifact, never a raw transcript. The prompt contains the
 closed canonical key list and explicitly requires exact keys from that list; it

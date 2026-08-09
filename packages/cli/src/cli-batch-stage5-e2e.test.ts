@@ -3,8 +3,9 @@
  *
  * Mirrors the stub-HTTP-server pattern of cli-batch-e2e.test.ts (fixture
  * repo in a temp dir, in-process stub LLM, real CLI subprocess). The
- * fixture is a small TS project whose module heuristic yields exactly
- * three product modules with one detectable flow:
+ * fixture is a small TS project whose #29 deterministic page-unit planner
+ * yields exactly three product folders (one file unit each) with one
+ * detectable flow:
  *
  *   src/cli/cli.ts      (entry: in-degree 0 AND matches the cli.* entry pattern)
  *     └── imports ../core/engine.js   (NodeNext specifier, FIX K)
@@ -12,13 +13,15 @@
  *     └── imports ../db/db.js
  *   src/db/db.ts        (persistence: matches the db.* persistence pattern)
  *
- * Expected detection: one candidate `cli-to-db`, moduleIds [cli, core, db].
+ * Expected detection: one candidate `cli-to-db`, moduleIds [cli, core, db]
+ * (folder ids — file pages are `livewiki/cli/cli.md`, folder pages
+ * `livewiki/cli/index.md`).
  *
  * Scenarios:
  *   1. `init --batch` happy path — flow page with the on-disk placeholder
  *      (never the inline diagram), companion .mmd with the real diagram,
  *      the full navigation surface (hub, gated quickstart link, overview
- *      `## Flows`, `Flow:` lines in participating module Navigate blocks),
+ *      `## Flows`, `Flow:` lines in participating folder Navigate blocks),
  *      verify zero issues, stage-5 task visible in `batch status --json`,
  *      and `batch --only flow:cli-to-db <runId>` rerunning the single flow
  *      with monotonically growing usage. Verify stays clean after it all.
@@ -128,7 +131,15 @@ kind: understanding
 This test repository exercises the batch pipeline with a small product surface.
 `;
 
-/** Valid stage-4 module page (same response strategy as cli-batch-e2e). */
+/**
+ * Valid #29 folder-purpose paragraph: plain prose, 40–800 chars, no
+ * frontmatter/headings/fences/links/HTML comments. The folder page skeleton
+ * around it is deterministic; the LLM writes ONLY this paragraph.
+ */
+const VALID_FOLDER_PURPOSE =
+  "This directory holds one part of the fixture product: its files implement the behavior exercised by these tests.";
+
+/** Valid stage-4 file page (same response strategy as cli-batch-e2e). */
 function modulePageHandler(req: { system: string; user: string }): StubResponse {
   if (req.user.includes("# Output: livewiki/understanding.md")) {
     return {
@@ -140,10 +151,32 @@ function modulePageHandler(req: { system: string; user: string }): StubResponse 
       },
     };
   }
-  const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
+  // #29 folder pages: the LLM writes ONLY the plain-prose purpose paragraph
+  // (initial system: "purpose paragraph of ONE folder page"; repair system:
+  // "folder purpose paragraph"). Answered outside the flow instrumentation.
+  if (
+    req.system.includes("purpose paragraph of ONE folder page") ||
+    req.system.includes("folder purpose paragraph")
+  ) {
+    return {
+      status: 200,
+      body: {
+        content: [{ type: "text", text: VALID_FOLDER_PURPOSE }],
+        model: "claude-test-mock",
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    };
+  }
+  // #29: a file-unit prompt carries `# File: <repoPath>` (single-path units);
+  // keep the legacy `# Module:` fallback for robustness.
+  const fileRef =
+    req.user.match(/# File: ([^\s]+)/)?.[1] ??
+    req.user.match(/# Module: ([^\s]+)/)?.[1] ??
+    "unknown";
+  const unitName = fileRef.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "unknown";
   const closedKeys = closedKeysFromPrompt(req.user);
   const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
-  const displayTitle = `${moduleId.replace(/-/g, " ")} responsibilities`;
+  const displayTitle = `${unitName} responsibilities`;
   const content = `---
 title: ${displayTitle}
 owner: generated
@@ -153,21 +186,21 @@ ${fmAnchors}
 
 # ${displayTitle}
 
-This page documents the indexed responsibilities of ${moduleId}.
+This page documents the indexed responsibilities of ${unitName}.
 
 ## When to use this page
 
-- Review ${moduleId} behavior.
-- Change ${moduleId} implementation.
+- Review ${unitName} behavior.
+- Change ${unitName} implementation.
 
 ## How it fits
 
-This module provides one part of the repository implementation visible in the supplied source.
+This file provides one part of the repository implementation visible in the supplied source.
 
 ## Details
 <!-- lw:anchors ${closedKeys.join(" ")} -->
 
-Some prose about ${moduleId}.
+Some prose about ${unitName}.
 `;
   return {
     status: 200,
@@ -248,8 +281,7 @@ function makeFlowPage(ctx: FlowPromptCtx, _diagramSource: string): string {
     "",
     "## Related pages",
     "",
-    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
-    "- [How it works](index.md)",
+    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}/index.md)`),
     "",
   ].join("\n");
 }
@@ -491,14 +523,27 @@ describe("CLI E2E stage 5 — semantic product flows with stub LLM", () => {
     expect(overview).toContain("## Flows");
     expect(overview).toContain("[How it works](../flows/index.md)");
 
-    // 4d. Participating module pages link the flow in their Navigate blocks.
+    // 4d. Participating folder pages link the flow in their Navigate blocks.
     for (const moduleId of ["cli", "core", "db"]) {
-      const page = await readWiki(`livewiki/${moduleId}.md`);
+      const page = await readWiki(`livewiki/${moduleId}/index.md`);
       expect(page).toContain("## Navigate");
-      expect(page).toContain(`- Flow: [${FLOW_TITLE}](flows/${FLOW_SLUG}.md)`);
+      expect(page).toContain(`- Flow: [${FLOW_TITLE}](../flows/${FLOW_SLUG}.md)`);
     }
 
-    // 4e. Verify: exit 0 + zero issues of any severity repo-wide.
+    // 4e. #29 real page units: file pages live under their folder, and the
+    //     old flat module pages (`livewiki/<id>.md`) never reach disk.
+    for (const filePage of [
+      "livewiki/cli/cli.md",
+      "livewiki/core/engine.md",
+      "livewiki/db/db.md",
+    ]) {
+      expect(await pathExists(filePage), `${filePage} missing`).toBe(true);
+    }
+    for (const moduleId of ["cli", "core", "db"]) {
+      expect(await pathExists(`livewiki/${moduleId}.md`)).toBe(false);
+    }
+
+    // 4f. Verify: exit 0 + zero issues of any severity repo-wide.
     await expectVerifyClean();
 
     // 5. Status: the stage-5 task is recorded with known usage.
@@ -586,7 +631,7 @@ describe("CLI E2E stage 5 — semantic product flows with stub LLM", () => {
     const overview = await readWiki("livewiki/architecture/overview.md");
     expect(overview).not.toContain("## Flows");
     for (const moduleId of ["cli", "core", "db"]) {
-      const page = await readWiki(`livewiki/${moduleId}.md`);
+      const page = await readWiki(`livewiki/${moduleId}/index.md`);
       expect(page).not.toContain("- Flow:");
     }
 

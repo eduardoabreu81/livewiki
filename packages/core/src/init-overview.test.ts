@@ -288,10 +288,13 @@ describe("flows hub and gated links (Lot S4)", () => {
       "export function help() { return 1; }\n",
       "utf8",
     );
-    // As a previous batch (stage 4 + 5) would have left them.
+    // As a previous batch (stage 4 + 5) would have left them. #29: the
+    // folder page for `src/auth` lives at `livewiki/auth/index.md` — the
+    // legacy flat `livewiki/auth.md` no longer exists.
     await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki/flows"), { recursive: true });
+    await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki/auth"), { recursive: true });
     await nodeFs.writeFile(
-      nodePath.join(repoRoot, "livewiki/auth.md"),
+      nodePath.join(repoRoot, "livewiki/auth/index.md"),
       [
         "---",
         "title: User authentication",
@@ -347,15 +350,15 @@ describe("flows hub and gated links (Lot S4)", () => {
 
     // The participating module's Navigate block gains the flow link.
     const authPage = await nodeFs.readFile(
-      nodePath.join(repoRoot, "livewiki/auth.md"),
+      nodePath.join(repoRoot, "livewiki/auth/index.md"),
       "utf8",
     );
-    expect(authPage).toContain("- Flow: [Auth to utils](flows/auth-to-utils.md)");
+    expect(authPage).toContain("- Flow: [Auth to utils](../flows/auth-to-utils.md)");
 
     // tasks.md shows only the linked display title of the existing product
     // page — no copied responsibility sentence (duplicate-prose audit).
     const tasks = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8");
-    expect(tasks).toContain("### [User authentication](auth.md)");
+    expect(tasks).toContain("### [User authentication](auth/index.md)");
     expect(tasks).not.toContain("Authenticates users and issues sessions.");
 
     expect((await runVerify(repoRoot)).issues).toEqual([]);
@@ -366,7 +369,7 @@ describe("flows hub and gated links (Lot S4)", () => {
       "livewiki/tasks.md",
       "livewiki/architecture/overview.md",
       "livewiki/flows/index.md",
-      "livewiki/auth.md",
+      "livewiki/auth/index.md",
     ];
     const before = await Promise.all(
       paths.map((path) => nodeFs.readFile(nodePath.join(repoRoot, path), "utf8")),

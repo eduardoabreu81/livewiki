@@ -52,7 +52,10 @@ const VALID_UNDERSTANDING_PAGE = [
 class FullMockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
-  public readonly documentedModules: string[] = [];
+  /** Source paths of the file-page prompts the mock answered (#29 file units). */
+  public readonly documentedFiles: string[] = [];
+  /** Directories whose folder-purpose prompt the mock answered (#29 folder units). */
+  public readonly documentedFolders: string[] = [];
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
     // Stage 5c (item 23): answer the understanding task with a valid page
@@ -64,8 +67,21 @@ class FullMockLlm implements LlmClient {
         usage: { inputTokens: 100, outputTokens: 50, model: this.model },
       };
     }
-    const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
-    this.documentedModules.push(moduleId);
+    // #29 folder page: the model writes ONLY the purpose paragraph
+    // (40–800 chars of plain prose); the page skeleton is deterministic.
+    if (req.system.includes("purpose paragraph of ONE folder page")) {
+      const dir = req.user.match(/^Directory: (.+)$/m)?.[1] ?? "unknown";
+      this.documentedFolders.push(dir);
+      return {
+        content:
+          "This directory holds the authentication module: login and the auth service that guards the product sign-in path.",
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
+    // #29: single-file units are prompted with `# File: <repoPath>`.
+    const filePath = req.user.match(/# File: ([^\s]+)/)?.[1] ?? "unknown";
+    this.documentedFiles.push(filePath);
+    const moduleId = filePath;
     const closedKeys: string[] = [];
     let collecting = false;
     for (const line of req.user.split(/\r?\n/)) {
@@ -218,20 +234,36 @@ describe("config.ignores propagation", () => {
     // Inventory: only the product source.
     expect((await activeFilePaths(repoRoot)).sort()).toEqual(["src/auth/login.ts"]);
 
-    // Batch tasks: no target references an ignored path.
+    // Batch tasks (#29 real units): one file page + one folder page for
+    // the product source; no target references an ignored path.
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(nodePath.join(repoRoot, ".livewiki/index.db"), { readonly: true });
     try {
       const tasks = db
         .prepare("SELECT target FROM batch_tasks WHERE stage = 4")
         .all() as Array<{ target: string }>;
-      expect(tasks.map((t) => t.target)).toEqual(["auth"]);
+      expect(tasks.map((t) => t.target)).toEqual(["auth/login", "auth"]);
     } finally {
       db.close();
     }
 
-    // LLM work: the LLM was only asked to document `auth` (the
-    // configured-ignored modules were never seen).
-    expect(mockLlm.documentedModules).toEqual(["auth"]);
+    // LLM work: one file-page call for the product file and one
+    // folder-purpose call for its directory (the configured-ignored
+    // paths were never seen).
+    expect(mockLlm.documentedFiles).toEqual(["src/auth/login.ts"]);
+    expect(mockLlm.documentedFolders).toEqual(["src/auth"]);
+
+    // Pages landed at the #29 real-unit paths and mention no ignored file.
+    const filePage = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/auth/login.md"),
+      "utf8",
+    );
+    expect(filePage).toContain("src/auth/login.ts#login");
+    const folderPage = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/auth/index.md"),
+      "utf8",
+    );
+    expect(folderPage).toContain("login.ts");
+    expect(folderPage).not.toMatch(/harness|peer/);
   });
 });

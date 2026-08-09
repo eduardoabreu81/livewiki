@@ -196,7 +196,7 @@ function makeFlowPage(ctx: FlowPromptCtx, _diagramSource: string): string {
     "",
     "## Related pages",
     "",
-    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
+    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}/index.md)`),
     "",
   ].join("\n");
 }
@@ -214,6 +214,14 @@ const VALID_UNDERSTANDING_PAGE = [
   "This test repository exercises the batch pipeline with a small product surface.",
   "",
 ].join("\n");
+
+/**
+ * Valid #29 folder-purpose paragraph: plain prose, 40–800 chars, no
+ * frontmatter/headings/fences/links/HTML comments/TODO (validateFolderPurpose
+ * in folder-page.ts). The folder page skeleton around it is deterministic.
+ */
+const VALID_FOLDER_PURPOSE =
+  "This directory holds the fixture module: its files implement the product behavior exercised by these tests.";
 
 /**
  * Programmable stage-4 + stage-5 stub. Stage-4 module pages are generated
@@ -247,6 +255,13 @@ class Stage5MockLlm implements LlmClient {
     this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
     this.callCount++;
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+    // #29 folder pages: the LLM writes ONLY the plain-prose purpose
+    // paragraph (40–800 chars, no frontmatter/headings/links); the page
+    // skeleton is deterministic. Detected by the folder-purpose system
+    // prompt framing, never present in file/flow prompts.
+    if (req.system.includes("purpose paragraph of ONE folder page")) {
+      return { content: VALID_FOLDER_PURPOSE, usage };
+    }
     if (/^# Flow: \S+$/m.test(req.user)) {
       const flowIdx = this.flowCallCount++;
       if (this.throwOnFlowCall && flowIdx === this.throwOnFlowCall.index) {
@@ -273,6 +288,8 @@ class Stage5MockLlm implements LlmClient {
 async function writeFlowRepo(root: string): Promise<void> {
   await nodeFs.mkdir(nodePath.join(root, "cli"), { recursive: true });
   await nodeFs.mkdir(nodePath.join(root, "core"), { recursive: true });
+  // #29: an `index.ts` file page always takes the extension suffix
+  // (`livewiki/cli/index-ts.md`) — the unsuffixed path is the folder page.
   await nodeFs.writeFile(
     nodePath.join(root, "cli/index.ts"),
     'import { connect } from "../core/db";\nexport function main() { return connect(); }\nexport function parseArgs(args) { return args; }\n',
@@ -838,9 +855,9 @@ describe("batch stage 5 — failure policy", () => {
     // Both artifacts were new → both removed by the rollback.
     expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
     expect(await fileExists(repoRoot, FLOW_DIAGRAM_PATH)).toBe(false);
-    // Stage-4 module work was NOT undone.
-    expect(await fileExists(repoRoot, "livewiki/cli.md")).toBe(true);
-    expect(await fileExists(repoRoot, "livewiki/core.md")).toBe(true);
+    // Stage-4 page-unit work was NOT undone (#29: file + folder pages).
+    expect(await fileExists(repoRoot, "livewiki/cli/index-ts.md")).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/core/db.md")).toBe(true);
   }, 60_000);
 
   it("llm_timeout during the stage-5 task → task failed, run continues", async () => {
@@ -1018,9 +1035,9 @@ describe("batch stage 5 — transactional pair write under exceptions (R10.1 A)"
     expect(checkpoint!.diagnosticHistory![0]!.errors.map((e) => e.code)).toContain(
       "write_verify_exception",
     );
-    // Stage-4 module work was NOT undone.
-    expect(await fileExists(repoRoot, "livewiki/cli.md")).toBe(true);
-    expect(await fileExists(repoRoot, "livewiki/core.md")).toBe(true);
+    // Stage-4 page-unit work was NOT undone (#29: file + folder pages).
+    expect(await fileExists(repoRoot, "livewiki/cli/index-ts.md")).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/core/db.md")).toBe(true);
   }, 60_000);
 
   it("verifier throws → newly created pair removed, task fails write_verify_exception, no repair retry", async () => {
@@ -1061,9 +1078,9 @@ describe("batch stage 5 — transactional pair write under exceptions (R10.1 A)"
       // Both artifacts were new → both removed by the exception rollback.
       expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
       expect(await fileExists(repoRoot, FLOW_DIAGRAM_PATH)).toBe(false);
-      // Stage-4 module work was NOT undone.
-      expect(await fileExists(repoRoot, "livewiki/cli.md")).toBe(true);
-      expect(await fileExists(repoRoot, "livewiki/core.md")).toBe(true);
+      // Stage-4 page-unit work was NOT undone (#29: file + folder pages).
+      expect(await fileExists(repoRoot, "livewiki/cli/index-ts.md")).toBe(true);
+      expect(await fileExists(repoRoot, "livewiki/core/db.md")).toBe(true);
 
       const checkpoint = await readTaskCheckpoint(repoRoot, 5, FLOW_TARGET);
       expect(checkpoint!.status).toBe("failed");
@@ -1289,8 +1306,8 @@ describe("batch stage 5 — write gate severity (R10.1 B)", () => {
     );
     expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
     expect(await fileExists(repoRoot, FLOW_DIAGRAM_PATH)).toBe(false);
-    // Stage-4 module work was NOT undone.
-    expect(await fileExists(repoRoot, "livewiki/cli.md")).toBe(true);
+    // Stage-4 page-unit work was NOT undone (#29: file pages).
+    expect(await fileExists(repoRoot, "livewiki/cli/index-ts.md")).toBe(true);
   }, 60_000);
 
   it("pre-existing issues on OTHER paths never block the stage-5 gate", async () => {
@@ -1398,7 +1415,7 @@ describe("batch stage 5 — Etapa 2a early abort on unrepairable verify sets", (
       // Rolled back — nothing invalid persists; stage-4 work is untouched.
       expect(await fileExists(repoRoot, FLOW_PAGE_PATH)).toBe(false);
       expect(await fileExists(repoRoot, FLOW_DIAGRAM_PATH)).toBe(false);
-      expect(await fileExists(repoRoot, "livewiki/cli.md")).toBe(true);
+      expect(await fileExists(repoRoot, "livewiki/cli/index-ts.md")).toBe(true);
     } finally {
       spy.mockRestore();
     }
@@ -1594,7 +1611,7 @@ function makeFlowPageWithSections(
     "",
     "## Related pages",
     "",
-    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
+    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}/index.md)`),
     "",
   ].join("\n");
 }
@@ -1888,7 +1905,7 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
       "## Related pages",
       "",
       "- [Topics hub](index.md)",
-      ...modules.map((m) => `- [${m} module](../${m}.md)`),
+      ...modules.map((m) => `- [${m} module](../${m}/index.md)`),
       ...flows.flatMap((f) => [
         `- [${f} flow](../flows/${f}.md)`,
         `- [${f} diagram](../diagrams/flow-${f}.mmd)`,
@@ -1921,6 +1938,10 @@ describe("batch stage 5 — topic-plan is proposed deterministically (Workstream
         };
       }
       const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+      // #29 folder pages: plain-prose purpose paragraph only.
+      if (req.system.includes("purpose paragraph of ONE folder page")) {
+        return { content: VALID_FOLDER_PURPOSE, usage };
+      }
       if (/^# Flow: \S+$/m.test(req.user)) {
         return { content: makeFlowPage(parseFlowPrompt(req.user), "flowchart LR\n  cli --> core"), usage };
       }
@@ -2410,6 +2431,12 @@ describe("batch stage 5 — flow candidate skipped when a participating module f
   // MoneyPrinterTurbo-Plus paid rerun (`flow:test-services-02-to-app-utils`,
   // 3 attempts, all `verify_failed [broken_internal_link]`, burning a full
   // repair budget on an unwinnable outcome).
+  //
+  // #29 update: flow pages link to the FOLDER pages (`../<id>/index.md`),
+  // so a failed FILE page no longer dooms the flow (the folder page still
+  // exists). The guaranteed-failure shape now requires the participating
+  // FOLDER page itself to fail — reproduced here by an always-invalid
+  // purpose paragraph for the `core` folder.
   class OneModuleAlwaysTruncatesLlm implements LlmClient {
     public readonly provider = "anthropic" as const;
     public readonly model = "claude-test-mock";
@@ -2426,12 +2453,21 @@ describe("batch stage 5 — flow candidate skipped when a participating module f
         };
       }
       const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+      // #29 folder pages: the `core` folder purpose is always invalid
+      // (below the 40-char floor), so the folder task never writes
+      // `livewiki/core/index.md`, regardless of repair attempts.
+      if (req.system.includes("purpose paragraph of ONE folder page")) {
+        if (req.user.includes("Directory: core")) {
+          return { content: "Too short.", usage };
+        }
+        return { content: VALID_FOLDER_PURPOSE, usage };
+      }
       if (/^# Flow: \S+$/m.test(req.user)) {
         this.flowCallCount++;
         return { content: makeFlowPage(parseFlowPrompt(req.user), "flowchart LR\n  cli --> core"), usage };
       }
       const closedKeys = parseClosedKeys(req.user);
-      // "core" module's page always truncates — it never produces a
+      // The `core/db` file page always truncates — it never produces a
       // written page, regardless of repair attempts.
       if (closedKeys.some((k) => k.startsWith("core/"))) {
         return { content: "# incomplete", usage, stopReason: "length", rawStopReason: "length" };
@@ -2442,6 +2478,14 @@ describe("batch stage 5 — flow candidate skipped when a participating module f
 
   it("skips flow:cli-to-core deterministically instead of spending 3 LLM calls on a guaranteed verify failure", async () => {
     await writeFlowRepo(repoRoot);
+    // A second succeeding cli file keeps the stage-4 failure ratio at 50%
+    // (2 fails / 4+ attempts) — strictly above 50% trips the circuit
+    // breaker mid-stage and the `cli` folder task would never run.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "cli/extra.ts"),
+      "export function extra() { return 1; }\n",
+      "utf8",
+    );
     const llmClient = new OneModuleAlwaysTruncatesLlm();
 
     const result = await runBatch({
@@ -2451,10 +2495,15 @@ describe("batch stage 5 — flow candidate skipped when a participating module f
       skipManifestWrite: true,
     });
 
-    // "core" failed stage-4 (repair_exhausted on truncation); "cli" succeeded.
+    // "core" failed stage-4 — BOTH its units: the `core/db` file page
+    // (repair_exhausted on truncation) and the `core` folder page (invalid
+    // purpose on every slot). "cli" succeeded.
     expect(result.failures.some((f) => f.module === "core")).toBe(true);
-    expect(await fileExists(repoRoot, "livewiki/cli.md")).toBe(true);
-    expect(await fileExists(repoRoot, "livewiki/core.md")).toBe(false);
+    expect(result.failures.some((f) => f.module === "core/db")).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/cli/index-ts.md")).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/cli/index.md")).toBe(true);
+    expect(await fileExists(repoRoot, "livewiki/core/db.md")).toBe(false);
+    expect(await fileExists(repoRoot, "livewiki/core/index.md")).toBe(false);
 
     // The flow was never attempted — zero flow LLM calls, no task row.
     expect(llmClient.flowCallCount).toBe(0);
@@ -2520,7 +2569,7 @@ describe("batch stage 5 — relaxed completion round (Component 2)", () => {
       "",
       "## Related pages",
       "",
-      ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
+      ...ctx.moduleIds.map((m) => `- [${m} module](../${m}/index.md)`),
       "",
     ].join("\n");
   }
@@ -2559,7 +2608,7 @@ describe("batch stage 5 — relaxed completion round (Component 2)", () => {
       "",
       "## Related pages",
       "",
-      ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
+      ...ctx.moduleIds.map((m) => `- [${m} module](../${m}/index.md)`),
       "",
     ].join("\n");
   }
@@ -2685,7 +2734,7 @@ describe("batch stage 5 — relaxed completion round (Component 2)", () => {
       "## Related pages",
       "",
       "- [Topics hub](index.md)",
-      ...t.modules.map((m) => `- [${m} module](../${m}.md)`),
+      ...t.modules.map((m) => `- [${m} module](../${m}/index.md)`),
       ...t.flows.flatMap((f) => [
         `- [${f} flow](../flows/${f}.md)`,
         `- [${f} diagram](../diagrams/flow-${f}.mmd)`,

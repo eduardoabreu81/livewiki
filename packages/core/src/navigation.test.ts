@@ -224,11 +224,11 @@ describe("deterministic navigation", () => {
       "Repository facts",
     ]);
     expect(quickstart).toContain(
-      "- **[API handlers](api.md)** — Serves the HTTP endpoints of the product.",
+      "- **[API handlers](api/index.md)** — Serves the HTTP endpoints of the product.",
     );
     // A module without a parseable opening contributes a title-link only.
-    expect(quickstart).toContain("- **[Render engine](engine.md)**\n");
-    expect(quickstart).not.toContain("Render engine](engine.md)** —");
+    expect(quickstart).toContain("- **[Render engine](engine/index.md)**\n");
+    expect(quickstart).not.toContain("Render engine](engine/index.md)** —");
     // With a README purpose, the fallback synthesis is not used.
     expect(quickstart).toContain("A pipeline that renders short videos from topic briefs.");
     expect(quickstart).not.toContain("Synthesized from the generated module pages");
@@ -251,9 +251,9 @@ describe("deterministic navigation", () => {
       moduleDigests,
     });
     expect(quickstart).toContain("## What you'll find in this wiki");
-    expect(quickstart).toContain("[Module 5](mod-5.md)");
-    expect(quickstart).not.toContain("[Module 6](mod-6.md)");
-    expect(quickstart).not.toContain("[Module 7](mod-7.md)");
+    expect(quickstart).toContain("[Module 5](mod-5/index.md)");
+    expect(quickstart).not.toContain("[Module 6](mod-6/index.md)");
+    expect(quickstart).not.toContain("[Module 7](mod-7/index.md)");
   });
 
   it("synthesizes the purpose from module digests when the README yields none, with provenance", () => {
@@ -315,11 +315,11 @@ describe("deterministic navigation", () => {
     });
     expect(none).not.toContain("What this repository is");
     expect(none).toContain("## What you'll find in this wiki");
-    expect(none).toContain("- **[Alpha](a.md)**\n");
+    expect(none).toContain("- **[Alpha](a/index.md)**\n");
   });
 
   it("loads module digests from accepted pages in prioritization order, skipping absent page files", async () => {
-    await safeIo.writeText(repoRoot, "livewiki/core-src-01.md", [
+    await safeIo.writeText(repoRoot, "livewiki/core-src-01/index.md", [
       "---",
       "title: Authentication flow",
       "owner: generated",
@@ -333,7 +333,7 @@ describe("deterministic navigation", () => {
       "Sits between the router and the session store.",
     ].join("\n"));
     // core-src-02 exists on disk but has no opening paragraph → title-only.
-    await safeIo.writeText(repoRoot, "livewiki/core-src-02.md", [
+    await safeIo.writeText(repoRoot, "livewiki/core-src-02/index.md", [
       "---",
       "title: Billing",
       "owner: generated",
@@ -358,7 +358,7 @@ describe("deterministic navigation", () => {
 
   it("assembles role-separated Tasks: compact title-and-link entries for every role, honest unavailable pages", async () => {
     const cue = "- Configure authentication before enabling protected routes.";
-    await safeIo.writeText(repoRoot, "livewiki/core-src-01.md", [
+    await safeIo.writeText(repoRoot, "livewiki/core-src-01/index.md", [
       "---",
       "title: Authentication flow",
       "owner: generated",
@@ -375,7 +375,7 @@ describe("deterministic navigation", () => {
       "",
     ].join("\n"));
     // Second product page: its opening prose is section-only content.
-    await safeIo.writeText(repoRoot, "livewiki/cli-src.md", [
+    await safeIo.writeText(repoRoot, "livewiki/cli-src/index.md", [
       "---",
       "title: CLI entry",
       "owner: generated",
@@ -387,7 +387,7 @@ describe("deterministic navigation", () => {
       "Prose under a section is not part of the opening.",
       "",
     ].join("\n"));
-    await safeIo.writeText(repoRoot, "livewiki/fixtures.md", [
+    await safeIo.writeText(repoRoot, "livewiki/fixtures/index.md", [
       "---",
       "title: Sample fixtures",
       "owner: generated",
@@ -415,12 +415,12 @@ describe("deterministic navigation", () => {
     // Product page: linked display title and nothing more — never the
     // responsibility sentence, the `When to use this page` bullets, or any
     // other module-page prose.
-    expect(tasks).toContain("### [Authentication flow](core-src-01.md)");
+    expect(tasks).toContain("### [Authentication flow](core-src-01/index.md)");
     expect(tasks).not.toContain("Handles credential checks and session issuance.");
     expect(tasks).not.toContain(cue);
     expect(tasks).not.toContain("When to use this page");
     // Second product page: same compact shape, no copied prose either.
-    expect(tasks).toContain("### [CLI entry](cli-src.md)");
+    expect(tasks).toContain("### [CLI entry](cli-src/index.md)");
     expect(tasks).not.toContain("Prose under a section is not part of the opening.");
     expect(tasks).toContain("## End-to-end behavior");
     expect(tasks).toContain("### [Batch execution](flows/batch-flow.md)");
@@ -431,8 +431,8 @@ describe("deterministic navigation", () => {
     expect(tasks).not.toContain("Sample fixtures");
     expect(tasks).not.toContain("Provides canned inputs for tests.");
     // Unavailable page: plain heading + honest note, no link.
-    expect(tasks).toContain("Page unavailable: `livewiki/core-src-02.md`");
-    expect(tasks).not.toContain("](core-src-02.md)");
+    expect(tasks).toContain("Page unavailable: `livewiki/core-src-02/index.md`");
+    expect(tasks).not.toContain("](core-src-02/index.md)");
     expect(tasks.indexOf("## End-to-end behavior")).toBeLessThan(
       tasks.indexOf("## Implementation reference"),
     );
@@ -481,7 +481,7 @@ describe("deterministic navigation", () => {
     const productOnly = modules.filter((module) => module.id !== "fixtures");
 
     expect((await syncAuxiliaryIndexHub(args)).outcome).toBe("written");
-    expect(await safeIo.readText(repoRoot, hubPath)).toContain("[Sample fixtures](../fixtures.md)");
+    expect(await safeIo.readText(repoRoot, hubPath)).toContain("[Sample fixtures](../fixtures/index.md)");
 
     for (const [owner, source] of [
       ["human", "---\ntitle: Mine\nowner: human\n---\n# Mine\n"],
@@ -548,10 +548,10 @@ describe("deterministic navigation", () => {
 
   it("adds one-link hub routes only to generated/mixed pages and preserves manual blocks byte-for-byte", async () => {
     const manual = "<!-- lw:manual -->\nKeep  two spaces.\n<!-- /lw:manual -->";
-    await safeIo.writeText(repoRoot, "livewiki/core-src-01.md", `---\ntitle: Core A\nowner: mixed\n---\n# Core A\n\n${manual}\n`);
-    await safeIo.writeText(repoRoot, "livewiki/core-src-02.md", "---\ntitle: Core B\nowner: generated\n---\n# Core B\n");
+    await safeIo.writeText(repoRoot, "livewiki/core-src-01/index.md", `---\ntitle: Core A\nowner: mixed\n---\n# Core A\n\n${manual}\n`);
+    await safeIo.writeText(repoRoot, "livewiki/core-src-02/index.md", "---\ntitle: Core B\nowner: generated\n---\n# Core B\n");
     const human = "---\ntitle: CLI\nowner: human\n---\n# Human CLI\n";
-    await safeIo.writeText(repoRoot, "livewiki/cli-src.md", human);
+    await safeIo.writeText(repoRoot, "livewiki/cli-src/index.md", human);
     const presentations = await loadModulePresentations(repoRoot, modules);
     const opts = {
       repoRoot,
@@ -566,8 +566,8 @@ describe("deterministic navigation", () => {
     };
 
     const changed = await updateModuleNavigateBlocks(opts);
-    const mixed = await safeIo.readText(repoRoot, "livewiki/core-src-01.md");
-    expect(changed).toEqual(["livewiki/core-src-01.md", "livewiki/core-src-02.md"]);
+    const mixed = await safeIo.readText(repoRoot, "livewiki/core-src-01/index.md");
+    expect(changed).toEqual(["livewiki/core-src-01/index.md", "livewiki/core-src-02/index.md"]);
     expect(mixed).toContain(manual);
     // C1: page-specific links only — the universal hub triple lives in the
     // quickstart and must NOT be repeated on every module page.
@@ -575,18 +575,18 @@ describe("deterministic navigation", () => {
     expect(mixed).not.toContain("[Tasks](tasks.md)");
     expect(mixed).not.toContain("[Architecture](architecture/overview.md)");
     expect(mixed).not.toContain("Flow:");
-    expect(mixed).toContain("[Core B](core-src-02.md) — dependency");
-    expect(mixed).toContain("[CLI](cli-src.md) — dependent");
+    expect(mixed).toContain("[Core B](../core-src-02/index.md) — dependency");
+    expect(mixed).toContain("[CLI](../cli-src/index.md) — dependent");
     expect(mixed).not.toContain("fixtures.md");
-    expect(await safeIo.readText(repoRoot, "livewiki/cli-src.md")).toBe(human);
+    expect(await safeIo.readText(repoRoot, "livewiki/cli-src/index.md")).toBe(human);
 
     expect(await updateModuleNavigateBlocks(opts)).toEqual([]);
-    expect((await safeIo.readText(repoRoot, "livewiki/core-src-01.md")).match(/## Navigate/g)).toHaveLength(1);
+    expect((await safeIo.readText(repoRoot, "livewiki/core-src-01/index.md")).match(/## Navigate/g)).toHaveLength(1);
   });
 
   it("links at most one flow page (lowest slug) in the Navigate block of participating modules only", async () => {
-    await safeIo.writeText(repoRoot, "livewiki/core-src-01.md", "---\ntitle: Core A\nowner: generated\n---\n# Core A\n");
-    await safeIo.writeText(repoRoot, "livewiki/core-src-02.md", "---\ntitle: Core B\nowner: generated\n---\n# Core B\n");
+    await safeIo.writeText(repoRoot, "livewiki/core-src-01/index.md", "---\ntitle: Core A\nowner: generated\n---\n# Core A\n");
+    await safeIo.writeText(repoRoot, "livewiki/core-src-02/index.md", "---\ntitle: Core B\nowner: generated\n---\n# Core B\n");
     await safeIo.writeText(repoRoot, "livewiki/flows/b-flow.md", [
       "---",
       "title: Beta flow",
@@ -621,11 +621,11 @@ describe("deterministic navigation", () => {
     };
 
     const changed = await updateModuleNavigateBlocks(opts);
-    expect(changed).toEqual(["livewiki/core-src-01.md", "livewiki/core-src-02.md"]);
-    const participant = await safeIo.readText(repoRoot, "livewiki/core-src-01.md");
-    expect(participant).toContain("- Flow: [Alpha flow](flows/a-flow.md)");
+    expect(changed).toEqual(["livewiki/core-src-01/index.md", "livewiki/core-src-02/index.md"]);
+    const participant = await safeIo.readText(repoRoot, "livewiki/core-src-01/index.md");
+    expect(participant).toContain("- Flow: [Alpha flow](../flows/a-flow.md)");
     expect(participant).not.toContain("Beta flow");
-    const nonParticipant = await safeIo.readText(repoRoot, "livewiki/core-src-02.md");
+    const nonParticipant = await safeIo.readText(repoRoot, "livewiki/core-src-02/index.md");
     expect(nonParticipant).not.toContain("Flow:");
 
     // The flow link is derived deterministically: a second pass changes nothing.
@@ -633,8 +633,8 @@ describe("deterministic navigation", () => {
   });
 
   it("keeps Flow, Topic, and dependency lines without the universal hub triple", async () => {
-    await safeIo.writeText(repoRoot, "livewiki/core-src-01.md", "---\ntitle: Core A\nowner: generated\n---\n# Core A\n");
-    await safeIo.writeText(repoRoot, "livewiki/core-src-02.md", "---\ntitle: Core B\nowner: generated\n---\n# Core B\n");
+    await safeIo.writeText(repoRoot, "livewiki/core-src-01/index.md", "---\ntitle: Core A\nowner: generated\n---\n# Core A\n");
+    await safeIo.writeText(repoRoot, "livewiki/core-src-02/index.md", "---\ntitle: Core B\nowner: generated\n---\n# Core B\n");
     await safeIo.writeText(repoRoot, "livewiki/flows/a-flow.md", [
       "---",
       "title: Alpha flow",
@@ -667,14 +667,14 @@ describe("deterministic navigation", () => {
       edges: [{ from: "core-src-01", to: "core-src-02" }],
       presentations,
     });
-    expect(changed).toEqual(["livewiki/core-src-01.md", "livewiki/core-src-02.md"]);
-    const page = await safeIo.readText(repoRoot, "livewiki/core-src-01.md");
-    expect(page).toContain("- Flow: [Alpha flow](flows/a-flow.md)");
-    expect(page).toContain("- Topic: [Billing concept](topics/billing.md)");
-    expect(page).toContain("[Core B](core-src-02.md) — dependency");
-    expect(page).not.toContain("[Quickstart](quickstart.md)");
-    expect(page).not.toContain("[Tasks](tasks.md)");
-    expect(page).not.toContain("[Architecture](architecture/overview.md)");
+    expect(changed).toEqual(["livewiki/core-src-01/index.md", "livewiki/core-src-02/index.md"]);
+    const page = await safeIo.readText(repoRoot, "livewiki/core-src-01/index.md");
+    expect(page).toContain("- Flow: [Alpha flow](../flows/a-flow.md)");
+    expect(page).toContain("- Topic: [Billing concept](../topics/billing.md)");
+    expect(page).toContain("[Core B](../core-src-02/index.md) — dependency");
+    expect(page).not.toContain("[Quickstart](../quickstart.md)");
+    expect(page).not.toContain("[Tasks](../tasks.md)");
+    expect(page).not.toContain("[Architecture](../architecture/overview.md)");
   });
 
   it("groups the tasks Implementation reference by common directory with singleton folding and title-link-only entries", () => {
@@ -712,10 +712,10 @@ describe("deterministic navigation", () => {
     // folds into the trailing catch-all bucket instead of fragmenting.
     expect(tasks.indexOf("### Other modules")).toBeGreaterThan(tasks.indexOf("### App services"));
     // Entries stay title-link-only bullets (R10 dedup — no copied sentences).
-    expect(tasks).toContain("- [Title api-01](api-01.md)");
-    expect(tasks).toContain("- [Title services-02](services-02.md)");
-    expect(tasks).toContain("- [Title webui](webui.md)");
-    expect(tasks.indexOf("- [Title api-01](api-01.md)")).toBeLessThan(tasks.indexOf("- [Title api-02](api-02.md)"));
+    expect(tasks).toContain("- [Title api-01](api-01/index.md)");
+    expect(tasks).toContain("- [Title services-02](services-02/index.md)");
+    expect(tasks).toContain("- [Title webui](webui/index.md)");
+    expect(tasks.indexOf("- [Title api-01](api-01/index.md)")).toBeLessThan(tasks.indexOf("- [Title api-02](api-02/index.md)"));
     expect(tasks).not.toContain("### [Title");
   });
 
@@ -741,8 +741,8 @@ describe("deterministic navigation", () => {
     // into it and the single effective cluster renders flat (no umbrella H3).
     expect(tasks).not.toContain("### App API");
     expect(tasks).not.toContain("### Other modules");
-    expect(tasks).toContain("### [Title api-01](api-01.md)");
-    expect(tasks).toContain("### [Title worker](worker.md)");
+    expect(tasks).toContain("### [Title api-01](api-01/index.md)");
+    expect(tasks).toContain("### [Title worker](worker/index.md)");
   });
 
   it("appends the parametrized coverage note exactly when the module source exceeds the budget", async () => {
@@ -753,8 +753,8 @@ describe("deterministic navigation", () => {
     await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
     await nodeFs.writeFile(nodePath.join(repoRoot, "src/big.ts"), "x".repeat(2048));
     await nodeFs.writeFile(nodePath.join(repoRoot, "src/small.ts"), "export const s = 1;\n");
-    await safeIo.writeText(repoRoot, "livewiki/big.md", "---\ntitle: Big\nowner: generated\n---\n# Big\n");
-    await safeIo.writeText(repoRoot, "livewiki/small.md", "---\ntitle: Small\nowner: generated\n---\n# Small\n");
+    await safeIo.writeText(repoRoot, "livewiki/big/index.md", "---\ntitle: Big\nowner: generated\n---\n# Big\n");
+    await safeIo.writeText(repoRoot, "livewiki/small/index.md", "---\ntitle: Small\nowner: generated\n---\n# Small\n");
     const presentations = await loadModulePresentations(repoRoot, bigModules);
     const opts = {
       repoRoot,
@@ -771,8 +771,8 @@ describe("deterministic navigation", () => {
     expect(await moduleSourceExceedsBudget(repoRoot, { id: "ghost", paths: ["src/ghost.ts"], symbolCount: 0 }, 1)).toBe(false);
 
     const changed = await updateModuleNavigateBlocks(opts);
-    expect(changed).toEqual(["livewiki/big.md", "livewiki/small.md"]);
-    const big = await safeIo.readText(repoRoot, "livewiki/big.md");
+    expect(changed).toEqual(["livewiki/big/index.md", "livewiki/small/index.md"]);
+    const big = await safeIo.readText(repoRoot, "livewiki/big/index.md");
     // The note carries the module's own inventory: 1 file (singular), ~2k chars.
     const expectedNote = buildModuleCoverageNote(1, 2048);
     expect(expectedNote).toContain("(1 file, ~2k chars)");
@@ -780,14 +780,14 @@ describe("deterministic navigation", () => {
     expect(big.match(/Coverage note/g)).toHaveLength(1);
     expect(big.indexOf("## Navigate")).toBeLessThan(big.indexOf(expectedNote));
     expect(big.indexOf(expectedNote)).toBeLessThan(big.indexOf("<!-- livewiki:navigate:end -->"));
-    const small = await safeIo.readText(repoRoot, "livewiki/small.md");
+    const small = await safeIo.readText(repoRoot, "livewiki/small/index.md");
     expect(small).not.toContain("Coverage note");
 
     // Idempotent: the note is part of the regenerated deterministic block.
     expect(await updateModuleNavigateBlocks(opts)).toEqual([]);
     // A larger budget removes the note on the next regen.
     await updateModuleNavigateBlocks({ ...opts, charBudget: 1_000_000 });
-    expect(await safeIo.readText(repoRoot, "livewiki/big.md")).not.toContain("Coverage note");
+    expect(await safeIo.readText(repoRoot, "livewiki/big/index.md")).not.toContain("Coverage note");
   });
 
   it("parametrizes the coverage note so no two over-budget modules share the same text", async () => {
@@ -811,7 +811,7 @@ describe("deterministic navigation", () => {
     await nodeFs.writeFile(nodePath.join(repoRoot, "src/b2.ts"), "x".repeat(1300));
     await nodeFs.writeFile(nodePath.join(repoRoot, "src/c.ts"), "x".repeat(2600));
     for (const module of overModules) {
-      await safeIo.writeText(repoRoot, `livewiki/${module.id}.md`, `---\ntitle: ${module.id}\nowner: generated\n---\n# ${module.id}\n`);
+      await safeIo.writeText(repoRoot, `livewiki/${module.id}/index.md`, `---\ntitle: ${module.id}\nowner: generated\n---\n# ${module.id}\n`);
     }
     const presentations = await loadModulePresentations(repoRoot, overModules);
     const changed = await updateModuleNavigateBlocks({
@@ -825,7 +825,7 @@ describe("deterministic navigation", () => {
     expect(changed).toHaveLength(3);
     const notes: string[] = [];
     for (const module of overModules) {
-      const page = await safeIo.readText(repoRoot, `livewiki/${module.id}.md`);
+      const page = await safeIo.readText(repoRoot, `livewiki/${module.id}/index.md`);
       const note = page.split("\n").find((line) => line.includes("Coverage note"));
       expect(note, `${module.id} must carry a coverage note`).toBeDefined();
       notes.push(note!);

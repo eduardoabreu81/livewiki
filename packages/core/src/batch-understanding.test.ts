@@ -129,7 +129,7 @@ function makeFlowPage(ctx: FlowPromptCtx): string {
     "",
     "## Related pages",
     "",
-    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
+    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}/index.md)`),
     "",
   ].join("\n");
 }
@@ -169,13 +169,17 @@ function makeInvalidUnderstandingPage(): string {
 /**
  * Programmable stage-4/5/5c stub. Understanding calls are detected by the
  * `# Output: livewiki/understanding.md` header and answered with a valid
- * page (or a test-supplied responder queue).
+ * page (or a test-supplied responder queue). #29: product FOLDER tasks ask
+ * for ONE plain purpose paragraph (system prompt says "purpose paragraph
+ * of ONE folder page") — the deterministic skeleton is assembled by the
+ * tool, so the stub returns plain prose, never a Markdown page.
  */
 class UnderstandingMockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
   public callCount = 0;
   public flowCallCount = 0;
+  public folderCallCount = 0;
   public understandingCallCount = 0;
   public understandingPrompts: Array<{ system: string; user: string }> = [];
   /** Override for understanding responses (receives the 0-based call index). */
@@ -184,6 +188,14 @@ class UnderstandingMockLlm implements LlmClient {
   async generate(req: GenerateRequest): Promise<GenerateResult> {
     this.callCount++;
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+    if (req.system.includes("purpose paragraph of ONE folder page")) {
+      this.folderCallCount++;
+      return {
+        content:
+          "This directory holds the product wiring: the command line interface, the persistence core, and how they connect.",
+        usage,
+      };
+    }
     if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
       const index = this.understandingCallCount++;
       this.understandingPrompts.push({ system: req.system, user: req.user });
@@ -282,6 +294,16 @@ describe("batch stage 5c — repository understanding", () => {
     expect(result.status).toBe("completed");
     expect(llm.understandingCallCount).toBe(1);
     expect(llm.flowCallCount).toBe(1);
+    // #29 real page units: one FILE task per symbol-bearing file plus one
+    // FOLDER task per product directory (each folder = one purpose call;
+    // the root directory holding the README is a folder unit too).
+    expect(llm.folderCallCount).toBe(3);
+    expect(
+      result.byModule
+        .map((entry) => entry.module)
+        .filter((target) => !target.startsWith("understanding:"))
+        .sort(),
+    ).toEqual(["cli", "cli/index-ts", "core", "core/db", "flow:cli-to-core", "root"]);
     const understandingUsage = result.byModule.find((entry) => entry.module.startsWith("understanding:"));
     expect(understandingUsage).toBeDefined();
     expect(understandingUsage!.inputTokens).toBe(100);
@@ -363,8 +385,8 @@ describe("batch stage 5c — repository understanding", () => {
     expect(failure).toBeDefined();
     expect(failure!.error.code).toBe("repair_exhausted");
     expect(failure!.retryCommand).toBe(`livewiki batch --only understanding ${result.runId}`);
-    // The run continued: module + flow tasks completed normally.
-    expect(result.tasksDone).toBeGreaterThanOrEqual(3);
+    // The run continued: file + folder + flow tasks completed normally.
+    expect(result.tasksDone).toBe(5);
     // Transactional write: the invalid page NEVER persisted.
     expect(await fileExists(repoRoot, UNDERSTANDING_REL_PATH)).toBe(false);
   });
@@ -387,9 +409,10 @@ describe("batch stage 5c — repository understanding", () => {
       skipManifestWrite: true,
     });
     expect(resumed.status).toBe("completed");
-    // Module/flow tasks re-ran (resume regenerates), but the understanding
-    // task found its done checkpoint for the SAME evidence hash and skipped.
-    expect(llm.callCount).toBeGreaterThan(3);
+    // File/folder/flow tasks re-ran (resume regenerates), but the
+    // understanding task found its done checkpoint for the SAME evidence
+    // hash and skipped.
+    expect(llm.callCount).toBeGreaterThan(6);
     expect(llm.understandingCallCount).toBe(1);
   });
 

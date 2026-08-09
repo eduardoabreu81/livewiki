@@ -830,7 +830,7 @@ export function validateStage4Artifact(
       );
       const expectedTargets = new Set<string>(["index.md"]);
       for (const moduleId of context?.expectedTopicModules ?? []) {
-        expectedTargets.add(`../${moduleId}.md`);
+        expectedTargets.add(`../${moduleId}/index.md`);
       }
       for (const flowSlug of context?.expectedTopicFlows ?? []) {
         expectedTargets.add(`../flows/${flowSlug}.md`);
@@ -1193,7 +1193,7 @@ export function validateStage4Artifact(
       if (targetPath === "" || /\.(?:md|mmd)$/i.test(targetPath)) continue;
       errors.push(err(
         "topic_source_link",
-        `link target "${target}" points at a source path outside the wiki and does not resolve for readers; name the symbol as inline code with its exact closed-list key, or link to its module page (../<moduleId>.md)`,
+        `link target "${target}" points at a source path outside the wiki and does not resolve for readers; name the symbol as inline code with its exact closed-list key, or link to its module page (../<moduleId>/index.md)`,
         "body",
         target,
       ));

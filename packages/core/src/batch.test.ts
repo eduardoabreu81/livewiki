@@ -42,36 +42,47 @@ class MockLlm implements LlmClient {
     }
     this.callCount++;
     this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
-    // Extrai o nome do módulo do user prompt (linha "# Module: <id>")
-    const match = req.user.match(/# Module: ([^\s]+)/);
-    const moduleId = match ? match[1] : "unknown";
-    // Extrai a primeira chave canônica do user prompt
-    const keyMatch = req.user.match(/^- (.+?#[\w.]+)$/m);
-    const firstKey = keyMatch ? keyMatch[1] : `${moduleId}.ts#placeholder`;
+    // #29 folder task: the LLM writes ONLY the purpose paragraph (plain
+    // prose, 40–800 chars) — the page skeleton is deterministic.
+    if (/purpose paragraph/.test(req.system)) {
+      return {
+        content:
+          "This directory holds the auth module: login, session, and token handling.",
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
+    // #29 file page task: the prompt names the file ("# File: <path>") and
+    // the closed list is the file's own symbols — anchor them ALL (dual
+    // complete coverage: frontmatter + section markers).
+    const fileMatch = req.user.match(/# File: ([^\s]+)/);
+    const filePath = fileMatch ? fileMatch[1] : "unknown.ts";
+    const keys = [...req.user.matchAll(/^- (\S+#\S+)$/gm)].map((m) => m[1]!);
+    const anchorKeys = keys.length > 0 ? keys : [`${filePath}#placeholder`];
+    const anchorsYaml = anchorKeys.map((k) => `  - ${k}`).join("\n");
     const content = `---
-title: ${moduleId} responsibilities
+title: ${filePath} responsibilities
 owner: generated
 anchors:
-  - ${firstKey}
+${anchorsYaml}
 ---
 
-# ${moduleId} responsibilities
+# ${filePath} responsibilities
 
-This page documents the responsibilities of ${moduleId}.
+This page documents the responsibilities of ${filePath}.
 
 ## When to use this page
 
-- Review ${moduleId} behavior.
-- Change ${moduleId} implementation.
+- Review ${filePath} behavior.
+- Change ${filePath} implementation.
 
 ## How it fits
 
-This module provides part of the repository implementation described by the indexed source.
+This file provides part of the repository implementation described by the indexed source.
 
 ## Details
-<!-- lw:anchors ${firstKey} -->
+<!-- lw:anchors ${anchorKeys.join(" ")} -->
 
-Some prose about ${moduleId}.
+Some prose about ${filePath}.
 `;
     return {
       content,
@@ -121,40 +132,61 @@ describe("batch.runBatch — orquestrador end-to-end com mock LLM", () => {
     expect(result.runId).toBeGreaterThan(0);
     expect(result.byModule.length).toBeGreaterThan(0);
 
-    // Wiki page gerada
-    const wikiPath = nodePath.join(repoRoot, "livewiki/auth.md");
-    expect(await nodeFs.readFile(wikiPath, "utf8")).toMatch(/title: auth/);
+    // #29: file page at livewiki/<folderId>/<fileBase>.md and folder page
+    // at livewiki/<folderId>/index.md.
+    const filePagePath = nodePath.join(repoRoot, "livewiki/auth/login.md");
+    expect(await nodeFs.readFile(filePagePath, "utf8")).toMatch(/title: src\/auth\/login\.ts/);
+    const folderPagePath = nodePath.join(repoRoot, "livewiki/auth/index.md");
+    expect(await nodeFs.readFile(folderPagePath, "utf8")).toContain(
+      "login, session, and token handling",
+    );
 
     // Manifest escrito
     const manifestPath = nodePath.join(repoRoot, "livewiki/.manifest.json");
     expect(await nodeFs.readFile(manifestPath, "utf8")).toMatch(/"version": 1/);
   });
 
-  it("--no-refine (default): etapa 2 só roda heurística, sem LLM call", async () => {
-    const before = mockLlm.callCount;
+  it("etapa 2 é determinística (#29): zero LLM calls, com ou sem --no-refine", async () => {
     await runBatch({
       repoRoot,
       llmClient: mockLlm,
       noRefine: true,
       skipManifestWrite: true,
     });
-    // Mock só foi chamado pra stage 4 (1 módulo = 1 chamada). Sem etapa 2.
-    expect(mockLlm.callCount - before).toBe(1);
+    // 1 file-page call + 1 folder-purpose call. NO stage-2 refine call
+    // (the LLM refine pass was removed in #29).
+    expect(mockLlm.callCount).toBe(2);
+    expect(
+      mockLlm.callLog.some((c) => c.user.includes("# File: src/auth/login.ts")),
+    ).toBe(true);
+    expect(mockLlm.callLog.some((c) => /purpose paragraph/.test(c.system))).toBe(true);
     expect(mockLlm.callLog.at(-1)?.user).not.toContain("# Suggested display title");
   });
 
-  it("com LLM refine: etapa 2 faz 1 chamada adicional", async () => {
-    // Setup: precisa de config válida pro cliente poder ser criado lazy
-    // Aqui injetamos o mock — então o config check é skipado
-    const before = mockLlm.callCount;
+  it("noRefine: false é no-op (#29): etapa 2 continua sem LLM call e a task persiste", async () => {
     await runBatch({
       repoRoot,
       llmClient: mockLlm,
-      noRefine: false, // tenta refinar (1 chamada extra na etapa 2)
+      noRefine: false, // legacy flag — stage 2 never calls the LLM anymore
       skipManifestWrite: true,
     });
-    // Etapa 2 (1) + etapa 4 (1) = 2 chamadas
-    expect(mockLlm.callCount - before).toBe(2);
+    // Same 2 calls as the noRefine run (file page + folder purpose).
+    expect(mockLlm.callCount).toBe(2);
+
+    // The stage-2 task still persists (deterministic planner; empty usage).
+    const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const task = db
+        .prepare("SELECT status, checkpoint_json FROM batch_tasks WHERE stage = 2")
+        .get() as { status: string; checkpoint_json: string };
+      expect(task.status).toBe("done");
+      const cp = JSON.parse(task.checkpoint_json) as { usageHistory: unknown[] };
+      expect(cp.usageHistory).toHaveLength(0);
+    } finally {
+      db.close();
+    }
   });
 
   it("checkpoint de cada task tem usageHistory populado", async () => {
@@ -236,7 +268,7 @@ describe("batch.runBatch — dynamic output-token budget (Priority-0 fix)", () =
 
     await runBatch({ repoRoot, llmClient: mockLlm, noRefine: true, skipManifestWrite: true });
 
-    const bigModuleCall = mockLlm.callLog.find((c) => c.user.includes("# Module: big"));
+    const bigModuleCall = mockLlm.callLog.find((c) => c.user.includes("# File: src/big/many.ts"));
     expect(bigModuleCall).toBeDefined();
     expect(bigModuleCall!.maxTokens).toBeGreaterThan(8192);
   });
@@ -246,7 +278,7 @@ describe("batch.runBatch — dynamic output-token budget (Priority-0 fix)", () =
     // the small-module path via beforeEach.
     await runBatch({ repoRoot, llmClient: mockLlm, noRefine: true, skipManifestWrite: true });
 
-    const authModuleCall = mockLlm.callLog.find((c) => c.user.includes("# Module: auth"));
+    const authModuleCall = mockLlm.callLog.find((c) => c.user.includes("# File: src/auth/login.ts"));
     expect(authModuleCall).toBeDefined();
     expect(authModuleCall!.maxTokens).toBeLessThan(8192);
   });
@@ -270,8 +302,18 @@ describe("batch.runBatch — dynamic output-token budget (Priority-0 fix)", () =
 
     await runBatch({ repoRoot, llmClient: mockLlm, noRefine: true, skipManifestWrite: true });
 
-    for (const call of mockLlm.callLog) {
+    // The fixed ceiling applies to the stage-4 FILE-page calls.
+    const fileCalls = mockLlm.callLog.filter((c) => c.user.includes("# File:"));
+    expect(fileCalls.length).toBeGreaterThan(0);
+    for (const call of fileCalls) {
       expect(call.maxTokens).toBe(8192);
+    }
+    // #29 folder-purpose paragraphs keep their own bounded budget (2048),
+    // independent of the stage-4 page strategy.
+    const folderCalls = mockLlm.callLog.filter((c) => /purpose paragraph/.test(c.system));
+    expect(folderCalls.length).toBeGreaterThan(0);
+    for (const call of folderCalls) {
+      expect(call.maxTokens).toBe(2048);
     }
   });
 });
@@ -293,7 +335,7 @@ describe("batch — Etapa 2a closed repair contract (stage 4)", () => {
           {
             severity: "error" as const,
             code: "manual_block_altered" as const,
-            wikiPath: "livewiki/auth.md",
+            wikiPath: "livewiki/auth/login.md",
             detail: "lw:manual block hash diverges from the baseline",
           },
         ],
@@ -310,8 +352,9 @@ describe("batch — Etapa 2a closed repair contract (stage 4)", () => {
         maxIncompleteRetries: 0,
       });
 
-      // Exactly ONE LLM call (the initial generation) — zero repair calls.
-      expect(mockLlm.callCount).toBe(1);
+      // TWO LLM calls: the file-page initial generation (zero repair calls —
+      // the set is all-unclassified) + the folder-purpose paragraph (#29).
+      expect(mockLlm.callCount).toBe(2);
       expect(result.status).toBe("completed_with_failures");
       expect(result.failures).toHaveLength(1);
       // Distinct from `repair_exhausted`, with the codes + reasons rendered.
@@ -325,7 +368,7 @@ describe("batch — Etapa 2a closed repair contract (stage 4)", () => {
       const db = new Database(dbPath, { readonly: true });
       try {
         const task = db
-          .prepare("SELECT * FROM batch_tasks WHERE stage = 4")
+          .prepare("SELECT * FROM batch_tasks WHERE stage = 4 AND target = 'auth/login'")
           .get() as { checkpoint_json: string };
         const cp = JSON.parse(task.checkpoint_json) as {
           status: string;
@@ -358,13 +401,13 @@ describe("batch — Etapa 2a closed repair contract (stage 4)", () => {
           {
             severity: "error" as const,
             code: "manual_block_altered" as const,
-            wikiPath: "livewiki/auth.md",
+            wikiPath: "livewiki/auth/login.md",
             detail: "lw:manual block hash diverges from the baseline",
           },
           {
             severity: "error" as const,
             code: "broken_internal_link" as const,
-            wikiPath: "livewiki/auth.md",
+            wikiPath: "livewiki/auth/login.md",
             detail: 'the link "./missing.md" resolves to a page that does not exist',
           },
         ],
@@ -381,9 +424,10 @@ describe("batch — Etapa 2a closed repair contract (stage 4)", () => {
         maxIncompleteRetries: 0,
       });
 
-      // The mixed set is repairable: initial + one repair call, and the
-      // repaired page passes the (real) second verify.
-      expect(mockLlm.callCount).toBe(2);
+      // THREE LLM calls (#29): file-page initial + one repair call (the
+      // repaired page passes the real second verify) + the folder-purpose
+      // paragraph.
+      expect(mockLlm.callCount).toBe(3);
       expect(result.status).toBe("completed");
       expect(result.failures).toHaveLength(0);
 

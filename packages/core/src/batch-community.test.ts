@@ -3,11 +3,12 @@
  * cross-check wiring.
  *
  * Covers:
- *   - divergent heuristic partition persists the cross-check report in the
+ *   - divergent real-units partition persists the cross-check report in the
  *     stage-2 checkpoint (diagnostic-only; run still completes);
  *   - `communityDetection: false` persists no report;
- *   - the report audits the HEURISTIC partition (computed before LLM
- *     refine) and the refine flow is unchanged;
+ *   - stage 2 is fully deterministic (#29 removed the LLM refine): it
+ *     NEVER calls the LLM, even without `--no-refine`, and the cross-check
+ *     audits the deterministic real-units partition;
  *   - the hoisted edge resolution runs exactly ONCE per run (stage 3
  *     reuses it — no double resolution);
  *   - determinism: the same fixture produces a byte-identical report.
@@ -43,7 +44,10 @@ const VALID_UNDERSTANDING_PAGE = [
 class MockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
+  /** Stage-4 file-page calls (and anything unrecognized — see test 3). */
   public callCount = 0;
+  /** Stage-4 folder-purpose calls (#29: one bounded paragraph per product folder). */
+  public folderCallCount = 0;
 
   async generate(req: import("./llm/types.js").GenerateRequest): Promise<GenerateResult> {
     // Stage 5c (item 23): answer the understanding task with a valid page
@@ -53,6 +57,16 @@ class MockLlm implements LlmClient {
     if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
       return {
         content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
+    // #29 folder page: the model writes ONLY the purpose paragraph
+    // (40–800 chars of plain prose); the page skeleton is deterministic.
+    if (req.system.includes("purpose paragraph of ONE folder page")) {
+      this.folderCallCount++;
+      return {
+        content:
+          "This directory holds product source files whose documented responsibilities are covered by the file pages it groups.",
         usage: { inputTokens: 100, outputTokens: 50, model: this.model },
       };
     }
@@ -102,10 +116,10 @@ class MockLlm implements LlmClient {
 }
 
 /**
- * Directory heuristic disagrees with the import graph: `a/x.ts` and
+ * Directory partition disagrees with the import graph: `a/x.ts` and
  * `b/z.ts` import each other (one community), while `a/y.ts` is isolated
- * (its own community). The directory heuristic puts x+y in module "a",
- * so file z sits outside its community's plurality module.
+ * (its own community). The real-units partition (#29) puts x+y in folder
+ * "a", so file z sits outside its community's plurality unit.
  */
 async function writeDivergentFixture(repoRoot: string): Promise<void> {
   await nodeFs.mkdir(nodePath.join(repoRoot, "src/a"), { recursive: true });
@@ -205,10 +219,10 @@ describe("stage-2 community cross-check (roadmap item 9)", () => {
     expect(cp.communityCrossCheck).toBeUndefined();
   });
 
-  it("audits the HEURISTIC partition and leaves the refine flow unchanged", async () => {
+  it("stage 2 never calls the LLM, even without --no-refine (#29: refine removed)", async () => {
     await writeDivergentFixture(repoRoot);
-    // Refine ENABLED: the mock returns a doc page for the stage-2 prompt,
-    // which fails refine validation → heuristic kept + degradation error.
+    // Refine flag deliberately ABSENT: #29 removed the stage-2 LLM refine
+    // entirely, so the run must make zero stage-2 calls regardless.
     const result = await runBatch({
       repoRoot,
       llmClient: llm,
@@ -217,13 +231,18 @@ describe("stage-2 community cross-check (roadmap item 9)", () => {
     expect(result.status).toBe("completed");
 
     const cp = await readStage2Checkpoint(repoRoot);
-    // Refine flow unchanged: degradation recorded in the error channel.
-    expect(cp.error?.code).toMatch(/^refine_/);
-    // The cross-check ran on the heuristic partition BEFORE refine.
+    // Deterministic stage 2: done, empty usage history, no error channel.
+    expect(cp.status).toBe("done");
+    expect(cp.error).toBeUndefined();
+    expect(cp.usageHistory).toEqual([]);
+    // The cross-check ran on the deterministic real-units partition.
     expect(cp.communityCrossCheck).toBeDefined();
     expect(cp.communityCrossCheck!.verdict).toBe("divergent");
-    // Refine call + stage-4 doc calls.
-    expect(llm.callCount).toBeGreaterThanOrEqual(2);
+    // Every instrumented call is stage-4 work on real units: 3 file pages
+    // (a/x, a/y, b/z) + 2 folder-purpose paragraphs (a, b). Any stage-2,
+    // flow, or topic call would inflate callCount and fail this loudly.
+    expect(llm.callCount).toBe(3);
+    expect(llm.folderCallCount).toBe(2);
   });
 
   it("resolves import edges exactly ONCE for the pipeline (hoisted; stage 3 reuses)", async () => {

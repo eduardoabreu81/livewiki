@@ -251,11 +251,18 @@ describe("key-leak — API key nunca vaza", () => {
     // truncation is observable.
     const CANARY_SENTINEL = "SENTINEL-CANDIDATE-LEAK-DONOTUSE-" + "X".repeat(370);
 
-    // Source file (so the heuristic finds a module to document).
+    // Source file (so the planner finds a file unit to document).
     await nodeFs.mkdir(nodePath.join(repoRoot, "src/auth"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "src/auth/login.ts"),
       "export function login() { return 1; }\n",
+      "utf8",
+    );
+    // Disable every stage-5 surface: this test is about the stage-4
+    // diagnostic history, not flows/topics/understanding.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ maxFlows: 0, maxTopics: 0, understandingSynthesis: false }),
       "utf8",
     );
 
@@ -263,14 +270,25 @@ describe("key-leak — API key nunca vaza", () => {
     // sentinel in the frontmatter `anchors:` key. The validator
     // puts the key into `offending` and embeds it into the message
     // string, so the diagnostic error summary contains the
-    // (eventually truncated) sentinel.
+    // (eventually truncated) sentinel. The FOLDER-purpose prompt
+    // (#29: one extra deterministic task per product folder) gets a
+    // valid plain-prose paragraph so only the file task fails.
     //
     // Inline stub — `ProgrammableMockLlm` lives in
     // `batch-repair.test.ts` and is not exported as a shared helper.
     const stub = {
       provider: "anthropic" as const,
       model: "claude-test-mock",
-      async generate() {
+      async generate(req: { system: string }) {
+        if (req.system.includes("purpose paragraph of ONE folder page")) {
+          return {
+            content:
+              "This directory holds the authentication module: the login flow and its session handling.",
+            usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+            stopReason: "complete" as const,
+            rawStopReason: "stop",
+          };
+        }
         return {
           content: [
             "---",
@@ -293,9 +311,11 @@ describe("key-leak — API key nunca vaza", () => {
     };
 
     // Run a real batch (single attempt — maxRepairAttempts: 0). The
-    // validator will reject the candidate (the sentinel key is not
-    // in the closed list) and the diagnostic history will record the
-    // truncated sentinel in `offending` and `message`.
+    // validator will reject the FILE task's candidate (the sentinel key is
+    // not in the closed list) and the diagnostic history will record the
+    // truncated sentinel in `offending` and `message`. #29: the file task
+    // target is the real unit id `auth/login` (`auth` is now the folder
+    // task, which the stub answers validly).
     const { runBatch } = await import("./batch.js");
     const result = await runBatch({
       repoRoot,
@@ -322,7 +342,7 @@ describe("key-leak — API key nunca vaza", () => {
         .prepare(
           "SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?",
         )
-        .get("auth") as { checkpoint_json: string };
+        .get("auth/login") as { checkpoint_json: string };
       checkpointJson = row.checkpoint_json;
     } finally {
       db.close();
@@ -391,11 +411,18 @@ describe("key-leak — API key nunca vaza", () => {
     const SENTINEL_KEY = "D3-SENTINEL-FAKE-KEY-DONOTUSE-" + "Z".repeat(370);
     expect(SENTINEL_KEY.length).toBeGreaterThan(200);
 
-    // Source file so the heuristic finds a module to document.
+    // Source file so the planner finds a file unit to document.
     await nodeFs.mkdir(nodePath.join(repoRoot, "src/auth"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "src/auth/login.ts"),
       "export function login() { return 1; }\n",
+      "utf8",
+    );
+    // Disable every stage-5 surface: this test is about the stage-4
+    // diagnostic history, not flows/topics/understanding.
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ maxFlows: 0, maxTopics: 0, understandingSynthesis: false }),
       "utf8",
     );
 
@@ -412,10 +439,22 @@ describe("key-leak — API key nunca vaza", () => {
     // fake marker is neutralized to whitespace. The candidate is
     // NOT persisted to the diagnostic history — only its hash +
     // size and the structured errors.
+    // The FOLDER-purpose prompt (#29: one extra deterministic task per
+    // product folder) gets a valid plain-prose paragraph so only the
+    // file task fails.
     const stub = {
       provider: "anthropic" as const,
       model: "claude-test-mock",
-      async generate() {
+      async generate(req: { system: string }) {
+        if (req.system.includes("purpose paragraph of ONE folder page")) {
+          return {
+            content:
+              "This directory holds the authentication module: the login flow and its session handling.",
+            usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+            stopReason: "complete" as const,
+            rawStopReason: "stop",
+          };
+        }
         const validMarker =
           "<!-- lw:anchors src/auth/login.ts#login src/auth/login.ts#logout -->";
         const fakeMarker = `<!-- lw:anchors ${SENTINEL_KEY} -->`;
@@ -470,7 +509,7 @@ describe("key-leak — API key nunca vaza", () => {
         .prepare(
           "SELECT checkpoint_json FROM batch_tasks WHERE stage = 4 AND target = ?",
         )
-        .get("auth") as { checkpoint_json: string };
+        .get("auth/login") as { checkpoint_json: string };
       checkpointJson = row.checkpoint_json;
     } finally {
       db.close();

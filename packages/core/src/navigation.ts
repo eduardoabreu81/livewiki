@@ -142,7 +142,7 @@ export async function loadModulePresentations(
   const fallbacks = buildDisplayTitleFallbacks(modules, pathRoleConfig);
   const result = new Map<string, ModulePresentation>();
   for (const module of [...modules].sort(compareModules)) {
-    const relPath = `livewiki/${module.id}.md`;
+    const relPath = `livewiki/${module.id}/index.md`;
     const pageExists = await safeIo.exists(repoRoot, relPath).catch(() => false);
     let owner: ModulePresentation["owner"] = null;
     let displayTitle = fallbacks.get(module.id) ?? "Repository module";
@@ -305,7 +305,7 @@ export async function loadModuleDigests(
     let responsibility: string | null = null;
     try {
       responsibility = extractModuleResponsibility(
-        await safeIo.readText(repoRoot, `livewiki/${module.id}.md`),
+        await safeIo.readText(repoRoot, `livewiki/${module.id}/index.md`),
       );
     } catch {
       // Unreadable page: title-link-only entry, never invented prose.
@@ -592,8 +592,8 @@ function buildModuleDigestBlock(moduleDigests: ModuleDigest[]): string[] {
   for (const digest of moduleDigests.slice(0, MODULE_DIGEST_CAP)) {
     block.push(
       digest.responsibility !== null
-        ? `- **[${digest.title}](${digest.id}.md)** — ${digest.responsibility}`
-        : `- **[${digest.title}](${digest.id}.md)**`,
+        ? `- **[${digest.title}](${digest.id}/index.md)** — ${digest.responsibility}`
+        : `- **[${digest.title}](${digest.id}/index.md)**`,
     );
   }
   block.push("");
@@ -664,13 +664,13 @@ export function generateTasksPage(opts: {
           lines.push(
             `### ${presentation.displayTitle}`,
             "",
-            `Page unavailable: \`livewiki/${module.id}.md\` has not been generated yet.`,
+            `Page unavailable: \`livewiki/${module.id}/index.md\` has not been generated yet.`,
             "",
           );
           continue;
         }
         lines.push(
-          `### [${presentation.displayTitle}](${module.id}.md)`,
+          `### [${presentation.displayTitle}](${module.id}/index.md)`,
           "",
         );
       }
@@ -682,8 +682,8 @@ export function generateTasksPage(opts: {
         for (const module of group.members) {
           const presentation = opts.presentations.get(module.id)!;
           lines.push(presentation.pageExists
-            ? `- [${presentation.displayTitle}](${module.id}.md)`
-            : `- ${presentation.displayTitle} — page unavailable: \`livewiki/${module.id}.md\` has not been generated yet.`);
+            ? `- [${presentation.displayTitle}](${module.id}/index.md)`
+            : `- ${presentation.displayTitle} — page unavailable: \`livewiki/${module.id}/index.md\` has not been generated yet.`);
         }
         lines.push("");
       }
@@ -822,7 +822,7 @@ export function generateAuxiliaryIndex(opts: {
     for (const module of members) {
       const presentation = opts.presentations.get(module.id)!;
       lines.push(presentation.pageExists
-        ? `- [${presentation.displayTitle}](../${module.id}.md)`
+        ? `- [${presentation.displayTitle}](../${module.id}/index.md)`
         : `- ${presentation.displayTitle} — page unavailable`);
     }
     lines.push("");
@@ -1113,7 +1113,7 @@ export async function updateModuleNavigateBlocks(opts: {
   for (const module of [...opts.modules].sort(compareModules)) {
     const presentation = opts.presentations.get(module.id);
     if (!presentation?.pageExists || (presentation.owner !== "generated" && presentation.owner !== "mixed")) continue;
-    const relPath = `livewiki/${module.id}.md`;
+    const relPath = `livewiki/${module.id}/index.md`;
     const source = await safeIo.readText(opts.repoRoot, relPath);
     const beforeManual = source.match(MANUAL_BLOCK_RE) ?? [];
     const linkableModules = opts.modules.filter((candidate) =>
@@ -1235,17 +1235,17 @@ function buildNavigateBlock(
     "",
   ];
   if (flow !== null) {
-    lines.push(`- Flow: [${flow.title ?? flow.slug}](flows/${flow.slug}.md)`);
+    lines.push(`- Flow: [${flow.title ?? flow.slug}](../flows/${flow.slug}.md)`);
   }
   for (const topic of topics.slice(0, 2)) {
-    lines.push(`- Topic: [${topic.title}](topics/${topic.slug}.md)`);
+    lines.push(`- Topic: [${topic.title}](../topics/${topic.slug}.md)`);
   }
   for (const item of related) {
     const title = presentations.get(item.moduleId)?.displayTitle ?? item.moduleId;
     const label = item.direction === "both"
       ? "dependency and dependent"
       : item.direction;
-    lines.push(`- [${title}](${item.moduleId}.md) — ${label}`);
+    lines.push(`- [${title}](../${item.moduleId}/index.md) — ${label}`);
   }
   if (coverageNote !== null) {
     lines.push("", coverageNote);

@@ -46,22 +46,36 @@ import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
 import { run as runVerify, type VerifyIssue, type VerifyResult } from "./verify.js";
 import {
-  identifyModulesHeuristic,
   resolveModuleEdges,
   prioritizeModules,
   makeUniqueDeterministicIds,
-  splitOversizedModules,
-  normalizeSplitLimits,
   assertExactPathPartition,
-  refinePeerDirectoryFragmentationError,
   ExactPartitionError,
   assertUniqueModuleIds,
   DuplicateModuleIdError,
-  applyRefinedDisplayTitles,
   classifyModuleRole,
   classifyPathRole,
   type Module,
 } from "./modules.js";
+import {
+  planPageUnits,
+  type FileUnit,
+  type FolderUnit,
+} from "./page-units.js";
+import {
+  buildFolderPurposeContext,
+  renderFolderPage,
+  validateFolderPurpose,
+  type FolderPurposeError,
+} from "./folder-page.js";
+import {
+  assembleFilePage,
+  deterministicFallbackPlan,
+  extractSectionSource,
+  parseFilePlan,
+  type FileSectionPlan,
+} from "./file-page-plan.js";
+import type { PromptPair } from "./prompts.js";
 import { collectImportsForFiles } from "./imports.js";
 import {
   detectFileCommunities,
@@ -73,7 +87,11 @@ import type { GenerateRequest, GenerateResult, StopReason } from "./llm/types.js
 import { loadConfig, applyDefaults, validateConfigForBatch, resolveExtraIgnores, CONFIG_DEFAULTS } from "./config.js";
 import { calculateCostUsd, lookupPricing } from "./pricing.js";
 import {
-  buildStage2RefinePrompt,
+  buildFolderPurposePrompt,
+  buildFolderPurposeRepairPrompt,
+  buildFileOpeningPrompt,
+  buildFilePlanPrompt,
+  buildFileSectionPrompt,
   buildStage4Prompt,
   buildRepairPrompt,
   buildStage5Prompt,
@@ -479,11 +497,9 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     const rationaleMaxChars =
       resolvedConfig.rationaleMaxChars ?? CONFIG_DEFAULTS.rationaleMaxChars;
     const thinkingMode = opts.thinking ?? resolvedConfig.thinking;
-    const { maxFiles: maxModuleFiles, maxSymbols: maxModuleSymbols } =
-      normalizeSplitLimits(
-        opts.maxModuleFiles ?? resolvedConfig.maxModuleFiles,
-        opts.maxModuleSymbols ?? resolvedConfig.maxModuleSymbols,
-      );
+    // #29: maxModuleFiles/maxModuleSymbols are legacy — pages are real
+    // units (file/folder), never size-split. The config keys still parse
+    // (backward compatibility) but no longer drive any split.
 
     // Create LLM client if not injected. Stage 4 (and --only) always need it.
     // --no-refine only skips stage-2 refinement; it must NOT skip client
@@ -581,25 +597,64 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       rustCrateName: await loadRustCrateName(absRoot),
     });
 
-    // === Estágio 2: Identificação de módulos (heurística + optional LLM refine) ===
-    let modules = identifyModulesHeuristic(filePaths, symbolCountByPath, resolvedConfig.pathRoles);
+    // === Stage 2 (#29): real repository page units ===
+    // The page unit is the unit of human curiosity: a FILE or a FOLDER —
+    // units the reader can see in the repository. The deterministic
+    // planner partitions the indexed inventory into real units. There is
+    // no LLM refine (real units are not refinable — a merged "module"
+    // would be a fabricated unit, the `core-src-03` failure one level up)
+    // and no size-based chunk splitting: chunking survives only inside
+    // the plan-then-write generation of oversized files (D2), never on
+    // disk. `--no-refine` is accepted for backward compatibility and has
+    // no effect.
+    const sizeRows = db
+      .prepare("SELECT path, size FROM files WHERE status = 'active'")
+      .all() as Array<{ path: string; size: number }>;
+    const sizeByPath = new Map(sizeRows.map((r) => [r.path, r.size]));
+    const pageUnitsPlan = planPageUnits(
+      { filePaths, symbolCountByPath, sizeByPath },
+      {
+        ...(resolvedConfig.pathRoles !== undefined
+          ? { pathRoles: resolvedConfig.pathRoles }
+          : {}),
+        ...(resolvedConfig.fileSplitSourceBytes !== undefined
+          ? { fileSplitSourceBytes: resolvedConfig.fileSplitSourceBytes }
+          : {}),
+      },
+    );
+    const folderUnitById = new Map(pageUnitsPlan.folderUnits.map((u) => [u.id, u]));
+    const fileUnitById = new Map(pageUnitsPlan.fileUnits.map((u) => [u.id, u]));
+    // Folder modules — one per real directory, paths = every indexed file
+    // in it — are the analysis surface for stages 3/5 (edges, priority,
+    // flow detection, topics, navigation) AND the exact-partition proof.
+    let modules: Module[] = pageUnitsPlan.folderUnits.map((folder) => ({
+      id: folder.id,
+      paths: folder.entries.map((e) => e.filePath),
+      symbolCount: folder.entries.reduce(
+        (acc, e) => acc + (symbolCountByPath.get(e.filePath) ?? 0),
+        0,
+      ),
+    }));
+    // File modules — one per symbol-bearing non-test file — are the
+    // stage-4 detail layer. The id carries the folder prefix
+    // ("core-src/batch"), so the existing write path lands the page at
+    // `livewiki/core-src/batch.md`.
+    const fileModules: Module[] = pageUnitsPlan.fileUnits.map((unit) => ({
+      id: unit.id,
+      paths: [unit.filePath],
+      symbolCount: unit.symbolCount,
+    }));
     const stage2Task = createOrGetTask(db, runId, 2, "modules", opts.mode);
     if (stage2Task) {
       const startedAt = Date.now();
-      let usageHistory: UsageAttempt[] = [];
-      let error: TaskCheckpoint["error"] | undefined;
-      let artifacts: TaskCheckpoint["artifacts"] | undefined;
-      let attempt = stage2Task.attempt;
+      const usageHistory: UsageAttempt[] = [];
 
       // Roadmap item 9 (diagnostic-only): cross-check the DETERMINISTIC
-      // heuristic partition against import-graph communities, BEFORE any
-      // LLM refine — the audit targets the deterministic partition, not
-      // the LLM's. The heuristic partition always wins; the report is
-      // persisted in this checkpoint for human review and never changes
-      // task/run status or exit code. Any failure in the cross-check
-      // itself degrades silently to "no report" (diagnostics never abort
-      // a run; unlike refine degradation there is no separate error
-      // channel for an optional deterministic diagnostic).
+      // real-units partition against import-graph communities. The real
+      // partition always wins; the report is persisted in this checkpoint
+      // for human review and never changes task/run status or exit code.
+      // Any failure in the cross-check itself degrades silently to
+      // "no report".
       let communityCrossCheck: CommunityCrossCheckReport | undefined;
       if (communityDetection) {
         try {
@@ -610,108 +665,29 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         }
       }
 
-      if (!opts.noRefine && llmClient) {
-        try {
-          attempt++;
-          const prompt = buildStage2RefinePrompt(modules, language);
-          const result = await llmClient.generate({
-            system: prompt.system,
-            user: prompt.user,
-            maxTokens: 4_000,
-          });
-          const cost = calculateCostUsd(
-            result.usage.inputTokens,
-            result.usage.outputTokens,
-            result.usage.model,
-            resolvedConfig.pricing,
-          );
-          usageHistory.push({
-            attempt,
-            usage: result.usage,
-            usageKnown: true,
-            costUsd: cost,
-            finishedAt: Date.now(),
-          });
-          // FIX I + T0 exact partition: validate refined BEFORE accepting.
-          // Inventory is the indexed filePaths (not a post-refine subset).
-          // Rejects missing/duplicate/unknown paths, empty modules, peer
-          // fragmentation. On any rejection: keep full heuristic, do not abort.
-          const indexedInventory = new Set(
-            filePaths.map((p) =>
-              p.includes("\\") ? p.replace(/\\/g, "/") : p,
-            ),
-          );
-          const validation = validateRefinedModules(
-            result.content,
-            indexedInventory,
-            resolvedConfig.pathRoles,
-          );
-          if (validation.accepted) {
-            modules = validation.modules!;
-          } else {
-            // Keep heuristic. Mark error in the checkpoint (not a task
-            // failure — it is degradation, status stays 'done').
-            error = {
-              code: validation.errorCode ?? "refine_rejected",
-              message: validation.errorMessage ?? "refined modules rejected",
-            };
-          }
-        } catch (err) {
-          // LLM refinement failure: continue with heuristic (NOT a task failure)
-          error = {
-            code: "refine_failed_degraded",
-            message: (err as Error).message,
-          };
-        }
-      }
-
-      // Persist task (always 'done' — degradation is not a failure)
+      // Persist task (always 'done' — the planner is deterministic; the
+      // optional diagnostic report never affects status).
       const checkpoint: TaskCheckpoint = {
         stage: 2,
         status: "done",
-        attempt,
+        attempt: stage2Task.attempt,
         startedAt,
         finishedAt: Date.now(),
         usageHistory,
-        ...(error ? { error } : {}),
-        ...(artifacts ? { artifacts } : {}),
-        // Roadmap item 9: additive diagnostic report (see above); never
-        // affects status. Absent when disabled or when the check failed.
         ...(communityCrossCheck ? { communityCrossCheck } : {}),
       };
-      const checkpointJson = JSON.stringify(checkpoint);
-      // FIX J (rev2): refined modules are NEVER concatenated into checkpoint_json —
-      // that corrupted the JSON and the status report lost stage 2 usage.
-      // They live in batch_runs.summary_json (own field), populated at the end
-      // of the run via `finalizeRunSummary` below.
       db.prepare(
         "UPDATE batch_tasks SET status = ?, checkpoint_json = ?, updated_at = ? WHERE id = ?",
-      ).run("done", checkpointJson, Date.now(), stage2Task.id);
+      ).run("done", JSON.stringify(checkpoint), Date.now(), stage2Task.id);
     }
 
-    // === Phase-5 plan (W) — global uniqueness gate ===
-    // Must run BEFORE edges / prioritization / diagrams / quickstart /
-    // overview / creation of stage 4 tasks. The module identity is
-    // the same thing in all these places: planner, dependency graph,
-    // regeneratedArchitectureOverview, batch_tasks.target, and the name of the
-    // `livewiki/<id>.md` file. If the assertion fails, we mark the run
-    // as `aborted` (terminal status) — never `running` — before
-    // re-throwing.
+    // === Global uniqueness + exact-partition gate (#29) ===
+    // The real-units planner already guarantees unique folder ids and an
+    // exact partition of the indexed inventory; the asserts stay as
+    // defense in depth. There is NO size-based split anymore — chunking
+    // is a generation concern (plan-then-write, D2), never a page unit.
     try {
-      // T0 plan W gate:
-      // 1) Unique IDs first (src → core-src / cli-src / …) so split prefixes are stable.
-      // 2) Structural + dual-axis split (true subdirs, then ordinal chunks).
-      // 3) Exact path partition vs original indexed filePaths (never a
-      //    post-refine subset — incomplete refine is rejected earlier).
-      // 4) Unique again for chunk ordinals / collisions.
-      // Splitting BEFORE uniqueness made every packages/*/src leaf keep id "src"
-      // and explode into src-<file> pages (bad A/B v2 run).
       modules = makeUniqueDeterministicIds(modules);
-      modules = splitOversizedModules(modules, {
-        maxFiles: maxModuleFiles,
-        maxSymbols: maxModuleSymbols,
-        symbolCountByPath,
-      });
       assertExactPathPartition(modules, filePaths);
       modules = makeUniqueDeterministicIds(modules);
       assertUniqueModuleIds(modules);
@@ -786,6 +762,22 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     let stageUsageTotals: StageUsage = emptyUsage();
     const byStageAcc: Record<string, StageUsage> = {};
 
+    // Stage-4 queue (#29): file units FIRST — a folder's synthesis reads
+    // its accepted file pages — ordered by the folder's stage-3 priority,
+    // then symbolCount desc, then id (deterministic). Folder units follow
+    // in stage-3 priority order.
+    const folderPriority = new Map(ordered.map((m, i) => [m.id, i]));
+    const fileModulesOrdered = [...fileModules].sort((a, b) => {
+      const fa = folderPriority.get(fileUnitById.get(a.id)?.folderId ?? "") ??
+        Number.MAX_SAFE_INTEGER;
+      const fb = folderPriority.get(fileUnitById.get(b.id)?.folderId ?? "") ??
+        Number.MAX_SAFE_INTEGER;
+      if (fa !== fb) return fa - fb;
+      if (a.symbolCount !== b.symbolCount) return b.symbolCount - a.symbolCount;
+      return a.id.localeCompare(b.id);
+    });
+    const stage4Queue: Module[] = [...fileModulesOrdered, ...ordered];
+
     // Stage 5: `--only flow:<slug>` targets a flow task, not a module.
     const onlyFlowSlug =
       opts.onlyTarget !== undefined && opts.onlyTarget.startsWith("flow:")
@@ -797,23 +789,35 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         : null;
     // Stage 5c (item 23): `--only understanding` targets the understanding task.
     const onlyUnderstanding = opts.onlyTarget === UNDERSTANDING_ONLY_TARGET;
+    // #29 aliases: `--only file:<repoPath>` and `--only folder:<folderId>`
+    // resolve to the unit ids; bare unit ids (`core-src/batch`, `core-src`)
+    // keep working verbatim.
+    const onlyAlias = (() => {
+      const t = opts.onlyTarget;
+      if (t === undefined) return null;
+      if (t.startsWith("file:")) {
+        const repoPath = t.slice("file:".length);
+        return [...fileUnitById.values()].find((u) => u.filePath === repoPath)?.id ?? t;
+      }
+      if (t.startsWith("folder:")) return t.slice("folder:".length);
+      return t;
+    })();
     const tasksToRun = opts.onlyTarget
       ? onlyFlowSlug !== null || onlyTopicIdentity !== null || onlyUnderstanding
         ? []
-        : ordered.filter((m) => m.id === opts.onlyTarget)
-      : ordered;
+        : stage4Queue.filter((m) => m.id === onlyAlias)
+      : stage4Queue;
 
     if (opts.onlyTarget && onlyFlowSlug === null && onlyTopicIdentity === null && !onlyUnderstanding && tasksToRun.length === 0) {
-      throw new Error(`module "${opts.onlyTarget}" not found in this run`);
+      throw new Error(`page unit "${opts.onlyTarget}" not found in this run`);
     }
 
-    // H (rev2): explicit guard. If there are modules to document and `tasksToRun`
+    // H (rev2): explicit guard. If there are units to document and `tasksToRun`
     // is empty, this is a pipeline failure — it cannot finish as "completed"
-    // with exit 0. Catches cases like: heuristic found modules, refinement
-    // returned empty [], or the --only filter did not match.
-    if (ordered.length > 0 && tasksToRun.length === 0 && opts.mode !== "only") {
+    // with exit 0.
+    if (stage4Queue.length > 0 && tasksToRun.length === 0 && opts.mode !== "only") {
       throw new EmptyPipelineError(
-        `pipeline produced 0 tasks but heuristic found ${ordered.length} module(s) — ` +
+        `pipeline produced 0 tasks but the planner found ${stage4Queue.length} page unit(s) — ` +
           `this is a pipeline bug, not a completed run.`,
       );
     }
@@ -899,7 +903,33 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         diagnosticHistory = [...prevCheckpoint.diagnosticHistory];
       }
 
-      const wikiPath = `livewiki/${module.id}.md`;
+      const folderUnit = folderUnitById.get(module.id);
+      const fileUnit = fileUnitById.get(module.id);
+      // #29: folder pages live at `livewiki/<folder>/index.md`; file pages
+      // ride the id-with-slash path (`livewiki/core-src/batch.md`).
+      const wikiPath = folderUnit !== undefined
+        ? `livewiki/${module.id}/index.md`
+        : `livewiki/${module.id}.md`;
+      // #29 D3: the test pointer is deterministic — appended after
+      // validation, never model prose (the file prompt forbids a Tests
+      // section). A 1:1 same-name pairing is stated as fact; a prefix-only
+      // match is reported as "likely", never asserted.
+      const withTestsPointer = (content: string): string => {
+        if (fileUnit === undefined) return content;
+        const pointerLines: string[] = [];
+        if (fileUnit.pairedTestPath !== undefined) {
+          pointerLines.push(
+            `Covered by \`${fileUnit.pairedTestPath}\` (same-name test file on disk).`,
+          );
+        }
+        for (const likely of fileUnit.likelyTestPaths) {
+          pointerLines.push(
+            `Likely also exercised by \`${likely}\` (name-prefix match, not verified).`,
+          );
+        }
+        if (pointerLines.length === 0) return content;
+        return content.trimEnd() + "\n\n## Tests\n\n" + pointerLines.join("\n") + "\n";
+      };
 
       // Review finding #1 + reviewer revision: pre-LLM check —
       // ONLY `owner: human` refuses the whole page (rule #6:
@@ -930,6 +960,216 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             `module "${module.id}" is on a page whose frontmatter did not parse (LF/CRLF/BOM-safe check). ` +
             `Refusing to rewrite untrusted content (rule #6 — operator must repair the page manually).`,
         };
+      } else if (folderUnit !== undefined) {
+        // #29 folder page: deterministic skeleton + ONE bounded LLM purpose
+        // paragraph (product folders). Non-product folders are fully
+        // deterministic (zero tokens). The file guide is never model
+        // output — `renderFolderPage` renders it from the planner's
+        // partition, linking only pages that exist on disk.
+        const folderRole = classifyModuleRole(module, resolvedConfig.pathRoles);
+        const folderFileUnits = pageUnitsPlan.fileUnits.filter(
+          (u) => u.folderId === folderUnit.id,
+        );
+        const existingPagePaths = new Set<string>();
+        for (const u of folderFileUnits) {
+          const pageContent = await safeIo
+            .readText(absRoot, u.pagePath)
+            .catch(() => null);
+          if (pageContent !== null) existingPagePaths.add(u.pagePath);
+        }
+        if (folderRole !== "product") {
+          const page = renderFolderPage({
+            folder: folderUnit,
+            fileUnits: folderFileUnits,
+            symbolCountByPath,
+            existingPagePaths,
+            purpose: "",
+            role: folderRole,
+          });
+          const writeResult = await tryWriteAndVerify(absRoot, wikiPath, page, existing);
+          if (writeResult.ok) {
+            artifacts = writeResult.artifacts;
+          } else if (writeResult.rollbackFailed) {
+            taskError = {
+              code: "rollback_failed",
+              message:
+                `rollback failed after verify rejection for ${wikiPath}: ${writeResult.rollbackFailed.reason}. ` +
+                `This is a terminal state for the ENTIRE run — the disk may have an inconsistent page. ` +
+                `Operator must inspect ${wikiPath} and re-run with --only after manual repair.`,
+            };
+            runAbortedByRollback = true;
+          } else {
+            taskError = {
+              code: "folder_page_verify_failed",
+              message:
+                `deterministic folder page for "${module.id}" failed verify: ` +
+                `${(writeResult.issues ?? []).map((i) => i.code).join(", ")}. Not model-repairable — ` +
+                `this indicates a bug in the deterministic generator, not a retry-able condition.`,
+              failedAt: 4,
+            };
+          }
+        } else {
+          // Product folder: bounded slots (1 + maxRepairAttempts) for the
+          // purpose paragraph. The deterministic guide cannot fail
+          // validation, so the error surface is the paragraph + verify.
+          const totalConsumedSlots = 1 + maxRepairAttempts;
+          let consumedSlots = 0;
+          let attemptDone = false;
+          let priorPurpose = "";
+          let priorPurposeErrors: Array<{ code: string; message: string }> = [];
+          let nextPromptKind: "initial" | "repair" = "initial";
+          const diagnosticSliceStart = diagnosticHistory.length;
+
+          while (consumedSlots < totalConsumedSlots) {
+            attempt++;
+            const promptKind = nextPromptKind;
+            const attemptResult = await attemptFolderGeneration({
+              attemptNumber: attempt,
+              absRoot,
+              folder: folderUnit,
+              fileUnits: folderFileUnits,
+              symbolCountByPath,
+              existingPagePaths,
+              language,
+              llmClient: llmClient!,
+              pricing: resolvedConfig.pricing,
+              promptKind,
+              priorPurpose,
+              priorErrors: priorPurposeErrors,
+              thinking: thinkingMode,
+              maxRepairAttempts,
+              consumedSlots,
+            });
+            usageHistory.push(attemptResult.usageEntry);
+            moduleUsageEntry = accumulateUsage(moduleUsageEntry, attemptResult.usageEntry, resolvedConfig.pricing);
+            stageUsageTotals = accumulateUsage(stageUsageTotals, attemptResult.usageEntry, resolvedConfig.pricing);
+
+            if (attemptResult.llmError) {
+              consumedSlots++;
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult,
+                  promptKind,
+                  outcome: "llm_error",
+                  errors: summarizeLlmDiagnosticError(attemptResult.llmError),
+                }),
+              );
+              if (attemptResult.llmError.code === "llm_timeout") {
+                taskError = {
+                  code: "llm_timeout",
+                  message: attemptResult.llmError.message,
+                  failedAt: 4,
+                };
+                attemptDone = true;
+                break;
+              }
+              priorPurpose = "";
+              priorPurposeErrors = [];
+              nextPromptKind = "initial";
+              continue;
+            }
+
+            if (attemptResult.purposeErrors !== undefined) {
+              consumedSlots++;
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult,
+                  promptKind,
+                  outcome: "artifact_validation_failed",
+                  errors: {
+                    errors: attemptResult.purposeErrors.map((e) => ({
+                      code: e.code,
+                      location: "global" as const,
+                      message: e.message,
+                    })),
+                    truncatedErrorCount: 0,
+                  },
+                }),
+              );
+              priorPurpose = attemptResult.rawPurpose;
+              priorPurposeErrors = attemptResult.purposeErrors;
+              nextPromptKind = "repair";
+              continue;
+            }
+
+            // Valid purpose → assemble the page and write+verify.
+            consumedSlots++;
+            const page = renderFolderPage({
+              folder: folderUnit,
+              fileUnits: folderFileUnits,
+              symbolCountByPath,
+              existingPagePaths,
+              purpose: attemptResult.purpose!,
+            });
+            const writeResult = await tryWriteAndVerify(absRoot, wikiPath, page, existing);
+            if (writeResult.ok) {
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult,
+                  promptKind,
+                  outcome: "success",
+                  errors: { errors: [], truncatedErrorCount: 0 },
+                }),
+              );
+              attemptDone = true;
+              artifacts = writeResult.artifacts;
+              break;
+            } else if (writeResult.rollbackFailed) {
+              taskError = {
+                code: "rollback_failed",
+                message:
+                  `rollback failed after verify rejection for ${wikiPath}: ${writeResult.rollbackFailed.reason}. ` +
+                  `This is a terminal state for the ENTIRE run — the disk may have an inconsistent page. ` +
+                  `Operator must inspect ${wikiPath} and re-run with --only after manual repair.`,
+              };
+              attemptDone = true;
+              runAbortedByRollback = true;
+              break;
+            } else if (writeResult.exception) {
+              taskError = {
+                code: "write_verify_exception",
+                message:
+                  `write/verify step threw for ${wikiPath}: ${writeResult.exception.message}. ` +
+                  `The candidate was rolled back; no repair retry because the failure is not model-fixable.`,
+                failedAt: 4,
+              };
+              attemptDone = true;
+              break;
+            } else {
+              // Verify failed — the paragraph itself already validated, so
+              // retry initial with the issue summary as context.
+              diagnosticHistory.push(
+                diagnosticAttempt({
+                  attemptResult,
+                  promptKind,
+                  outcome: "verify_failed",
+                  errors: summarizeVerifyDiagnosticErrors(writeResult.issues ?? []),
+                }),
+              );
+              priorPurpose = "";
+              priorPurposeErrors = [];
+              nextPromptKind = "initial";
+              continue;
+            }
+          }
+
+          if (!attemptDone && !taskError) {
+            const thisLoopDiagnostics = diagnosticHistory.slice(diagnosticSliceStart);
+            const attemptLines = thisLoopDiagnostics.map((d) => {
+              const stopReason = d.stopReason ?? "-";
+              const codes = d.errors.map((e) => e.code);
+              return `attempt ${d.attempt}: ${stopReason} -> ${d.outcome}` +
+                (codes.length > 0 ? ` [${codes.join(", ")}]` : "");
+            });
+            taskError = {
+              code: "repair_exhausted",
+              message:
+                `folder task "${module.id}" exhausted ${thisLoopDiagnostics.length} LLM call(s) without producing a verified folder page.\n` +
+                `Attempts:\n${attemptLines.join("\n")}`,
+              failedAt: 4,
+            };
+          }
+        }
       } else if (classifyModuleRole(module, resolvedConfig.pathRoles) !== "product") {
         // Priority-0 fix: auxiliary modules (fixture/tooling/docs) never
         // call the LLM. Their page contract is fully mechanical (fixed H2
@@ -1042,6 +1282,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             thinking: thinkingMode,
             pathRoleConfig: resolvedConfig.pathRoles,
             surgicalRepair,
+            ...(fileUnit?.oversizedSource === true ? { oversizedFile: true } : {}),
             ...(moduleDiagramBudgets !== undefined
               ? { moduleDiagrams: moduleDiagramBudgets }
               : {}),
@@ -1167,14 +1408,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
                 absRoot,
                 wikiPath,
                 `livewiki/diagrams/${moduleSlug(module.id)}.mmd`,
-                attemptResult.artifact,
+                withTestsPointer(attemptResult.artifact),
                 attemptResult.moduleDiagramSource,
                 existing,
               )
             : await tryWriteAndVerify(
                 absRoot,
                 wikiPath,
-                attemptResult.artifact,
+                withTestsPointer(attemptResult.artifact),
                 existing,
               );
           if (writeResult.ok) {
@@ -1323,6 +1564,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             surgicalRepair: false,
             allowMechanicalFallback: false,
             relaxed: true,
+            ...(fileUnit?.oversizedSource === true ? { oversizedFile: true } : {}),
             ...(moduleDiagramBudgets !== undefined
               ? { moduleDiagrams: moduleDiagramBudgets }
               : {}),
@@ -1364,14 +1606,14 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
                   absRoot,
                   wikiPath,
                   `livewiki/diagrams/${moduleSlug(module.id)}.mmd`,
-                  relaxedResult.artifact,
+                  withTestsPointer(relaxedResult.artifact),
                   relaxedResult.moduleDiagramSource,
                   existing,
                 )
               : await tryWriteAndVerify(
                   absRoot,
                   wikiPath,
-                  relaxedResult.artifact,
+                  withTestsPointer(relaxedResult.artifact),
                   existing,
                 );
             if (writeResult.ok) {
@@ -1562,40 +1804,37 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     };
 
     // Roadmap item 7 (`batchConcurrency`): bounded worker pool for stage-4
-    // module tasks only. 1 (default) = sequential, byte-for-byte the
-    // pre-pool behavior. > 1 spawns N workers pulling modules from the
-    // prioritized `tasksToRun` queue via a shared cursor (JS is
-    // single-threaded: a `nextIndex` counter is race-free).
+    // tasks. 1 (default) = sequential, byte-for-byte the pre-pool behavior.
+    // > 1 spawns N workers pulling tasks from the queue via a shared cursor
+    // (JS is single-threaded: a `nextIndex` counter is race-free).
     //
     // Abort/drain policy: workers check the breaker and
     // `runAbortedByRollback` BEFORE pulling the next task; once tripped, no
-    // new tasks start and in-flight tasks run to their natural completion
-    // (the checkpoint is persisted inside `runStage4ModuleTask`), then the
-    // run finalizes as `aborted` exactly as the sequential path. No
-    // mid-task cancellation.
+    // new tasks start and in-flight tasks run to their natural completion,
+    // then the run finalizes as `aborted`. No mid-task cancellation.
     //
-    // There is NO client-side rate limiter beyond the pool size — the pool
-    // IS the limiter. Per-call 429 retries stay uncoordinated by design and
-    // honor `Retry-After` (llm/base.ts).
-    //
-    // Stage 5 (flows/topics) stays SEQUENTIAL below: its loops share hub
-    // files inside transactions — a documented hazard, out of scope here.
-    if (batchConcurrency <= 1) {
-      for (const module of tasksToRun) {
-        const moduleUsageEntry = await runStage4ModuleTask(module);
-        if (circuitBreakerTripped()) return await finalizeStage4Abort(true);
-        moduleUsage.push({ module: module.id, ...moduleUsageEntry });
-        if (runAbortedByRollback) return await finalizeStage4Abort(false);
+    // #29: the queue runs in TWO drained phases — every file page settles
+    // before any folder task starts, because the folder synthesis reads the
+    // accepted file pages from disk. Returns null on success, or the abort
+    // result to propagate.
+    const runStage4Queue = async (queue: Module[]): Promise<BatchRunResult | null> => {
+      if (batchConcurrency <= 1) {
+        for (const module of queue) {
+          const moduleUsageEntry = await runStage4ModuleTask(module);
+          if (circuitBreakerTripped()) return await finalizeStage4Abort(true);
+          moduleUsage.push({ module: module.id, ...moduleUsageEntry });
+          if (runAbortedByRollback) return await finalizeStage4Abort(false);
+        }
+        return null;
       }
-    } else {
       let nextIndex = 0;
       let poolAbort: "breaker" | "rollback" | null = null;
       const worker = async (): Promise<void> => {
         for (;;) {
           if (poolAbort !== null) return;
           const index = nextIndex++;
-          if (index >= tasksToRun.length) return;
-          const module = tasksToRun[index]!;
+          if (index >= queue.length) return;
+          const module = queue[index]!;
           const moduleUsageEntry = await runStage4ModuleTask(module);
           // Mirrors the sequential order: a breaker trip suppresses the
           // tripping task's byModule entry; a rollback abort keeps it.
@@ -1610,16 +1849,15 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           }
         }
       };
-      const workerCount = Math.min(batchConcurrency, tasksToRun.length);
+      const workerCount = Math.min(batchConcurrency, queue.length);
       // The pool is awaited BEFORE stage 5, so the `db.close()` in the
       // outer finally still happens only after every worker has settled.
       await Promise.all(Array.from({ length: workerCount }, () => worker()));
       // Deterministic report ordering: completion order is nondeterministic
-      // under the pool, so sort by the stage-3 module priority (`ordered`)
-      // before any result/summary is built. Stable sort — stage-5 flow/
-      // topic entries appended later (unknown to this map) keep their
-      // relative order.
-      const priorityIndex = new Map(ordered.map((m, i) => [m.id, i]));
+      // under the pool, so sort by the stage-4 queue order before any
+      // result/summary is built. Stable sort — stage-5 flow/topic entries
+      // appended later (unknown to this map) keep their relative order.
+      const priorityIndex = new Map(stage4Queue.map((m, i) => [m.id, i]));
       const byPriority = (
         a: { module: string },
         b: { module: string },
@@ -1630,6 +1868,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       failures.sort(byPriority);
       if (poolAbort === "breaker") return await finalizeStage4Abort(true);
       if (poolAbort === "rollback") return await finalizeStage4Abort(false);
+      return null;
+    };
+    {
+      const fileAbort = await runStage4Queue(
+        tasksToRun.filter((m) => fileUnitById.has(m.id)),
+      );
+      if (fileAbort !== null) return fileAbort;
+      const folderAbort = await runStage4Queue(
+        tasksToRun.filter((m) => folderUnitById.has(m.id)),
+      );
+      if (folderAbort !== null) return folderAbort;
     }
     byStageAcc["4"] = stageUsageTotals;
     // === Stage 5: semantic product flows (SPEC §"Semantic product-flow layer") ===
@@ -2475,14 +2724,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       await syncStaleTopicArtifacts(absRoot, topicCandidates);
     }
 
-    // #24: generated module pages whose module disappeared from the
-    // effective partition (test-role split, pattern/config changes) are
-    // removed; human/mixed pages are preserved. FULL runs only — an
-    // `--only` run re-derives a partition that may differ from a
-    // previously refined one and would make valid pages look stale.
+    // #29 (D4): generated unit pages whose unit disappeared from the
+    // effective plan are removed; the keep-set is built from RESOLVED PAGE
+    // PATHS (never module ids — see syncStaleModulePages). Human/mixed
+    // pages are preserved. FULL runs only.
     let removedStalePages: string[] | undefined;
     if (!opts.onlyTarget && !runAbortedByRollback) {
-      const staleModulePages = await syncStaleModulePages(absRoot, modules);
+      const keepPagePaths = new Set<string>([
+        ...pageUnitsPlan.fileUnits.map((u) => u.pagePath),
+        ...pageUnitsPlan.folderUnits.map((u) => u.pagePath),
+      ]);
+      const staleModulePages = await syncStaleModulePages(absRoot, keepPagePaths);
       if (staleModulePages.removed.length > 0) {
         removedStalePages = staleModulePages.removed;
         // Re-run the ledger so the removed pages' doc_pages/anchors drop
@@ -2729,9 +2981,9 @@ async function runSemanticTopicStage(opts: {
     // Workstream B: the plan is proposed deterministically first (no LLM
     // call, no repair loop, no possible "exhausted" outcome) — see
     // `proposeTopicPlanDeterministically` in topics.ts. An optional,
-    // narrowly-scoped LLM refine pass may reword/merge/drop proposals
-    // afterward, mirroring stage 2's heuristic-first + optional-refine
-    // pattern (`buildStage2RefinePrompt` above): any rejection, invalid
+    // narrowly-scoped LLM refine pass (`buildTopicRefinePrompt` in
+    // prompts.ts) may reword/merge/drop proposals
+    // afterward: any rejection, invalid
     // output, or infra failure degrades silently back to the already-valid
     // deterministic plan rather than failing or skipping the task.
     const planValidationOpts = {
@@ -3314,6 +3566,171 @@ async function attemptUnderstandingGeneration(opts: {
   };
 }
 
+interface FolderAttemptResult extends Stage4AttemptResult {
+  /** Validated purpose paragraph (only when purposeErrors is undefined). */
+  purpose?: string;
+  /** Raw model output (repair input). */
+  rawPurpose: string;
+  /** Purpose validation errors (validation_failed outcome). */
+  purposeErrors?: FolderPurposeError[];
+}
+
+/**
+ * ONE folder-purpose attempt (#29): the model writes only the purpose
+ * paragraph; the page skeleton is assembled deterministically by
+ * `renderFolderPage`. Mirrors the understanding attempt's accounting and
+ * error channels.
+ */
+async function attemptFolderGeneration(opts: {
+  attemptNumber: number;
+  absRoot: string;
+  folder: FolderUnit;
+  fileUnits: readonly FileUnit[];
+  symbolCountByPath: ReadonlyMap<string, number>;
+  existingPagePaths: ReadonlySet<string>;
+  language: Language;
+  llmClient: LlmClient;
+  promptKind: "initial" | "repair";
+  priorPurpose: string;
+  priorErrors: ReadonlyArray<{ code: string; message: string }>;
+  pricing: import("./pricing.js").PricingOverride | undefined;
+  thinking?: "disabled" | "adaptive" | "omit" | undefined;
+  maxRepairAttempts: number;
+  consumedSlots: number;
+}): Promise<FolderAttemptResult> {
+  // Evidence: deterministic inventory + openings of the folder's accepted
+  // file pages (read from disk — they were written earlier in the queue).
+  const openingsByPagePath = new Map<string, string>();
+  for (const unit of opts.fileUnits) {
+    if (!opts.existingPagePaths.has(unit.pagePath)) continue;
+    const content = await safeIo
+      .readText(opts.absRoot, unit.pagePath)
+      .catch(() => null);
+    if (content !== null) {
+      openingsByPagePath.set(unit.pagePath, extractModuleOpeningDigest(content));
+    }
+  }
+  const contextBlock = buildFolderPurposeContext({
+    folder: opts.folder,
+    fileUnits: opts.fileUnits,
+    symbolCountByPath: opts.symbolCountByPath,
+    openingsByPagePath,
+  });
+
+  const prompt =
+    opts.promptKind === "repair"
+      ? buildFolderPurposeRepairPrompt(
+          contextBlock,
+          opts.priorPurpose,
+          opts.priorErrors,
+          8_000,
+          opts.language,
+          { attempt: opts.consumedSlots, total: opts.maxRepairAttempts },
+        )
+      : buildFolderPurposePrompt(contextBlock, opts.language);
+
+  const base: Omit<FolderAttemptResult, "usageEntry"> = {
+    normalizedRaw: "",
+    diagnosticCandidate: null,
+    diagnosticOutcome: null,
+    artifact: null,
+    validationErrors: [],
+    llmError: null,
+    rawPurpose: "",
+  };
+
+  let raw: string;
+  let usage: { inputTokens: number; outputTokens: number; model: string };
+  let stopReason: StopReason = "unknown";
+  let rawStopReason: string | undefined;
+  try {
+    const result = await opts.llmClient.generate({
+      system: prompt.system,
+      user: prompt.user,
+      maxTokens: 2_048,
+      ...(opts.thinking ? { thinking: opts.thinking } : {}),
+    });
+    raw = result.content;
+    usage = result.usage;
+    stopReason = result.stopReason ?? "unknown";
+    rawStopReason = result.rawStopReason;
+  } catch (err) {
+    const usageEntry: UsageAttempt = {
+      attempt: opts.attemptNumber,
+      usage: null,
+      usageKnown: false,
+      costUsd: null,
+      finishedAt: Date.now(),
+    };
+    if (err instanceof LlmTimeoutError) {
+      return {
+        ...base,
+        usageEntry,
+        diagnosticOutcome: "llm_error",
+        llmError: { code: "llm_timeout", message: err.message },
+      };
+    }
+    const e = err as Error;
+    return {
+      ...base,
+      usageEntry,
+      diagnosticOutcome: "llm_error",
+      llmError: { code: "llm_call_failed", message: e.message },
+    };
+  }
+
+  const usageEntry: UsageAttempt = {
+    attempt: opts.attemptNumber,
+    usage,
+    usageKnown: true,
+    costUsd: computeCostFromUsage(usage, opts.pricing),
+    finishedAt: Date.now(),
+    stopReason,
+    ...(rawStopReason !== undefined ? { rawStopReason } : {}),
+  };
+
+  if (stopReason === "length" || stopReason === "incomplete") {
+    const code =
+      stopReason === "length" ? "truncated_by_token_limit" : "incomplete_generation";
+    return {
+      ...base,
+      usageEntry,
+      normalizedRaw: raw,
+      diagnosticCandidate: raw,
+      diagnosticOutcome: code,
+      rawPurpose: raw,
+      purposeErrors: [
+        {
+          code: "folder_purpose_invalid_shape",
+          message: `provider stopped before completing the paragraph (${code})`,
+        },
+      ],
+    };
+  }
+
+  const purposeErrors = validateFolderPurpose(raw);
+  if (purposeErrors.length > 0) {
+    return {
+      ...base,
+      usageEntry,
+      normalizedRaw: raw,
+      diagnosticCandidate: raw,
+      diagnosticOutcome: "artifact_validation_failed",
+      rawPurpose: raw,
+      purposeErrors,
+    };
+  }
+
+  return {
+    ...base,
+    usageEntry,
+    normalizedRaw: raw,
+    diagnosticCandidate: raw,
+    purpose: raw.trim(),
+    rawPurpose: raw,
+  };
+}
+
 function understandingAttemptDiagnostic(
   attempt: number,
   promptKind: "initial" | "repair",
@@ -3784,201 +4201,6 @@ function safeJsonParse<T>(s: string): T | null {
   }
 }
 
-/**
- * Validates the JSON returned by the LLM in stage 2 (module refinement).
- *
- * Exact partition of the indexed inventory (100% — no 80% soft threshold):
- *   - malformed JSON / missing "modules" array field
- *   - `modules: []` (empty)
- *   - empty module / missing id / duplicate id
- *   - any unknown path (not in inventory)
- *   - any path assigned more than once
- *   - any inventory path missing from the refine
- *   - peer directory fragmentation (`refine_fragmented_peers`)
- *
- * Returns `{ accepted: true, modules }` or `{ accepted: false, errorCode,
- * errorMessage }`. The heuristic is kept in any rejection case (batch continues).
- */
-function validateRefinedModules(
-  content: string,
-  indexedInventory: Set<string>,
-  pathRoleConfig?: import("./modules.js").PathRoleConfig,
-): {
-  accepted: boolean;
-  modules?: Module[];
-  errorCode?: string;
-  errorMessage?: string;
-} {
-  // Normalize inventory keys for comparison.
-  const inventory = new Set(
-    [...indexedInventory].map((p) => p.replace(/\\/g, "/")),
-  );
-
-  // 1. Extract first JSON object (LLM may add prose)
-  const match = content.match(/\{[\s\S]*\}/);
-  if (!match) {
-    return {
-      accepted: false,
-      errorCode: "refine_invalid_json",
-      errorMessage: "no JSON object found in LLM response",
-    };
-  }
-  let parsed: { modules?: unknown };
-  try {
-    parsed = JSON.parse(match[0]) as { modules?: unknown };
-  } catch (err) {
-    return {
-      accepted: false,
-      errorCode: "refine_invalid_json",
-      errorMessage: `JSON parse failed: ${(err as Error).message}`,
-    };
-  }
-  if (!parsed.modules || !Array.isArray(parsed.modules)) {
-    return {
-      accepted: false,
-      errorCode: "refine_invalid_json",
-      errorMessage: 'response has no "modules" array',
-    };
-  }
-
-  // 2. modules: [] → reject
-  if (parsed.modules.length === 0) {
-    return {
-      accepted: false,
-      errorCode: "refine_rejected_empty",
-      errorMessage:
-        "refined modules array is empty — would erase heuristic modules; ignoring refinement",
-    };
-  }
-
-  // 3. Validate shape + exact partition (no silent path filtering)
-  const ids = new Set<string>();
-  const pathToModule = new Map<string, string>();
-  const cleanModules: Module[] = [];
-  const displayTitleCandidates: Array<{ id: string; displayTitle?: unknown }> = [];
-  for (const m of parsed.modules) {
-    if (!m || typeof m !== "object") {
-      return {
-        accepted: false,
-        errorCode: "refine_invalid_module",
-        errorMessage: "module entry is not an object",
-      };
-    }
-    const obj = m as { id?: unknown; paths?: unknown; displayTitle?: unknown };
-    if (typeof obj.id !== "string" || obj.id === "") {
-      return {
-        accepted: false,
-        errorCode: "refine_invalid_module",
-        errorMessage: "module without valid id",
-      };
-    }
-    if (ids.has(obj.id)) {
-      return {
-        accepted: false,
-        errorCode: "refine_invalid_module",
-        errorMessage: `duplicate module id: "${obj.id}"`,
-      };
-    }
-    ids.add(obj.id);
-    displayTitleCandidates.push({ id: obj.id, displayTitle: obj.displayTitle });
-    if (!Array.isArray(obj.paths) || obj.paths.some((p) => typeof p !== "string")) {
-      return {
-        accepted: false,
-        errorCode: "refine_invalid_module",
-        errorMessage: `module "${obj.id}" has non-string paths`,
-      };
-    }
-    if (obj.paths.length === 0) {
-      return {
-        accepted: false,
-        errorCode: "refine_invalid_module",
-        errorMessage: `module "${obj.id}" is empty (no paths); would produce an empty page`,
-      };
-    }
-
-    const normalizedPaths: string[] = [];
-    for (const raw of obj.paths) {
-      const p = raw.replace(/\\/g, "/");
-      if (!inventory.has(p)) {
-        return {
-          accepted: false,
-          errorCode: "refine_unknown_path",
-          errorMessage: `module "${obj.id}" references unknown path "${p}" not in indexed inventory; ignoring refinement`,
-        };
-      }
-      const prev = pathToModule.get(p);
-      if (prev !== undefined) {
-        return {
-          accepted: false,
-          errorCode: "refine_duplicate_path",
-          errorMessage: `path "${p}" assigned to modules "${prev}" and "${obj.id}"; ignoring refinement`,
-        };
-      }
-      pathToModule.set(p, obj.id);
-      normalizedPaths.push(p);
-    }
-    normalizedPaths.sort((a, b) => a.localeCompare(b));
-    cleanModules.push({
-      id: obj.id,
-      paths: normalizedPaths,
-      // symbolCount filled later from the index map in the split/prioritize path
-      symbolCount: 0,
-    });
-  }
-
-  // 4. Exact 100% coverage of indexed inventory (every path once)
-  if (pathToModule.size !== inventory.size) {
-    const missing: string[] = [];
-    for (const f of inventory) {
-      if (!pathToModule.has(f)) missing.push(f);
-    }
-    missing.sort((a, b) => a.localeCompare(b));
-    const sample = missing.slice(0, 5).join(", ");
-    return {
-      accepted: false,
-      errorCode: "refine_incomplete_partition",
-      errorMessage:
-        `refined modules cover ${pathToModule.size}/${inventory.size} indexed paths ` +
-        `(need exact 100%); missing e.g. ${sample || "(none listed)"}; ignoring refinement`,
-    };
-  }
-
-  // 5. Peer directory integrity (no filename-derived split in refine)
-  const frag = refinePeerDirectoryFragmentationError(cleanModules);
-  if (frag) {
-    return {
-      accepted: false,
-      errorCode: "refine_fragmented_peers",
-      errorMessage: frag,
-    };
-  }
-
-  // 6. Test-role purity (#24, found by the paid rehearsal 2026-08-04):
-  // the LLM may rename/merge/split, but it must NOT undo the test split —
-  // a module mixing a test-role path with non-test paths reintroduces
-  // test anchors into product pages (and their token cost). Merging
-  // test-only modules among themselves stays allowed.
-  for (const m of cleanModules) {
-    const roles = m.paths.map((p) => classifyPathRole(p, pathRoleConfig));
-    const hasTest = roles.some((r) => r === "test");
-    const hasNonTest = roles.some((r) => r !== "test");
-    if (hasTest && hasNonTest) {
-      const testPath = m.paths[roles.indexOf("test")]!;
-      return {
-        accepted: false,
-        errorCode: "refine_mixed_test_role",
-        errorMessage:
-          `module "${m.id}" mixes test file "${testPath}" with non-test paths; ` +
-          `test files must stay in test-only modules (#24); ignoring refinement`,
-      };
-    }
-  }
-
-  return {
-    accepted: true,
-    modules: applyRefinedDisplayTitles(cleanModules, displayTitleCandidates),
-  };
-}
 
 /**
  * Review finding #1 + reviewer revision: reads the owner declared in the
@@ -4814,6 +5036,12 @@ interface AttemptOpts {
   module: Module;
   language: Language;
   llmClient: LlmClient;
+  /**
+   * #29 D2: this file unit's source exceeds fileSplitSourceBytes — initial
+   * attempts run the plan-then-write pipeline instead of one full-source
+   * call. Repair attempts keep the single-call fair-truncated path.
+   */
+  oversizedFile?: boolean;
   charBudget: number;
   /** Cap (chars) for the rationale evidence block; carved inside charBudget. */
   rationaleMaxChars: number;
@@ -4866,6 +5094,157 @@ interface AttemptOpts {
  *
  * The caller orchestrates the bounded loop; this function is "one turn of the loop".
  */
+/**
+ * #29 D2 plan-then-write pipeline for oversized single-file pages.
+ * One "attempt" from the caller's perspective; internally: opening pass →
+ * plan pass (one retry, then the deterministic source-order fallback) →
+ * one section pass per planned section with the COMPLETE source slice.
+ * Frontmatter, markers, headings, and assembly are deterministic — the
+ * model only writes prose. Usage is the exact sum across sub-calls.
+ */
+async function generateOversizedFilePage(opts: {
+  absRoot: string;
+  module: Module;
+  language: Language;
+  llmClient: LlmClient;
+  charBudget: number;
+  pricing: import("./pricing.js").PricingOverride | undefined;
+  thinking?: "disabled" | "adaptive" | "omit" | undefined;
+  ctx: ModuleDocContext;
+}): Promise<{
+  raw: string | null;
+  usage: { inputTokens: number; outputTokens: number; model: string } | null;
+  llmError: { code: string; message: string } | null;
+}> {
+  const filePath = opts.module.paths[0]!;
+  const closedKeyList = opts.ctx.closedKeyList;
+  const symbolRows = await getModuleSymbolRows(opts.absRoot, opts.module);
+  const fullSource = await nodeFs
+    .readFile(nodePath.join(opts.absRoot, filePath), "utf8")
+    .catch(() => null);
+
+  const usageAcc = { inputTokens: 0, outputTokens: 0, model: "" };
+  const call = async (prompt: PromptPair, maxTokens: number) => {
+    const result = await opts.llmClient.generate({
+      system: prompt.system,
+      user: prompt.user,
+      maxTokens,
+      ...(opts.thinking ? { thinking: opts.thinking } : {}),
+    });
+    usageAcc.inputTokens += result.usage.inputTokens;
+    usageAcc.outputTokens += result.usage.outputTokens;
+    usageAcc.model = result.usage.model;
+    return result;
+  };
+
+  try {
+    // Pass 0 — opening (one retry on provider non-completion).
+    let opening: string | null = null;
+    for (let i = 0; i < 2 && opening === null; i++) {
+      const r = await call(
+        buildFileOpeningPrompt(filePath, opts.ctx.symbolsTable, opts.ctx.truncatedSource, opts.language),
+        2_048,
+      );
+      const text = r.content.trim();
+      if (
+        (r.stopReason === "length" || r.stopReason === "incomplete") &&
+        i === 0
+      ) {
+        continue;
+      }
+      opening = /^#\s+/m.test(text) ? text : null;
+    }
+    if (opening === null) {
+      return {
+        raw: null,
+        usage: { ...usageAcc },
+        llmError: {
+          code: "llm_call_failed",
+          message: "plan-then-write: the opening pass produced no usable opening block after 2 attempts",
+        },
+      };
+    }
+
+    // Pass 1 — narrative arc plan (one retry, then deterministic fallback).
+    let plan: FileSectionPlan[] | null = null;
+    let planError: string | null = null;
+    for (let i = 0; i < 2 && plan === null; i++) {
+      const r = await call(
+        buildFilePlanPrompt(filePath, closedKeyList, opts.ctx.symbolsTable, opts.ctx.truncatedSource, opts.language),
+        2_048,
+      );
+      const parsed = parseFilePlan(r.content, closedKeyList);
+      if (parsed.ok) {
+        plan = parsed.sections;
+      } else {
+        planError = parsed.error;
+      }
+    }
+    if (plan === null) {
+      // The split is a generation concern: the deterministic source-order
+      // fallback keeps the pipeline alive (honest "Part N" headings).
+      plan = deterministicFallbackPlan(closedKeyList);
+    }
+
+    // Pass 2 — one prose call per section over its COMPLETE source slice.
+    const sectionProse: string[] = [];
+    const spanByKey = new Map(symbolRows.map((s) => [s.key, s]));
+    const symbolsTableByKey = new Map(
+      opts.ctx.symbolsTable
+        .split("\n")
+        .filter((l) => l.startsWith("- "))
+        .map((l) => [l.slice(2).split(" ")[0]!, l] as const),
+    );
+    for (const section of plan) {
+      const spans = section.keys
+        .map((k) => spanByKey.get(k))
+        .filter((s): s is NonNullable<typeof s> => s !== undefined);
+      const slice = fullSource !== null
+        ? extractSectionSource(fullSource, spans, 30_000)
+        : { text: "", truncated: false };
+      const sectionTable = section.keys
+        .map((k) => symbolsTableByKey.get(k) ?? `- ${k}`)
+        .join("\n");
+      const r = await call(
+        buildFileSectionPrompt(
+          filePath,
+          section.heading,
+          section.keys,
+          sectionTable,
+          slice.text,
+          slice.truncated,
+          opts.language,
+        ),
+        4_096,
+      );
+      sectionProse.push(r.content.trim());
+    }
+
+    const raw = assembleFilePage({
+      opening,
+      plan,
+      sectionProse,
+      closedKeyList,
+    });
+    return { raw, usage: { ...usageAcc }, llmError: null };
+  } catch (err) {
+    if (err instanceof LlmTimeoutError) {
+      return {
+        raw: null,
+        // Sub-call usage so far IS real (billed); report it, not 0/0.
+        usage: { ...usageAcc },
+        llmError: { code: "llm_timeout", message: err.message },
+      };
+    }
+    const e = err as Error;
+    return {
+      raw: null,
+      usage: { ...usageAcc },
+      llmError: { code: "llm_call_failed", message: e.message },
+    };
+  }
+}
+
 async function attemptStage4Generation(
   opts: AttemptOpts,
 ): Promise<Stage4AttemptResult> {
@@ -4873,6 +5252,93 @@ async function attemptStage4Generation(
   // need the same context (the closed list does not change between attempts —
   // unless the index changes, which would be out of batch scope).
   const ctx = await buildModuleDocContext(opts.absRoot, opts.module, opts.charBudget, opts.rationaleMaxChars);
+
+  // #29 D2: oversized single file + initial attempt → plan-then-write
+  // pipeline (opening pass, plan pass, per-section passes with COMPLETE
+  // source slices, deterministic assembly). The split never reaches disk.
+  if (opts.promptKind === "initial" && opts.oversizedFile === true) {
+    const pipeline = await generateOversizedFilePage({
+      absRoot: opts.absRoot,
+      module: opts.module,
+      language: opts.language,
+      llmClient: opts.llmClient,
+      charBudget: opts.charBudget,
+      pricing: opts.pricing,
+      thinking: opts.thinking,
+      ctx,
+    });
+    const usageEntry: UsageAttempt = {
+      attempt: opts.attemptNumber,
+      usage: pipeline.usage,
+      usageKnown: pipeline.usage !== null,
+      costUsd: pipeline.usage !== null
+        ? computeCostFromUsage(pipeline.usage, opts.pricing)
+        : null,
+      finishedAt: Date.now(),
+    };
+    if (pipeline.llmError !== null) {
+      return {
+        usageEntry,
+        normalizedRaw: "",
+        diagnosticCandidate: null,
+        diagnosticOutcome: "llm_error",
+        artifact: null,
+        validationErrors: [],
+        llmError: pipeline.llmError,
+      };
+    }
+    // The assembled page flows through the SAME normalization + validation
+    // as a single-call page (below): the contract never relaxes for the
+    // pipeline.
+    const pipelineNormalize = normalizeStage4Artifact(pipeline.raw!);
+    if (!pipelineNormalize.ok) {
+      return {
+        usageEntry,
+        normalizedRaw: pipeline.raw!,
+        diagnosticCandidate: pipeline.raw!,
+        diagnosticOutcome: "normalization_failed",
+        artifact: null,
+        validationErrors: pipelineNormalize.errors,
+        llmError: null,
+      };
+    }
+    // Recovery tier (Component 2): same contract as the single-call path —
+    // the degraded mark lands BEFORE validation, so what validation sees is
+    // byte-for-byte what reaches disk.
+    const pipelineCandidate = opts.relaxed === true
+      ? markDegradedArtifact(pipelineNormalize.content)
+      : pipelineNormalize.content;
+    const pipelineValidation = validateStage4Artifact(
+      pipelineCandidate,
+      ctx.closedKeyList,
+      {
+        moduleId: opts.module.id,
+        moduleRole: classifyModuleRole(opts.module, opts.pathRoleConfig),
+        ...(opts.relaxed === true ? { relaxed: true } : {}),
+      },
+    );
+    if (!pipelineValidation.ok) {
+      return {
+        usageEntry,
+        normalizedRaw: pipelineCandidate,
+        diagnosticCandidate: pipelineCandidate,
+        diagnosticOutcome: "artifact_validation_failed",
+        artifact: null,
+        validationErrors: pipelineValidation.errors,
+        llmError: null,
+      };
+    }
+    return {
+      usageEntry,
+      normalizedRaw: pipelineCandidate,
+      diagnosticCandidate: pipelineCandidate,
+      diagnosticOutcome: null,
+      artifact: pipelineCandidate,
+      validationErrors: [],
+      llmError: null,
+    };
+  }
+
   const maxTokens = resolveOutputTokenBudget(
     opts.outputTokenStrategy,
     opts.outputTokenCeiling,
@@ -5252,6 +5718,9 @@ interface ModuleSymbolRow {
   name: string;
   kind: string;
   signature: string | null;
+  /** Source span (1-based, inclusive) — used by the #29 plan-then-write slicer. */
+  start_line: number;
+  end_line: number;
 }
 
 /**
@@ -5269,7 +5738,7 @@ async function getModuleSymbolRows(
   try {
     const fileIds = await getFileIdsForModule(absRoot, module);
     const stmt = db.prepare(
-      `SELECT key, name, kind, signature FROM symbols
+      `SELECT key, name, kind, signature, start_line, end_line FROM symbols
        WHERE status = 'active' AND file_id IN (${fileIds.map(() => "?").join(",") || "NULL"})`,
     );
     return (fileIds.length > 0 ? stmt.all(...fileIds) : []) as ModuleSymbolRow[];
@@ -6190,7 +6659,7 @@ export async function buildTopicDocContext(
     const symbolsTable = symbols.map((symbol) => `- ${symbol.key} (${symbol.kind}): ${symbol.signature ?? ""}`).join("\n");
     const digest: string[] = [];
     for (const moduleId of candidate.modules) {
-      const page = await safeIo.readText(absRoot, `livewiki/${moduleId}.md`).catch(() => null);
+      const page = await safeIo.readText(absRoot, `livewiki/${moduleId}/index.md`).catch(() => null);
       digest.push(`### Module: ${moduleId}\n\n${page === null ? "Page unavailable" : extractModuleOpeningDigest(page)}`);
     }
     for (const flowSlug of candidate.flows) {
@@ -6327,7 +6796,7 @@ async function buildFlowDocContext(
     const openings: string[] = [];
     for (const moduleId of candidate.moduleIds) {
       const content = await safeIo
-        .readText(absRoot, `livewiki/${moduleId}.md`)
+        .readText(absRoot, `livewiki/${moduleId}/index.md`)
         .catch(() => null);
       if (content === null) {
         openings.push(`### ${moduleId}\n\n- ${moduleId} (page unavailable)`);

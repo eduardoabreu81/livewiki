@@ -702,9 +702,12 @@ function classifyGroup(wikiPath: string): SiteGroup {
   if (rel.startsWith("topics/") && name !== "index.md") return "Concept topics";
   if (rel.startsWith("flows/") && name !== "index.md") return "Flows";
   if (rel.startsWith("auxiliary/") && name !== "index.md") return "Auxiliary";
+  if (rel.startsWith("architecture/")) return "Wiki indexes";
   if (!rel.includes("/") && rel !== "tasks.md") return "Implementation reference";
-  // tasks.md, the flows/topics/auxiliary hubs, architecture/*.md and any
-  // other index-style page.
+  // #29: unit pages live one level down — `livewiki/<folder>/index.md`
+  // (folder page) and `livewiki/<folder>/<file>.md` (file pages).
+  if (/^[^/]+\/[^/]+\.md$/.test(rel)) return "Implementation reference";
+  // tasks.md, the flows/topics hubs, and any other index-style page.
   return "Wiki indexes";
 }
 

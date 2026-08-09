@@ -351,9 +351,9 @@ describe("evidence hash + rendering", () => {
     );
     await nodeFs.writeFile(nodePath.join(repoRoot, "package.json"), JSON.stringify({ bin: { "flow-repo": "dist/main.js" } }), "utf8");
     await runIndexer(repoRoot, { quiet: true });
-    await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"), { recursive: true });
+    await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki/src"), { recursive: true });
     await nodeFs.writeFile(
-      nodePath.join(repoRoot, "livewiki/src.md"),
+      nodePath.join(repoRoot, "livewiki/src/index.md"),
       [
         "---",
         "title: Application source",

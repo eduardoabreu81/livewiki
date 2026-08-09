@@ -307,7 +307,7 @@ const FLOW_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
   broken_anchor: () =>
     `the named anchor does not resolve to any indexed symbol. Point the citation at the exact closed-list key of the symbol the prose documents, or drop the citation from both the frontmatter anchors list and the section marker — the two sides must stay consistent.`,
   broken_internal_link: () =>
-    `every link target must resolve from this page's directory — the flows hub link in \`Related pages\` must be the bare \`index.md\` target (NEVER \`../index.md\`, \`./index.md\`, or any other path), while module pages keep the \`../<moduleId>.md\` form.`,
+    `every link target must resolve from this page's directory — the flows hub link in \`Related pages\` must be the bare \`index.md\` target (NEVER \`../index.md\`, \`./index.md\`, or any other path), while module pages keep the \`../<moduleId>/index.md\` form.`,
   invalid_mermaid_diagram: INVALID_MERMAID,
 };
 
@@ -357,7 +357,7 @@ const TOPIC_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
     `cite more non-test product symbols from the closed list (in the section that documents them) until at least 75% of cited keys are product symbols; drop a test-only citation if needed instead of adding an unrelated one.`,
   topic_source_link: (ctx) =>
     ctx.offending !== undefined
-      ? `rewrite this citation "${ctx.offending}": a Markdown link to a source path does not resolve for readers. Name the symbol as inline code with its exact closed-list key (e.g. \`path#symbol\`), or link to the module page that documents it (\`../<moduleId>.md\`). Keep every lw:anchors marker and the frontmatter anchors list unchanged.`
+      ? `rewrite this citation "${ctx.offending}": a Markdown link to a source path does not resolve for readers. Name the symbol as inline code with its exact closed-list key (e.g. \`path#symbol\`), or link to the module page that documents it (\`../<moduleId>/index.md\`). Keep every lw:anchors marker and the frontmatter anchors list unchanged.`
       : "",
   auxiliary_page_not_compact: AUXILIARY_COMPACT,
   truncated_by_token_limit: REWRITE_COMPLETE_PAGE,
@@ -366,7 +366,7 @@ const TOPIC_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
   broken_anchor: () =>
     `the named anchor does not resolve to any indexed symbol. Point the citation at the exact closed-list key of the symbol the prose documents, or drop the citation from both the frontmatter anchors list and the section marker — the two sides must stay consistent.`,
   broken_internal_link: () =>
-    `correct the named internal link so its target resolves from the topics directory: module links are exactly \`../<moduleId>.md\`, flow links are exactly \`../flows/<flowSlug>.md\`, flow diagrams are exactly \`../diagrams/flow-<flowSlug>.mmd\`, and the topics hub is the bare \`index.md\`.`,
+    `correct the named internal link so its target resolves from the topics directory: module links are exactly \`../<moduleId>/index.md\`, flow links are exactly \`../flows/<flowSlug>.md\`, flow diagrams are exactly \`../diagrams/flow-<flowSlug>.mmd\`, and the topics hub is the bare \`index.md\`.`,
   invalid_mermaid_diagram: INVALID_MERMAID,
 };
 

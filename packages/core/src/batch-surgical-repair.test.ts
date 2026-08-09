@@ -135,7 +135,7 @@ function makeFlowPage(ctx: FlowPromptCtx): string {
     "",
     "## Related pages",
     "",
-    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}.md)`),
+    ...ctx.moduleIds.map((m) => `- [${m} module](../${m}/index.md)`),
     "",
   ].join("\n");
 }
@@ -214,7 +214,7 @@ function makeTopicPage(user: string): string {
     "## Related pages",
     "",
     "- [Topics hub](index.md)",
-    ...modules.map((m) => `- [${m} module](../${m}.md)`),
+    ...modules.map((m) => `- [${m} module](../${m}/index.md)`),
     ...flows.flatMap((f) => [
       `- [${f} flow](../flows/${f}.md)`,
       `- [${f} diagram](../diagrams/flow-${f}.mmd)`,
@@ -295,6 +295,23 @@ function expectJoinedAttempts(checkpoint: TaskCheckpoint): void {
 const SURGICAL_CONTRACT_MARKER = "SURGICAL REPAIR";
 const FULL_REPAIR_CONTEXT_MARKER = "# Closed list of canonical keys";
 
+/**
+ * #29 folder task: product folders get ONE bounded LLM call for the purpose
+ * paragraph (initial system: "purpose paragraph of ONE folder page"; repair
+ * system: "the folder purpose paragraph was REJECTED"; both user prompts
+ * name the "folder purpose paragraph" output). Answered OUTSIDE the queued
+ * instrumentation, like the understanding page — the folder contract has its
+ * own dedicated suites.
+ */
+function isFolderPurposeCall(req: GenerateRequest): boolean {
+  return req.system.includes("purpose paragraph of ONE folder page") ||
+    req.system.includes("folder purpose paragraph was REJECTED");
+}
+
+/** Valid folder purpose: plain prose, 40–800 chars (validateFolderPurpose). */
+const VALID_FOLDER_PURPOSE =
+  "This directory holds the auth module: login, session, and token handling.";
+
 /** Valid stage-5c understanding page returned outside mock instrumentation. */
 const VALID_UNDERSTANDING_PAGE = [
   "---",
@@ -329,6 +346,15 @@ class SurgicalModuleMockLlm implements LlmClient {
     if (/^# Output: livewiki\/understanding\.md$/m.test(req.user)) {
       return {
         content: VALID_UNDERSTANDING_PAGE,
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
+    // #29: the folder task's purpose paragraph is answered OUTSIDE the
+    // queued instrumentation (like understanding) so callCount/callLog
+    // keep tracking only the file-page attempts under test.
+    if (isFolderPurposeCall(req)) {
+      return {
+        content: VALID_FOLDER_PURPOSE,
         usage: { inputTokens: 100, outputTokens: 50, model: this.model },
       };
     }
@@ -403,7 +429,7 @@ describe("batch surgical repair — stage 4 (module)", () => {
     // Failed page embedded with its markers verbatim (the syntax to preserve).
     expect(repairPrompt.user).toContain("<!-- lw:anchors src/auth/login.ts#login src/auth/login.ts#logout -->");
 
-    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "auth");
+    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "auth/login");
     expect(checkpoint).not.toBeNull();
     expect(checkpoint!.status).toBe("done");
     expect(checkpoint!.diagnosticHistory!.map((d) => d.outcome)).toEqual([
@@ -414,7 +440,7 @@ describe("batch surgical repair — stage 4 (module)", () => {
     expect(surgicalOutcomeOf(checkpoint!.diagnosticHistory![1])).toBe("surgical_ok");
     expectJoinedAttempts(checkpoint!);
 
-    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(page).toContain("Body.");
   }, 30_000);
 
@@ -443,7 +469,7 @@ describe("batch surgical repair — stage 4 (module)", () => {
     expect(result.status).toBe("completed");
     expect(llm.callCount).toBe(3);
 
-    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "auth");
+    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "auth/login");
     expect(checkpoint!.diagnosticHistory!.map((d) => d.outcome)).toEqual([
       "artifact_validation_failed",
       "artifact_validation_failed",
@@ -457,7 +483,7 @@ describe("batch surgical repair — stage 4 (module)", () => {
 
     // The persisted page is the compliant splice: the original How it fits
     // text survived byte-for-byte; the cascade rewrite never touched disk.
-    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8");
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8");
     expect(page).toContain("This module provides one part of the repository implementation.");
     expect(page).not.toContain("The model rewrote a section it was told to keep.");
   }, 30_000);
@@ -484,7 +510,7 @@ describe("batch surgical repair — stage 4 (module)", () => {
     expect(repairPrompt.system).not.toContain(SURGICAL_CONTRACT_MARKER);
     expect(repairPrompt.user).toContain(FULL_REPAIR_CONTEXT_MARKER);
 
-    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "auth");
+    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "auth/login");
     expect(surgicalOutcomeOf(checkpoint!.diagnosticHistory![1])).toBeUndefined();
     expectJoinedAttempts(checkpoint!);
   }, 30_000);
@@ -510,7 +536,7 @@ describe("batch surgical repair — stage 4 (module)", () => {
     expect(repairPrompt.system).not.toContain(SURGICAL_CONTRACT_MARKER);
     expect(repairPrompt.user).toContain(FULL_REPAIR_CONTEXT_MARKER);
 
-    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "auth");
+    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "auth/login");
     expect(surgicalOutcomeOf(checkpoint!.diagnosticHistory![1])).toBeUndefined();
   }, 30_000);
 });
@@ -544,6 +570,11 @@ class SurgicalFlowMockLlm implements LlmClient {
     }
     this.callLog.push({ system: req.system, user: req.user });
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+    // #29: folder purpose paragraph (product folders) — outside the flow
+    // instrumentation.
+    if (isFolderPurposeCall(req)) {
+      return { content: VALID_FOLDER_PURPOSE, usage };
+    }
     if (/^# Flow: \S+$/m.test(req.user)) {
       const idx = this.flowCallCount++;
       const ctx = parseFlowPrompt(req.user);
@@ -635,6 +666,11 @@ class SurgicalTopicMockLlm implements LlmClient {
     }
     this.callLog.push({ system: req.system, user: req.user });
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+    // #29: folder purpose paragraph (product folders) — outside the topic
+    // instrumentation.
+    if (isFolderPurposeCall(req)) {
+      return { content: VALID_FOLDER_PURPOSE, usage };
+    }
     if (/^# Flow: \S+$/m.test(req.user)) {
       return { content: makeFlowPage(parseFlowPrompt(req.user)), usage };
     }

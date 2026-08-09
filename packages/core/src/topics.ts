@@ -236,7 +236,7 @@ export async function buildTopicPlanningInventory(opts: {
   const flowCandidateBySlug = new Map((opts.flowCandidates ?? []).map((candidate) => [candidate.slug, candidate]));
 
   for (const module of [...opts.modules].sort((a, b) => a.id.localeCompare(b.id))) {
-    const relPath = `livewiki/${module.id}.md`;
+    const relPath = `livewiki/${module.id}/index.md`;
     if (!(await safeIo.exists(opts.repoRoot, relPath).catch(() => false))) continue;
     const source = await safeIo.readText(opts.repoRoot, relPath).catch(() => null);
     if (source === null) continue;
@@ -248,8 +248,33 @@ export async function buildTopicPlanningInventory(opts: {
     }
     if (parsed.frontmatter === null) continue;
     const role = classifyModuleRole(module, opts.pathRoleConfig);
+    // #29: anchors live on the FILE pages inside the folder's wiki
+    // directory (`livewiki/<id>/<page>.md`); the folder page itself is an
+    // anchor-less synthesis. Union the frontmatter anchors of every
+    // accepted file page in that directory (disk is the truth — a failed
+    // file task leaves no page and contributes no evidence).
     const anchors = uniqueSorted(getAnchors(parsed.frontmatter));
-    for (const key of anchors) {
+    const wikiDir = `livewiki/${module.id}`;
+    const absWikiDir = await safeIo.resolveAndValidate(opts.repoRoot, wikiDir).catch(() => null);
+    if (absWikiDir !== null) {
+      const entries = (await nodeFs.readdir(absWikiDir, { withFileTypes: true }).catch(() => []))
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md")
+        .map((entry) => entry.name)
+        .sort();
+      for (const name of entries) {
+        const fileSource = await safeIo.readText(opts.repoRoot, `${wikiDir}/${name}`).catch(() => null);
+        if (fileSource === null) continue;
+        try {
+          const fileParsed = parseFrontmatter(fileSource);
+          if (fileParsed.frontmatter === null) continue;
+          anchors.push(...getAnchors(fileParsed.frontmatter));
+        } catch {
+          // A malformed file page contributes no anchor evidence.
+        }
+      }
+    }
+    const uniqueAnchors = uniqueSorted(anchors);
+    for (const key of uniqueAnchors) {
       const sourcePath = key.split("#", 1)[0] ?? "";
       anchorRoles[key] = classifyPathRole(sourcePath, opts.pathRoleConfig);
     }
@@ -262,7 +287,7 @@ export async function buildTopicPlanningInventory(opts: {
       responsibility: extractOpeningSentence(parsed.body),
       whenToUse: extractSectionBullets(parsed.body, "When to use this page"),
       sections: extractH2Titles(parsed.body),
-      anchors,
+      anchors: uniqueAnchors,
       importNeighbors: uniqueSorted((opts.edges ?? []).flatMap((edge) =>
         edge.from === module.id ? [edge.to] : edge.to === module.id ? [edge.from] : []
       )),

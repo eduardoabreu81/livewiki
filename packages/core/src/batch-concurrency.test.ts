@@ -37,7 +37,17 @@ class ValidMockLlm implements LlmClient {
     } finally {
       this.inFlight--;
     }
-    const match = req.user.match(/# Module: ([^\s]+)/);
+    // #29 folder page: the model writes ONLY the purpose paragraph
+    // (40–800 chars of plain prose); the page skeleton is deterministic.
+    if (req.system.includes("purpose paragraph of ONE folder page")) {
+      return {
+        content:
+          "This directory holds one product module: its implementation file and the responsibilities documented on the file page.",
+        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
+      };
+    }
+    // #29: single-file units are prompted with `# File: <repoPath>`.
+    const match = req.user.match(/# (?:File|Module): ([^\s]+)/);
     const moduleId = match ? match[1] : "unknown";
     const keyMatch = req.user.match(/^- (.+?#[\w.]+)$/m);
     const firstKey = keyMatch ? keyMatch[1] : `${moduleId}.ts#placeholder`;
@@ -72,11 +82,12 @@ Some prose about ${moduleId}.
     };
   }
 
-  /** Distinct module IDs this mock was called for (stage-4 prompts only). */
+  /** Distinct file unit source paths this mock was called for (stage-4
+   * file-page prompts only — folder-purpose prompts carry no `# File:` line). */
   calledModuleIds(): string[] {
     const ids = new Set<string>();
     for (const call of this.callLog) {
-      const match = call.user.match(/# Module: ([^\s]+)/);
+      const match = call.user.match(/# File: ([^\s]+)/);
       if (match) ids.add(match[1]!);
     }
     return [...ids];
@@ -103,9 +114,9 @@ class FailingMockLlm implements LlmClient {
     } finally {
       this.inFlight--;
     }
-    const match = req.user.match(/# Module: ([^\s]+)/);
+    const match = req.user.match(/# (?:File|Module): ([^\s]+)/);
     const moduleId = match ? match[1] : "unknown";
-    const bogusKey = `${moduleId}.ts#symbol_that_does_not_exist`;
+    const bogusKey = `${moduleId}#symbol_that_does_not_exist`;
     const content = `---
 title: ${moduleId} responsibilities
 owner: generated
@@ -140,7 +151,7 @@ Some prose about ${moduleId}.
   calledModuleIds(): string[] {
     const ids = new Set<string>();
     for (const call of this.callLog) {
-      const match = call.user.match(/# Module: ([^\s]+)/);
+      const match = call.user.match(/# File: ([^\s]+)/);
       if (match) ids.add(match[1]!);
     }
     return [...ids];
@@ -149,7 +160,9 @@ Some prose about ${moduleId}.
 
 const MODULE_IDS = ["m1", "m2", "m3", "m4", "m5", "m6"];
 
-/** Creates a fresh repo with one tiny module per id + stage-5 disabled. */
+/** Creates a fresh repo with one tiny folder + file unit per id
+ * (`src/<id>/index.ts` → file unit `<id>/index` + folder unit `<id>`)
+ * + stage-5 disabled. */
 async function createRepo(moduleIds: string[]): Promise<string> {
   const root = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-conc-"));
   for (const id of moduleIds) {

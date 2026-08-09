@@ -1,28 +1,33 @@
 /**
- * CLI E2E — Etapa 1: tier-2 universal prose floor (SPEC §"Coverage ladder").
+ * CLI E2E — Etapa 1: tier-2 universal prose floor (SPEC §"Coverage ladder"),
+ * migrated to the #29 real-page-units contract.
  *
  * Scenario: a repository mixing grammar-mapped sources (.ts — tier 1,
  * anchored) and grammar-less sources (.rb, .kt — tier 2, prose). The walker
  * indexes every text file; the indexer records prose files with
- * `symbolCount: 0`; stage 4 emits zero-key pages (`anchors: []`, no markers)
- * for prose modules via the existing zero-key prompt contract.
+ * `symbolCount: 0`. Under #29 there are no module chunks and no LLM-written
+ * zero-key pages: the deterministic planner (`page-units.ts`) emits one FILE
+ * unit per symbol-bearing product file and one FOLDER unit per real
+ * directory, and a prose (inert) file is accounted for as a deterministic
+ * line on its folder page ("no symbols extracted") — zero tokens.
  *
  * Coverage:
- *   1. init --batch on a mixed repo completes with exit 0, verify reports
- *      zero issues, prose module pages exist with `anchors: []` and no
- *      lw:anchors markers, and `status --json` classifies each language as
- *      anchored vs prose.
+ *   1. init --batch on a mixed repo completes, verify reports zero issues,
+ *      the anchored file page lands at `livewiki/<folder>/<file>.md`, prose
+ *      files appear as inert lines on their folder pages, no legacy
+ *      `<module>.md` chunk pages exist, and `status --json` classifies each
+ *      language as anchored vs prose.
  *   2. A repo with NO grammar-mapped file at all still completes with a
- *      non-empty wiki — the tool never exits 0 with an empty wiki on an
- *      unsupported language.
+ *      non-empty wiki — the folder page alone documents the inventory, so
+ *      the tool never exits 0 with an empty wiki on an unsupported language.
  *   3. D1: a root README feeds the quickstart `## What this repository is`
  *      block (first section after the H1, provenance marked, tool-meta
- *      sections after the product sections) while being documented itself
- *      as a tier-2 prose module.
+ *      sections after the product sections) while being accounted for as an
+ *      inert file on the root folder page.
  *
  * In-process stub (same pattern as cli-batch-e2e-subdirs.test.ts): zero real
- * provider calls. The stub answers the zero-key contract with an unanchored
- * page and grammar-backed modules with a closed-list anchored page.
+ * provider calls. The stub answers file-page prompts with a closed-list
+ * anchored page and folder-purpose prompts with a plain-prose paragraph.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
@@ -84,14 +89,14 @@ async function startStubServer(): Promise<StubServer> {
   };
 }
 
-/** Extract closed-list keys from the stage-4 user prompt. */
-function closedKeysFromPrompt(user: string, fallbackModuleId: string): string[] {
+/** Extract closed-list keys from the stage-4 file-page user prompt. */
+function closedKeysFromPrompt(user: string): string[] {
   const keys: string[] = [];
   for (const line of user.split("\n")) {
     const m = /^- (\S+#\S+)$/.exec(line);
     if (m?.[1]) keys.push(m[1]);
   }
-  return keys.length > 0 ? keys : [`${fallbackModuleId}.ts#placeholder`];
+  return keys;
 }
 
 /**
@@ -112,8 +117,28 @@ This test repository exercises the batch pipeline with a small product surface.
 `;
 
 /**
- * Stage-4 handler aware of the zero-key contract: prose modules (empty closed
- * list) get an unanchored page; grammar-backed modules get an anchored page.
+ * #29 folder page: the model writes ONLY the purpose paragraph (plain prose,
+ * 40–800 chars — no headings, frontmatter, links, or fences); the page
+ * skeleton around it is deterministic. One call per product folder per run.
+ * The initial system prompt carries "purpose paragraph of ONE folder page";
+ * the repair variant carries "folder purpose paragraph".
+ */
+const FOLDER_PURPOSE =
+  "This directory holds product source files whose documented responsibilities are covered by the file pages it groups.";
+
+function isFolderPurposePrompt(system: string): boolean {
+  return (
+    system.includes("purpose paragraph of ONE folder page") ||
+    system.includes("folder purpose paragraph")
+  );
+}
+
+/**
+ * Stage-4 handler for the #29 real-units contract: folder-purpose prompts get
+ * a plain paragraph; file-page prompts (`# File: <repoPath>` +
+ * `# Paths (1): <repoPath>`) get a closed-list anchored page. Prose files
+ * never reach the LLM — they are inert lines on the deterministic folder
+ * page — so there is no zero-key branch here anymore.
  */
 function proseTierHandler(req: { system: string; user: string }): StubResponse | null {
   if (req.user.includes("# Output: livewiki/understanding.md")) {
@@ -126,39 +151,23 @@ function proseTierHandler(req: { system: string; user: string }): StubResponse |
       },
     };
   }
-  const moduleId = req.user.match(/# Module: ([^\s]+)/)?.[1] ?? "unknown";
-  const displayTitle = `${moduleId.replace(/-/g, " ")} responsibilities`;
+  if (isFolderPurposePrompt(req.system)) {
+    return {
+      status: 200,
+      body: {
+        choices: [{ message: { role: "assistant", content: FOLDER_PURPOSE } }],
+        usage: { prompt_tokens: 1000, completion_tokens: 100 },
+        model: "gpt-test-mock",
+      },
+    };
+  }
+  const filePath = req.user.match(/# File: (\S+)/)?.[1] ?? "unknown.ts";
+  const fileBase = (filePath.split("/").pop() ?? "unknown").replace(/\.[^.]+$/, "");
+  const displayTitle = `${fileBase} responsibilities`;
 
-  let content: string;
-  if (req.user.includes("Zero-key contract")) {
-    // Tier-2 page: unanchored prose, `anchors: []`, no lw:anchors markers.
-    content = `---
-title: ${displayTitle}
-owner: generated
-anchors: []
----
-
-# ${displayTitle}
-
-This page documents the visible responsibilities of ${moduleId}.
-
-## When to use this page
-
-- Review ${moduleId} behavior.
-- Change ${moduleId} implementation.
-
-## How it fits
-
-This module provides one part of the repository implementation visible in the supplied source.
-
-## Details
-
-Some prose about ${moduleId}.
-`;
-  } else {
-    const closedKeys = closedKeysFromPrompt(req.user, moduleId);
-    const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
-    content = `---
+  const closedKeys = closedKeysFromPrompt(req.user);
+  const fmAnchors = closedKeys.map((k) => `  - ${k}`).join("\n");
+  const content = `---
 title: ${displayTitle}
 owner: generated
 anchors:
@@ -167,23 +176,22 @@ ${fmAnchors}
 
 # ${displayTitle}
 
-This page documents the indexed responsibilities of ${moduleId}.
+This page documents the indexed responsibilities of ${fileBase}.
 
 ## When to use this page
 
-- Review ${moduleId} behavior.
-- Change ${moduleId} implementation.
+- Review ${fileBase} behavior.
+- Change ${fileBase} implementation.
 
 ## How it fits
 
-This module provides one part of the repository implementation visible in the supplied source.
+This file provides one part of the repository implementation visible in the supplied source.
 
 ## Details
 <!-- lw:anchors ${closedKeys.join(" ")} -->
 
-Some prose about ${moduleId}.
+Some prose about ${fileBase}.
 `;
-  }
   return {
     status: 200,
     body: {
@@ -266,6 +274,14 @@ async function expectVerifyClean(): Promise<void> {
   expect(verifyReport.ok).toBe(true);
 }
 
+async function wikiPageExists(rel: string): Promise<boolean> {
+  return nodeFs.access(nodePath.join(repoRoot, rel)).then(() => true).catch(() => false);
+}
+
+async function readWikiPage(rel: string): Promise<string> {
+  return nodeFs.readFile(nodePath.join(repoRoot, rel), "utf8");
+}
+
 describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", () => {
   it("init --batch on a .ts + .rb + .kt repo completes, verify clean, tiers reported", async () => {
     await writeCode(
@@ -280,9 +296,9 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       "src/engine/lib.kt",
       "fun render(frame: Int): Int = frame + 1\n",
     );
-    // D1: a root README feeds the quickstart orientation block. It is also a
-    // tier-2 prose file, so the batch documents it through the zero-key
-    // contract like any other grammar-less source.
+    // D1: a root README feeds the quickstart orientation block. It is a
+    // tier-2 prose file, so under #29 it is accounted for as an inert line
+    // on the root folder page — zero tokens, no LLM page.
     await writeCode(
       "README.md",
       [
@@ -305,25 +321,41 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch", "--no-refine"]);
       expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
 
-      // All three module pages generated — anchored (api) AND prose (server, engine).
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/api.md"))).resolves.toBeUndefined();
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/server.md"))).resolves.toBeUndefined();
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/engine.md"))).resolves.toBeUndefined();
-
-      // Prose pages follow the zero-key contract: `anchors: []`, no markers.
-      for (const page of ["server.md", "engine.md"]) {
-        const body = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki", page), "utf8");
-        expect(body, `${page} declares empty anchors`).toContain("anchors: []");
-        expect(body, `${page} carries no lw:anchors marker`).not.toMatch(/<!--\s*lw:anchors\s/);
+      // #29 page units: the symbol-bearing .ts file gets a FILE page at
+      // `livewiki/<folderId>/<fileBase>.md`; every real directory gets a
+      // FOLDER page at `livewiki/<folderId>/index.md`.
+      expect(await wikiPageExists("livewiki/api/handler.md")).toBe(true);
+      for (const folder of ["api", "server", "engine", "root"]) {
+        expect(await wikiPageExists(`livewiki/${folder}/index.md`), `${folder} folder page`).toBe(true);
       }
-      // The anchored page cites at least one closed-list key.
-      const apiBody = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/api.md"), "utf8");
-      expect(apiBody).toContain("src/api/handler.ts#handleRequest");
+      // The legacy module-chunk pages are gone.
+      for (const legacy of ["api.md", "server.md", "engine.md", "root.md"]) {
+        expect(await wikiPageExists(`livewiki/${legacy}`), `no legacy ${legacy}`).toBe(false);
+      }
+
+      // The anchored file page cites at least one closed-list key.
+      const handlerBody = await readWikiPage("livewiki/api/handler.md");
+      expect(handlerBody).toContain("src/api/handler.ts#handleRequest");
+
+      // Prose files never reach the LLM: each is a deterministic inert line
+      // on its folder page (zero tokens, nothing hallucinated).
+      const serverFolder = await readWikiPage("livewiki/server/index.md");
+      expect(serverFolder).toContain("`main.rb` — no symbols extracted (barrel, configuration, or prose file)");
+      const engineFolder = await readWikiPage("livewiki/engine/index.md");
+      expect(engineFolder).toContain("`lib.kt` — no symbols extracted (barrel, configuration, or prose file)");
+      const rootFolder = await readWikiPage("livewiki/root/index.md");
+      expect(rootFolder).toContain("`README.md` — no symbols extracted (barrel, configuration, or prose file)");
+
+      // The product folder pages carry the LLM purpose paragraph above the
+      // deterministic file guide.
+      const apiFolder = await readWikiPage("livewiki/api/index.md");
+      expect(apiFolder).toContain(FOLDER_PURPOSE);
+      expect(apiFolder).toContain("[handler.ts](handler.md)");
 
       // D1: the quickstart opens with the product-orientation block sourced
       // from the fixture README (badges skipped, provenance marked, fast-path
       // section pointed at by name) before any tool-meta section.
-      const quickstart = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/quickstart.md"), "utf8");
+      const quickstart = await readWikiPage("livewiki/quickstart.md");
       const headings = [...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
       expect(headings[0], "orientation block is the first section after the H1").toBe(
         "What this repository is",
@@ -343,33 +375,40 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
         quickstart.indexOf("## Work by intent"),
       );
 
-      // D1.5: the reader digest follows the orientation block with at least
-      // one responsibility sentence extracted from an accepted module page.
-      // Stage 5c: the purpose comes from the understanding synthesis (the
-      // README excerpt is rendered as secondary evidence above).
+      // D1.5: the reader digest follows the orientation block. Under #29 the
+      // digest entries are the FOLDER pages (`<id>/index.md`), and the
+      // responsibility sentence is the folder page's opening — the accepted
+      // LLM purpose paragraph.
       expect(headings[1], "reader digest follows the orientation block").toBe(
         "What you'll find in this wiki",
       );
-      expect(quickstart).toMatch(
-        /- \*\*\[[^\]]+\]\(api\.md\)\*\* — This page documents the indexed responsibilities of api\./,
-      );
+      expect(quickstart).toContain(`- **[src/api](api/index.md)** — ${FOLDER_PURPOSE}`);
       expect(quickstart).not.toContain("Synthesized from the generated module pages");
 
       // Verify: exit 0 + zero issues of any severity.
       await expectVerifyClean();
 
-      // Batch report: run completed, 4 stage-4 tasks all done (3 code modules
-      // + the prose README module).
+      // Batch report: run completed; stage-4 queue = 1 file unit + 4 folder
+      // units (api, server, engine, root), all done. The prose files cost
+      // zero stage-4 tasks of their own.
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       expect(status.status).toBe(0);
       const report = JSON.parse(status.stdout);
       expect(report.run.status).toBe("completed");
       const stage4Tasks = report.tasks.filter((t: { stage: number }) => t.stage === 4);
-      expect(stage4Tasks.length, "expected 4 stage-4 tasks").toBe(4);
+      expect(stage4Tasks.length, "expected 5 stage-4 tasks (1 file + 4 folders)").toBe(5);
       expect(
         stage4Tasks.filter((t: { status: string }) => t.status === "done").length,
         "all stage-4 tasks done",
-      ).toBe(4);
+      ).toBe(5);
+      const targets = stage4Tasks.map((t: { target: string }) => t.target).sort();
+      expect(targets, "stage-4 targets are the real unit ids").toEqual([
+        "api",
+        "api/handler",
+        "engine",
+        "root",
+        "server",
+      ]);
 
       // Status: every language classified by coverage tier.
       const statusR = await runCli(["--json", "--repo", repoRoot, "status"]);
@@ -403,14 +442,26 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch", "--no-refine"]);
       expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
 
-      // The wiki is NOT empty: the prose module page exists.
-      await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/server.md"))).resolves.toBeUndefined();
+      // The wiki is NOT empty: with zero symbol-bearing files there is no
+      // file page, but the FOLDER page documents the whole inventory — both
+      // prose files appear as deterministic inert lines.
+      expect(await wikiPageExists("livewiki/server/index.md")).toBe(true);
+      expect(await wikiPageExists("livewiki/server.md"), "no legacy chunk page").toBe(false);
+      const folderBody = await readWikiPage("livewiki/server/index.md");
+      expect(folderBody).toContain("`main.rb` — no symbols extracted (barrel, configuration, or prose file)");
+      expect(folderBody).toContain("`routes.rb` — no symbols extracted (barrel, configuration, or prose file)");
 
       await expectVerifyClean();
 
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       const report = JSON.parse(status.stdout);
       expect(report.run.status).toBe("completed");
+      const stage4Tasks = report.tasks.filter((t: { stage: number }) => t.stage === 4);
+      expect(
+        stage4Tasks.map((t: { target: string }) => t.target),
+        "one folder unit is the whole stage-4 queue",
+      ).toEqual(["server"]);
+      expect(stage4Tasks[0].status).toBe("done");
 
       const statusR = await runCli(["--json", "--repo", repoRoot, "status"]);
       const statusReport = JSON.parse(statusR.stdout);
@@ -421,7 +472,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
     }
   }, 90_000);
 
-  it("stage-4 prompt carries the indexed rationale evidence block (Etapa 2b)", async () => {
+  it("stage-4 file-page prompt carries the indexed rationale evidence block (Etapa 2b)", async () => {
     await writeCode(
       "src/api/handler.ts",
       "// WHY: bursts are smoothed to protect the upstream API\n" +
@@ -441,13 +492,22 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch", "--no-refine"]);
       expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
 
-      const stage4Requests = captured.filter((c) => c.user.includes("# Module: api"));
-      expect(stage4Requests.length, "expected at least one stage-4 request for module api").toBeGreaterThan(0);
+      // #29: the file page prompt is keyed by the real path, not a module id.
+      const fileRequests = captured.filter((c) => c.user.includes("# File: src/api/handler.ts"));
+      expect(fileRequests.length, "expected at least one stage-4 request for the handler file unit").toBeGreaterThan(0);
+      expect(fileRequests[0]!.user).toContain("# Paths (1): src/api/handler.ts");
       // The indexed rationale reached the model, fenced as untrusted evidence.
-      expect(stage4Requests[0]!.user).toContain("# Rationale evidence");
-      expect(stage4Requests[0]!.user).toContain("WHY: bursts are smoothed to protect the upstream API");
+      expect(fileRequests[0]!.user).toContain("# Rationale evidence");
+      expect(fileRequests[0]!.user).toContain("WHY: bursts are smoothed to protect the upstream API");
       // The system prompt pins rationale text out of the anchor-key space.
-      expect(stage4Requests[0]!.system).toMatch(/NEVER a source of anchor keys/);
+      expect(fileRequests[0]!.system).toMatch(/NEVER a source of anchor keys/);
+
+      // Exactly one folder-purpose call (the product `api` folder), and the
+      // folder prompt carries no rationale block (Etapa 2b scope: stage-4
+      // module/file and topic prompts only).
+      const folderRequests = captured.filter((c) => isFolderPurposePrompt(c.system));
+      expect(folderRequests.length, "one folder-purpose call for the api folder").toBe(1);
+      expect(folderRequests[0]!.user).not.toContain("# Rationale evidence");
 
       await expectVerifyClean();
     } finally {

@@ -83,13 +83,23 @@ function makeModulePage(closedKeyList: string[], withDiagram: boolean): string {
 class ModuleDiagramMockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "mock-module-diagram";
+  /** File-page calls only — #29 folder-purpose paragraphs stay OUTSIDE
+   *  this instrumentation (they are answered with a valid paragraph). */
   public callLog: Array<{ system: string; user: string; maxTokens: number | undefined }> = [];
   /** When true, the FIRST stage-4 response omits the Diagram section. */
   public failFirstWithoutDiagram = false;
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
-    this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
     const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+    // #29 folder page: the model writes ONLY the purpose paragraph.
+    if (req.system.includes("purpose paragraph of ONE folder page")) {
+      return {
+        content:
+          "This directory holds the data layer: the connection lifecycle functions documented by its file page.",
+        usage,
+      };
+    }
+    this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
     const closedKeys = parseClosedKeys(req.user);
     const withDiagram = !(this.failFirstWithoutDiagram && this.callLog.length === 1);
     return { content: makeModulePage(closedKeys, withDiagram), usage };
@@ -141,9 +151,12 @@ async function readFile(root: string, rel: string): Promise<string | null> {
   return nodeFs.readFile(nodePath.join(root, rel), "utf8").catch(() => null);
 }
 
-const PAGE_PATH = "livewiki/core.md";
-const DIAGRAM_PATH = "livewiki/diagrams/core.mmd";
-const PLACEHOLDER = "%% livewiki/diagrams/core.mmd";
+// #29: the file unit `core/db` owns the page and the diagram; the folder
+// unit `core` gets its deterministic skeleton + purpose paragraph.
+const PAGE_PATH = "livewiki/core/db.md";
+const DIAGRAM_PATH = "livewiki/diagrams/core-db.mmd";
+const PLACEHOLDER = "%% livewiki/diagrams/core-db.mmd";
+const FILE_TARGET = "core/db";
 
 let repoRoot: string;
 let llm: ModuleDiagramMockLlm;
@@ -166,7 +179,7 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
 
     const result = await runBatch({ repoRoot, llmClient: llm, noRefine: true, skipManifestWrite: true });
     expect(result.status).toBe("completed");
-    expect(result.tasksDone).toBe(1);
+    expect(result.tasksDone).toBe(2); // file + folder unit
     expect(result.tasksFailed).toBe(0);
 
     // The page carries ONLY the exact placeholder, never the inline diagram.
@@ -191,7 +204,7 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
     ).toEqual([]);
 
     // Checkpoint: done, with the diagram recorded in artifacts.
-    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "core");
+    const checkpoint = await readTaskCheckpoint(repoRoot, 4, FILE_TARGET);
     expect(checkpoint?.status).toBe("done");
     expect(checkpoint?.artifacts?.wikiPath).toBe(PAGE_PATH);
     expect(checkpoint?.artifacts?.diagramPath).toBe(DIAGRAM_PATH);
@@ -230,7 +243,7 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
       verify.issues.filter((i) => i.wikiPath === PAGE_PATH || i.wikiPath === DIAGRAM_PATH),
     ).toEqual([]);
 
-    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "core");
+    const checkpoint = await readTaskCheckpoint(repoRoot, 4, FILE_TARGET);
     expect(checkpoint?.status).toBe("done");
     expect(checkpoint?.usageHistory.map((u) => u.attempt)).toEqual([1, 2]);
   });
@@ -253,7 +266,7 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
     expect(llm.callLog).toHaveLength(3);
     expect(result.status).toBe("completed_with_failures");
     expect(result.failures[0]?.error.code).toBe("repair_exhausted");
-    const cp = await readTaskCheckpoint(repoRoot, 4, "core");
+    const cp = await readTaskCheckpoint(repoRoot, 4, FILE_TARGET);
     expect(
       cp?.diagnosticHistory?.some((d) =>
         (d.errors ?? []).some((e) => e.code === "flow_diagram_too_large"),
@@ -268,8 +281,15 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
     // must not.
     class FifteenNodeLlm extends ModuleDiagramMockLlm {
       override async generate(req: GenerateRequest): Promise<GenerateResult> {
-        this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
         const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+        if (req.system.includes("purpose paragraph of ONE folder page")) {
+          return {
+            content:
+              "This directory holds the data layer: the connection lifecycle functions documented by its file page.",
+            usage,
+          };
+        }
+        this.callLog.push({ system: req.system, user: req.user, maxTokens: req.maxTokens });
         const closedKeys = parseClosedKeys(req.user);
         const nodes = Array.from({ length: 15 }, (_, i) => `n${i}`);
         const edges = nodes.slice(0, -1).map((n, i) => `  ${n} --> ${nodes[i + 1]}`);
@@ -298,7 +318,7 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
     const pageBefore = await readFile(repoRoot, PAGE_PATH);
     const diagramBefore = await readFile(repoRoot, DIAGRAM_PATH);
 
-    const rerun = await runOnly({ repoRoot, llmClient: llm, onlyTarget: "core", noRefine: true, skipManifestWrite: true });
+    const rerun = await runOnly({ repoRoot, llmClient: llm, onlyTarget: FILE_TARGET, noRefine: true, skipManifestWrite: true });
     expect(rerun.status).toBe("completed");
 
     // Page and diagram rewritten consistently (same bytes — deterministic mock).
@@ -306,7 +326,7 @@ describe("batch — moduleDiagrams + deepHierarchy (roadmap item 22)", () => {
     expect(await readFile(repoRoot, DIAGRAM_PATH)).toBe(diagramBefore);
 
     // Usage attempts are monotonic across the rerun (checkpoint pattern).
-    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "core");
+    const checkpoint = await readTaskCheckpoint(repoRoot, 4, FILE_TARGET);
     expect(checkpoint?.status).toBe("done");
     expect(checkpoint?.usageHistory.map((u) => u.attempt)).toEqual([1, 2]);
     expect(checkpoint?.artifacts?.diagramPath).toBe(DIAGRAM_PATH);
@@ -340,7 +360,7 @@ describe("batch — module format flags off (pre-#22 contract)", () => {
     expect(llm.callLog[0]!.system).not.toContain("emit ONE H2 `Diagram` section");
     expect(llm.callLog[0]!.system).not.toContain("concept-named H2 sections");
 
-    const checkpoint = await readTaskCheckpoint(repoRoot, 4, "core");
+    const checkpoint = await readTaskCheckpoint(repoRoot, 4, FILE_TARGET);
     expect(checkpoint?.status).toBe("done");
     expect(checkpoint?.artifacts?.diagramPath).toBeUndefined();
 
