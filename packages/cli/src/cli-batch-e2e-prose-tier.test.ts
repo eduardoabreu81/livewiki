@@ -344,7 +344,11 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       const engineFolder = await readWikiPage("livewiki/engine/index.md");
       expect(engineFolder).toContain("`lib.kt` — not documented (re-export, configuration, or plain-text file)");
       const rootFolder = await readWikiPage("livewiki/root/index.md");
-      expect(rootFolder).toContain("`README.md` — not documented (re-export, configuration, or plain-text file)");
+      // #30 follow-up: a Markdown prose file's OWN title (frontmatter/H1)
+      // replaces the raw-filename fallback — harvested from the source file
+      // through the real batch path (regression: safeIo is allowlist-
+      // restricted to the wiki dirs, so the harvest must read via plain fs).
+      expect(rootFolder).toContain("`README.md` — Media fixture");
 
       // The product folder pages carry the LLM purpose paragraph above the
       // deterministic file guide.

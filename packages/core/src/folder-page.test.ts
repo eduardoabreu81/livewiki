@@ -193,4 +193,30 @@ describe("extractPageTitle", () => {
     expect(extractPageTitle("# Just a heading\n\nprose\n")).toBe("Just a heading");
     expect(extractPageTitle("---\nowner: generated\n---\nno heading\n")).toBeNull();
   });
+
+  it("accepts an H1 behind an HTML preamble (badges, aligned divs) but never a mid-document section (#30 measurement)", () => {
+    // Real-world README shape (MPTP): HTML title block, then prose. The
+    // first Markdown H1 is a setup note deep in the file — NOT the
+    // document's title; the honest answer is null (caller's fallback).
+    const htmlTitled = [
+      '<div align="center">',
+      '<h1 align="center">Some Product</h1>',
+      "</div>",
+      "",
+      "Prose about the product follows the HTML block.",
+      "",
+      "# Windows setup notes",
+      "",
+      "Details.",
+    ].join("\n");
+    expect(extractPageTitle(htmlTitled)).toBeNull();
+    // A Markdown H1 directly after an HTML badge block IS title-position.
+    expect(
+      extractPageTitle('<div align="center"><img src="badge.svg"></div>\n\n# Real Title\n\nprose\n'),
+    ).toBe("Real Title");
+    // Prose first, H1 later: the H1 is a section, not the title.
+    expect(extractPageTitle("Opening prose.\n\n# Later section\n")).toBeNull();
+    // Wiki pages without a frontmatter title still resolve their own H1.
+    expect(extractPageTitle("---\nowner: generated\n---\n\n# Page Heading\n\ntext\n")).toBe("Page Heading");
+  });
 });

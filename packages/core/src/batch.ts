@@ -989,12 +989,15 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         // raw filename — filename noise to a lay reader. Harvest the file's
         // own title (frontmatter/H1) so the guide can say what the document
         // IS. Non-Markdown inert files keep the plain fallback line.
+        // Reads go through plain fs like every other source read in this
+        // file — safeIo is allowlist-restricted to the wiki dirs and would
+        // reject source paths (silently, via the catch).
         const proseTitlesByFilePath = new Map<string, string>();
         for (const entry of folderUnit.entries) {
           if (entry.disposition !== "inert") continue;
           if (!/\.(md|mdx|markdown)$/i.test(entry.filePath)) continue;
-          const proseContent = await safeIo
-            .readText(absRoot, entry.filePath)
+          const proseContent = await nodeFs
+            .readFile(nodePath.join(absRoot, entry.filePath), "utf8")
             .catch(() => null);
           if (proseContent === null) continue;
           const proseTitle = extractPageTitle(proseContent);

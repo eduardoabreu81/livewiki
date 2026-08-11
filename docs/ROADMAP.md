@@ -1057,8 +1057,35 @@ at build time. Still open: the Activity dashboard's body strings stay
 English (content, not chrome); the auxiliary hub (`auxiliary/index.md`)
 lands in the "Indexes & overviews" sidebar group instead of "Auxiliary
 areas" (consistent with the flows/topics hubs today — revisit whether
-the hub belongs with its pages); and the prompt-rule effects are only
-measurable on the next paid run.
+the hub belongs with its pages).
+
+**Measurement run 2026-08-11 (paid, MiniMax-M3 via the :8900 proxy
+bridge, external MPTP clone — full `init --batch` at commit 0f1c86a):**
+verify OK (65 pages, no issues); accounting EXACT (checkpoint 737,074 ==
+proxy callog 737,074 after the 44-token smoke; 121 calls). Readability
+read: the new contracts are visible in the corpus — the understanding
+page carries `## Where to look in the code`, folder guides lead with
+page titles + plain coverage lines + "used here / depends on this
+folder" Navigate labels, file pages open sections with why-before-how
+and gloss every literal signature in plain language. **Length-pressure
+finding:** the two length-capped micro-artifacts suffered — folder
+`app-services` exhausted 6 consecutive attempts on
+`folder_purpose_too_long` (1019→834→803→… vs the 800 cap; page missing
+from the corpus) and understanding needed a `--only` recovery
+(purpose 769→673→726 vs 600). Pre-#30 the same model wrote both first
+try, so the lay-reader/why-first rules plausibly lengthen capped prose —
+candidate fix: carve the length-capped builders out of
+LAY_READER_PROMPT_RULE or add a "brevity outranks completeness" clause
+(maintainer decision). Two defects found and fixed with regression
+tests (uncommitted): the prose-title harvest used allowlist-restricted
+`safeIo.readText` and silently never fired (now plain fs like every
+source read in batch.ts; the prose-tier CLI E2E asserts the harvested
+title end-to-end), and `extractPageTitle` accepted a mid-document H1 as
+a title (MPTP READMEs titled their pages "Please set according to your
+actual path…") — now only a title-position H1 (frontmatter body, HTML
+preamble allowed) qualifies. The understanding synthesis named the
+product "livewiki" from the clone's directory name (body text accurate)
+— name-resolution wobble worth watching on the next run.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 

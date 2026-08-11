@@ -128,15 +128,34 @@ export interface RenderFolderPageOptions {
 }
 
 /**
- * Title of an accepted wiki page: frontmatter `title:` first, first H1 as
- * fallback. Used so the folder guide can say what a file is for instead of
- * how many symbols it has (#30). Returns null when neither exists.
+ * Title of an accepted wiki page or a prose source file: frontmatter
+ * `title:` first, then an H1 IN TITLE POSITION — the document's own
+ * heading, not a mid-document section. "Title position" means only blank
+ * lines, HTML blocks/comments (badges, `<div align>` wrappers), and
+ * nothing else precede it; a file that opens with prose and has a `#`
+ * section thirty lines down has no document title and returns null (the
+ * caller's fallback is more honest than a random section name — measured
+ * live on the MPTP READMEs, whose first Markdown H1 is a setup note).
  */
 export function extractPageTitle(content: string): string | null {
-  const raw = parseFrontmatter(content).frontmatter?.["title"];
+  let body = content;
+  let frontmatter: Record<string, unknown> | null = null;
+  try {
+    const parsed = parseFrontmatter(content);
+    body = parsed.body;
+    frontmatter = parsed.frontmatter;
+  } catch {
+    // Unparseable frontmatter: scan the raw content tolerantly.
+  }
+  const raw = frontmatter?.["title"];
   if (typeof raw === "string" && raw.trim() !== "") return raw.trim();
-  const h1 = /^#\s+(.+)$/m.exec(content);
-  return h1 !== null && h1[1]!.trim() !== "" ? h1[1]!.trim() : null;
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("<")) continue;
+    const h1 = /^#\s+(.+)$/.exec(trimmed);
+    return h1 !== null && h1[1]!.trim() !== "" ? h1[1]!.trim() : null;
+  }
+  return null;
 }
 
 /** Assemble the complete folder page Markdown. Pure/deterministic. */
