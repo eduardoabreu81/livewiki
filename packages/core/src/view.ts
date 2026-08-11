@@ -82,6 +82,12 @@ import { slugify } from "./anchors.js";
 import { maskCodeSpans, maskCodeSpansPreservingLength } from "./markdown-mask.js";
 import { listUpdateMetrics } from "./update-metrics.js";
 import { buildActivityModel, renderActivityPage } from "./view-activity.js";
+import {
+  GROUP_ORDER,
+  resolveViewerChrome,
+  type SiteGroup,
+  type ViewerChrome,
+} from "./view-chrome.js";
 import type { SpawnImpl } from "./risk.js";
 
 export const VIEW_TEMPLATES = ["agent", "docs"] as const;
@@ -122,6 +128,11 @@ export interface BuildSiteOptions {
   ref?: string;
   /** Injectable spawn for every git probe (tests substitute a fake). */
   spawnImpl?: SpawnImpl;
+  /**
+   * BCP-47 wiki language for the `<html lang>` attribute (#30) — the CLI
+   * passes `.livewiki/config.json` `language`; defaults to "en".
+   */
+  language?: string;
 }
 
 export interface BuildSiteResult {
@@ -152,27 +163,6 @@ interface PageRecord {
   /** Freshness badge from git history (absent without git data or when disabled). */
   badge?: "new" | "updated";
 }
-
-type SiteGroup =
-  | "Quickstart"
-  | "Concept topics"
-  | "Flows"
-  | "Implementation reference"
-  | "Auxiliary"
-  | "Diagrams"
-  | "Wiki indexes"
-  | "Activity";
-
-const GROUP_ORDER: readonly SiteGroup[] = [
-  "Quickstart",
-  "Concept topics",
-  "Flows",
-  "Implementation reference",
-  "Auxiliary",
-  "Diagrams",
-  "Wiki indexes",
-  "Activity",
-];
 
 const SEARCH_EXCERPT_CAP = 400;
 /** Meta description / og:description cap (~one social-card snippet). */
@@ -234,6 +224,10 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
   // (deterministic — no git/config probing).
   const repoName = nodePath.basename(absRoot);
 
+  // #30 follow-up: chrome strings (sidebar, search, toggle, stamp, diagram
+  // captions) follow the sticky wiki language, not just `<html lang>`.
+  const chrome = resolveViewerChrome(opts.language);
+
   // Version stamp (roadmap item 17): newest commit touching livewiki/ —
   // in ref mode, the newest such commit AT the ref. Null on any failure.
   const stamp = await probeWikiStamp(absRoot, ref, spawnImpl);
@@ -268,7 +262,7 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
     const sourceText = wikiPath.endsWith(".mmd")
       ? mmdSources.get(wikiPath)!
       : await source.read(wikiPath);
-    pages.push(await renderPage(md, wikiPath, sourceText, artifactPaths, tasksGrouping, mmdSources, deepLinks));
+    pages.push(await renderPage(md, wikiPath, sourceText, artifactPaths, tasksGrouping, mmdSources, deepLinks, chrome));
   }
 
   // Freshness badges from git history (deterministic: epochs are compared
@@ -294,7 +288,7 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
     pages.push({
       wikiPath: ".livewiki/update_metrics.json",
       outRel: "activity.html",
-      title: "Activity",
+      title: chrome.activityTitle,
       group: "Activity",
       subgroup: null,
       tasksIndex: Number.MAX_SAFE_INTEGER,
@@ -332,18 +326,20 @@ export async function buildSite(opts: BuildSiteOptions): Promise<BuildSiteResult
     const shell = renderShell({
       template,
       page,
-      sidebarHtml: buildSidebar(pages, page.outRel),
+      sidebarHtml: buildSidebar(pages, page.outRel, chrome),
       rootPrefix: rootPrefixFor(page.outRel),
       repoName,
       stamp: stamp === null ? null : { date: stamp.date, shortSha: stamp.sha.slice(0, 7) },
+      language: opts.language ?? "en",
+      chrome,
     });
     await write(page.outRel, shell);
   }
 
   await write("assets/view-agent.css", AGENT_CSS);
   await write("assets/view-docs.css", DOCS_CSS);
-  await write("assets/view-app.js", VIEW_APP_JS);
-  await write("assets/search-index.js", buildSearchIndexJs(pages));
+  await write("assets/view-app.js", renderViewAppJs(chrome));
+  await write("assets/search-index.js", buildSearchIndexJs(pages, chrome));
   await write("assets/mermaid.min.js", await readMermaidAsset());
 
   filesWritten.sort((a, b) => a.localeCompare(b));
@@ -613,13 +609,16 @@ async function renderPage(
   tasksGrouping: TasksGrouping,
   mmdSources: Map<string, string>,
   deepLinks: DeepLinks | null,
+  chrome: ViewerChrome,
 ): Promise<PageRecord> {
   const outRel = outRelFor(wikiPath);
   const group = classifyGroup(wikiPath);
 
   if (wikiPath.endsWith(".mmd")) {
-    // `.mmd` sources render as a page with a Mermaid code block.
-    const title = deriveTitle(null, "", wikiPath);
+    // `.mmd` sources render as a page with a Mermaid code block. #30: a
+    // human title + one-line caption instead of the raw filename slug —
+    // `flow-cli-src-01-to-core-src-05` as an H1 is filename noise.
+    const { title, caption } = diagramTitleAndCaption(wikiPath, chrome);
     return {
       wikiPath,
       outRel,
@@ -629,9 +628,10 @@ async function renderPage(
       tasksIndex: Number.MAX_SAFE_INTEGER,
       contentHtml:
         `<h1>${escapeHtml(title)}</h1>\n` +
+        `<p>${escapeHtml(caption)}</p>\n` +
         `<pre><code class="language-mermaid">${escapeHtml(source)}</code></pre>\n`,
       headings: [],
-      excerpt: source.replace(/\s+/g, " ").trim().slice(0, SEARCH_EXCERPT_CAP),
+      excerpt: `${title} — ${caption}`.slice(0, SEARCH_EXCERPT_CAP),
     };
   }
 
@@ -701,14 +701,14 @@ function classifyGroup(wikiPath: string): SiteGroup {
   const name = rel.split("/").pop() ?? rel;
   if (rel.startsWith("topics/") && name !== "index.md") return "Concept topics";
   if (rel.startsWith("flows/") && name !== "index.md") return "Flows";
-  if (rel.startsWith("auxiliary/") && name !== "index.md") return "Auxiliary";
-  if (rel.startsWith("architecture/")) return "Wiki indexes";
+  if (rel.startsWith("auxiliary/") && name !== "index.md") return "Auxiliary areas";
+  if (rel.startsWith("architecture/")) return "Indexes & overviews";
   if (!rel.includes("/") && rel !== "tasks.md") return "Implementation reference";
   // #29: unit pages live one level down — `livewiki/<folder>/index.md`
   // (folder page) and `livewiki/<folder>/<file>.md` (file pages).
   if (/^[^/]+\/[^/]+\.md$/.test(rel)) return "Implementation reference";
   // tasks.md, the flows/topics hubs, and any other index-style page.
-  return "Wiki indexes";
+  return "Indexes & overviews";
 }
 
 function deriveTitle(fm: Frontmatter | null, body: string, wikiPath: string): string {
@@ -718,6 +718,49 @@ function deriveTitle(fm: Frontmatter | null, body: string, wikiPath: string): st
   if (h1?.[1]) return h1[1];
   const name = wikiPath.split("/").pop() ?? wikiPath;
   return name.replace(/\.(md|mmd)$/, "");
+}
+
+/**
+ * Human title + one-line caption for a `.mmd` diagram page (#30). The
+ * deterministic filenames carry the meaning: `structure`, `modules`
+ * (import graph), `flow-<slug>`, and `<folder>.classes`. Strings come from
+ * the wiki-language chrome table; `humanize` only capitalizes the slug.
+ */
+function diagramTitleAndCaption(wikiPath: string, chrome: ViewerChrome): { title: string; caption: string } {
+  const name = (wikiPath.split("/").pop() ?? wikiPath).replace(/\.mmd$/, "");
+  const humanize = (slug: string): string =>
+    slug
+      .split(/[-_.]+/)
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  if (name === "structure") {
+    return {
+      title: chrome.structureDiagramTitle,
+      caption: chrome.structureDiagramCaption,
+    };
+  }
+  if (name === "modules") {
+    return {
+      title: chrome.modulesDiagramTitle,
+      caption: chrome.modulesDiagramCaption,
+    };
+  }
+  if (name.endsWith(".classes")) {
+    const folder = name.slice(0, -".classes".length);
+    return {
+      title: chrome.classDiagramTitle(humanize(folder)),
+      caption: chrome.classDiagramCaption(folder),
+    };
+  }
+  if (name.startsWith("flow-")) {
+    const slug = name.slice("flow-".length);
+    return {
+      title: chrome.flowDiagramTitle(humanize(slug)),
+      caption: chrome.flowDiagramCaption,
+    };
+  }
+  return { title: humanize(name), caption: chrome.genericDiagramCaption };
 }
 
 /**
@@ -825,9 +868,9 @@ function rewriteLinks(body: string, fromWikiPath: string, artifactPaths: Set<str
  * Resolve `%% livewiki/<path>.mmd` placeholders — a fenced ```mermaid
  * block whose body is ONLY the placeholder line (the stage-5 flow-page
  * contract and the architecture overview use it) — and embed the diagram
- * source INLINE, keeping a small source note above the block. Applies
- * anywhere such a placeholder appears. A placeholder referencing a
- * missing `.mmd` is left untouched (verify owns that error surface).
+ * source INLINE. Applies anywhere such a placeholder appears. A
+ * placeholder referencing a missing `.mmd` is left untouched (verify owns
+ * that error surface).
  */
 function inlineMermaidPlaceholders(body: string, mmdSources: Map<string, string>): string {
   const re = /```mermaid\s*\r?\n([\s\S]*?)\r?\n```/g;
@@ -838,7 +881,6 @@ function inlineMermaidPlaceholders(body: string, mmdSources: Map<string, string>
     const source = mmdSources.get(mmdRel);
     if (source === undefined) return match;
     return (
-      `_Source: \`${mmdRel}\`_\n\n` +
       `\`\`\`mermaid\n${source.replace(/\s+$/, "")}\n\`\`\``
     );
   });
@@ -1014,9 +1056,15 @@ function renderShell(opts: {
   repoName: string;
   /** Version stamp (roadmap item 17); null when no git data is available. */
   stamp: { date: string; shortSha: string } | null;
+  /** BCP-47 language for `<html lang>` (#30 — the wiki language is sticky). */
+  language: string;
+  /** Localized chrome strings (#30 follow-up). */
+  chrome: ViewerChrome;
 }): string {
-  const { template, page, sidebarHtml, rootPrefix, repoName, stamp } = opts;
-  const siteTitle = `${repoName} — livewiki docs`;
+  const { template, page, sidebarHtml, rootPrefix, repoName, stamp, language, chrome } = opts;
+  // #30: a repo literally named "livewiki" must not brand as
+  // "livewiki — livewiki docs".
+  const siteTitle = repoName === "livewiki" ? "livewiki docs" : `${repoName} — livewiki docs`;
   const pageTitle = `${page.title} — ${siteTitle}`;
   // Static social/OG meta: no og:url (unknown at build time), no og:image
   // (no assets; offline posture). The description reuses the search excerpt.
@@ -1027,14 +1075,15 @@ function renderShell(opts: {
   const brand = page.outRel === "index.html"
     ? `<h1 class="brand">${brandLink}</h1>`
     : `<div class="brand">${brandLink}</div>`;
-  const headerBadge = page.badge === undefined ? "" : `<div class="page-badges">${badgeSpan(page)}</div>\n`;
+  const headerBadge = page.badge === undefined ? "" : `<div class="page-badges">${badgeSpan(page, chrome)}</div>\n`;
   // Version stamp under the brand (roadmap item 17): newest commit
-  // touching the wiki. Absent without git data — never an error.
+  // touching the wiki. Absent without git data — never an error. #30:
+  // plain language; the short sha stays as a tooltip for developers.
   const stampLine = stamp === null
     ? ""
-    : `<div class="site-stamp">Updated on ${escapeHtml(stamp.date)} · Commit ${escapeHtml(stamp.shortSha)}</div>\n`;
+    : `<div class="site-stamp" title="${escapeHtml(chrome.stampTooltip(stamp.shortSha))}">${escapeHtml(chrome.stampText(stamp.date))}</div>\n`;
   return `<!doctype html>
-<html lang="en">
+<html lang="${escapeHtml(language)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1054,8 +1103,8 @@ function renderShell(opts: {
 <div class="sidebar-header">
 ${brand}
 ${stampLine}<div class="sidebar-tools">
-<input id="search-input" type="search" placeholder="Search…" aria-label="Search the wiki">
-<button id="theme-toggle" type="button" aria-label="Toggle light/dark mode" aria-pressed="false">Theme</button>
+<input id="search-input" type="search" placeholder="${escapeHtml(chrome.searchPlaceholder)}" aria-label="${escapeHtml(chrome.searchAriaLabel)}">
+<button id="theme-toggle" type="button" aria-label="${escapeHtml(chrome.themeToggleAriaLabel)}" aria-pressed="false">${escapeHtml(chrome.themeToDark)}</button>
 </div>
 </div>
 <div id="sidebar-groups">
@@ -1076,7 +1125,7 @@ ${headerBadge}${page.contentHtml}
 `;
 }
 
-function buildSidebar(pages: PageRecord[], currentOutRel: string): string {
+function buildSidebar(pages: PageRecord[], currentOutRel: string, chrome: ViewerChrome): string {
   const byGroup = new Map<SiteGroup, PageRecord[]>();
   for (const page of pages) {
     const members = byGroup.get(page.group) ?? [];
@@ -1088,7 +1137,7 @@ function buildSidebar(pages: PageRecord[], currentOutRel: string): string {
     const href = relativeHref(currentOutRel, page.outRel);
     const active = page.outRel === currentOutRel;
     const attrs = active ? ` class="active" aria-current="page"` : "";
-    return `<li><a${attrs} href="${href}">${escapeHtml(page.title)}${badgeSpan(page)}</a></li>`;
+    return `<li><a${attrs} href="${href}">${escapeHtml(page.title)}${badgeSpan(page, chrome)}</a></li>`;
   };
   const byTitle = (a: PageRecord, b: PageRecord): number =>
     a.title.localeCompare(b.title) || a.wikiPath.localeCompare(b.wikiPath);
@@ -1122,7 +1171,7 @@ function buildSidebar(pages: PageRecord[], currentOutRel: string): string {
     } else {
       for (const page of [...members].sort(byTitle)) items.push(linkFor(page));
     }
-    const heading = `<h2>${escapeHtml(group)}</h2>`;
+    const heading = `<h2>${escapeHtml(chrome.groupLabels[group])}</h2>`;
     const list = `<ul>${items.join("")}</ul>`;
     if (members.length === 1) {
       // Single-item groups are always open and not collapsible.
@@ -1140,14 +1189,15 @@ function buildSidebar(pages: PageRecord[], currentOutRel: string): string {
 }
 
 /** Sidebar/header freshness pill markup (empty when the page has no badge). */
-function badgeSpan(page: PageRecord): string {
+function badgeSpan(page: PageRecord, chrome: ViewerChrome): string {
   if (page.badge === undefined) return "";
-  return `<span class="lw-badge lw-badge-${page.badge}">${page.badge}</span>`;
+  const label = page.badge === "new" ? chrome.badgeNew : chrome.badgeUpdated;
+  return `<span class="lw-badge lw-badge-${page.badge}">${escapeHtml(label)}</span>`;
 }
 
-function buildSearchIndexJs(pages: PageRecord[]): string {  const entries = pages.map((page) => ({
+function buildSearchIndexJs(pages: PageRecord[], chrome: ViewerChrome): string {  const entries = pages.map((page) => ({
     title: page.title,
-    group: page.group,
+    group: chrome.groupLabels[page.group],
     url: page.outRel,
     headings: page.headings,
     text: page.excerpt,
@@ -1215,6 +1265,9 @@ function collectHeadings(body: string): string[] {
 function plainTextExcerpt(body: string, cap: number): string {
   const text = maskCodeSpans(body)
     .replace(/<!--[\s\S]*?-->/g, " ")
+    // Headings carry no excerpt value — the page title already covers them
+    // (#30: the OG description used to duplicate the H1).
+    .replace(/^#{1,6}\s+.*$/gm, " ")
     .replace(/\[([^\]]*)\]\(([^)]*)\)/g, "$1")
     .replace(/[#>*_`|-]+/g, " ")
     .replace(/\s+/g, " ")
@@ -1465,11 +1518,19 @@ body { line-height: 1.65; }
  * location + scrolled into view). ES2019, no dependencies beyond the
  * vendored mermaid.
  */
-const VIEW_APP_JS = `(function () {
+function renderViewAppJs(chrome: ViewerChrome): string {
+  return `(function () {
   "use strict";
 
   var ROOT = typeof window.LIVEWIKI_ROOT === "string" ? window.LIVEWIKI_ROOT : "";
   var THEME_KEY = "${THEME_STORAGE_KEY}";
+  // #30 follow-up: UI strings follow the wiki language (baked at build time).
+  var STRINGS = {
+    themeToDark: ${JSON.stringify(chrome.themeToDark)},
+    themeToLight: ${JSON.stringify(chrome.themeToLight)},
+    noResults: ${JSON.stringify(chrome.searchNoResults)},
+    diagramFallbackNote: ${JSON.stringify(chrome.diagramFallbackNote)},
+  };
 
   function escapeHtml(text) {
     return String(text)
@@ -1493,7 +1554,7 @@ const VIEW_APP_JS = `(function () {
     function sync() {
       var theme = current();
       button.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
-      button.textContent = theme === "dark" ? "Light" : "Dark";
+      button.textContent = theme === "dark" ? STRINGS.themeToLight : STRINGS.themeToDark;
     }
     button.addEventListener("click", function () {
       var next = current() === "dark" ? "light" : "dark";
@@ -1567,7 +1628,15 @@ const VIEW_APP_JS = `(function () {
       code.className = "language-mermaid";
       code.textContent = entry.source;
       pre.appendChild(code);
-      entry.div.parentNode.replaceChild(pre, entry.div);
+      // #30: a lay reader staring at raw mermaid source needs one honest
+      // line explaining why.
+      var note = document.createElement("p");
+      note.className = "diagram-fallback-note";
+      note.textContent = STRINGS.diagramFallbackNote;
+      var fragment = document.createDocumentFragment();
+      fragment.appendChild(note);
+      fragment.appendChild(pre);
+      entry.div.parentNode.replaceChild(fragment, entry.div);
     }
     // A failed diagram must degrade to the plain code block. Mermaid
     // renders parse errors AS an svg (the red "bomb", marked with
@@ -1642,7 +1711,7 @@ const VIEW_APP_JS = `(function () {
             return '<li><a href="' + ROOT + entry.url + '">' + escapeHtml(entry.title) +
               '</a><span class="result-group">' + escapeHtml(entry.group) + "</span></li>";
           }).join("")
-        : '<li class="no-results">No matches</li>';
+        : '<li class="no-results">' + escapeHtml(STRINGS.noResults) + '</li>';
       results.hidden = false;
       groups.hidden = true;
     });
@@ -1662,3 +1731,4 @@ const VIEW_APP_JS = `(function () {
   }
 })();
 `;
+}

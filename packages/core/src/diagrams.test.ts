@@ -94,7 +94,7 @@ describe("diagrams.generateModulesGraph", () => {
 
   it("lida com lista vazia (mostra 'no edges' marker)", () => {
     const out = generateModulesGraph([]);
-    expect(out).toContain("No module edges");
+    expect(out).toContain("No cross-folder imports detected");
   });
 
   it("declares a node once when it has multiple outgoing edges", () => {

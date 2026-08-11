@@ -880,7 +880,7 @@ blocking in a later release, so tightening a contract never
 retroactively breaks existing user wikis. Small; protects the exact
 pain we hit every time a new validation code lands.
 
-### 29. Real repository page units (PRE-BETA) — supersedes #25
+### 29. Real repository page units (PRE-BETA) — supersedes #25 ✅ P0–P5 DONE 2026-08-09 (commit 6e5efdb + paid rehearsal/full run on the external clone: exit 0, 63/0, verify OK 68 pages, 663k tokens, checkpoint == proxy exact; evidence in docs/handoffs/2026-08-09-29-p5-rehearsal-app-utils.md, local-only)
 
 Source: maintainer review 2026-08-07. #25 was scoped as "rename the
 mechanical page names"; the review established that the names were a
@@ -922,6 +922,143 @@ measured on one folder before committing). Carries the
 `${module.id}.md`, so the first full batch after page paths stop being
 module ids deletes the wiki (`owner: generated` pages, the ownership
 guard does not save them).
+
+### 30. Human-first wiki readability (product refinement phase)
+
+Source: maintainer directive 2026-08-09, from reading the P5 full-run
+corpus (`app-utils` folder page). The next product phase: **the wiki must
+be readable and understandable by a lay human**, not just verifiable by
+a machine. First findings, all on the folder page (`folder-page.ts`,
+deterministic — zero tokens to change):
+
+1. **The file guide shows machine metrics, not meaning.** `Files` lists
+   `file_security.py — 1 symbol`; a human wants "what is this file for".
+   The answer already exists — the accepted file page's H1 title
+   ("File path containment for whitelisted directories"). Reuse the child
+   page title in the guide instead of (or alongside) the symbol count.
+2. **"Same-name test coverage: 0 of 3 documented files" is insider
+   jargon.** A lay reader cannot parse it. Reword in plain language
+   ("none of these files has a same-named test file") or drop the line.
+3. Minor: purpose-paragraph redundancy ("lightweight, dependency-light")
+   and inconsistent Navigate neighbor labels ("App services module" vs
+   the folder-id style of the other entries).
+
+Wider question for the phase: audit every deterministic surface
+(quickstart, tasks, folder skeletons, Navigate blocks, hub pages) for
+machine-first phrasing, and every LLM prompt for prose that assumes
+reader context a lay human does not have.
+
+**First pass implemented 2026-08-11 (uncommitted; deterministic gate
+green — core 1833 / CLI 126 / MCP 56, zero paid calls):** (1) the file
+guide leads with the accepted child page's title
+(`titlesByPagePath` + `extractPageTitle` in `folder-page.ts`, titles
+harvested in the existing `batch.ts` page-read loop; symbol count is
+the fallback, failed generations still degrade to a plain name);
+(2) the coverage line is plain language (`plainTestCoverageLine` —
+none/partial/all/single-file sentence shapes); (3a) the folder-purpose
+prompt rules ban near-synonym adjective pairs ("lightweight,
+dependency-light"); (3b) `loadModulePresentations` accepts a folder
+page's directory-path title even when it normalizes to the module id,
+so Navigate labels are uniformly folder-id style.
+
+**Audit run 2026-08-11 (three fronts, read-only; maintainer framing:
+agent-facing surfaces STAY machine-precise — frontmatter, anchors,
+ledger, validation contracts — reading surfaces and the viewer HTML go
+human-first).** Findings, in the approved implementation sequence:
+
+*Step 1 — contract fixes (not style):* `buildTopicRepairPrompt` drops
+three shared rules the initial topic prompt has
+(`EXCEPTION_BRANCH_PROMPT_RULE`, `INVENTORY_AUTHORITY_PROMPT_RULE`,
+`BRANCH_PRECISION_PROMPT_RULE`) — a repaired topic page can silently
+lose accuracy guarantees; `buildFileSectionPrompt` paraphrases the
+literal-signature rule instead of using the shared
+`LITERAL_SIGNATURE_PROMPT_RULE` constant.
+
+*Step 2 — deterministic Markdown strings:* dead pre-#29 vocabulary
+("modules", "symbols extracted", "Module ID:", "— part N of M") in the
+quickstart stats, overview intro/cards, tasks "Other modules", fallback
+display titles, and `modules.mmd` ("No module edges detected");
+pipeline internals leaking to readers ("prompt budget / closed-list
+symbols" in the coverage note, "generation failed", "name-prefix match,
+not verified", "is classified as … so its symbols stay addressable from
+anchors" in auxiliary pages); jargon labels ("Organogram",
+"— dependency and dependent", "Auxiliary modules" hub). Vocabulary
+decision: the lay-visible unit is the directory path / "folder".
+
+*Step 3 — viewer HTML (the human-first surface):* Activity dashboard
+renders raw event enums (`package_emitted …`, `debt_resolved … via
+cli`), a "write/package token ratio" card, "median detection→payment",
+and a "1 batch runs" plural bug; the home page leads humans into
+agent-only MCP/CLI operating instructions; the degraded-page notice
+("relaxed contract / strict attempts / anchors verified") renders
+verbatim as a blockquote; diagram pages get raw filename-slug titles
+with no caption; sidebar labels "Auxiliary"/"Wiki indexes"; hardcoded
+`lang="en"`; "Commit \<sha\>" in the version stamp.
+
+*Step 4 — prompt prose contracts:* no builder defines the reader
+(anywhere); "this is reference documentation, not marketing" licenses
+unexplained jargon (prompts.ts:425, :1058);
+`buildSurgicalRepairPrompt` carries no prose contract at all; the
+literal-signature rule dumps a raw signature with no plain-language
+gloss; topic prose must never let a raw `path#symbol` key carry a
+sentence alone. Keep-as-pattern: `FILE_NARRATIVE_PROMPT_RULES`,
+`UNDERSTANDING_PAGE_PROMPT_RULES`, the shared-constants mechanism.
+Cleanup candidates: dead `buildQuickstartPrompt`/`buildOverviewPrompt`
+(only referenced by tests).
+
+**Steps 1–4 implemented 2026-08-11 (uncommitted; zero paid calls).**
+Step 1: topic repair inherits the three shared accuracy rules +
+`buildFileSectionPrompt` uses the shared `LITERAL_SIGNATURE_PROMPT_RULE`.
+Step 2: every deterministic Markdown surface moved to folder/file
+vocabulary and plain language — quickstart stats and intro, tasks
+intro/"Page not written yet"/"Other folders", overview intro, cards
+("Module ID:" line dropped; "Pages:", "Depends on: / Used by:"),
+auxiliary hub renamed "Auxiliary areas", auxiliary-page sentences no
+longer describe livewiki machinery, Navigate labels "used here /
+depends on this folder / used both ways", coverage note without
+pipeline internals, folder guide fallbacks ("not documented (re-export,
+configuration, or plain-text file)", "probably covers (guessed from the
+file name)"), `modules.mmd` empty marker. Step 3 (viewer):
+Activity dashboard in human sentences (event kinds rewritten, ratio
+card dropped, plurals fixed, legends/intro reworded), degraded notice
+is now "Draft page — checked against the code, wording may be rougher"
+(legacy prefix still recognized), diagram pages get human titles +
+captions, sidebar "Auxiliary areas" / "Indexes & overviews", `<html
+lang>` follows the configured wiki language, stamp reads "Documentation
+last changed on \<date\>" (sha in a tooltip), brand deduped for repos
+named livewiki, search "No pages match your search.", diagram fallback
+carries an explanatory note, quickstart agent sections labeled "(for
+agents)". Step 4: `LAY_READER_PROMPT_RULE` shared by all prose
+builders via the rule arrays (initial + repair inherit),
+`WRITE_FOR_UNDERSTANDING_PROMPT_RULE` replaces "reference
+documentation, not marketing", literal signatures get a mandatory
+plain-language gloss, FILE_NARRATIVE gains why-before-how, flow Purpose
+opens with the user-visible goal, topic prose leads with the human
+role before the raw key, surgical repair gets a one-line prose
+contract; dead `buildQuickstartPrompt`/`buildOverviewPrompt` deleted
+with their tests. **Follow-ups implemented 2026-08-11 (later, same day;
+uncommitted; zero paid calls):** (a) the understanding page's surfaces
+section is plain language — `## Where to look in the code` replaces `##
+Key surfaces` (strict validator requires the new heading for new
+generations; the tolerant reader accepts BOTH, since pre-#30 pages are
+sticky and keep the old heading forever; SPEC updated);
+(b) inert Markdown files in the folder-page guide show their OWN title
+(frontmatter/H1 harvested from the source file —
+`proseTitlesByFilePath` in `folder-page.ts`, harvested in the same
+`batch.ts` loop as `titlesByPagePath`) instead of a bare filename +
+"not documented"; non-Markdown inert files keep the plain fallback;
+(c) viewer chrome localization beyond `<html lang>` — new
+`view-chrome.ts` string tables (`en` + `pt`, resolved by BCP-47 base
+subtag, unknown → English byte-identical) cover the sidebar group
+labels, search box/no-results, theme toggle, version stamp, freshness
+badges, diagram titles/captions, and the mermaid fallback note;
+`VIEW_APP_JS` became `renderViewAppJs(chrome)` with the strings baked
+at build time. Still open: the Activity dashboard's body strings stay
+English (content, not chrome); the auxiliary hub (`auxiliary/index.md`)
+lands in the "Indexes & overviews" sidebar group instead of "Auxiliary
+areas" (consistent with the flows/topics hubs today — revisit whether
+the hub belongs with its pages); and the prompt-rule effects are only
+measurable on the next paid run.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 

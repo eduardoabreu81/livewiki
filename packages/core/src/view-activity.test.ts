@@ -189,18 +189,18 @@ describe("view-activity — renderActivityPage", () => {
     expect(headings).toEqual([
       "Totals",
       "Tokens per week",
-      "Debt burndown",
+      "Outdated pages over time",
       "Writes per page",
       "Recent activity",
     ]);
     expect(contentHtml).toContain("12,000"); // batch total grouped
     expect(contentHtml).toContain("$1.50"); // USD secondary estimate
-    expect(contentHtml).toContain("batch wall time"); // durationMs surfaced
+    expect(contentHtml).toContain("time spent in full runs"); // durationMs surfaced
     expect(contentHtml).toContain("2026-01-05 10:00"); // UTC, no local TZ
-    expect(contentHtml).toContain("median detection→payment");
+    expect(contentHtml).toContain("typical time from spotting an outdated page to fixing it");
     expect(contentHtml).toContain('class="activity-chart"'); // inline SVG charts
     expect(contentHtml).not.toContain("<script"); // zero JS
-    expect(excerpt).toContain("12,000 batch tokens");
+    expect(excerpt).toContain("12,000 tokens used by full runs");
   });
 
   it("omits the USD card when no run carries pricing", () => {
@@ -220,7 +220,7 @@ describe("view-activity — renderActivityPage", () => {
 
   it("renders a single-point burndown without crashing (padded time span)", () => {
     const { contentHtml } = renderActivityPage(buildActivityModel([pkg(MON, 100, 7)])!);
-    expect(contentHtml).toContain("Debt burndown");
+    expect(contentHtml).toContain("Outdated pages over time");
     expect(contentHtml).toContain('class="activity-chart"');
   });
 

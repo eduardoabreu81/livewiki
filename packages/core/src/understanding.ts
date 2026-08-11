@@ -253,10 +253,10 @@ export type UnderstandingValidationCode =
   | "purpose_not_single_paragraph" // extra paragraph(s) after the purpose
   | "purpose_too_short" // purpose below the minimum
   | "purpose_too_long" // purpose above the maximum
-  | "unexpected_section" // an H2 other than "Key surfaces"
-  | "unexpected_content" // content after the Key surfaces list / outside the contract
-  | "empty_surfaces_section" // "## Key surfaces" with no bullets
-  | "surfaces_not_a_list" // non-bullet content inside Key surfaces
+  | "unexpected_section" // an H2 other than "Where to look in the code"
+  | "unexpected_content" // content after the surfaces list / outside the contract
+  | "empty_surfaces_section" // "## Where to look in the code" with no bullets
+  | "surfaces_not_a_list" // non-bullet content inside the surfaces section
   | "too_many_surfaces" // more bullets than the cap
   | "surface_too_long" // one bullet above the per-item cap
   | "code_span_forbidden" // backtick inline code or fenced block (no symbol claims)
@@ -270,7 +270,12 @@ export interface UnderstandingValidationError {
   offending?: string;
 }
 
-const KEY_SURFACES_HEADING_RE = /^##\s+key surfaces\s*$/i;
+// #30 follow-up: the section heading is plain language — "Key surfaces" is
+// insider jargon a lay reader cannot parse. Pages are sticky, so pre-rename
+// pages keep the old heading forever: the STRICT validator requires the new
+// heading (new generations), while the tolerant reader accepts both.
+const SURFACES_HEADING_RE = /^##\s+where to look in the code\s*$/i;
+const LEGACY_SURFACES_HEADING_RE = /^##\s+key surfaces\s*$/i;
 const H1_RE = /^#\s+\S/;
 const H2_RE = /^##\s+\S/;
 const ANY_HEADING_RE = /^#{1,6}\s/;
@@ -283,7 +288,8 @@ const LW_MANUAL_RE = /<!--\s*lw:manual\s*-->/;
 /**
  * Validates one normalized understanding artifact against the strict
  * contract: frontmatter (`owner: generated`, no `anchors`), H1, exactly one
- * purpose paragraph, and at most one `## Key surfaces` bullet section. No
+ * purpose paragraph, and at most one `## Where to look in the code` bullet
+ * section. No
  * anchors, no code spans, no Markdown links, no placeholders — the page
  * synthesizes PURPOSE, it does not document symbols. Returns the list of
  * errors; an empty list means valid.
@@ -378,7 +384,8 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
     );
   }
 
-  // Structure: H1 → one purpose paragraph → optional "## Key surfaces".
+  // Structure: H1 → one purpose paragraph → optional "## Where to look in
+  // the code".
   const lines = body.split("\n");
   const h1Indexes: number[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -429,8 +436,8 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
       );
     }
   }
-  // After the purpose: optional `## Key surfaces`, then EOF. Anything else
-  // (extra paragraphs, other sections) violates the contract.
+  // After the purpose: optional `## Where to look in the code`, then EOF.
+  // Anything else (extra paragraphs, other sections) violates the contract.
   let sawSurfaces = false;
   let surfaceCount = 0;
   while (cursor < lines.length) {
@@ -440,10 +447,10 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
       continue;
     }
     if (H2_RE.test(trimmed)) {
-      if (!KEY_SURFACES_HEADING_RE.test(trimmed) || sawSurfaces) {
+      if (!SURFACES_HEADING_RE.test(trimmed) || sawSurfaces) {
         push(
           "unexpected_section",
-          `only one "Key surfaces" H2 section is allowed, got "${trimmed.replace(/^##\s+/, "")}"`,
+          `only one "Where to look in the code" H2 section is allowed, got "${trimmed.replace(/^##\s+/, "")}"`,
           "body",
           trimmed,
         );
@@ -454,7 +461,7 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
       continue;
     }
     if (ANY_HEADING_RE.test(trimmed)) {
-      push("unexpected_section", `only the "Key surfaces" H2 section is allowed, got "${trimmed}"`, "body", trimmed);
+      push("unexpected_section", `only the "Where to look in the code" H2 section is allowed, got "${trimmed}"`, "body", trimmed);
       cursor++;
       continue;
     }
@@ -462,19 +469,19 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
       if (BULLET_RE.test(trimmed)) {
         push(
           "unexpected_content",
-          "a bullet list appears outside the Key surfaces section",
+          "a bullet list appears outside the Where to look in the code section",
           "body",
           trimmed.length > 80 ? `${trimmed.slice(0, 80)}…` : trimmed,
         );
       } else if (purpose !== "" && purposeLines.length > 0) {
         push(
           "purpose_not_single_paragraph",
-          "the purpose must be exactly one paragraph — extra content between the purpose and Key surfaces is not allowed",
+          "the purpose must be exactly one paragraph — extra content between the purpose and Where to look in the code is not allowed",
           "body",
           trimmed.length > 80 ? `${trimmed.slice(0, 80)}…` : trimmed,
         );
       } else {
-        push("unexpected_content", "content outside the H1/purpose/Key surfaces contract", "body", trimmed);
+        push("unexpected_content", "content outside the H1/purpose/Where to look in the code contract", "body", trimmed);
       }
       cursor++;
       continue;
@@ -482,7 +489,7 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
     if (!BULLET_RE.test(trimmed)) {
       push(
         "surfaces_not_a_list",
-        "the Key surfaces section must be a flat Markdown bullet list (`- item`)",
+        "the Where to look in the code section must be a flat Markdown bullet list (`- item`)",
         "body",
         trimmed.length > 80 ? `${trimmed.slice(0, 80)}…` : trimmed,
       );
@@ -494,7 +501,7 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
     if (itemText.length > UNDERSTANDING_SURFACE_MAX_CHARS) {
       push(
         "surface_too_long",
-        `a Key surfaces bullet is ${itemText.length} characters (maximum ${UNDERSTANDING_SURFACE_MAX_CHARS})`,
+        `a Where to look in the code bullet is ${itemText.length} characters (maximum ${UNDERSTANDING_SURFACE_MAX_CHARS})`,
         "body",
         itemText.slice(0, 80),
       );
@@ -502,12 +509,12 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
     cursor++;
   }
   if (sawSurfaces && surfaceCount === 0) {
-    push("empty_surfaces_section", "the Key surfaces section has no bullets", "body");
+    push("empty_surfaces_section", "the Where to look in the code section has no bullets", "body");
   }
   if (surfaceCount > UNDERSTANDING_MAX_SURFACES) {
     push(
       "too_many_surfaces",
-      `the Key surfaces section has ${surfaceCount} bullets (maximum ${UNDERSTANDING_MAX_SURFACES})`,
+      `the Where to look in the code section has ${surfaceCount} bullets (maximum ${UNDERSTANDING_MAX_SURFACES})`,
       "body",
     );
   }
@@ -524,7 +531,10 @@ export interface UnderstandingSynthesis {
 
 /**
  * Tolerant reader for the synthesis page: the H1 title, the first
- * paragraph after it (the purpose), and the `## Key surfaces` bullets.
+ * paragraph after it (the purpose), and the surfaces-section bullets.
+ * Accepts both the current "Where to look in the code" heading and the
+ * pre-#30 "Key surfaces" heading — pages are sticky, so old pages keep the
+ * old heading forever.
  * Returns null when the shape is not recognizable — the callers then fall
  * back to the pre-existing orientation chain. Used for pages that already
  * passed validation OR were human-edited (any owner is accepted: a human
@@ -554,7 +564,9 @@ export function parseUnderstandingPage(content: string): UnderstandingSynthesis 
   const purpose = purposeLines.join(" ").replace(/\s+/g, " ").trim();
   if (purpose === "") return null;
   const surfaces: string[] = [];
-  const surfacesIndex = lines.findIndex((line) => KEY_SURFACES_HEADING_RE.test(line.trim()));
+  const surfacesIndex = lines.findIndex(
+    (line) => SURFACES_HEADING_RE.test(line.trim()) || LEGACY_SURFACES_HEADING_RE.test(line.trim()),
+  );
   if (surfacesIndex >= 0) {
     for (let i = surfacesIndex + 1; i < lines.length; i++) {
       const trimmed = lines[i]!.trim();

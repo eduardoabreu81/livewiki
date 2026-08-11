@@ -119,7 +119,7 @@ describe("deterministic navigation hubs", () => {
       "Work by intent",
       "Document a repo",
       "Query the wiki from an agent",
-      "Pay documentation debt",
+      "Keep the documentation up to date (for agents)",
       "Repository facts",
     ]);
     expect(quickstart).toContain("[Tasks](tasks.md)");
@@ -178,21 +178,21 @@ describe("deterministic navigation hubs", () => {
     expect(tasks.indexOf("## Implementation reference")).toBeLessThan(
       tasks.indexOf("## Auxiliary work"),
     );
-    expect(tasks.match(/\[Auxiliary modules\]\(auxiliary\/index\.md\)/g)).toHaveLength(1);
+    expect(tasks.match(/\[Auxiliary areas\]\(auxiliary\/index\.md\)/g)).toHaveLength(1);
     expect(tasks).not.toContain("aaafixture");
-    expect(tasks).toContain("Page unavailable:");
+    expect(tasks).toContain("Page not written yet");
     const auxiliary = await nodeFs.readFile(
       nodePath.join(repoRoot, "livewiki/auxiliary/index.md"),
       "utf8",
     );
     expect(auxiliary).toContain("## Test fixtures");
-    expect(auxiliary).toContain("page unavailable");
+    expect(auxiliary).toContain("page not written yet");
     const overview = await nodeFs.readFile(
       nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
       "utf8",
     );
-    expect(overview).toContain("## Auxiliary modules");
-    expect(overview.match(/\[Auxiliary modules\]\(\.\.\/auxiliary\/index\.md\)/g)).toHaveLength(1);
+    expect(overview).toContain("## Auxiliary areas");
+    expect(overview.match(/\[Auxiliary areas\]\(\.\.\/auxiliary\/index\.md\)/g)).toHaveLength(1);
     expect(overview).not.toContain("## Test fixtures");
   });
 
@@ -221,8 +221,8 @@ describe("deterministic navigation hubs", () => {
     );
     expect(tasks).toContain("## Implementation reference");
     expect(tasks).not.toContain("## Auxiliary work");
-    expect(overview).toContain("## Product modules");
-    expect(overview).not.toContain("## Auxiliary modules");
+    expect(overview).toContain("## Product folders");
+    expect(overview).not.toContain("## Auxiliary areas");
     await expect(
       nodeFs.stat(nodePath.join(repoRoot, "livewiki/auxiliary/index.md")),
     ).rejects.toThrow();
@@ -257,8 +257,8 @@ describe("deterministic navigation hubs", () => {
       "utf8",
     );
     const tasks = await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8");
-    expect(quickstart).toContain("[Auxiliary modules](auxiliary/index.md)");
-    expect(tasks.match(/\[Auxiliary modules\]\(auxiliary\/index\.md\)/g)).toHaveLength(1);
+    expect(quickstart).toContain("[Auxiliary areas](auxiliary/index.md)");
+    expect(tasks.match(/\[Auxiliary areas\]\(auxiliary\/index\.md\)/g)).toHaveLength(1);
   });
 });
 
@@ -592,7 +592,7 @@ describe("planning inventory — active files with zero extracted symbols", () =
     // 3. The plan, structure diagram, and overview all list the same three
     //    paths exactly once — proving the exact-partition contract still
     //    holds when zero-symbol files are present.
-    expect(overview).toMatch(/\*\*\d+\*\* symbols across \*\*3\*\* files/);
+    expect(overview).toMatch(/\*\*3\*\* files, \*\*\d+\*\* documented code symbols/);
     expect(overview.match(/src\/index\.ts/g)?.length).toBe(1);
   });
 });

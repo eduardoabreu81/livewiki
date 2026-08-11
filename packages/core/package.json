@@ -155,6 +155,10 @@
       "types": "./dist/view-activity.d.ts",
       "import": "./dist/view-activity.js"
     },
+    "./view-chrome": {
+      "types": "./dist/view-chrome.d.ts",
+      "import": "./dist/view-chrome.js"
+    },
     "./diff-preview": {
       "types": "./dist/diff-preview.d.ts",
       "import": "./dist/diff-preview.js"

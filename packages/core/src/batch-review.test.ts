@@ -1433,19 +1433,19 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
     expect(initQuickstart).toContain("[Tasks](tasks.md)");
     expect(initQuickstart).toContain("[Architecture overview](architecture/overview.md)");
     const initTasks = await safeIo.readText(repoRoot, "livewiki/tasks.md");
-    const initTaskIds = new Set<string>();
-    // #29: before pages exist, tasks.md carries each stable folder id in the
-    // `Page unavailable` path — now the FOLDER page (`<id>/index.md`).
-    for (const m of initTasks.matchAll(/Page unavailable: `livewiki\/([\w-]+)\/index\.md`/g)) {
-      if (m[1]) initTaskIds.add(m[1]);
-    }
-    expect(initTaskIds.size).toBe(3);
-    for (const id of initTaskIds) {
-      expect(id).not.toBe("src"); // leaf "src" alone NEVER appears
-    }
+    // #29: before pages exist, tasks.md names each folder through its
+    // display title with one "Page not written yet" line — #30 dropped the
+    // raw `livewiki/<id>/index.md` path from the human surface. The identity
+    // check below asserts the fallback titles never collapse to the bare
+    // colliding leaf ("Src") and that exactly the 3 product folders are
+    // listed as not written.
+    const notWritten = initTasks.match(/Page not written yet/g) ?? [];
+    expect(notWritten.length).toBe(3);
+    const initHeadings = [...initTasks.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
+    expect(initHeadings).not.toContain("Src");
     const initAuxiliary = await safeIo.readText(repoRoot, "livewiki/auxiliary/index.md");
-    expect(initAuxiliary.match(/ — page unavailable$/gm)).toHaveLength(2);
-    expect(initTasks).toContain("[Auxiliary modules](auxiliary/index.md)");
+    expect(initAuxiliary.match(/ — page not written yet$/gm)).toHaveLength(2);
+    expect(initTasks).toContain("[Auxiliary areas](auxiliary/index.md)");
     expect(initTasks).not.toContain("## Test fixtures");
     expect(initTasks).not.toContain("## Tooling and benchmarks");
 
@@ -1557,7 +1557,7 @@ describe("review #11 — E2E: plan, graph, overview, task IDs and pages share th
       }
     }
     expect(overviewIds.size).toBe(3);
-    expect(overview).toContain("[Auxiliary modules](../auxiliary/index.md)");
+    expect(overview).toContain("[Auxiliary areas](../auxiliary/index.md)");
 
     // 6. summary.modulesRefined (batch persisted): the folder-unit partition
     const summaryIds = new Set(

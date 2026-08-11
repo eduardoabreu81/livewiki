@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   buildStage4Prompt,
-  buildQuickstartPrompt,
-  buildOverviewPrompt,
   buildRepairPrompt,
   buildStage5Prompt,
   buildStage5RepairPrompt,
@@ -861,28 +859,6 @@ describe("prompts — Lot N page opening and factual precision", () => {
     expect(fixtureOutput).toMatch(/normal path/i);
     expect(fixtureOutput).toMatch(/catch branch falls back/i);
     expect(fixtureOutput).not.toMatch(/\balways\b|\bguarantees\b|\bmandatory\b/i);
-  });
-});
-
-describe("prompts — quickstart + overview", () => {
-  it("quickstart limita tamanho (max 200 lines)", () => {
-    const r = buildQuickstartPrompt([sampleModule], "syms");
-    expect(r.system).toMatch(/200 lines/);
-  });
-
-  it("quickstart NÃO pede frontmatter (é entry point, não code doc)", () => {
-    const r = buildQuickstartPrompt([sampleModule], "syms");
-    expect(r.system).toMatch(/NO frontmatter/);
-  });
-
-  it("overview pede frontmatter owner: generated", () => {
-    const r = buildOverviewPrompt([sampleModule], "summary");
-    expect(r.system).toMatch(/owner: generated/);
-  });
-
-  it("overview tem language instruction explícita", () => {
-    const r = buildOverviewPrompt([sampleModule], "summary", "pt-BR");
-    expect(r.user).toMatch(/pt-BR/);
   });
 });
 
@@ -2051,6 +2027,21 @@ describe("prompts — rationale evidence block (Etapa 2b)", () => {
     expect(initial.system).not.toContain("does not establish exhaustive behavior");
     // Inventory authority is shared with the module prompts (same constant).
     expect(initial.system).toContain(INVENTORY_AUTHORITY_PROMPT_RULE);
+  });
+
+  it("topic REPAIR prompt inherits the shared accuracy rules (no drift, #30 audit)", () => {
+    const repair = buildTopicRepairPrompt(
+      sampleTopic,
+      "digest",
+      "sym",
+      "source",
+      "prior",
+      [],
+      1000,
+    );
+    expect(repair.system).toContain(EXCEPTION_BRANCH_PROMPT_RULE);
+    expect(repair.system).toContain(INVENTORY_AUTHORITY_PROMPT_RULE);
+    expect(repair.system).toContain(BRANCH_PRECISION_PROMPT_RULE);
   });
 
   it("neutralizes lw:* control markers inside rationale text (never copyable anchor syntax)", () => {

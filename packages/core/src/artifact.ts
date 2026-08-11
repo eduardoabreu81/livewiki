@@ -199,11 +199,13 @@ const TOPIC_ANCHOR_SECTION_NORMALIZED: ReadonlySet<string> = new Set(
  * contract. Defined once so the relaxed writer (batch.ts) and the relaxed
  * opening checks (which skip lines carrying EXACTLY this prefix —
  * deterministic, no prose guessing) can never drift apart. The full notice
- * is parametrized per page (`buildDegradedNotice`); the round-5 legacy
- * notice was this prefix followed by a fixed sentence, so prefix matching
- * also recognizes degraded pages written before the parametrization.
+ * is parametrized per page (`buildDegradedNotice`). #30: the wording is
+ * lay-readable ("Draft page", no "relaxed contract" pipeline jargon);
+ * `DEGRADED_NOTICE_LEGACY_PREFIX` keeps pages written before the reword
+ * recognizable by the stripping/relaxed-check machinery.
  */
-export const DEGRADED_NOTICE_PREFIX = "> **Degraded page** —";
+export const DEGRADED_NOTICE_PREFIX = "> **Draft page** —";
+export const DEGRADED_NOTICE_LEGACY_PREFIX = "> **Degraded page** —";
 
 /**
  * Reader-visible degraded notice for ONE page, parametrized by the page
@@ -211,14 +213,20 @@ export const DEGRADED_NOTICE_PREFIX = "> **Degraded page** —";
  * a duplicate-paragraph group across degraded pages).
  */
 export function buildDegradedNotice(title: string): string {
-  return `${DEGRADED_NOTICE_PREFIX} "${title}" was generated under the relaxed contract after strict attempts failed; anchors verified, presentation reduced.`;
+  return `${DEGRADED_NOTICE_PREFIX} "${title}" was written automatically and checked against the code, but its wording may be rougher than the other pages.`;
 }
 
-/** Drop lines whose trimmed content carries the known degraded-notice prefix. */
+/** Drop lines whose trimmed content carries a known degraded-notice prefix. */
 function dropDegradedNoticeLines(text: string): string {
   return text
     .split("\n")
-    .filter((line) => !line.trim().startsWith(DEGRADED_NOTICE_PREFIX))
+    .filter((line) => {
+      const trimmed = line.trim();
+      return (
+        !trimmed.startsWith(DEGRADED_NOTICE_PREFIX) &&
+        !trimmed.startsWith(DEGRADED_NOTICE_LEGACY_PREFIX)
+      );
+    })
     .join("\n");
 }
 

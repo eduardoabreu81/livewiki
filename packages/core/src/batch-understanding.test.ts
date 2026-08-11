@@ -150,7 +150,7 @@ function makeUnderstandingPage(): string {
     "",
     UNDERSTANDING_PURPOSE,
     "",
-    "## Key surfaces",
+    "## Where to look in the code",
     "",
     "- Command line interface entry point",
     "- Persistence layer in the core module",

@@ -64,6 +64,7 @@ import {
 } from "./page-units.js";
 import {
   buildFolderPurposeContext,
+  extractPageTitle,
   renderFolderPage,
   validateFolderPurpose,
   type FolderPurposeError,
@@ -971,11 +972,33 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           (u) => u.folderId === folderUnit.id,
         );
         const existingPagePaths = new Set<string>();
+        const titlesByPagePath = new Map<string, string>();
         for (const u of folderFileUnits) {
           const pageContent = await safeIo
             .readText(absRoot, u.pagePath)
             .catch(() => null);
-          if (pageContent !== null) existingPagePaths.add(u.pagePath);
+          if (pageContent !== null) {
+            existingPagePaths.add(u.pagePath);
+            // #30: the guide leads with what the file is for — the accepted
+            // page's title — falling back to the symbol count without one.
+            const pageTitle = extractPageTitle(pageContent);
+            if (pageTitle !== null) titlesByPagePath.set(u.pagePath, pageTitle);
+          }
+        }
+        // #30 follow-up: inert Markdown files (docs, prose) are listed by
+        // raw filename — filename noise to a lay reader. Harvest the file's
+        // own title (frontmatter/H1) so the guide can say what the document
+        // IS. Non-Markdown inert files keep the plain fallback line.
+        const proseTitlesByFilePath = new Map<string, string>();
+        for (const entry of folderUnit.entries) {
+          if (entry.disposition !== "inert") continue;
+          if (!/\.(md|mdx|markdown)$/i.test(entry.filePath)) continue;
+          const proseContent = await safeIo
+            .readText(absRoot, entry.filePath)
+            .catch(() => null);
+          if (proseContent === null) continue;
+          const proseTitle = extractPageTitle(proseContent);
+          if (proseTitle !== null) proseTitlesByFilePath.set(entry.filePath, proseTitle);
         }
         if (folderRole !== "product") {
           const page = renderFolderPage({
@@ -983,6 +1006,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             fileUnits: folderFileUnits,
             symbolCountByPath,
             existingPagePaths,
+            titlesByPagePath,
+            proseTitlesByFilePath,
             purpose: "",
             role: folderRole,
           });
@@ -1099,6 +1124,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
               fileUnits: folderFileUnits,
               symbolCountByPath,
               existingPagePaths,
+              titlesByPagePath,
+              proseTitlesByFilePath,
               purpose: attemptResult.purpose!,
             });
             const writeResult = await tryWriteAndVerify(absRoot, wikiPath, page, existing);

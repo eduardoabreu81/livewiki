@@ -36,23 +36,23 @@ const ROLE_LABEL: Record<AuxiliaryRole, string> = {
 const ROLE_BULLETS: Record<AuxiliaryRole, [string, string, string]> = {
   test: [
     "You are debugging a failing test and need to see what this suite covers.",
-    "You are adding a test for a behavior that this module's product code already handles.",
+    "You are adding a test for a behavior that the product code already handles.",
     "You are checking whether a code path has test coverage before changing it.",
   ],
   fixture: [
     "You are debugging a failing test that depends on this fixture.",
-    "You need to see every exported symbol this fixture provides to tests.",
+    "You need to see every function and value this fixture provides to tests.",
     "You are adding a new test that should reuse this fixture instead of duplicating it.",
   ],
   tooling: [
-    "You are modifying the build, lint, release, or benchmark scripts in this module.",
-    "You need the exact symbols this tooling module exposes to other scripts.",
-    "You are debugging a CI or local tooling failure that touches this module.",
+    "You are modifying the build, lint, release, or benchmark scripts in this area.",
+    "You need the exact functions these tooling scripts expose to other scripts.",
+    "You are debugging a CI or local tooling failure that touches these scripts.",
   ],
   docs: [
     "You are updating the repository's own documentation source.",
-    "You need the symbols used to generate or validate documentation.",
-    "You are checking what this documentation module covers before editing it.",
+    "You need the helpers used to generate or validate documentation.",
+    "You are checking what this documentation area covers before editing it.",
   ],
 };
 
@@ -84,7 +84,7 @@ export function generateAuxiliaryModulePage(opts: {
     "",
     `# ${title}`,
     "",
-    `\`${module.id}\` is classified as ${roleLabel} rather than product runtime code, so this page documents its symbols without presenting them as part of the shipped product.`,
+    `This page documents the ${roleLabel} under \`${module.id}\` — reference material, not part of the shipped product's runtime code.`,
     "",
     "## When to use this page",
     "",
@@ -114,9 +114,8 @@ export function generateAuxiliaryModulePage(opts: {
 function howItFitsParagraph(module: Module, roleLabel: string): string {
   const fileWord = module.paths.length === 1 ? "file" : "files";
   return (
-    `This module spans ${module.paths.length} ${fileWord} classified as ${roleLabel}. ` +
-    `It exists so its symbols stay addressable from anchors and cross-references, ` +
-    `without appearing in the primary product hubs.`
+    `This area spans ${module.paths.length} ${fileWord} of ${roleLabel}. ` +
+    `They are documented here for reference and are not linked from the main product pages.`
   );
 }
 
@@ -131,8 +130,8 @@ function referenceParagraph(
   // wrapping it always stays balanced — slicing the assembled sentence could
   // land inside a fence and leave `unclosed_markdown` behind.
   const fixedText =
-    ` is a ${symbol.kind} defined in \`${path}\`, part of the ${roleLabel} ` +
-    `surface of \`${module.id}\` — not part of the product's runtime behavior.`;
+    ` is a ${symbol.kind} defined in \`${path}\`, part of this area's ${roleLabel} ` +
+    `— not part of the product's runtime behavior.`;
   const fixedTextChars = fixedText.length + 2;
   const signatureBudget = Math.max(1, MAX_REFERENCE_PARAGRAPH_CHARS - fixedTextChars);
   const signature =
@@ -140,8 +139,8 @@ function referenceParagraph(
       ? rawSignature.slice(0, signatureBudget - 1) + "…"
       : rawSignature;
   return (
-    `\`${signature}\` is a ${symbol.kind} defined in \`${path}\`, part of the ${roleLabel} ` +
-    `surface of \`${module.id}\` — not part of the product's runtime behavior.`
+    `\`${signature}\` is a ${symbol.kind} defined in \`${path}\`, part of this area's ${roleLabel} ` +
+    `— not part of the product's runtime behavior.`
   );
 }
 

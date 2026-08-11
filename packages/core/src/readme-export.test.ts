@@ -291,7 +291,7 @@ describe("generateReadmeContent — understanding synthesis (item 23)", () => {
     "",
     "WidgetKit is a small engine that turns declarative configs into rendered dashboard widgets for product teams.",
     "",
-    "## Key surfaces",
+    "## Where to look in the code",
     "",
     "- Declarative widget configs",
     "- Dashboard rendering pipeline",

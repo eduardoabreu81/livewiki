@@ -75,7 +75,7 @@ describe("deterministic navigation", () => {
       "Work by intent",
       "Document a repo",
       "Query the wiki from an agent",
-      "Pay documentation debt",
+      "Keep the documentation up to date (for agents)",
       "Repository facts",
     ]);
     expect(quickstart).toContain("[Tasks](tasks.md)");
@@ -103,12 +103,12 @@ describe("deterministic navigation", () => {
     expect(withFlows).toContain("[Beta flow](flows/b-flow.md)");
     expect(withFlows.indexOf("Alpha flow")).toBeLessThan(withFlows.indexOf("Beta flow"));
     expect(withFlows).toContain("[How it works](flows/index.md)");
-    expect(withFlows).toContain("[Auxiliary modules](auxiliary/index.md)");
+    expect(withFlows).toContain("[Auxiliary areas](auxiliary/index.md)");
     expect([...withFlows.matchAll(/^## (.+)$/gm)].map((match) => match[1])).toEqual([
       "Work by intent",
       "Document a repo",
       "Query the wiki from an agent",
-      "Pay documentation debt",
+      "Keep the documentation up to date (for agents)",
       "Repository facts",
     ]);
     expect(withFlows.split("\n").filter((line) => line.trim() !== "").length).toBeLessThanOrEqual(100);
@@ -135,7 +135,7 @@ describe("deterministic navigation", () => {
       "Work by intent",
       "Document a repo",
       "Query the wiki from an agent",
-      "Pay documentation debt",
+      "Keep the documentation up to date (for agents)",
       "Repository facts",
     ]);
     // The block is the FIRST section after the H1.
@@ -190,7 +190,7 @@ describe("deterministic navigation", () => {
       "Work by intent",
       "Document a repo",
       "Query the wiki from an agent",
-      "Pay documentation debt",
+      "Keep the documentation up to date (for agents)",
       "Repository facts",
     ]);
   });
@@ -220,7 +220,7 @@ describe("deterministic navigation", () => {
       "Work by intent",
       "Document a repo",
       "Query the wiki from an agent",
-      "Pay documentation debt",
+      "Keep the documentation up to date (for agents)",
       "Repository facts",
     ]);
     expect(quickstart).toContain(
@@ -231,7 +231,7 @@ describe("deterministic navigation", () => {
     expect(quickstart).not.toContain("Render engine](engine/index.md)** —");
     // With a README purpose, the fallback synthesis is not used.
     expect(quickstart).toContain("A pipeline that renders short videos from topic briefs.");
-    expect(quickstart).not.toContain("Synthesized from the generated module pages");
+    expect(quickstart).not.toContain("Synthesized from the generated folder pages");
     expect(quickstart.split("\n").filter((line) => line.trim() !== "").length).toBeLessThanOrEqual(100);
     expect(quickstart.trim().split(/\s+/).length).toBeLessThanOrEqual(700);
   });
@@ -275,7 +275,7 @@ describe("deterministic navigation", () => {
     expect(quickstart).toContain(
       "This repository is organized around API handlers (serves HTTP endpoints), Render engine (renders the final video), and Command line (drives the pipeline).",
     );
-    expect(quickstart).toContain("*(Synthesized from the generated module pages.)*");
+    expect(quickstart).toContain("*(Synthesized from the generated folder pages.)*");
     expect(quickstart).not.toContain("Purpose excerpt");
     // The synthesis uses at most three modules (the fourth still appears as
     // a reader-digest bullet, capped separately at six).
@@ -356,6 +356,31 @@ describe("deterministic navigation", () => {
     ]);
   });
 
+  it("accepts a folder page's directory-path title even when it normalizes to the module id (#30)", async () => {
+    // #29 folder units: the folder page's title IS the directory path.
+    // Before this fix a title normalizing equal to the module id was
+    // rejected and navigation fell back to the humanized "… module" label,
+    // mixing label styles ("App services module" vs folder-id style)
+    // across Navigate blocks.
+    const folderModules: Module[] = [
+      { id: "app-services", paths: ["app/services/user.ts"], symbolCount: 3 },
+      { id: "app-utils", paths: ["app/utils/format.py"], symbolCount: 2 },
+    ];
+    await safeIo.writeText(
+      repoRoot,
+      "livewiki/app-services/index.md",
+      "---\ntitle: app/services\nowner: generated\n---\n# app/services\n",
+    );
+    await safeIo.writeText(
+      repoRoot,
+      "livewiki/app-utils/index.md",
+      "---\ntitle: app/utils\nowner: generated\n---\n# app/utils\n",
+    );
+    const presentations = await loadModulePresentations(repoRoot, folderModules);
+    expect(presentations.get("app-services")!.displayTitle).toBe("app/services");
+    expect(presentations.get("app-utils")!.displayTitle).toBe("app/utils");
+  });
+
   it("assembles role-separated Tasks: compact title-and-link entries for every role, honest unavailable pages", async () => {
     const cue = "- Configure authentication before enabling protected routes.";
     await safeIo.writeText(repoRoot, "livewiki/core-src-01/index.md", [
@@ -424,14 +449,14 @@ describe("deterministic navigation", () => {
     expect(tasks).not.toContain("Prose under a section is not part of the opening.");
     expect(tasks).toContain("## End-to-end behavior");
     expect(tasks).toContain("### [Batch execution](flows/batch-flow.md)");
-    // Auxiliary modules are represented by exactly one inventory route.
+    // Auxiliary areas are represented by exactly one inventory route.
     expect(tasks).toContain("## Auxiliary work");
-    expect(tasks.match(/\[Auxiliary modules\]\(auxiliary\/index\.md\)/g)).toHaveLength(1);
+    expect(tasks.match(/\[Auxiliary areas\]\(auxiliary\/index\.md\)/g)).toHaveLength(1);
     expect(tasks).not.toContain("fixtures.md");
     expect(tasks).not.toContain("Sample fixtures");
     expect(tasks).not.toContain("Provides canned inputs for tests.");
     // Unavailable page: plain heading + honest note, no link.
-    expect(tasks).toContain("Page unavailable: `livewiki/core-src-02/index.md`");
+    expect(tasks).toContain("Page not written yet — run `livewiki batch` to generate it.");
     expect(tasks).not.toContain("](core-src-02/index.md)");
     expect(tasks.indexOf("## End-to-end behavior")).toBeLessThan(
       tasks.indexOf("## Implementation reference"),
@@ -460,10 +485,10 @@ describe("deterministic navigation", () => {
     });
 
     expect(reordered).toBe(hub);
-    expect(hub).toContain("title: Auxiliary modules");
+    expect(hub).toContain("title: Auxiliary areas");
     expect(hub).toContain("owner: generated");
     expect(hub).toContain("## Test fixtures");
-    expect(hub).toContain("- Sample fixtures — page unavailable");
+    expect(hub).toContain("- Sample fixtures — page not written yet");
     expect(hub).not.toContain("fixtures.md)");
     expect(hub).not.toContain("Authentication flow");
     expect(hub).not.toContain("CLI entry");
@@ -575,8 +600,8 @@ describe("deterministic navigation", () => {
     expect(mixed).not.toContain("[Tasks](tasks.md)");
     expect(mixed).not.toContain("[Architecture](architecture/overview.md)");
     expect(mixed).not.toContain("Flow:");
-    expect(mixed).toContain("[Core B](../core-src-02/index.md) — dependency");
-    expect(mixed).toContain("[CLI](../cli-src/index.md) — dependent");
+    expect(mixed).toContain("[Core B](../core-src-02/index.md) — used here");
+    expect(mixed).toContain("[CLI](../cli-src/index.md) — depends on this folder");
     expect(mixed).not.toContain("fixtures.md");
     expect(await safeIo.readText(repoRoot, "livewiki/cli-src/index.md")).toBe(human);
 
@@ -671,7 +696,7 @@ describe("deterministic navigation", () => {
     const page = await safeIo.readText(repoRoot, "livewiki/core-src-01/index.md");
     expect(page).toContain("- Flow: [Alpha flow](../flows/a-flow.md)");
     expect(page).toContain("- Topic: [Billing concept](../topics/billing.md)");
-    expect(page).toContain("[Core B](../core-src-02/index.md) — dependency");
+    expect(page).toContain("[Core B](../core-src-02/index.md) — used here");
     expect(page).not.toContain("[Quickstart](../quickstart.md)");
     expect(page).not.toContain("[Tasks](../tasks.md)");
     expect(page).not.toContain("[Architecture](../architecture/overview.md)");
@@ -710,7 +735,7 @@ describe("deterministic navigation", () => {
     expect(tasks.indexOf("### App services")).toBeGreaterThan(tasks.indexOf("### App API"));
     // The webui singleton shares no directory prefix with any cluster: it
     // folds into the trailing catch-all bucket instead of fragmenting.
-    expect(tasks.indexOf("### Other modules")).toBeGreaterThan(tasks.indexOf("### App services"));
+    expect(tasks.indexOf("### Other folders")).toBeGreaterThan(tasks.indexOf("### App services"));
     // Entries stay title-link-only bullets (R10 dedup — no copied sentences).
     expect(tasks).toContain("- [Title api-01](api-01/index.md)");
     expect(tasks).toContain("- [Title services-02](services-02/index.md)");
@@ -740,7 +765,7 @@ describe("deterministic navigation", () => {
     // Only one multi-member cluster exists, so the prefixed singleton folds
     // into it and the single effective cluster renders flat (no umbrella H3).
     expect(tasks).not.toContain("### App API");
-    expect(tasks).not.toContain("### Other modules");
+    expect(tasks).not.toContain("### Other folders");
     expect(tasks).toContain("### [Title api-01](api-01/index.md)");
     expect(tasks).toContain("### [Title worker](worker/index.md)");
   });
@@ -1110,7 +1135,7 @@ describe("generateQuickstart — understanding synthesis priority (item 23)", ()
       moduleDigests: digests,
       understanding: null,
     });
-    expect(noReadme).toContain("*(Synthesized from the generated module pages.)*");
+    expect(noReadme).toContain("*(Synthesized from the generated folder pages.)*");
     expect(noReadme).not.toContain("Synthesized from the verified wiki pages");
   });
 });

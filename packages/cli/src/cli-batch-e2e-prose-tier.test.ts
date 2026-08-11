@@ -9,7 +9,7 @@
  * zero-key pages: the deterministic planner (`page-units.ts`) emits one FILE
  * unit per symbol-bearing product file and one FOLDER unit per real
  * directory, and a prose (inert) file is accounted for as a deterministic
- * line on its folder page ("no symbols extracted") — zero tokens.
+ * line on its folder page ("not documented") — zero tokens.
  *
  * Coverage:
  *   1. init --batch on a mixed repo completes, verify reports zero issues,
@@ -340,11 +340,11 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       // Prose files never reach the LLM: each is a deterministic inert line
       // on its folder page (zero tokens, nothing hallucinated).
       const serverFolder = await readWikiPage("livewiki/server/index.md");
-      expect(serverFolder).toContain("`main.rb` — no symbols extracted (barrel, configuration, or prose file)");
+      expect(serverFolder).toContain("`main.rb` — not documented (re-export, configuration, or plain-text file)");
       const engineFolder = await readWikiPage("livewiki/engine/index.md");
-      expect(engineFolder).toContain("`lib.kt` — no symbols extracted (barrel, configuration, or prose file)");
+      expect(engineFolder).toContain("`lib.kt` — not documented (re-export, configuration, or plain-text file)");
       const rootFolder = await readWikiPage("livewiki/root/index.md");
-      expect(rootFolder).toContain("`README.md` — no symbols extracted (barrel, configuration, or prose file)");
+      expect(rootFolder).toContain("`README.md` — not documented (re-export, configuration, or plain-text file)");
 
       // The product folder pages carry the LLM purpose paragraph above the
       // deterministic file guide.
@@ -383,7 +383,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
         "What you'll find in this wiki",
       );
       expect(quickstart).toContain(`- **[src/api](api/index.md)** — ${FOLDER_PURPOSE}`);
-      expect(quickstart).not.toContain("Synthesized from the generated module pages");
+      expect(quickstart).not.toContain("Synthesized from the generated folder pages");
 
       // Verify: exit 0 + zero issues of any severity.
       await expectVerifyClean();
@@ -448,8 +448,8 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       expect(await wikiPageExists("livewiki/server/index.md")).toBe(true);
       expect(await wikiPageExists("livewiki/server.md"), "no legacy chunk page").toBe(false);
       const folderBody = await readWikiPage("livewiki/server/index.md");
-      expect(folderBody).toContain("`main.rb` — no symbols extracted (barrel, configuration, or prose file)");
-      expect(folderBody).toContain("`routes.rb` — no symbols extracted (barrel, configuration, or prose file)");
+      expect(folderBody).toContain("`main.rb` — not documented (re-export, configuration, or plain-text file)");
+      expect(folderBody).toContain("`routes.rb` — not documented (re-export, configuration, or plain-text file)");
 
       await expectVerifyClean();
 

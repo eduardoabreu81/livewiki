@@ -2819,7 +2819,7 @@ describe("Lot N — deterministic stage 2 (#29: no LLM refine) and page-unit nav
 
     expect(await safeIo.readText(repoRoot, "livewiki/tasks.md")).toContain("](auth/index.md)");
     expect(await safeIo.readText(repoRoot, "livewiki/architecture/overview.md")).toContain(
-      "[module page](../auth/index.md)",
+      "[folder page](../auth/index.md)",
     );
   });
 });

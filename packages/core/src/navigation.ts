@@ -122,8 +122,10 @@ export function buildDisplayTitleFallbacks(
 
   const result = new Map<string, string>();
   for (const module of stable) {
-    let title = suffixes.get(module.id) ?? "Repository module";
-    if (normalizeLabel(title) === normalizeLabel(module.id)) title += " module";
+    // #30: the lay-visible unit is the folder, not the dead module-chunk
+    // vocabulary ("… module" / "Repository module").
+    let title = suffixes.get(module.id) ?? "Repository root";
+    if (normalizeLabel(title) === normalizeLabel(module.id)) title += " folder";
     const group = byDirectory.get(groupKeyOf(module)) ?? [];
     if (group.length > 1) {
       const part = group.findIndex((candidate) => candidate.id === module.id) + 1;
@@ -145,7 +147,7 @@ export async function loadModulePresentations(
     const relPath = `livewiki/${module.id}/index.md`;
     const pageExists = await safeIo.exists(repoRoot, relPath).catch(() => false);
     let owner: ModulePresentation["owner"] = null;
-    let displayTitle = fallbacks.get(module.id) ?? "Repository module";
+    let displayTitle = fallbacks.get(module.id) ?? "Repository root";
     if (pageExists) {
       try {
         const source = await safeIo.readText(repoRoot, relPath);
@@ -158,7 +160,13 @@ export async function loadModulePresentations(
         if (
           typeof rawTitle === "string" &&
           rawTitle.trim() !== "" &&
-          normalizeLabel(rawTitle) !== normalizeLabel(module.id)
+          (normalizeLabel(rawTitle) !== normalizeLabel(module.id) ||
+            // #29/#30: a folder page's title IS its directory path — the
+            // human-meaningful identity of the unit. Accept it even when it
+            // normalizes to the module id, so every navigation surface shows
+            // the same folder-id style instead of mixing it with the
+            // humanized "… module" fallback.
+            rawTitle.trim() === folderPageTitle(module))
         ) {
           displayTitle = rawTitle.trim();
         }
@@ -445,7 +453,7 @@ export function generateQuickstart(opts: {  totalFiles: number;
   );
   if (opts.hasAuxiliary) {
     workByIntent.push(
-      "- **Maintain tests, fixtures, tooling, benchmarks, or repository documentation:** open the [Auxiliary modules](auxiliary/index.md) inventory.",
+      "- **Maintain tests, fixtures, tooling, benchmarks, or repository documentation:** open the [Auxiliary areas](auxiliary/index.md) inventory.",
     );
   }
   const lines = [
@@ -453,7 +461,7 @@ export function generateQuickstart(opts: {  totalFiles: number;
     "",
     ...orientationBlock,
     ...digestBlock,
-    "Use this wiki to choose a task, inspect the repository architecture, query focused pages from an agent, and keep documentation debt under control.",
+    "Use this wiki to choose a task, inspect the repository architecture, query focused pages from an agent, and keep the documentation up to date as the code changes.",
     "",
     ...(topicPresentations.size > 0
       ? [
@@ -471,7 +479,7 @@ export function generateQuickstart(opts: {  totalFiles: number;
     "## Document a repo",
     "",
     "1. Run `livewiki init` to index the repository and create deterministic navigation.",
-    "2. Run `livewiki init --batch` when you also want generated module pages.",
+    "2. Run `livewiki init --batch` when you also want the generated folder and file pages.",
     "3. Run `livewiki verify` before relying on or publishing the wiki.",
     "",
     "## Query the wiki from an agent",
@@ -480,7 +488,7 @@ export function generateQuickstart(opts: {  totalFiles: number;
     "2. Use `livewiki_search` to find relevant pages.",
     "3. Use `livewiki_read` to inspect the selected page in full.",
     "",
-    "## Pay documentation debt",
+    "## Keep the documentation up to date (for agents)",
     "",
     "1. Inspect open debt with `livewiki_debt` or `livewiki status --json`.",
     "2. Update a page with `livewiki_write_doc`, or edit it directly while preserving its ownership rules.",
@@ -488,9 +496,9 @@ export function generateQuickstart(opts: {  totalFiles: number;
     "",
     "## Repository facts",
     "",
-    `- **${opts.totalFiles} files** indexed`,
-    `- **${opts.totalSymbols} symbols** extracted`,
-    `- **${opts.moduleCount} modules** identified`,
+    `- **${opts.totalFiles} ${opts.totalFiles === 1 ? "file" : "files"}** documented`,
+    `- **${opts.moduleCount} ${opts.moduleCount === 1 ? "folder" : "folders"}** covered`,
+    `- **${opts.totalSymbols} code ${opts.totalSymbols === 1 ? "symbol" : "symbols"}** indexed`,
     "",
   ];
   return lines.join("\n");
@@ -562,7 +570,7 @@ function buildOrientationBlock(
     block.push(`*(Purpose excerpt from the repository README: \`${source}\`.)*`, "");
   } else if (synthesizedPurpose !== null) {
     block.push(synthesizedPurpose, "");
-    block.push("*(Synthesized from the generated module pages.)*", "");
+    block.push("*(Synthesized from the generated folder pages.)*", "");
   }
   if (surfaces.length > 0) {
     block.push("**Entry points and surfaces**", "");
@@ -631,7 +639,7 @@ export function generateTasksPage(opts: {
     "",
     "# Tasks",
     "",
-    "Choose an end-to-end behavior or a product area. Auxiliary repository roles are available through one separate inventory.",
+    "Choose an end-to-end behavior or a product area. Tests, fixtures, tooling, and documentation pages live in one separate inventory.",
     "",
   ];
   const topicPresentations = opts.topicPresentations ?? new Map<string, TopicPresentation>();
@@ -664,7 +672,7 @@ export function generateTasksPage(opts: {
           lines.push(
             `### ${presentation.displayTitle}`,
             "",
-            `Page unavailable: \`livewiki/${module.id}/index.md\` has not been generated yet.`,
+            "Page not written yet — run `livewiki batch` to generate it.",
             "",
           );
           continue;
@@ -683,7 +691,7 @@ export function generateTasksPage(opts: {
           const presentation = opts.presentations.get(module.id)!;
           lines.push(presentation.pageExists
             ? `- [${presentation.displayTitle}](${module.id}/index.md)`
-            : `- ${presentation.displayTitle} — page unavailable: \`livewiki/${module.id}/index.md\` has not been generated yet.`);
+            : `- ${presentation.displayTitle} — page not written yet — run \`livewiki batch\` to generate it.`);
         }
         lines.push("");
       }
@@ -694,7 +702,7 @@ export function generateTasksPage(opts: {
     lines.push(
       "## Auxiliary work",
       "",
-      "Use the complete [Auxiliary modules](auxiliary/index.md) inventory for tests, fixtures, tooling, benchmarks, and repository documentation.",
+      "Use the complete [Auxiliary areas](auxiliary/index.md) inventory for tests, fixtures, tooling, benchmarks, and repository documentation.",
       "",
     );
   }
@@ -708,7 +716,7 @@ interface TasksModuleGroup {
 }
 
 /** Heading for the trailing bucket that receives singletons with no prefixed sibling. */
-const TASKS_OTHER_GROUP_HEADING = "Other modules";
+const TASKS_OTHER_GROUP_HEADING = "Other folders";
 
 /**
  * Deterministic concern grouping for the tasks page `Implementation
@@ -721,11 +729,11 @@ const TASKS_OTHER_GROUP_HEADING = "Other modules";
  * 3. Singleton folding: a one-member cluster never gets its own heading.
  *    It folds into the multi-member cluster sharing the longest common
  *    directory prefix (at least one segment; ties broken by cluster order).
- *    With no prefixed sibling it lands in one trailing "Other modules"
+ *    With no prefixed sibling it lands in one trailing "Other folders"
  *    bucket (members in prioritization order).
  * 4. Headings are `humanizeSegments` of the cluster directory ("Repository
  *    root" when modules sit at the root); the catch-all bucket is always
- *    "Other modules". When folding leaves a single effective cluster the
+ *    "Other folders". When folding leaves a single effective cluster the
  *    caller renders the flat list without any group heading.
  */
 function groupTasksModules(productModules: Module[]): TasksModuleGroup[] {
@@ -804,11 +812,11 @@ export function generateAuxiliaryIndex(opts: {
   const order = new Map(opts.ordered.map((module, index) => [module.id, index]));
   const lines = [
     "---",
-    "title: Auxiliary modules",
+    "title: Auxiliary areas",
     "owner: generated",
     "---",
     "",
-    "# Auxiliary modules",
+    "# Auxiliary areas",
     "",
     "Reference inventory for tests, fixtures, tooling, benchmarks, and repository documentation.",
     "",
@@ -823,7 +831,7 @@ export function generateAuxiliaryIndex(opts: {
       const presentation = opts.presentations.get(module.id)!;
       lines.push(presentation.pageExists
         ? `- [${presentation.displayTitle}](../${module.id}/index.md)`
-        : `- ${presentation.displayTitle} — page unavailable`);
+        : `- ${presentation.displayTitle} — page not written yet`);
     }
     lines.push("");
   }
@@ -846,7 +854,7 @@ export function generateFlowsIndex(opts: {
     "",
     "# How it works",
     "",
-    "Each page below explains one principal end-to-end flow across modules, with its companion diagram.",
+    "Each page below explains one principal end-to-end flow across the codebase, with its companion diagram.",
     "",
   ];
   for (const slug of [...opts.presentations.keys()].sort()) {
@@ -1242,9 +1250,13 @@ function buildNavigateBlock(
   }
   for (const item of related) {
     const title = presentations.get(item.moduleId)?.displayTitle ?? item.moduleId;
+    // #30: plain-language relationship labels — "dependency and dependent"
+    // is graph jargon a lay reader should never have to decode.
     const label = item.direction === "both"
-      ? "dependency and dependent"
-      : item.direction;
+      ? "used both ways"
+      : item.direction === "dependency"
+        ? "used here"
+        : "depends on this folder";
     lines.push(`- [${title}](../${item.moduleId}/index.md) — ${label}`);
   }
   if (coverageNote !== null) {
@@ -1255,19 +1267,20 @@ function buildNavigateBlock(
 }
 
 /**
- * Per-module coverage note appended to the Navigate block when the module
- * source exceeded the stage-4 prompt budget. Parametrized by the module's
+ * Per-folder coverage note appended to the Navigate block when the folder's
+ * source exceeded the stage-4 prompt budget. Parametrized by the folder's
  * own file count and summed source size (rounded to whole k) so no two
- * modules share the note verbatim — a fixed line repeated across pages is
+ * pages share the note verbatim — a fixed line repeated across pages is
  * itself duplicate boilerplate. `fileCount` is `module.paths.length` (the
- * module's declared inventory), `totalBytes` the summed on-disk sizes
+ * folder's declared inventory), `totalBytes` the summed on-disk sizes
  * (~chars for source text). Coverage honesty is the tool's job — one
- * deterministic line per page, never model prose.
+ * deterministic line per page, never model prose. #30: plain language —
+ * no "prompt budget" / "closed-list" pipeline internals.
  */
 export function buildModuleCoverageNote(fileCount: number, totalBytes: number): string {
   const files = fileCount === 1 ? "1 file" : `${fileCount} files`;
   const kiloChars = Math.round(totalBytes / 1000);
-  return `> Coverage note: this module's source (${files}, ~${kiloChars}k chars) exceeded the prompt budget and was excerpted; this page documents the closed-list symbols.`;
+  return `> Coverage note: this folder's source (${files}, ~${kiloChars}k chars) is too large to read in full; this page documents its main entry points.`;
 }
 
 /** Sums the on-disk sizes of `module.paths`; unreadable paths contribute nothing. */
@@ -1321,11 +1334,24 @@ function humanizeSegments(segments: string[]): string {
     const value = lower === "src" ? "source" : lower === "docs" ? "documentation" : lower;
     if (acronyms.has(value)) return value.toUpperCase();
     return index === 0 ? value.charAt(0).toUpperCase() + value.slice(1) : value;
-  }).join(" ") || "Repository module";
+  }).join(" ") || "Repository root";
 }
 
 function normalizeLabel(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * The title `renderFolderPage` gives the folder page of this module (#29):
+ * the directory path itself, or "(repository root)" for the root folder.
+ * Derived from `module.paths` (all in the folder's directory); null when
+ * the module declares no paths.
+ */
+function folderPageTitle(module: Module): string | null {
+  const first = module.paths[0];
+  if (first === undefined) return null;
+  const directory = nodePath.posix.dirname(first.replace(/\\/g, "/"));
+  return directory === "." ? "(repository root)" : directory;
 }
 
 function compareModules(a: Module, b: Module): number {

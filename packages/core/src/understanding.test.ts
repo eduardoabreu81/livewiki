@@ -5,7 +5,7 @@
  *
  *   - validateUnderstandingArtifact: a valid page passes; every contract
  *     violation is rejected with its own code (no anchors, no code spans,
- *     no links, single purpose paragraph, bounded Key surfaces);
+ *     no links, single purpose paragraph, bounded surfaces section);
  *   - parseUnderstandingPage / loadUnderstandingSynthesis: tolerant reader
  *     for the quickstart/README-export consumers, null on garbage;
  *   - computeUnderstandingEvidenceHash: stable identity, sensitive to
@@ -51,7 +51,7 @@ function makeValidPage(): string {
     "",
     "Flow Repo is a small command line application that drives a persistence core for its users.",
     "",
-    "## Key surfaces",
+    "## Where to look in the code",
     "",
     "- Command line interface entry point",
     "- Persistence layer in the core module",
@@ -86,7 +86,7 @@ afterEach(async () => {
 // === Validation ===
 
 describe("validateUnderstandingArtifact", () => {
-  it("accepts a valid page (with and without the Key surfaces section)", () => {
+  it("accepts a valid page (with and without the Where to look in the code section)", () => {
     expect(validateUnderstandingArtifact(makeValidPage())).toEqual([]);
     const noSurfaces = [
       "---",
@@ -127,7 +127,7 @@ describe("validateUnderstandingArtifact", () => {
       },
       {
         name: "lw:anchors marker",
-        mutate: (page) => page.replace("## Key surfaces", "<!-- lw:anchors cli/index.ts#main -->\n\n## Key surfaces"),
+        mutate: (page) => page.replace("## Where to look in the code", "<!-- lw:anchors cli/index.ts#main -->\n\n## Where to look in the code"),
         code: "anchors_forbidden",
       },
       {
@@ -142,7 +142,7 @@ describe("validateUnderstandingArtifact", () => {
       },
       {
         name: "multiple H1",
-        mutate: (page) => page.replace("## Key surfaces", "# Another title\n\n## Key surfaces"),
+        mutate: (page) => page.replace("## Where to look in the code", "# Another title\n\n## Where to look in the code"),
         code: "multiple_h1",
       },
       {
@@ -174,12 +174,12 @@ describe("validateUnderstandingArtifact", () => {
       },
       {
         name: "second purpose paragraph",
-        mutate: (page) => page.replace("## Key surfaces", "A second paragraph the contract forbids.\n\n## Key surfaces"),
+        mutate: (page) => page.replace("## Where to look in the code", "A second paragraph the contract forbids.\n\n## Where to look in the code"),
         code: "purpose_not_single_paragraph",
       },
       {
         name: "unexpected section",
-        mutate: (page) => page.replace("## Key surfaces", "## Architecture"),
+        mutate: (page) => page.replace("## Where to look in the code", "## Architecture"),
         code: "unexpected_section",
       },
       {
@@ -225,8 +225,13 @@ describe("validateUnderstandingArtifact", () => {
       },
       {
         name: "markdown link",
-        mutate: (page) => page.replace("## Key surfaces", "## Key surfaces\n\nSee [the flow](flows/cli-to-core.md)."),
+        mutate: (page) => page.replace("## Where to look in the code", "## Where to look in the code\n\nSee [the flow](flows/cli-to-core.md)."),
         code: "link_forbidden",
+      },
+      {
+        name: "legacy Key surfaces heading (pre-#30 pages keep it, but new generations must use the plain-language heading)",
+        mutate: (page) => page.replace("## Where to look in the code", "## Key surfaces"),
+        code: "unexpected_section",
       },
       {
         name: "TODO placeholder",
@@ -267,6 +272,16 @@ describe("parseUnderstandingPage / loadUnderstandingSynthesis", () => {
   it("returns null when there is no H1 or no purpose paragraph", () => {
     expect(parseUnderstandingPage("no heading at all")).toBeNull();
     expect(parseUnderstandingPage("# Title only\n\n## Key surfaces\n\n- a\n")).toBeNull();
+  });
+
+  it("still reads the pre-#30 'Key surfaces' heading (pages are sticky — old pages keep it forever)", () => {
+    const legacy = makeValidPage().replace("## Where to look in the code", "## Key surfaces");
+    const parsed = parseUnderstandingPage(legacy);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.surfaces).toEqual([
+      "Command line interface entry point",
+      "Persistence layer in the core module",
+    ]);
   });
 
   it("loads the page from disk and degrades to null when absent", async () => {

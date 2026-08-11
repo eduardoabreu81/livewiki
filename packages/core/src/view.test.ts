@@ -231,6 +231,42 @@ describe("view.buildSite", () => {
     }
   });
 
+  it("localizes the viewer chrome to the wiki language (#30 follow-up); default stays English", async () => {
+    await writeFixtureWiki();
+    const ptOut = nodePath.join(repoRoot, "site-pt");
+    await buildSite({ repoRoot, outDir: ptOut, language: "pt-BR", badgeDays: 0 });
+
+    const index = (await readSite(ptOut, "index.html"))!;
+    expect(index).toContain('<html lang="pt-BR">');
+    expect(index).toContain('placeholder="Buscar…"');
+    expect(index).toContain('aria-label="Buscar na wiki"');
+    expect(index).toContain(">Início rápido</h2>");
+    expect(index).toContain(">Referência de implementação</h2>");
+    expect(index).not.toContain(">Implementation reference</h2>");
+
+    // Diagram page titles/captions follow the language too.
+    const structure = (await readSite(ptOut, "pages/architecture/structure.html"))!;
+    expect(structure).toContain("Estrutura do repositório");
+    expect(structure).toContain("Mapa das pastas e arquivos do repositório.");
+
+    // The runtime JS asset carries the localized strings (baked at build time).
+    const appJs = (await readSite(ptOut, "assets/view-app.js"))!;
+    expect(appJs).toContain("Nenhuma página corresponde à sua busca.");
+    expect(appJs).not.toContain("No pages match your search.");
+
+    // Search index group labels are localized (shown under each result).
+    const entries = parseSearchIndex((await readSite(ptOut, "assets/search-index.js"))!);
+    expect(entries.some((entry) => entry["group"] === "Fluxos")).toBe(true);
+
+    // No language configured → the pre-#30 English chrome, byte-for-byte.
+    const enOut = nodePath.join(repoRoot, "site-en");
+    await buildSite({ repoRoot, outDir: enOut, badgeDays: 0 });
+    const enIndex = (await readSite(enOut, "index.html"))!;
+    expect(enIndex).toContain('<html lang="en">');
+    expect(enIndex).toContain('placeholder="Search…"');
+    expect(enIndex).toContain(">Implementation reference</h2>");
+  });
+
   it("rewrites internal links to .html and every .html href resolves inside the site", async () => {
     await writeFixtureWiki();
     const outDir = nodePath.join(repoRoot, "site-out");
@@ -310,8 +346,6 @@ describe("view.buildSite", () => {
     expect(flow).toContain('class="language-mermaid"');
     expect(flow).toContain("sequenceDiagram");
     expect(flow).toContain("CLI-&gt;&gt;Core: run");
-    expect(flow).toContain("Source:");
-    expect(flow).toContain("livewiki/diagrams/flow-cli-auth.mmd");
     expect(flow).not.toContain("%% livewiki/");
   });
 
@@ -923,17 +957,17 @@ async function writeDeepLinkWiki(): Promise<void> {
 }
 
 describe("view.buildSite version stamp (roadmap item 17)", () => {
-  it("renders 'Updated on <date> · Commit <short-sha>' under the brand from one git log call", async () => {
+  it("renders a plain-language stamp (date + sha tooltip) under the brand from one git log call", async () => {
     await writeDeepLinkWiki();
     const outDir = nodePath.join(repoRoot, "site-out");
     await buildSite({ repoRoot, outDir, spawnImpl: fakeGitRouter(stampRoutes()) });
 
     const index = (await readSite(outDir, "index.html"))!;
     expect(index).toContain(
-      `<div class="site-stamp">Updated on 2026-08-01 · Commit ${STAMP_SHA.slice(0, 7)}</div>`,
+      `<div class="site-stamp" title="commit ${STAMP_SHA.slice(0, 7)}">Documentation last changed on 2026-08-01</div>`,
     );
     const auth = (await readSite(outDir, "pages/auth.html"))!;
-    expect(auth).toContain("Updated on 2026-08-01");
+    expect(auth).toContain("Documentation last changed on 2026-08-01");
   });
 
   it("no stamp when the git log probe fails (spawn error / non-zero exit / garbage)", async () => {
@@ -1105,7 +1139,8 @@ describe("view.buildSite --ref", () => {
     expect(calls.some((a) => a.includes("--no-merges"))).toBe(false);
     const auth = (await readSite(outDir, "pages/auth.html"))!;
     expect(auth).not.toContain("lw-badge");
-    expect(auth).toContain(`Updated on 2026-07-01 · Commit ${REF_SHA.slice(0, 7)}`);
+    expect(auth).toContain(`Documentation last changed on 2026-07-01`);
+    expect(auth).toContain(`title="commit ${REF_SHA.slice(0, 7)}"`);
     expect(auth).toContain(`https://github.com/acme/widgets/blob/${REF_SHA}/src/auth/login.ts`);
   });
 

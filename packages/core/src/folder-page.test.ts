@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { planPageUnits } from "./page-units.js";
 import {
+  extractPageTitle,
+  plainTestCoverageLine,
   renderFolderPage,
   validateFolderPurpose,
   FOLDER_PURPOSE_MAX_CHARS,
@@ -65,12 +67,52 @@ describe("renderFolderPage", () => {
     });
     expect(page).toContain("# src");
     expect(page).toContain("owner: generated");
-    expect(page).toContain("- [batch.ts](batch.md) — 55 symbols · Tests: `batch.test.ts`");
-    expect(page).toContain("- [view.ts](view.md) — 48 symbols");
-    expect(page).toContain("- `index.ts` — no symbols extracted");
-    expect(page).toContain("`batch-repair.test.ts` — test file, likely covers `batch` (name-prefix match, not verified)");
-    expect(page).toContain("`e2e.test.ts` — orphan: no product file in this repository matches this test");
-    expect(page).toContain("Same-name test coverage: 1 of 2 documented files.");
+    expect(page).toContain("- [batch.ts](batch.md) · Tests: `batch.test.ts`");
+    expect(page).toContain("- [view.ts](view.md)");
+    expect(page).toContain("- `index.ts` — not documented (re-export, configuration, or plain-text file)");
+    expect(page).toContain("`batch-repair.test.ts` — test file, probably covers `batch` (guessed from the file name)");
+    expect(page).toContain("`e2e.test.ts` — no product file in this repository matches this test");
+    expect(page).toContain(
+      "1 of the 2 documented files in this folder have a test file named after them.",
+    );
+  });
+
+  it("leads each guide line with the accepted page's title when available (#30)", () => {
+    const plan = planFor(files);
+    const folder = plan.folderUnits.find((f) => f.id === "src")!;
+    const existing = new Set(plan.fileUnits.map((u) => u.pagePath));
+    const titlesByPagePath = new Map<string, string>([
+      ["livewiki/src/batch.md", "Batch orchestration and task queue"],
+      // view.md intentionally has no title → bare-link fallback.
+    ]);
+    const page = renderFolderPage({
+      folder,
+      fileUnits: plan.fileUnits,
+      symbolCountByPath: new Map(files.map((f) => [f.path, f.symbols ?? 0])),
+      existingPagePaths: existing,
+      titlesByPagePath,
+      purpose: "The orchestration core: batch runs, checkpoints, and the stage-4 loop.",
+    });
+    expect(page).toContain(
+      "- [batch.ts](batch.md) — Batch orchestration and task queue · Tests: `batch.test.ts`",
+    );
+    expect(page).not.toContain("symbols");
+    expect(page).toContain("- [view.ts](view.md)\n");
+  });
+
+  it("ignores titles for pages that are not on disk (never upgrades a failed generation)", () => {
+    const plan = planFor(files);
+    const folder = plan.folderUnits.find((f) => f.id === "src")!;
+    const page = renderFolderPage({
+      folder,
+      fileUnits: plan.fileUnits,
+      symbolCountByPath: new Map(files.map((f) => [f.path, f.symbols ?? 0])),
+      existingPagePaths: new Set(),
+      titlesByPagePath: new Map([["livewiki/src/batch.md", "Stale title"]]),
+      purpose: "The orchestration core: batch runs, checkpoints, and the stage-4 loop.",
+    });
+    expect(page).not.toContain("Stale title");
+    expect(page).toContain("`batch.ts` · page not written yet");
   });
 
   it("never links a page that does not exist on disk", () => {
@@ -84,7 +126,28 @@ describe("renderFolderPage", () => {
       purpose: "The orchestration core: batch runs, checkpoints, and the stage-4 loop.",
     });
     expect(page).not.toContain("](batch.md)");
-    expect(page).toContain("`batch.ts` — 55 symbols · page unavailable (generation failed)");
+    expect(page).toContain("`batch.ts` · page not written yet");
+  });
+
+  it("shows an inert prose file's own title instead of the raw filename (#30 follow-up)", () => {
+    const plan = planFor([
+      { path: "docs/guide.md" },
+      { path: "docs/notes.txt" },
+    ]);
+    const folder = plan.folderUnits.find((f) => f.id === "docs")!;
+    const withTitle = renderFolderPage({
+      folder,
+      fileUnits: plan.fileUnits,
+      symbolCountByPath: new Map(),
+      existingPagePaths: new Set(),
+      proseTitlesByFilePath: new Map([["docs/guide.md", "How to install and run the product"]]),
+      purpose: "",
+      role: "docs",
+    });
+    expect(withTitle).toContain("- `guide.md` — How to install and run the product");
+    expect(withTitle).not.toContain("`guide.md` — not documented");
+    // Non-harvested inert files keep the plain fallback.
+    expect(withTitle).toContain("- `notes.txt` — not documented (re-export, configuration, or plain-text file)");
   });
 
   it("uses the deterministic role sentence for non-product folders (zero tokens)", () => {
@@ -99,5 +162,35 @@ describe("renderFolderPage", () => {
       role: "fixture",
     });
     expect(page).toContain("test fixtures and supporting test data");
+  });
+});
+
+describe("plainTestCoverageLine (#30 plain language)", () => {
+  it("reads as a sentence for none / partial / all / single-file shapes", () => {
+    expect(plainTestCoverageLine(0, 3)).toBe(
+      "None of the 3 documented files in this folder has a test file named after it.",
+    );
+    expect(plainTestCoverageLine(1, 2)).toBe(
+      "1 of the 2 documented files in this folder have a test file named after them.",
+    );
+    expect(plainTestCoverageLine(4, 4)).toBe(
+      "Every documented file in this folder has a test file named after it.",
+    );
+    expect(plainTestCoverageLine(1, 1)).toBe(
+      "This file has a test file named after it.",
+    );
+    expect(plainTestCoverageLine(0, 1)).toBe(
+      "This file has no test file named after it.",
+    );
+  });
+});
+
+describe("extractPageTitle", () => {
+  it("prefers the frontmatter title and falls back to the first H1", () => {
+    expect(
+      extractPageTitle("---\ntitle: File path containment\nowner: generated\n---\n# Other\n"),
+    ).toBe("File path containment");
+    expect(extractPageTitle("# Just a heading\n\nprose\n")).toBe("Just a heading");
+    expect(extractPageTitle("---\nowner: generated\n---\nno heading\n")).toBeNull();
   });
 });

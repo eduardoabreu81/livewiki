@@ -6,6 +6,7 @@ import {
   ViewError,
   type ViewTemplate,
 } from "@livewiki/core/view";
+import { loadConfig } from "@livewiki/core/config";
 import { resolveRepoRoot } from "../cli.js";
 import { emitJson, emitHuman } from "../output.js";
 
@@ -64,12 +65,15 @@ export function registerView(program: Command): void {
       }
 
       try {
+        const config = await loadConfig(repoRoot).catch(() => null);
         const result = await buildSite({
           repoRoot,
           ...(opts.out !== undefined ? { outDir: opts.out } : {}),
           template: (opts.template ?? "agent") as ViewTemplate,
           badgeDays,
           ...(opts.ref !== undefined ? { ref: opts.ref } : {}),
+          // #30: `<html lang>` follows the sticky wiki language.
+          ...(config !== null ? { language: config.language } : {}),
         });
         const indexHtml = nodePath.join(result.outDir, "index.html");
         let opened = false;

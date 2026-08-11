@@ -509,8 +509,10 @@ traces to verify-gated wiki pages. The page carries NO anchors (it
 synthesizes purpose, it does not document symbols) and follows a dedicated
 strict contract: frontmatter with `owner: generated` and `kind:
 understanding`, one H1, exactly one 40–600 character purpose paragraph, and
-at most one `Key surfaces` bullet section (≤ 10 bullets, ≤ 160 characters
-each); inline code, fenced code, Markdown links, images, and TODO-style
+at most one `Where to look in the code` bullet section (≤ 10 bullets, ≤
+160 characters each — plain-language heading since the #30 readability
+pass; pre-#30 pages keep the old `Key surfaces` heading, which the
+tolerant reader still accepts); inline code, fenced code, Markdown links, images, and TODO-style
 placeholders are rejected. Generation reuses the flows/topics machinery:
 bounded repair, monotonic usage accounting, safe-io, an any-severity
 page-scoped verify gate, transactional rollback, checkpoint reuse on

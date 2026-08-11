@@ -357,7 +357,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         "Work by intent",
         "Document a repo",
         "Query the wiki from an agent",
-        "Pay documentation debt",
+        "Keep the documentation up to date (for agents)",
         "Repository facts",
       ]);
       for (const moduleId of ["auth", "utils"]) {
@@ -774,9 +774,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(overview).toMatch(/Architecture overview/);
     expect(overview).toMatch(/### Auth source/);
     expect(overview).toMatch(/### Utils source/);
-    expect(overview).toContain("Module ID: `auth`");
-    expect(overview).toContain("Module ID: `utils`");
-    // Stable HTML identity remains Module.id, independent of display title.
+    // #30: the card no longer prints the raw `Module ID:` line — the
+    // stable HTML identity below is the durable contract.
+    expect(overview).not.toContain("Module ID:");
     expect(overview).toMatch(/<a id="auth"><\/a>/);
     expect(overview).toMatch(/<a id="utils"><\/a>/);
     // Function-only modules do not generate `diagrams/<slug>.classes.mmd`,
@@ -804,11 +804,11 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
         "utf8",
       );
-      expect(overview).toContain("Module ID: `auth`");
-      expect(overview).toContain("Module ID: `utils`");
-      // #29: the module page link points at the FOLDER page.
-      expect(overview).toMatch(/\[module page\]\(\.\.\/auth\/index\.md\)/);
-      expect(overview).toMatch(/\[module page\]\(\.\.\/utils\/index\.md\)/);
+      expect(overview).not.toContain("Module ID:");
+      expect(overview).toContain('<a id="auth"></a>');
+      // #29: the folder page link points at the FOLDER page.
+      expect(overview).toMatch(/\[folder page\]\(\.\.\/auth\/index\.md\)/);
+      expect(overview).toMatch(/\[folder page\]\(\.\.\/utils\/index\.md\)/);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
@@ -831,10 +831,10 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(quickstart).toContain("[Tasks](tasks.md)");
     expect(quickstart).toContain("[Architecture overview](architecture/overview.md)");
     expect(overview).toContain('<a id="auth"></a>');
-    // R10.1 E: tasks.md has no `Module ID:` line — before the page exists,
-    // the stable id is carried by the unavailable-entry path. #29: the page
-    // path is the FOLDER page (`<folderId>/index.md`).
-    expect(tasks).toContain("Page unavailable: `livewiki/auth/index.md`");
+    // R10.1 E: tasks.md has no `Module ID:` line. #30: before the page
+    // exists the entry reads "Page not written yet" — the raw page path no
+    // longer leaks into the human surface.
+    expect(tasks).toContain("Page not written yet");
     expect(tasks).not.toContain("Module ID:");
     expect(tasks).not.toContain("](auth.md)");
   });
@@ -924,7 +924,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     ).toContain("## Document a repo");
     expect(
       await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/tasks.md"), "utf8"),
-    ).toContain("Page unavailable:");
+    ).toContain("Page not written yet");
     await expect(
       nodeFs.stat(nodePath.join(repoRoot, "livewiki/architecture/overview.md")),
     ).resolves.toBeDefined();
@@ -1070,9 +1070,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
         "utf8",
       );
-      expect(overview).toMatch(/\[module page\]\(\.\.\/auth\/index\.md\)/);
-      expect(overview).toMatch(/\[module page\]\(\.\.\/utils\/index\.md\)/);
-      expect(overview).toMatch(/\[module page\]\(\.\.\/api\/index\.md\)/);
+      expect(overview).toMatch(/\[folder page\]\(\.\.\/auth\/index\.md\)/);
+      expect(overview).toMatch(/\[folder page\]\(\.\.\/utils\/index\.md\)/);
+      expect(overview).toMatch(/\[folder page\]\(\.\.\/api\/index\.md\)/);
 
       // 3. Verify limpo: exit 0 + zero issues
       const verifyR = await runCli(["--json", "--repo", repoRoot, "verify"]);

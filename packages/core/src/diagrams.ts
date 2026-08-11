@@ -137,7 +137,7 @@ function buildCollapsedStructureLines(filePaths: string[]): string[] {
 export function generateModulesGraph(edges: ModuleGraphEdge[]): string {
   const lines: string[] = ["graph LR"];
   if (edges.length === 0) {
-    lines.push("  root[No module edges detected]");
+    lines.push("  root[No cross-folder imports detected]");
     return lines.join("\n") + "\n";
   }
 

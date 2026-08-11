@@ -8,7 +8,9 @@
  * real-units partition, so no file can be invented or omitted and no link
  * can point at a page that does not exist (the caller passes the set of
  * file pages actually written; failed generations degrade to a plain
- * name, never a dangling link).
+ * name, never a dangling link). Each guide line leads with the accepted
+ * page's title — what the file IS FOR (#30 human-first readability);
+ * the raw symbol count is only the fallback when no title exists.
  *
  * Product rule (maintainer 2026-08-08): no special machinery per file
  * type. Tests appear as dispositions in the guide: a 1:1 same-name
@@ -24,6 +26,7 @@
 import type { FileUnit, FolderUnit } from "./page-units.js";
 import { folderCoverageSignal } from "./page-units.js";
 import type { PathRole } from "./modules.js";
+import { parseFrontmatter } from "./frontmatter.js";
 
 /** Purpose paragraph bounds (understanding-style strict contract). */
 export const FOLDER_PURPOSE_MIN_CHARS = 40;
@@ -102,6 +105,20 @@ export interface RenderFolderPageOptions {
    */
   readonly existingPagePaths: ReadonlySet<string>;
   /**
+   * Accepted file-page titles by page path (#30): the guide line leads with
+   * what the file IS FOR (the verify-gated page title), not the machine
+   * metric. Entries without a title fall back to the symbol count.
+   */
+  readonly titlesByPagePath?: ReadonlyMap<string, string>;
+  /**
+   * Prose-file titles by SOURCE path (#30 follow-up): an inert Markdown
+   * file's own frontmatter `title:`/H1, harvested from the source file. A
+   * documentation file identified only by its raw filename is filename
+   * noise to a lay reader — when the file itself declares a title, the
+   * guide shows it. Non-Markdown inert files keep the plain fallback.
+   */
+  readonly proseTitlesByFilePath?: ReadonlyMap<string, string>;
+  /**
    * The LLM purpose paragraph (already validated). Empty for non-product
    * folders, which get a deterministic role sentence instead.
    */
@@ -110,9 +127,23 @@ export interface RenderFolderPageOptions {
   readonly role?: Exclude<PathRole, "product">;
 }
 
+/**
+ * Title of an accepted wiki page: frontmatter `title:` first, first H1 as
+ * fallback. Used so the folder guide can say what a file is for instead of
+ * how many symbols it has (#30). Returns null when neither exists.
+ */
+export function extractPageTitle(content: string): string | null {
+  const raw = parseFrontmatter(content).frontmatter?.["title"];
+  if (typeof raw === "string" && raw.trim() !== "") return raw.trim();
+  const h1 = /^#\s+(.+)$/m.exec(content);
+  return h1 !== null && h1[1]!.trim() !== "" ? h1[1]!.trim() : null;
+}
+
 /** Assemble the complete folder page Markdown. Pure/deterministic. */
 export function renderFolderPage(opts: RenderFolderPageOptions): string {
-  const { folder, fileUnits, symbolCountByPath, existingPagePaths } = opts;
+  // `symbolCountByPath` stays in the options (the LLM evidence builder uses
+  // it); the human guide no longer renders raw symbol counts (#30).
+  const { folder, fileUnits, existingPagePaths } = opts;
   const title = folder.dirPath === "" ? "(repository root)" : folder.dirPath;
   const purpose =
     opts.purpose !== ""
@@ -140,24 +171,35 @@ export function renderFolderPage(opts: RenderFolderPageOptions): string {
     switch (entry.disposition) {
       case "page": {
         const unit = fileUnitByPath.get(entry.filePath);
-        const symbols = symbolCountByPath.get(entry.filePath) ?? 0;
         const pageBase = entry.pagePath?.split("/").pop() ?? "";
         const linked =
           entry.pagePath !== undefined && existingPagePaths.has(entry.pagePath);
+        const pageTitle =
+          linked && entry.pagePath !== undefined
+            ? opts.titlesByPagePath?.get(entry.pagePath)
+            : undefined;
         const head = linked ? `[${name}](${pageBase})` : `\`${name}\``;
-        const parts = [`${head} — ${symbols} symbol${symbols === 1 ? "" : "s"}`];
-        if (!linked) parts.push("page unavailable (generation failed)");
+        // #30: lead with what the file is for (the accepted page's title).
+        // A linked page without a title renders as the bare link; a missing
+        // page is an honest "not written yet" — never a dangling link, and
+        // never a machine metric ("N symbols") where meaning belongs.
+        const parts = [pageTitle !== undefined ? `${head} — ${pageTitle}` : head];
+        if (!linked) parts.push("page not written yet");
         if (unit?.pairedTestPath !== undefined) {
           parts.push(`Tests: \`${unit.pairedTestPath.split("/").pop()!}\``);
         }
         lines.push(`- ${parts.join(" · ")}`);
         break;
       }
-      case "inert":
+      case "inert": {
+        const proseTitle = opts.proseTitlesByFilePath?.get(entry.filePath);
         lines.push(
-          `- \`${name}\` — no symbols extracted (barrel, configuration, or prose file)`,
+          proseTitle !== undefined
+            ? `- \`${name}\` — ${proseTitle}`
+            : `- \`${name}\` — not documented (re-export, configuration, or plain-text file)`,
         );
         break;
+      }
       case "test-paired":
         // accounted on the product file's line — no separate entry
         break;
@@ -166,13 +208,13 @@ export function renderFolderPage(opts: RenderFolderPageOptions): string {
           ? `\`${entry.likelyProductPath.split("/").pop()!.replace(/\.[^.]+$/, "")}\``
           : "a product file";
         testLines.push(
-          `- \`${name}\` — test file, likely covers ${likelyName} (name-prefix match, not verified)`,
+          `- \`${name}\` — test file, probably covers ${likelyName} (guessed from the file name)`,
         );
         break;
       }
       case "test-orphan":
         testLines.push(
-          `- \`${name}\` — orphan: no product file in this repository matches this test`,
+          `- \`${name}\` — no product file in this repository matches this test`,
         );
         break;
     }
@@ -183,14 +225,33 @@ export function renderFolderPage(opts: RenderFolderPageOptions): string {
 
   const signal = folderCoverageSignal(folder);
   if (signal.pages > 0) {
+    // #30: plain language — "Same-name test coverage: 0 of 3 documented
+    // files" is insider jargon a lay reader cannot parse.
     const covered = signal.pages - signal.withoutSameNameTest;
-    lines.push(
-      "",
-      `Same-name test coverage: ${covered} of ${signal.pages} documented file${signal.pages === 1 ? "" : "s"}.`,
-    );
+    lines.push("", plainTestCoverageLine(covered, signal.pages));
   }
 
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}
+
+/**
+ * The folder-page test-coverage line in plain language (#30). Exported for
+ * tests; the three shapes (none / partial / all) read as sentences a lay
+ * reader can parse, never as a coverage metric.
+ */
+export function plainTestCoverageLine(covered: number, pages: number): string {
+  if (pages === 1) {
+    return covered === 1
+      ? "This file has a test file named after it."
+      : "This file has no test file named after it.";
+  }
+  if (covered === 0) {
+    return `None of the ${pages} documented files in this folder has a test file named after it.`;
+  }
+  if (covered === pages) {
+    return `Every documented file in this folder has a test file named after it.`;
+  }
+  return `${covered} of the ${pages} documented files in this folder have a test file named after them.`;
 }
 
 /** Per-file opening cap inside the folder-purpose evidence block. */

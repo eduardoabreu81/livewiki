@@ -229,9 +229,9 @@ export function renderActivityPage(model: ActivityModel): ActivityPageFragment {
 
   parts.push(`<h1>Activity</h1>\n`);
   parts.push(
-    `<p>Documentation activity of this repository, built at site-build time from ` +
-      `<code>.livewiki/update_metrics.json</code> (local derived data, never versioned). ` +
-      `Times are UTC.</p>\n`,
+    `<p>How this documentation has been written and maintained over time. ` +
+      `Built at site-build time from local activity data ` +
+      `(<code>.livewiki/update_metrics.json</code>, never versioned). Times are UTC.</p>\n`,
   );
 
   // ── Totals ──
@@ -241,25 +241,25 @@ export function renderActivityPage(model: ActivityModel): ActivityPageFragment {
   const batchTotal = t.batchInputTokens + t.batchOutputTokens;
   cards.push([
     formatInt(batchTotal),
-    `batch tokens (${formatInt(t.batchInputTokens)} in / ${formatInt(t.batchOutputTokens)} out)`,
+    `tokens used by full runs (${formatInt(t.batchInputTokens)} read / ${formatInt(t.batchOutputTokens)} written)`,
   ]);
   if (t.batchCostUsd !== null) {
-    cards.push([formatUsd(t.batchCostUsd), "batch cost (estimated, dated pricing table)"]);
+    cards.push([formatUsd(t.batchCostUsd), "estimated cost of full runs (dated pricing table)"]);
   }
   if (t.batchRuns > 0) {
-    cards.push([formatDuration(t.batchDurationMs), `batch wall time (${t.batchRuns} runs)`]);
+    cards.push([
+      formatDuration(t.batchDurationMs),
+      `time spent in full runs (${t.batchRuns} ${t.batchRuns === 1 ? "run" : "runs"})`,
+    ]);
   }
-  cards.push([formatInt(t.sessionTokensEstimated), "in-session tokens (estimated)"]);
-  cards.push([formatInt(t.debtResolvedTotal), "debt items resolved"]);
-  cards.push([formatInt(t.batchRuns), "batch runs"]);
-  if (t.efficiencyRatio !== null) {
-    cards.push([String(t.efficiencyRatio), "write/package token ratio"]);
-  }
+  cards.push([formatInt(t.sessionTokensEstimated), "tokens used by editor sessions (estimated)"]);
+  cards.push([formatInt(t.debtResolvedTotal), "outdated items fixed"]);
+  cards.push([formatInt(t.batchRuns), `full documentation ${t.batchRuns === 1 ? "run" : "runs"}`]);
   if (model.timeToDocument !== null) {
     const ttd = model.timeToDocument;
     cards.push([
       `${ttd.medianHours}h`,
-      `median detection→payment (${ttd.samples} samples; max ${ttd.maxHours}h)`,
+      `typical time from spotting an outdated page to fixing it (${ttd.samples} ${ttd.samples === 1 ? "sample" : "samples"}; longest ${ttd.maxHours}h)`,
     ]);
   }
   parts.push(
@@ -283,8 +283,8 @@ export function renderActivityPage(model: ActivityModel): ActivityPageFragment {
     section("Tokens per week");
     parts.push(
       legend([
-        ["var(--lw-chart-a, var(--lw-link))", "in-session (estimated)"],
-        ["var(--lw-chart-b, var(--lw-muted))", "batch (provider-billed)"],
+        ["var(--lw-chart-a, var(--lw-link))", "editor sessions (estimated)"],
+        ["var(--lw-chart-b, var(--lw-muted))", "full runs (billed by the LLM provider)"],
       ]),
     );
     parts.push(renderWeeklyBarChart(model.weeklyTokens, weekMax));
@@ -292,13 +292,13 @@ export function renderActivityPage(model: ActivityModel): ActivityPageFragment {
 
   // ── Debt burndown ──
   if (model.openDebtSeries.length > 0 || model.cumulativeResolvedSeries.length > 0) {
-    section("Debt burndown");
+    section("Outdated pages over time");
     const series: Array<[string, string]> = [];
     if (model.openDebtSeries.length > 0) {
-      series.push(["var(--lw-chart-a, var(--lw-link))", "open debt (observed at package time)"]);
+      series.push(["var(--lw-chart-a, var(--lw-link))", "outdated pages (as observed)"]);
     }
     if (model.cumulativeResolvedSeries.length > 0) {
-      series.push(["var(--lw-chart-b, var(--lw-muted))", "cumulative resolved"]);
+      series.push(["var(--lw-chart-b, var(--lw-muted))", "total fixed"]);
     }
     parts.push(legend(series));
     parts.push(renderBurndownChart(model.openDebtSeries, model.cumulativeResolvedSeries));
@@ -339,12 +339,13 @@ export function renderActivityPage(model: ActivityModel): ActivityPageFragment {
 
   const ttdSentence =
     model.timeToDocument !== null
-      ? ` Median detection-to-payment ${model.timeToDocument.medianHours} hours.`
+      ? ` Median time to fix an outdated page: ${model.timeToDocument.medianHours} hours.`
       : "";
   const excerpt =
-    `Documentation activity: ${formatInt(batchTotal)} batch tokens, ` +
-    `${formatInt(t.sessionTokensEstimated)} in-session tokens (estimated), ` +
-    `${t.debtResolvedTotal} debt items resolved across ${t.batchRuns} batch runs.` +
+    `Documentation activity: ${formatInt(batchTotal)} tokens used by full runs, ` +
+    `${formatInt(t.sessionTokensEstimated)} editor-session tokens (estimated), ` +
+    `${t.debtResolvedTotal} outdated items fixed across ${t.batchRuns} ` +
+    `full ${t.batchRuns === 1 ? "run" : "runs"}.` +
     ttdSentence;
 
   return { contentHtml: parts.join(""), headings, excerpt };
@@ -493,19 +494,23 @@ function formatUtc(ts: number): string {
   );
 }
 
-/** Same one-line event text as the `status` Activity block. */
+/**
+ * One-line human sentence per ledger event (#30: the viewer is the
+ * human-first surface — raw enum names like `package_emitted` stay in the
+ * agent-facing `status` output, not here).
+ */
 function formatActivityEvent(e: UpdateMetric): string {
   switch (e.kind) {
     case "package_emitted":
-      return `package_emitted ~${e.tokensEstimated} tokens, ${e.debtCount} debt items`;
+      return `Documentation update prepared (~${formatInt(e.tokensEstimated)} tokens of context, ${e.debtCount} outdated ${e.debtCount === 1 ? "item" : "items"})`;
     case "write_received":
-      return `write_received ${e.wikiPath} (~${e.tokensEstimated} tokens)`;
+      return `Page ${e.wikiPath} updated from an editor session (~${formatInt(e.tokensEstimated)} tokens)`;
     case "debt_resolved":
-      return `debt_resolved ${e.count} item(s) via ${e.source}`;
+      return `${e.count} outdated ${e.count === 1 ? "item" : "items"} marked resolved (via ${e.source})`;
     case "batch_run":
       return (
-        `batch_run #${e.runId} ${e.status}, ` +
-        `${e.inputTokens} in / ${e.outputTokens} out, ${formatDuration(e.durationMs)}`
+        `Full documentation run #${e.runId} ${e.status} — ` +
+        `${formatInt(e.inputTokens)} tokens read / ${formatInt(e.outputTokens)} written, ${formatDuration(e.durationMs)}`
       );
   }
 }

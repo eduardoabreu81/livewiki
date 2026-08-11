@@ -41,8 +41,21 @@ export const DEFAULT_CONTEXT_TOKEN_BUDGET = 30_000;
 /** Limite default de tokens da resposta (Markdown gerado). */
 export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
 
+/**
+ * #30 human-first readability: the audience definition every prose-writing
+ * builder shares. Placed inside the shared rule arrays so initial AND
+ * repair prompts inherit it without drift.
+ */
+export const LAY_READER_PROMPT_RULE =
+  `- Your reader is a capable developer who has never opened this repository: explain what things are FOR before how they work, and define any project-specific term or acronym the first time it appears.`;
+
+/** #30: replaces "this is reference documentation, not marketing". */
+export const WRITE_FOR_UNDERSTANDING_PROMPT_RULE =
+  `- Keep prose tight and factual, but write for understanding, not lookup: a newcomer should finish each section knowing why it exists and when they would care.`;
+
 /** Shared stage-4 editorial contract. Initial and repair prompts must not drift. */
 export const PAGE_OPENING_PROMPT_RULES = [
+  LAY_READER_PROMPT_RULE,
   `- After frontmatter and before the first implementation section, open with this exact structure in order: an H1 human-meaningful title; exactly one sentence stating the page's responsibility; an H2 \`When to use this page\`; two to four task bullets that each begin with an action verb; an H2 \`How it fits\`; and one or more short prose paragraphs naming the module's role and immediate repository context without claiming a complete call graph. The shown H2 casing is canonical, while structural validation matches those exact words case-insensitively.`,
   `- Each task bullet must have non-empty content after its Markdown bullet marker. Bold text, inline code, and links are allowed around the leading action or command.`,
   `- The frontmatter title and H1 must be a concise semantic responsibility title. For a product module, neither may be the stable module ID alone.`,
@@ -65,8 +78,9 @@ export const PAGE_OPENING_PROMPT_RULES = [
  * `Invariants` before validation ever runs.
  */
 export const FLOW_PAGE_PROMPT_RULES = [
+  LAY_READER_PROMPT_RULE,
   `- After the frontmatter, open with this exact structure in order: an H1 human-meaningful flow title; exactly one sentence stating what end-to-end behavior the page explains; then these H2 sections in this order and with this exact casing: \`Purpose\`, \`Ordered flow\`, \`Invariants\`, \`Failure and recovery\`, \`Related pages\`. Structural validation matches those exact words case-insensitively. Do NOT write a \`Diagram\` section — the orchestrator generates and inserts the companion diagram itself; do not mention Mermaid or attempt to draw one.`,
-  `- \`Purpose\`: one or more prose paragraphs stating what starts the flow and what it produces.`,
+  `- \`Purpose\`: one or more prose paragraphs stating what starts the flow and what it produces. Open with the user-visible goal of the flow in plain words (what a person is trying to accomplish), before any internal step or component name.`,
   `- \`Ordered flow\`: a numbered Markdown list of the end-to-end steps. It is the textual fallback of the diagram — a reader who cannot render Mermaid must get the same sequence from this list.`,
   `- \`Invariants\`: prose or bullets stating what must hold at each stage of the flow.`,
   `- \`Failure and recovery\`: prose describing the retry/rollback/recovery paths visible in the cited source. When the supplied source shows no failure path, state that explicitly — never invent one.`,
@@ -79,6 +93,7 @@ export const FLOW_PAGE_PROMPT_RULES = [
 
 /** Shared semantic-topic contract. Initial and repair prompts must not drift. */
 export const TOPIC_PAGE_PROMPT_RULES = [
+  LAY_READER_PROMPT_RULE,
   `- After frontmatter, write: an H1 matching the title; exactly one sentence stating the reader problem; then these H2 sections in order: \`Purpose\`, \`When to use this page\`, \`Behavioral contract\`, \`Failure and recovery\`, \`Change map\`, \`Related pages\`.`,
   `- Put \`lw:anchors\` markers only in Purpose, When to use this page, Behavioral contract, Failure and recovery, and Change map. H3-H6 descendants belong to their ancestral H2. Each of those five sections must cite at least one distinct closed-list key.`,
   `- The closed key list is an upper bound. Every key actually cited appears exactly once in frontmatter and exactly once across section markers; unused closed keys are valid.`,
@@ -86,7 +101,7 @@ export const TOPIC_PAGE_PROMPT_RULES = [
   `- At least 75% of the keys actually cited by the page must be non-test product symbols.`,
   `- Target 500-900 prose words and never exceed 1,400 prose words. Prefer a concise complete contract over padding.`,
   `- Do not emit source-code signature dumps or non-Mermaid code fences. Change map names exact symbols and links to their module pages instead of copying implementations.`,
-  `- Name source symbols in prose as inline code with the exact closed-list key (e.g. \`app/services/bgm.py#save_bgm_upload\`) — never as a Markdown link to the source path: source files live outside the wiki and such links do not resolve for readers. Markdown links are only for wiki artifacts (module pages, flow pages, flow diagrams, the topics hub).`,
+  `- Name source symbols in prose as inline code with the exact closed-list key (e.g. \`app/services/bgm.py#save_bgm_upload\`) — never as a Markdown link to the source path: source files live outside the wiki and such links do not resolve for readers. Markdown links are only for wiki artifacts (module pages, flow pages, flow diagrams, the topics hub). Lead with the symbol's human-readable role ("the background-music upload step") and attach the exact key in inline code after it — never let a raw path#symbol key carry a sentence alone.`,
   `- Prose source evidence files (when supplied) have no canonical keys — they can never appear in the closed list. Describe what they visibly do; never cite them as anchors and never invent keys for them.`,
   `- Related pages links only to supplied existing paths. From livewiki/topics/<slug>.md, module links are exactly \`../<moduleId>/index.md\`, flow links are exactly \`../flows/<flowSlug>.md\`, flow diagrams are exactly \`../diagrams/flow-<flowSlug>.mmd\`, and the topics hub is exactly \`index.md\`. Link an existing flow diagram; do not copy it into the topic.`,
   `- Avoid absolute words such as only, always, never, sole, and single unless the supplied source proves the scope and the sentence names the controlling guard or exception.`,
@@ -146,12 +161,13 @@ export const DEEP_HIERARCHY_PROMPT_RULE =
 
 export const FILE_NARRATIVE_PROMPT_RULES = [
   `- Organize the implementation sections around WHAT THIS FILE'S CODE DOES as a mechanism: the flow it implements, the steps of that flow, and each step's role. One H2 per responsibility or pipeline stage — never one flat section per symbol by default. A reader wants the story of the file; the symbols are cited where the story touches them.`,
+  `- Start each section with WHY this step exists in the file's story, then HOW it does it; a newcomer must be able to follow the narrative without having read the callers.`,
   `- Inside a section, explain behavior step by step ("X validates the parameters, resolves the session, and returns Y; Z then orchestrates the run..."), naming the real symbols in inline code. A section that is a list of one-sentence symbol summaries is a REJECTED shape even when every key is cited.`,
   `- Do NOT write a \`Tests\` section — when this file has a same-name test counterpart on disk, the orchestrator appends the test pointer itself; never mention test files in prose.`,
 ] as const;
 
 export const LITERAL_SIGNATURE_PROMPT_RULE =
-  `- When a section asserts behavior of a named function or method and the symbols table supplies a non-empty signature, copy that signature byte-for-byte from the symbols table into inline code or a fenced code block in the same section before the behavioral explanation. Do not reconstruct, normalize, shorten, or "improve" it. One literal signature covers subsequent claims about that symbol within the section. If the table has no signature, do not invent one; limit the prose to facts visible in the supplied source and identify the symbol by its exact closed-list key.`;
+  `- When a section asserts behavior of a named function or method and the symbols table supplies a non-empty signature, copy that signature byte-for-byte from the symbols table into inline code or a fenced code block in the same section before the behavioral explanation. Do not reconstruct, normalize, shorten, or "improve" it. One literal signature covers subsequent claims about that symbol within the section. If the table has no signature, do not invent one; limit the prose to facts visible in the supplied source and identify the symbol by its exact closed-list key. Immediately after each literal signature, add one plain-language sentence naming what the symbol takes and what it returns, in words a non-specialist understands.`;
 
 export const EXCEPTION_BRANCH_PROMPT_RULE =
   `- When the supplied source visibly contains a material \`throw\`, \`catch\`, fallback, rollback, early return, or fail-open/fail-closed branch for the documented symbol, describe that branch or explicitly scope the prose to the normal path. Never use "always", "guarantees", "mandatory", or equivalent absolute language while omitting a visible exception. Document only what the visible evidence establishes; never narrate what the excerpt does or does not contain.`;
@@ -422,7 +438,7 @@ export function buildStage4Prompt(
     `- Distribute closed keys across sections with one marker per section — every section that has a marker MUST be followed by real explanatory prose before the next heading (a marker with no prose after it is rejected).`,
     `- Close every Markdown construct you open: every fenced code block (\`\`\`) needs its closing fence, every inline code span needs its closing backtick run of the same length. Never end the page mid code-span or mid-fence.`,
     `- Do NOT write "TODO", "TBD", or similar placeholders in your prose. If the provided context does not cover a symbol, describe what IS visible (signature, name, kind) instead of a placeholder — never invent behaviour you cannot see.`,
-    `- Keep prose tight; this is reference documentation, not marketing.`,
+    WRITE_FOR_UNDERSTANDING_PROMPT_RULE,
     ``,
     `Constraints (livewiki invariants):`,
     `- Frontmatter anchors list MUST only contain keys from the closed list.`,
@@ -916,76 +932,6 @@ function buildTopicSectionAssignmentBlock(sectionMap: TopicKeySectionMap | undef
 }
 
 /**
- * Quickstart generation — usado no FINAL do batch (e opcionalmente no init
- * sem --batch, se houver símbolos suficientes).
- */
-export function buildQuickstartPrompt(
-  moduleList: Module[],
-  topSymbols: string,
-  language: Language = "en",
-): PromptPair {
-  const system = [
-    `You are a technical documentation generator for the livewiki project.`,
-    `Generate a "quickstart" page that helps a new reader navigate the repository.`,
-    ``,
-    `Output rules:`,
-    `- Markdown. NO frontmatter (quickstart is the entry point, not a code doc).`,
-    `- Max 200 lines.`,
-    `- Structure: 1-line description, top 3 entry points (with relative links), key concepts.`,
-    `- Tone: terse, factual, no marketing.`,
-  ].join("\n");
-
-  const modList = moduleList.map((m) => `- livewiki/${m.id}/index.md`).join("\n");
-
-  const user = [
-    `# Language: ${language}`,
-    ``,
-    `# Modules in this repo:`,
-    modList,
-    ``,
-    `# Top symbols (from index):`,
-    topSymbols,
-    ``,
-    `# Generate livewiki/quickstart.md content.`,
-  ].join("\n");
-
-  return { system, user };
-}
-
-/**
- * Architecture overview — gerado no final do batch. Resumo de alto nível.
- */
-export function buildOverviewPrompt(
-  moduleList: Module[],
-  moduleSummary: string,
-  language: Language = "en",
-): PromptPair {
-  const system = [
-    `You are a technical documentation generator for the livewiki project.`,
-    `Generate an architecture overview page that explains the high-level structure of the repo.`,
-    ``,
-    `Output rules:`,
-    `- Markdown with frontmatter: title, owner: generated.`,
-    `- Max 150 lines.`,
-    `- Structure: 1-paragraph intro, table of modules (id, purpose, key symbols), cross-module dependencies.`,
-  ].join("\n");
-
-  const user = [
-    `# Language: ${language}`,
-    ``,
-    `# Modules (${moduleList.length}):`,
-    moduleList.map((m) => `- ${m.id}: ${m.paths.length} files, ${m.symbolCount} symbols`).join("\n"),
-    ``,
-    `# Per-module summary (from prior stage 4 generations):`,
-    moduleSummary,
-    ``,
-    `# Generate livewiki/architecture/overview.md content.`,
-  ].join("\n");
-
-  return { system, user };
-}
-
-/**
  * Stage 5 — generate ONE semantic product-flow page (SPEC §"Semantic
  * product-flow layer"). Mirrors `buildStage4Prompt`'s structure: system
  * carries the flow page contract + closed-key rules + rejection criteria;
@@ -1055,7 +1001,7 @@ export function buildStage5Prompt(
     `- Every section that has a marker MUST be followed by real explanatory prose before the next heading (a marker with no prose after it is rejected).`,
     `- Close every Markdown construct you open: every fenced code block (\`\`\`) needs its closing fence, every inline code span needs its closing backtick run of the same length. Never end the page mid code-span or mid-fence.`,
     `- Do NOT write "TODO", "TBD", or similar placeholders in your prose. If the provided context does not cover a symbol, describe what IS visible (signature, name, kind) instead of a placeholder — never invent behaviour you cannot see.`,
-    `- Keep prose tight; this is reference documentation, not marketing.`,
+    WRITE_FOR_UNDERSTANDING_PROMPT_RULE,
     ``,
     `Constraints (livewiki invariants):`,
     `- Frontmatter anchors list MUST only contain keys from the closed list.`,
@@ -1505,6 +1451,13 @@ export function buildTopicRepairPrompt(
             `- SECTION ASSIGNMENT IS FIXED, NOT YOURS TO DECIDE: the "Section assignment" table in the user message names the ONE section each key's marker belongs to. Copy each key into that section's marker only — never a different one. In particular, "Change map" must NOT re-list a key already marked in another section.`,
           ]
         : []),
+      // #30 audit fix: the repair prompt must carry the same shared
+      // accuracy rules as the initial topic prompt — a repaired page may
+      // not silently lose the exception-branch / inventory-authority /
+      // branch-precision guarantees.
+      EXCEPTION_BRANCH_PROMPT_RULE,
+      INVENTORY_AUTHORITY_PROMPT_RULE,
+      BRANCH_PRECISION_PROMPT_RULE,
       `The closed list remains an upper bound: every cited key appears once in frontmatter and once in exactly one allowed section marker; unused keys stay unused.`,
       RATIONALE_UNTRUSTED_SYSTEM_RULE,
       isFinal
@@ -1604,6 +1557,7 @@ export function buildSurgicalRepairPrompt(
     `- Change ONLY the content of these sections: ${targetNames.map((name) => `"${name}"`).join(", ")}.`,
     `- Everything else MUST be returned byte-for-byte identical to the failed page: the frontmatter, the page opening (the H1 and everything before the first H2), every other section, and every blank line outside the named sections. Do not rephrase, reorder, reformat, or "improve" anything outside the named sections.`,
     `- Inside the named sections, fix EVERY structured error listed in the user message, following each error's ACTION directive.`,
+    `- Inside the named sections, keep the page's prose contract: explain behavior step by step in plain words, lead with why before how, and define any project-specific term on first use — the reader is a developer who has never opened this repository.`,
     `- The \`lw:anchors\` HTML-comment markers inside the failed page are shown verbatim on purpose: preserve them byte-for-byte outside the named sections, and keep a named section's existing marker keys unless its ACTION directive says otherwise. NEVER invent an anchor key. NEVER emit an \`lw:manual\` block (reserved for human content, rule #6).`,
     `- When an ACTION requires citing an additional anchor key, choose a key ALREADY declared in the failed page's frontmatter anchors list — the frontmatter is outside your editable sections and MUST stay byte-identical.`,
     `- Output the raw Markdown page only. Do NOT wrap your output in code fences. Do NOT include reasoning prose.`,
@@ -1644,8 +1598,9 @@ export function buildSurgicalRepairPrompt(
  * inventory in the user message).
  */
 export const UNDERSTANDING_PAGE_PROMPT_RULES = [
-  `- After the frontmatter, write exactly: an H1 human-meaningful title naming the repository's product; then ONE prose paragraph stating what the repository is, whom it serves, and the main way it is used; then optionally ONE H2 \`Key surfaces\` section with a flat bullet list of the main user-facing surfaces (entry points, CLIs, services, containers). Nothing else — no other sections, no extra paragraphs.`,
-  `- The purpose paragraph is between 40 and 600 characters — aim for 400–550 and COUNT the characters before returning; overshooting the maximum is the most common rejection of this page. Key surfaces is at most 10 bullets, each at most 160 characters.`,
+  LAY_READER_PROMPT_RULE,
+  `- After the frontmatter, write exactly: an H1 human-meaningful title naming the repository's product; then ONE prose paragraph stating what the repository is, whom it serves, and the main way it is used; then optionally ONE H2 \`Where to look in the code\` section with a flat bullet list naming the main parts of the product (entry points, CLIs, services, containers) and what each does. Nothing else — no other sections, no extra paragraphs.`,
+  `- The purpose paragraph is between 40 and 600 characters — aim for 400–550 and COUNT the characters before returning; overshooting the maximum is the most common rejection of this page. Where to look in the code is at most 10 bullets, each at most 160 characters.`,
   `- NEVER use inline code, fenced code blocks, Markdown links, or images anywhere: this page synthesizes purpose in plain prose and does not document symbols. Name files, commands, and tools as plain words.`,
   `- The frontmatter carries exactly: \`title\` (matching the H1), \`owner: generated\`, \`kind: understanding\`, and \`updated\` (the current date supplied in the user message). No \`anchors\` key, no \`lw:anchors\` markers, no \`lw:manual\` block anywhere.`,
   `- Every claim must trace to the supplied evidence inventory: the accepted module pages' responsibility sentences, the flow pages, the topic pages, and the detected entry points. When the evidence cannot support a claim, omit the claim — never guess.`,
@@ -1665,7 +1620,7 @@ export function buildUnderstandingPrompt(
 ): PromptPair {
   const system = [
     `You are a technical documentation generator for the livewiki project.`,
-    `Write the ONE repository-understanding page of a generated code wiki: what the repository is, for whom, and its key surfaces.`,
+    `Write the ONE repository-understanding page of a generated code wiki: what the repository is, for whom, and where to look in the code.`,
     `Everything you may claim is already verify-gated: the evidence inventory below comes from accepted wiki pages and deterministic repository facts. Synthesize from it; never invent product capabilities.`,
     ...UNDERSTANDING_PAGE_PROMPT_RULES,
     `Output raw Markdown only, without an outer fence or reasoning.`,
@@ -1705,10 +1660,10 @@ export function buildUnderstandingRepairPrompt(
     // repairs still overshot, then the model flailed and dropped the
     // frontmatter — narrow the edit, don't ask for a rewrite).
     if (error.code === "purpose_too_long") {
-      return `- [${error.code}]: ${messageSafe} — ACTION: shorten ONLY the purpose paragraph by deleting its least essential clauses (keep it ONE paragraph, keep the repository's core identity and audience). Change nothing else — not the frontmatter, not the H1, not Key surfaces.`;
+      return `- [${error.code}]: ${messageSafe} — ACTION: shorten ONLY the purpose paragraph by deleting its least essential clauses (keep it ONE paragraph, keep the repository's core identity and audience). Change nothing else — not the frontmatter, not the H1, not the Where to look in the code section.`;
     }
     if (error.code === "purpose_too_short") {
-      return `- [${error.code}]: ${messageSafe} — ACTION: expand ONLY the purpose paragraph with one more evidence-backed clause (whom it serves or how it is used). Change nothing else — not the frontmatter, not the H1, not Key surfaces.`;
+      return `- [${error.code}]: ${messageSafe} — ACTION: expand ONLY the purpose paragraph with one more evidence-backed clause (whom it serves or how it is used). Change nothing else — not the frontmatter, not the H1, not the Where to look in the code section.`;
     }
     return `- [${error.code}]: ${messageSafe} — ACTION: fix exactly this contract violation and return the complete corrected page; do not work around it by deleting the purpose or the surfaces wholesale.`;
   });
@@ -1743,11 +1698,13 @@ export function buildUnderstandingRepairPrompt(
  * must not drift.
  */
 export const FOLDER_PURPOSE_PROMPT_RULES = [
+  LAY_READER_PROMPT_RULE,
   `- Write ONE prose paragraph (at most two) answering the reader's question "what is this directory for?" — a real synthesis of the directory's role in the product, never a concatenation of per-file summaries.`,
   `- The paragraph is between 40 and 800 characters — COUNT the characters before returning; overshooting the maximum is the most common rejection.`,
   `- Plain prose only: no frontmatter, no headings, no code fences, no HTML comments, no Markdown links, no images. You may name important files with inline code spans.`,
   `- Every claim must trace to the supplied evidence: the deterministic file inventory and the accepted file-page openings. When the evidence cannot support a claim, omit the claim — never guess.`,
   `- Do not enumerate every file — the deterministic file guide already does that. Synthesize the directory's PURPOSE and how its main pieces fit together.`,
+  `- Prefer concrete nouns over adjective stacks: never pair near-synonymous qualifiers ("lightweight, dependency-light") — one precise word carries the meaning; filler pairs read as padding.`,
   `- Do not write "TODO", "TBD", or similar placeholders. If the evidence is thin, write a shorter honest paragraph instead.`,
 ] as const;
 
@@ -1919,7 +1876,9 @@ export function buildFileSectionPrompt(
     `Write the PROSE of ONE section of the wiki page for a large source file. The heading and the anchor marker are owned by the orchestrator — you write only the explanatory prose.`,
     ...FILE_NARRATIVE_PROMPT_RULES,
     `- The section's heading is "${heading}" and it documents exactly these symbols: ${sectionKeys.join(", ")}. Explain what this part of the mechanism does, step by step, naming the real symbols in inline code.`,
-    `- When the symbols table supplies a non-empty signature for a symbol whose behavior you assert, copy that signature byte-for-byte into inline code or a fenced block before the behavioral explanation.`,
+    // #30 audit fix: use the shared constant — the paraphrase it replaces
+    // dropped the "one literal signature covers subsequent claims" nuance.
+    LITERAL_SIGNATURE_PROMPT_RULE,
     sourceTruncated
       ? `- The source slice below was TRUNCATED by the section budget — describe only what is visible; never invent behavior for code you cannot see.`
       : `- The source slice below is the COMPLETE source of these symbols.`,
