@@ -1,9 +1,20 @@
 {
   "name": "@livewiki/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "type": "module",
   "description": "Deterministic structural index and batch documentation engine for livewiki.",
+  "keywords": [
+    "livewiki",
+    "documentation",
+    "code-documentation",
+    "llm",
+    "agents",
+    "tree-sitter",
+    "markdown",
+    "wiki"
+  ],
+  "homepage": "https://github.com/eduardoabreu81/livewiki#readme",
   "license": "MIT",
   "repository": {
     "type": "git",

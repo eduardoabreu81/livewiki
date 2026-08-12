@@ -1,9 +1,20 @@
 {
   "name": "@livewiki/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "type": "module",
   "description": "MCP server exposing a livewiki repository wiki to any MCP client.",
+  "keywords": [
+    "livewiki",
+    "mcp",
+    "model-context-protocol",
+    "documentation",
+    "code-documentation",
+    "llm",
+    "agents",
+    "wiki"
+  ],
+  "homepage": "https://github.com/eduardoabreu81/livewiki#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,6 +30,13 @@
   "main": "dist/index.js",
   "bin": {
     "livewiki-mcp": "dist/index.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./stdio": {
+      "types": "./dist/stdio.d.ts",
+      "default": "./dist/stdio.js"
+    }
   },
   "files": [
     "dist"

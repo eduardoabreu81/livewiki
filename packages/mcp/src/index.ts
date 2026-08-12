@@ -20,9 +20,8 @@
  *   - 1: setup error (invalid repo, etc)
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as nodePath from "node:path";
-import { createServer } from "./server.js";
+import { startMcpStdioServer } from "./stdio.js";
 
 function parseArgs(argv: readonly string[]): { repoRoot: string } {
   let repoRoot = process.cwd();
@@ -38,9 +37,7 @@ function parseArgs(argv: readonly string[]): { repoRoot: string } {
 
 async function main(): Promise<void> {
   const { repoRoot } = parseArgs(process.argv.slice(2));
-  const server = await createServer({ repoRoot });
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const server = await startMcpStdioServer({ repoRoot });
 
   // Graceful shutdown — closes the server (which closes the FTS5 index).
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

@@ -1,9 +1,20 @@
 {
   "name": "@livewiki/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "type": "module",
   "description": "livewiki command-line interface — living documentation anchored to code, verifiable against hallucination.",
+  "keywords": [
+    "livewiki",
+    "documentation",
+    "code-documentation",
+    "llm",
+    "agents",
+    "cli",
+    "markdown",
+    "wiki"
+  ],
+  "homepage": "https://github.com/eduardoabreu81/livewiki#readme",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -29,9 +40,11 @@
   },
   "dependencies": {
     "@livewiki/core": "workspace:*",
+    "@livewiki/mcp": "workspace:*",
     "commander": "^12.1.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0",
     "@types/node": "^22.0.0"

@@ -85,4 +85,17 @@ describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
     expect(resolveRepoRoot(".")).toBe(cwd);
     expect(resolveRepoRoot("/tmp/abc")).toMatch(/[\\/]tmp[\\/]abc$/);
   });
+
+  it("program version matches package.json (regression: published package printed --version 0.0.0)", async () => {
+    const nodeFs = await import("node:fs/promises");
+    const nodePath = await import("node:path");
+    const raw = await nodeFs.readFile(
+      nodePath.resolve(process.cwd(), "package.json"),
+      "utf8",
+    );
+    const pkg = JSON.parse(raw) as { version: string };
+    const program = createProgram();
+    expect(program.version()).toBe(pkg.version);
+    expect(program.version()).not.toBe("0.0.0");
+  });
 });

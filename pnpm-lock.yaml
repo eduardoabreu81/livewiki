@@ -31,10 +31,16 @@ importers:
       '@livewiki/core':
         specifier: workspace:*
         version: link:../core
+      '@livewiki/mcp':
+        specifier: workspace:*
+        version: link:../mcp
       commander:
         specifier: ^12.1.0
         version: 12.1.0
     devDependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.30.0
+        version: 1.30.0(zod@4.4.3)
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.0

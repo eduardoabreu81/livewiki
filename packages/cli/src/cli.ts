@@ -16,11 +16,12 @@ import { registerInstall } from "./commands/install.js";
 /**
  * Version read from @livewiki/cli's package.json. Synchronous — the file is
  * static at build time and the caller (`run`) is already async.
- * Path: src/cli.ts → ../../package.json. Built: dist/cli.js → same path.
+ * Path: src/cli.ts → ../package.json. Built: dist/cli.js → same relative
+ * path (dist/ and src/ sit at the same depth inside the package).
  */
 function readVersion(): string {
   const here = new URL(import.meta.url);
-  const pkgUrl = new URL("../../package.json", here);
+  const pkgUrl = new URL("../package.json", here);
   try {
     const raw = nodeFs.readFileSync(pkgUrl, "utf8");
     const parsed = JSON.parse(raw) as { version?: string };
