@@ -66,6 +66,7 @@ import {
   buildFolderPurposeContext,
   extractPageTitle,
   renderFolderPage,
+  truncateFolderPurpose,
   validateFolderPurpose,
   type FolderPurposeError,
 } from "./folder-page.js";
@@ -177,6 +178,7 @@ import {
   computeUnderstandingEvidenceHash,
   hasUnderstandingBasis,
   renderUnderstandingEvidence,
+  salvageUnderstandingCandidate,
   validateUnderstandingArtifact,
   UNDERSTANDING_MAX_OUTPUT_TOKENS,
   UNDERSTANDING_ONLY_TARGET,
@@ -1180,6 +1182,53 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
               priorPurposeErrors = [];
               nextPromptKind = "initial";
               continue;
+            }
+          }
+
+          if (!attemptDone && !taskError) {
+            const thisLoopDiagnostics = diagnosticHistory.slice(diagnosticSliceStart);
+            // Deterministic sentence-clip fallback (2026-08-12): when every
+            // attempt failed ONLY on the length cap, models demonstrably
+            // cannot count characters (a run's repairs landed at
+            // 1078/983/977 against the 800 cap). Clip the last candidate at
+            // a sentence boundary instead of failing the folder outright.
+            const onlyTooLong =
+              priorPurpose !== "" &&
+              thisLoopDiagnostics.length > 0 &&
+              thisLoopDiagnostics.every(
+                (d) =>
+                  d.errors.length > 0 &&
+                  d.errors.every((e) => e.code === "folder_purpose_too_long"),
+              );
+            const truncated = onlyTooLong
+              ? truncateFolderPurpose(priorPurpose)
+              : null;
+            if (truncated !== null && validateFolderPurpose(truncated).length === 0) {
+              const page = renderFolderPage({
+                folder: folderUnit,
+                fileUnits: folderFileUnits,
+                symbolCountByPath,
+                existingPagePaths,
+                titlesByPagePath,
+                proseTitlesByFilePath,
+                purpose: truncated,
+              });
+              const writeResult = await tryWriteAndVerify(absRoot, wikiPath, page, existing);
+              if (writeResult.ok) {
+                attemptDone = true;
+                artifacts = writeResult.artifacts;
+              } else if (writeResult.rollbackFailed) {
+                taskError = {
+                  code: "rollback_failed",
+                  message:
+                    `rollback failed after verify rejection for ${wikiPath}: ${writeResult.rollbackFailed.reason}. ` +
+                    `This is a terminal state for the ENTIRE run — the disk may have an inconsistent page. ` +
+                    `Operator must inspect ${wikiPath} and re-run with --only after manual repair.`,
+                };
+                runAbortedByRollback = true;
+              }
+              // A verify rejection or write exception on the deterministic
+              // skeleton falls through to repair_exhausted below.
             }
           }
 
@@ -3974,6 +4023,37 @@ async function runUnderstandingStage(opts: {
       }
       artifacts = write.artifacts;
       break;
+    }
+    if (!artifacts && !taskError) {
+      // Deterministic salvage fallback (2026-08-12): same model-can't-count
+      // failure class as the folder purpose, plus MiniMax-M3's persistent
+      // inline-code habit on this page kind. When the LAST candidate fails
+      // ONLY on mechanically fixable codes (length caps / code spans), the
+      // salvager deletes formatting and trailing clauses and the rebuilt
+      // page is accepted instead of failing the task. The salvager
+      // re-validates the whole contract, so any residual violation keeps
+      // the failure.
+      const lengthOnly =
+        priorCandidate !== "" &&
+        priorErrors.length > 0 &&
+        priorErrors.every(
+          (e) =>
+            e.code === "purpose_too_long" ||
+            e.code === "surface_too_long" ||
+            e.code === "code_span_forbidden",
+        );
+      const clipped = lengthOnly ? salvageUnderstandingCandidate(priorCandidate) : null;
+      if (clipped !== null) {
+        const write = await tryWriteAndVerify(opts.absRoot, wikiPath, clipped, existing, true);
+        if (write.rollbackFailed) {
+          taskError = { code: "rollback_failed", message: write.rollbackFailed.reason, failedAt: 5 };
+          result.rollbackFailed = true;
+        } else if (!write.exception && !write.issues) {
+          artifacts = write.artifacts;
+        }
+        // A verify rejection or write exception falls through to
+        // repair_exhausted below.
+      }
     }
     if (!artifacts && !taskError) {
       taskError = {

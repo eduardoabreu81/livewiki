@@ -94,6 +94,13 @@ export interface UnderstandingEvidence {
   /** README purpose excerpt when present — one evidence input, never the authority. */
   readmePurpose: string | null;
   readmePath: string | null;
+  /**
+   * Product name from the README's first H1 (orientation), when present —
+   * the deterministic product-name pin: without it the model infers the
+   * name from directory/wiki paths and can call the product "livewiki"
+   * (the name-wobble observed 2026-08-11/12).
+   */
+  readmeTitle: string | null;
 }
 
 /**
@@ -154,6 +161,7 @@ export async function buildUnderstandingEvidence(opts: {
     surfaces: orientation.surfaces,
     readmePurpose: orientation.purpose,
     readmePath: orientation.readmePath,
+    readmeTitle: orientation.readmeTitle,
   };
 }
 
@@ -173,6 +181,7 @@ export function computeUnderstandingEvidenceHash(evidence: UnderstandingEvidence
       surfaces: evidence.surfaces,
       readmePurpose: evidence.readmePurpose,
       readmePath: evidence.readmePath,
+      readmeTitle: evidence.readmeTitle,
     }),
   );
 }
@@ -231,6 +240,8 @@ export function renderUnderstandingEvidence(
   }
   lines.push("", "## README purpose excerpt (human-written evidence; may be stale — never the authority)");
   lines.push(evidence.readmePurpose ?? "(no README purpose found)");
+  lines.push("", "## Product name (from the README's own title — authoritative for naming)");
+  lines.push(evidence.readmeTitle ?? "(no README title found)");
   let rendered = lines.join("\n");
   if (rendered.length > maxChars) {
     rendered = rendered.slice(0, maxChars) + "\n(evidence truncated to the character budget)";
@@ -519,6 +530,108 @@ export function validateUnderstandingArtifact(content: string): UnderstandingVal
     );
   }
   return errors;
+}
+
+// ── Deterministic length fallback (2026-08-12) ─────────────────────────────
+
+/**
+ * Clips `text` at the LAST boundary that fits `max`: sentence punctuation
+ * first-class, but also clause separators (" — ", "; ", ", ") because the
+ * surfaces bullets are noun phrases without terminators. Returns null when
+ * no boundary keeps at least `min` characters (fail-closed: the caller
+ * keeps the repair_exhausted failure). Never rewrites — only deletes
+ * trailing clauses.
+ */
+function clipAtClauseBoundary(text: string, max: number, min: number): string | null {
+  if (text.length <= max) return text;
+  let clipEnd = -1;
+  for (const match of text.matchAll(/[.!?。！？]+["'”’)]?(?=\s|$)|[—;,](?=\s)/g)) {
+    const end = match.index! + match[0].length;
+    if (end > max) break;
+    clipEnd = end;
+  }
+  if (clipEnd < min) return null;
+  return text.slice(0, clipEnd).replace(/[\s—;,]+$/u, "").trimEnd();
+}
+
+/**
+ * Deterministic last resort for an understanding candidate whose remaining
+ * failures are ONLY mechanically fixable (purpose_too_long /
+ * surface_too_long / code_span_forbidden — the caller checks that). Same
+ * failure class as the folder purpose (2026-08-12): models cannot count
+ * characters, bounded repairs oscillate at the cap boundary, and MiniMax-M3
+ * keeps wrapping file names in inline code despite the ban. The salvage
+ * only DELETES: inline-code backticks are unwrapped (the prose text is
+ * kept), the purpose is clipped at a sentence boundary, and each oversized
+ * bullet at a clause boundary — then the WHOLE contract is re-validated;
+ * any residual violation returns null and the task keeps its
+ * repair_exhausted failure. Fenced code blocks are refused (not
+ * unwrappable prose).
+ */
+export function salvageUnderstandingCandidate(raw: string): string | null {
+  const normalized = raw.replace(/\r\n/g, "\n");
+  const fm = /^---\n[\s\S]*?\n---/.exec(normalized)?.[0];
+  if (fm === undefined) return null;
+  const bodyLines = normalized.slice(fm.length).split("\n");
+  // Inline code spans are unwrapped, never rewritten: `text` → text.
+  // A fenced block is not prose — refuse the candidate.
+  if (/^~~~|^```/m.test(bodyLines.join("\n"))) return null;
+  const lines = bodyLines.map((line) => line.replace(/`([^`]*)`/g, "$1"));
+  const h1Index = lines.findIndex((line) => H1_RE.test(line.trim()));
+  if (h1Index < 0) return null;
+  const h1Text = lines[h1Index]!.trim();
+
+  // Purpose: the paragraph block immediately after the H1 (validator rules).
+  let cursor = h1Index + 1;
+  const purposeLines: string[] = [];
+  while (cursor < lines.length) {
+    const trimmed = lines[cursor]!.trim();
+    if (ANY_HEADING_RE.test(trimmed)) break;
+    if (trimmed === "") {
+      if (purposeLines.length > 0) {
+        cursor++;
+        break;
+      }
+      cursor++;
+      continue;
+    }
+    purposeLines.push(trimmed);
+    cursor++;
+  }
+  const purpose = purposeLines.join(" ").replace(/\s+/g, " ").trim();
+  if (purpose === "") return null;
+  const clippedPurpose = clipAtClauseBoundary(
+    purpose,
+    UNDERSTANDING_PURPOSE_MAX_CHARS,
+    UNDERSTANDING_PURPOSE_MIN_CHARS,
+  );
+  if (clippedPurpose === null) return null;
+
+  // Optional surfaces section: heading verbatim, bullets clause-clipped.
+  let headingText: string | null = null;
+  const bullets: string[] = [];
+  for (; cursor < lines.length; cursor++) {
+    const trimmed = lines[cursor]!.trim();
+    if (trimmed === "") continue;
+    if (H2_RE.test(trimmed)) {
+      headingText = trimmed;
+      continue;
+    }
+    if (BULLET_RE.test(trimmed)) {
+      const item = trimmed.replace(/^-\s+/, "");
+      const clipped = clipAtClauseBoundary(item, UNDERSTANDING_SURFACE_MAX_CHARS, 40);
+      if (clipped === null) return null;
+      bullets.push(clipped);
+      continue;
+    }
+    // Non-bullet content is not a length failure — refuse to rebuild.
+    return null;
+  }
+
+  const page =
+    `${fm}\n\n${h1Text}\n\n${clippedPurpose}\n` +
+    (headingText !== null ? `\n${headingText}\n\n${bullets.map((b) => `- ${b}`).join("\n")}\n` : "");
+  return validateUnderstandingArtifact(page).length === 0 ? page : null;
 }
 
 // ── Tolerant reader (quickstart orientation + README export) ───────────────

@@ -25,6 +25,10 @@ import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { runBatch, runOnly } from "./batch.js";
+import {
+  FOLDER_PURPOSE_MAX_CHARS,
+  truncateFolderPurpose,
+} from "./folder-page.js";
 import { buildStatusReport } from "./batch-status.js";
 import { DEGRADED_NOTICE_PREFIX } from "./artifact.js";
 import * as safeIo from "./safe-io.js";
@@ -82,6 +86,12 @@ class ProgrammableMockLlm implements LlmClient {
    * manually (e.g.: uniqueness test with 5 modules).
    */
   public autoPageFromPrompt = false;
+  /**
+   * When set, folder-purpose prompts (initial AND repair) always receive
+   * this paragraph — used by the deterministic length-fallback test to
+   * force `folder_purpose_too_long` on every bounded attempt.
+   */
+  public folderPurposeResponse: string | undefined;
 
   async generate(req: import("./llm/types.js").GenerateRequest): Promise<GenerateResult> {
     // Stage 5c (item 23): answer the understanding task with a valid page
@@ -104,7 +114,7 @@ class ProgrammableMockLlm implements LlmClient {
       req.system.includes("folder purpose paragraph")
     ) {
       return {
-        content: VALID_FOLDER_PURPOSE,
+        content: this.folderPurposeResponse ?? VALID_FOLDER_PURPOSE,
         usage: { inputTokens: 100, outputTokens: 50, model: this.model },
       };
     }
@@ -3173,5 +3183,54 @@ describe("batch recovery tier — relaxed completion round (Component 2)", () =>
     expect(result.failures[0]!.error.code).toBe("repair_exhausted");
     expect(llm.callCount).toBe(3); // no relaxed call
     expect(result.degradedPages).toBeUndefined();
+  });
+});
+
+describe("folder purpose deterministic length fallback (2026-08-12)", () => {
+  it("clips an always-overshooting folder purpose at a sentence boundary instead of failing the folder", async () => {
+    const overshoot = Array.from(
+      { length: 14 },
+      (_, i) =>
+        `Sentence ${i + 1} describes one responsibility of the auth directory in plain words.`,
+    ).join(" ");
+    expect(overshoot.length).toBeGreaterThan(FOLDER_PURPOSE_MAX_CHARS);
+    llm.folderPurposeResponse = overshoot;
+    llm.autoPageFromPrompt = true;
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed");
+    const expected = truncateFolderPurpose(overshoot);
+    expect(expected).not.toBeNull();
+    const page = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/auth/index.md"),
+      "utf8",
+    );
+    expect(page).toContain(expected!);
+    expect(page).not.toContain(overshoot);
+  });
+
+  it("keeps repair_exhausted when the overshoot has no honest clip point", async () => {
+    llm.folderPurposeResponse = `x`.repeat(FOLDER_PURPOSE_MAX_CHARS + 100);
+    llm.autoPageFromPrompt = true;
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    const folderFailure = result.failures.find((f) => f.error.code === "repair_exhausted");
+    expect(folderFailure).toBeDefined();
+    expect(folderFailure!.error.message).toContain("folder_purpose_too_long");
   });
 });

@@ -4,8 +4,10 @@ import {
   extractPageTitle,
   plainTestCoverageLine,
   renderFolderPage,
+  truncateFolderPurpose,
   validateFolderPurpose,
   FOLDER_PURPOSE_MAX_CHARS,
+  FOLDER_PURPOSE_MIN_CHARS,
 } from "./folder-page.js";
 
 function planFor(paths: Array<{ path: string; symbols?: number }>) {
@@ -41,6 +43,49 @@ describe("validateFolderPurpose", () => {
     ).toEqual([
       expect.objectContaining({ code: "folder_purpose_invalid_shape" }),
     ]);
+  });
+});
+
+describe("truncateFolderPurpose (2026-08-12 deterministic length fallback)", () => {
+  const sentence = (n: number) =>
+    `Sentence ${n} describes one responsibility of this directory in plain words.`;
+
+  it("returns the text unchanged when it already fits the cap", () => {
+    const text = "This directory holds the batch orchestrator and its checkpoints.";
+    expect(truncateFolderPurpose(text)).toBe(text);
+  });
+
+  it("clips at the LAST sentence boundary that fits under the cap", () => {
+    const sentences = Array.from({ length: 12 }, (_, i) => sentence(i + 1));
+    const text = sentences.join(" ");
+    expect(text.length).toBeGreaterThan(FOLDER_PURPOSE_MAX_CHARS);
+    const clipped = truncateFolderPurpose(text);
+    expect(clipped).not.toBeNull();
+    expect(clipped!.length).toBeLessThanOrEqual(FOLDER_PURPOSE_MAX_CHARS);
+    expect(clipped!.length).toBeGreaterThanOrEqual(FOLDER_PURPOSE_MIN_CHARS);
+    expect(clipped!.endsWith(".")).toBe(true);
+    expect(text.startsWith(clipped!)).toBe(true);
+    // One more full sentence would NOT have fit.
+    const next = clipped!.length + 1 + sentence(1).length;
+    expect(next).toBeGreaterThan(FOLDER_PURPOSE_MAX_CHARS);
+    expect(validateFolderPurpose(clipped!)).toEqual([]);
+  });
+
+  it("normalizes newlines before measuring", () => {
+    const long = `${sentence(1)}\n\n${Array.from({ length: 12 }, (_, i) => sentence(i + 2)).join(" ")}`;
+    const clipped = truncateFolderPurpose(long);
+    expect(clipped).not.toBeNull();
+    expect(clipped).not.toContain("\n");
+    expect(clipped!.length).toBeLessThanOrEqual(FOLDER_PURPOSE_MAX_CHARS);
+  });
+
+  it("returns null when no honest clip point exists (one oversized sentence)", () => {
+    expect(truncateFolderPurpose("x".repeat(FOLDER_PURPOSE_MAX_CHARS + 50))).toBeNull();
+  });
+
+  it("returns null when the only boundary lands below the minimum", () => {
+    const text = `Hi. ${"y".repeat(FOLDER_PURPOSE_MAX_CHARS)}`;
+    expect(truncateFolderPurpose(text)).toBeNull();
   });
 });
 

@@ -1600,7 +1600,8 @@ export function buildSurgicalRepairPrompt(
 export const UNDERSTANDING_PAGE_PROMPT_RULES = [
   LAY_READER_PROMPT_RULE,
   `- After the frontmatter, write exactly: an H1 human-meaningful title naming the repository's product; then ONE prose paragraph stating what the repository is, whom it serves, and the main way it is used; then optionally ONE H2 \`Where to look in the code\` section with a flat bullet list naming the main parts of the product (entry points, CLIs, services, containers) and what each does. Nothing else — no other sections, no extra paragraphs.`,
-  `- The purpose paragraph is between 40 and 600 characters — aim for 400–550 and COUNT the characters before returning; overshooting the maximum is the most common rejection of this page. Where to look in the code is at most 10 bullets, each at most 160 characters.`,
+  `- Naming: when the evidence inventory carries a "Product name" line, the H1 and the frontmatter \`title\` MUST be exactly that name. Otherwise derive the name from the README purpose excerpt or the dominant module names — NEVER from directory names or wiki page paths: "livewiki" is the documentation TOOL that generated this wiki (every page path starts with \`livewiki/\`), never the name of the documented product.`,
+  `- The purpose paragraph is between 40 and 600 characters — aim for 400–550 and COUNT the characters before returning; overshooting the maximum is the most common rejection of this page. The cap outranks completeness and term definitions: when a clause does not fit, DROP it — a shorter paragraph that passes is always better than a fuller one that is rejected. Where to look in the code is at most 10 bullets, each at most 160 characters — aim for at most 120: name the part and its role in plain words, and drop qualifiers that do not fit.`,
   `- NEVER use inline code, fenced code blocks, Markdown links, or images anywhere: this page synthesizes purpose in plain prose and does not document symbols. Name files, commands, and tools as plain words.`,
   `- The frontmatter carries exactly: \`title\` (matching the H1), \`owner: generated\`, \`kind: understanding\`, and \`updated\` (the current date supplied in the user message). No \`anchors\` key, no \`lw:anchors\` markers, no \`lw:manual\` block anywhere.`,
   `- Every claim must trace to the supplied evidence inventory: the accepted module pages' responsibility sentences, the flow pages, the topic pages, and the detected entry points. When the evidence cannot support a claim, omit the claim — never guess.`,
@@ -1660,10 +1661,13 @@ export function buildUnderstandingRepairPrompt(
     // repairs still overshot, then the model flailed and dropped the
     // frontmatter — narrow the edit, don't ask for a rewrite).
     if (error.code === "purpose_too_long") {
-      return `- [${error.code}]: ${messageSafe} — ACTION: shorten ONLY the purpose paragraph by deleting its least essential clauses (keep it ONE paragraph, keep the repository's core identity and audience). Change nothing else — not the frontmatter, not the H1, not the Where to look in the code section.`;
+      return `- [${error.code}]: ${messageSafe} — ACTION: shorten ONLY the purpose paragraph by deleting its least essential clauses (keep it ONE paragraph, keep the repository's core identity and audience), and land under 520 characters so the 600 cap keeps a safety margin. Change nothing else — not the frontmatter, not the H1, not the Where to look in the code section.`;
     }
     if (error.code === "purpose_too_short") {
       return `- [${error.code}]: ${messageSafe} — ACTION: expand ONLY the purpose paragraph with one more evidence-backed clause (whom it serves or how it is used). Change nothing else — not the frontmatter, not the H1, not the Where to look in the code section.`;
+    }
+    if (error.code === "surface_too_long") {
+      return `- [${error.code}]: ${messageSafe} — ACTION: shorten ONLY the oversized bullets, landing under 140 characters each so the 160 cap keeps a safety margin: name the part and its role, drop the qualifiers. Change nothing else.`;
     }
     return `- [${error.code}]: ${messageSafe} — ACTION: fix exactly this contract violation and return the complete corrected page; do not work around it by deleting the purpose or the surfaces wholesale.`;
   });
@@ -1700,7 +1704,7 @@ export function buildUnderstandingRepairPrompt(
 export const FOLDER_PURPOSE_PROMPT_RULES = [
   LAY_READER_PROMPT_RULE,
   `- Write ONE prose paragraph (at most two) answering the reader's question "what is this directory for?" — a real synthesis of the directory's role in the product, never a concatenation of per-file summaries.`,
-  `- The paragraph is between 40 and 800 characters — COUNT the characters before returning; overshooting the maximum is the most common rejection.`,
+  `- The paragraph is between 40 and 800 characters — aim for 400–700 so the cap keeps a safety margin, and COUNT the characters before returning; overshooting the maximum is the most common rejection. The cap outranks every other rule, including completeness and term definitions: when a clause does not fit, DROP it — a shorter paragraph that passes is always better than a fuller one that is rejected.`,
   `- Plain prose only: no frontmatter, no headings, no code fences, no HTML comments, no Markdown links, no images. You may name important files with inline code spans.`,
   `- Every claim must trace to the supplied evidence: the deterministic file inventory and the accepted file-page openings. When the evidence cannot support a claim, omit the claim — never guess.`,
   `- Do not enumerate every file — the deterministic file guide already does that. Synthesize the directory's PURPOSE and how its main pieces fit together.`,
@@ -1754,7 +1758,9 @@ export function buildFolderPurposeRepairPrompt(
   const errorLines = errors.map((error) => {
     const messageSafe = neutralizeUntrustedControlMarkers(error.message);
     if (error.code === "folder_purpose_too_long") {
-      return `- [${error.code}]: ${messageSafe} — ACTION: shorten ONLY the paragraph by deleting its least essential clauses.`;
+      const priorLength = priorPurpose.trim().replace(/\s+/g, " ").length;
+      const mustDelete = Math.max(0, priorLength - 650);
+      return `- [${error.code}]: ${messageSafe} — ACTION: shorten ONLY the paragraph by deleting its least essential clauses. Your rejected paragraph has ${priorLength} characters — you must DELETE at least ${mustDelete} of them and land under 700 so the 800 cap keeps a safety margin. Deleting one clause is rarely enough: count what remains and keep deleting until the target is met.`;
     }
     if (error.code === "folder_purpose_too_short") {
       return `- [${error.code}]: ${messageSafe} — ACTION: expand ONLY the paragraph with one more evidence-backed clause (what the directory enables or how its pieces fit).`;

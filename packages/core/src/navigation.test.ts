@@ -127,6 +127,7 @@ describe("deterministic navigation", () => {
         surfaces: ["Python entry point: `main.py`", "Container build file: `Dockerfile`"],
         readmePath: "README.md",
         fastPathSection: "Quick Start",
+        readmeTitle: "MoneyPrinterTurbo-Plus",
       },
     });
     const headings = [...quickstart.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
@@ -167,6 +168,7 @@ describe("deterministic navigation", () => {
         surfaces: ["Go module definition: `go.mod`"],
         readmePath: null,
         fastPathSection: null,
+        readmeTitle: null,
       },
     });
     expect(quickstart).toContain("## What this repository is");
@@ -182,7 +184,7 @@ describe("deterministic navigation", () => {
       moduleCount: 4,
       flowPresentations: new Map(),
       hasAuxiliary: false,
-      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null },
+      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null, readmeTitle: null },
     });
     expect(quickstart).not.toContain("What this repository is");
     expect(quickstart).not.toContain("What you'll find in this wiki");
@@ -207,6 +209,7 @@ describe("deterministic navigation", () => {
         surfaces: [],
         readmePath: "README.md",
         fastPathSection: null,
+        readmeTitle: null,
       },
       moduleDigests: [
         { id: "api", title: "API handlers", responsibility: "Serves the HTTP endpoints of the product." },
@@ -263,7 +266,7 @@ describe("deterministic navigation", () => {
       moduleCount: 4,
       flowPresentations: new Map(),
       hasAuxiliary: false,
-      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null },
+      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null, readmeTitle: null },
       moduleDigests: [
         { id: "api", title: "API handlers", responsibility: "serves HTTP endpoints" },
         { id: "engine", title: "Render engine", responsibility: "renders the final video" },
@@ -1042,6 +1045,7 @@ describe("generateQuickstart — understanding synthesis priority (item 23)", ()
         surfaces: ["Python entry point: `main.py`"],
         readmePath: "README.md",
         fastPathSection: "Quick Start",
+        readmeTitle: "MoneyPrinterTurbo-Plus",
       },
       understanding: synthesis,
     });
@@ -1075,6 +1079,7 @@ describe("generateQuickstart — understanding synthesis priority (item 23)", ()
         surfaces: [],
         readmePath: "README.md",
         fastPathSection: null,
+        readmeTitle: null,
       },
       understanding: synthesis,
     });
@@ -1098,6 +1103,7 @@ describe("generateQuickstart — understanding synthesis priority (item 23)", ()
         surfaces: ["Go module definition: `go.mod`"],
         readmePath: null,
         fastPathSection: null,
+        readmeTitle: null,
       },
       understanding: { title: "Flow Repo", purpose: synthesis.purpose, surfaces: [] },
     });
@@ -1113,6 +1119,7 @@ describe("generateQuickstart — understanding synthesis priority (item 23)", ()
       surfaces: ["Python entry point: `main.py`"],
       readmePath: "README.md",
       fastPathSection: "Quick Start",
+      readmeTitle: "MoneyPrinterTurbo-Plus",
     };
     const digests = [
       { id: "core", title: "Core pipeline", responsibility: "Renders the video end to end." },
@@ -1131,7 +1138,7 @@ describe("generateQuickstart — understanding synthesis priority (item 23)", ()
     // Same for the no-README digest-synthesis branch.
     const noReadme = generateQuickstart({
       ...baseOpts,
-      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null },
+      orientation: { purpose: null, surfaces: [], readmePath: null, fastPathSection: null, readmeTitle: null },
       moduleDigests: digests,
       understanding: null,
     });

@@ -4,6 +4,7 @@ import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
 import {
   extractPurpose,
+  extractReadmeTitle,
   extractRepoOrientation,
   findFastPathSection,
   PURPOSE_MAX_CHARS,
@@ -222,5 +223,45 @@ describe("repo orientation (D1)", () => {
     expect(findFastPathSection("## Getting Started\nx\n")).toBe("Getting Started");
     expect(findFastPathSection("## Architecture\nx\n")).toBeNull();
     expect(findFastPathSection("plain prose\n")).toBeNull();
+  });
+});
+
+describe("extractReadmeTitle (product-name pin, 2026-08-12)", () => {
+  it("reads a markdown H1", () => {
+    expect(extractReadmeTitle("# MoneyPrinterTurbo-Plus\n\nprose\n")).toBe("MoneyPrinterTurbo-Plus");
+  });
+
+  it("reads a single-line HTML h1 with attributes and strips the trailing emoji (real MPTP head)", () => {
+    expect(
+      extractReadmeTitle('<div align="center">\n<h1 align="center">MoneyPrinterTurbo-Plus 💸</h1>\n</div>\n'),
+    ).toBe("MoneyPrinterTurbo-Plus");
+  });
+
+  it("reduces a linked title to its text", () => {
+    expect(extractReadmeTitle("# [Cool Tool](https://example.com)\n")).toBe("Cool Tool");
+  });
+
+  it("ignores deeper headings and `#` lines inside fenced code", () => {
+    expect(extractReadmeTitle("## Not it\n```sh\n# comment\n```\n# Real Name\n")).toBe("Real Name");
+  });
+
+  it("returns null when no usable H1 exists", () => {
+    expect(extractReadmeTitle("plain prose only\n")).toBeNull();
+    expect(extractReadmeTitle("# ![](badge.svg)\n")).toBeNull();
+  });
+
+  it("surfaces through extractRepoOrientation as readmeTitle", async () => {
+    const repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-orientation-title-"));
+    try {
+      await nodeFs.writeFile(
+        nodePath.join(repoRoot, "README.md"),
+        '<h1 align="center">MoneyPrinterTurbo-Plus 💸</h1>\n\nThis repository turns a short topic brief into a fully rendered short video for its users.\n',
+        "utf8",
+      );
+      const orientation = await extractRepoOrientation(repoRoot);
+      expect(orientation.readmeTitle).toBe("MoneyPrinterTurbo-Plus");
+    } finally {
+      await nodeFs.rm(repoRoot, { recursive: true, force: true });
+    }
   });
 });

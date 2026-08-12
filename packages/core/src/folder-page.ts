@@ -93,6 +93,29 @@ export function validateFolderPurpose(raw: string): FolderPurposeError[] {
   return errors;
 }
 
+/**
+ * Deterministic last resort for a purpose whose ONLY failure is the length
+ * cap (2026-08-12: models cannot count characters — three bounded repairs
+ * of an 18-service folder landed at 1078/983/977 against the 800 cap).
+ * Clips at the LAST sentence boundary that fits under the maximum. Models
+ * front-load the folder's identity, so dropping trailing clauses keeps the
+ * paragraph honest; a single sentence longer than the cap has no honest
+ * clip point and returns null (the task keeps its `repair_exhausted`
+ * failure). Never rewrites — only deletes trailing sentences.
+ */
+export function truncateFolderPurpose(raw: string): string | null {
+  const text = raw.trim().replace(/\s+/g, " ");
+  if (text.length <= FOLDER_PURPOSE_MAX_CHARS) return text;
+  let clipEnd = -1;
+  for (const match of text.matchAll(/[.!?。！？]+["'”’)]?(?=\s|$)/g)) {
+    const end = match.index! + match[0].length;
+    if (end > FOLDER_PURPOSE_MAX_CHARS) break;
+    clipEnd = end;
+  }
+  if (clipEnd < FOLDER_PURPOSE_MIN_CHARS) return null;
+  return text.slice(0, clipEnd);
+}
+
 export interface RenderFolderPageOptions {
   readonly folder: FolderUnit;
   /** File units of this folder (page disposition entries). */

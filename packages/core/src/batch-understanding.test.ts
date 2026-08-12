@@ -27,7 +27,7 @@ import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { resumeBatch, runBatch, runOnly } from "./batch.js";
 import { run as runVerify } from "./verify.js";
-import { UNDERSTANDING_REL_PATH } from "./understanding.js";
+import { UNDERSTANDING_REL_PATH, parseUnderstandingPage, UNDERSTANDING_PURPOSE_MAX_CHARS, UNDERSTANDING_SURFACE_MAX_CHARS } from "./understanding.js";
 import type { LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult } from "./llm/types.js";
 import type { TaskCheckpoint } from "./batch-state.js";
@@ -370,9 +370,70 @@ describe("batch stage 5c — repository understanding", () => {
     expect(page).not.toContain("core/db.ts#connect");
   });
 
+  it("length-only persistent overshoot is clipped deterministically instead of failing (2026-08-12 fallback)", async () => {
+    await writeFlowRepo(repoRoot);
+    const longPurpose = Array.from(
+      { length: 12 },
+      (_, i) => `Clause ${i + 1} states one fact about what the repository does for its users.`,
+    ).join(" ");
+    const longBullet =
+      "The core package persists every record behind one seam — " +
+      "connections, transactions, and migrations — keeping storage details out of the domain code entirely";
+    const overshoot = makeUnderstandingPage()
+      .replace(UNDERSTANDING_PURPOSE, longPurpose)
+      .replace("- Persistence layer in the core module", `- ${longBullet}`);
+    llm.understandingResponder = () => overshoot;
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+
+    expect(result.status).toBe("completed");
+    const page = await nodeFs.readFile(nodePath.join(repoRoot, UNDERSTANDING_REL_PATH), "utf8");
+    const parsed = parseUnderstandingPage(page);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.purpose.length).toBeLessThanOrEqual(UNDERSTANDING_PURPOSE_MAX_CHARS);
+    expect(longPurpose.startsWith(parsed!.purpose)).toBe(true);
+    for (const surface of parsed!.surfaces) {
+      expect(surface.length).toBeLessThanOrEqual(UNDERSTANDING_SURFACE_MAX_CHARS);
+    }
+    const checkpoint = await readLatestUnderstandingCheckpoint(repoRoot);
+    expect(checkpoint?.status).toBe("done");
+  });
+
+  it("length overshoot without an honest clip point still fails repair_exhausted", async () => {
+    await writeFlowRepo(repoRoot);
+    const overshoot = makeUnderstandingPage().replace(
+      UNDERSTANDING_PURPOSE,
+      "x".repeat(UNDERSTANDING_PURPOSE_MAX_CHARS + 100),
+    );
+    llm.understandingResponder = () => overshoot;
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    const failure = result.failures.find((entry) => entry.module.startsWith("understanding:"));
+    expect(failure).toBeDefined();
+    expect(failure!.error.code).toBe("repair_exhausted");
+    expect(await fileExists(repoRoot, UNDERSTANDING_REL_PATH)).toBe(false);
+  });
+
   it("persistent violations exhaust the budget: task fails, run continues, nothing persists", async () => {
     await writeFlowRepo(repoRoot);
-    llm.understandingResponder = () => makeInvalidUnderstandingPage();
+    // A Markdown link is NOT mechanically salvageable (unlike a code span,
+    // which the 2026-08-12 deterministic salvage unwraps), so the task still
+    // exhausts its budget and fails.
+    llm.understandingResponder = () =>
+      makeUnderstandingPage().replace(
+        "persists records for its users.",
+        "persists records for its users — see [the docs](https://example.com).",
+      );
     const result = await runBatch({
       repoRoot,
       llmClient: llm,

@@ -27,6 +27,7 @@ import {
   loadUnderstandingSynthesis,
   parseUnderstandingPage,
   renderUnderstandingEvidence,
+  salvageUnderstandingCandidate,
   validateUnderstandingArtifact,
   UNDERSTANDING_EVIDENCE_MAX_CHARS,
   UNDERSTANDING_MAX_SURFACES,
@@ -70,6 +71,7 @@ function makeEvidence(): UnderstandingEvidence {
     surfaces: ["Node.js CLI entry point declared in `package.json` (`bin`)"],
     readmePurpose: "Flow Repo is a tool that does things.",
     readmePath: "README.md",
+    readmeTitle: "Flow Repo",
   };
 }
 
@@ -302,6 +304,7 @@ describe("evidence hash + rendering", () => {
     expect(computeUnderstandingEvidenceHash(makeEvidence())).toBe(hash);
     const variants: UnderstandingEvidence[] = [
       { ...makeEvidence(), readmePurpose: "A different README." },
+      { ...makeEvidence(), readmeTitle: "A Different Name" },
       { ...makeEvidence(), surfaces: [] },
       { ...makeEvidence(), modules: makeEvidence().modules.slice(0, 1) },
       { ...makeEvidence(), flows: [] },
@@ -330,6 +333,8 @@ describe("evidence hash + rendering", () => {
     expect(rendered).toContain("## Entry points and surfaces");
     expect(rendered).toContain("## README purpose excerpt");
     expect(rendered).toContain("Flow Repo is a tool that does things.");
+    expect(rendered).toContain("## Product name (from the README's own title — authoritative for naming)");
+    expect(rendered).toContain("Flow Repo");
 
     const truncated = renderUnderstandingEvidence(makeEvidence(), 120);
     expect(truncated.length).toBeLessThanOrEqual(120 + "\n(evidence truncated to the character budget)".length);
@@ -346,6 +351,7 @@ describe("evidence hash + rendering", () => {
       surfaces: ["Go module definition: `go.mod`"],
       readmePurpose: null,
       readmePath: null,
+      readmeTitle: null,
     };
     expect(hasUnderstandingBasis(empty)).toBe(false);
     expect(hasUnderstandingBasis({ ...empty, readmePurpose: "A README purpose." })).toBe(true);
@@ -448,5 +454,106 @@ describe("understanding prompt builders", () => {
     expect(prompt.system).not.toContain("do not work around it by deleting");
     // The length rule carries the salience fix in both prompt kinds.
     expect(prompt.system).toContain("aim for 400–550");
+  });
+});
+
+describe("salvageUnderstandingCandidate (2026-08-12 deterministic salvage fallback)", () => {
+  const sentence = (n: number) =>
+    `Clause ${n} states one fact about what the repository does for its users.`;
+
+  function page(purpose: string, bullets: string[]): string {
+    return [
+      "---",
+      "title: Flow Repo",
+      "owner: generated",
+      "kind: understanding",
+      "---",
+      "",
+      "# Flow Repo",
+      "",
+      purpose,
+      "",
+      "## Where to look in the code",
+      "",
+      ...bullets.map((b) => `- ${b}`),
+      "",
+    ].join("\n");
+  }
+
+  it("clips an over-cap purpose at the last sentence boundary and revalidates clean", () => {
+    const purpose = Array.from({ length: 12 }, (_, i) => sentence(i + 1)).join(" ");
+    expect(purpose.length).toBeGreaterThan(UNDERSTANDING_PURPOSE_MAX_CHARS);
+    const candidate = page(purpose, ["The cli package drives the pipeline."]);
+    expect(
+      validateUnderstandingArtifact(candidate).map((e) => e.code),
+    ).toEqual(["purpose_too_long"]);
+
+    const clipped = salvageUnderstandingCandidate(candidate);
+    expect(clipped).not.toBeNull();
+    expect(validateUnderstandingArtifact(clipped!)).toEqual([]);
+    expect(clipped).toContain("title: Flow Repo");
+    expect(clipped).toContain("# Flow Repo");
+    expect(clipped).toContain("## Where to look in the code");
+    const parsed = parseUnderstandingPage(clipped!);
+    expect(parsed!.purpose.length).toBeLessThanOrEqual(UNDERSTANDING_PURPOSE_MAX_CHARS);
+    expect(parsed!.purpose.endsWith(".")).toBe(true);
+    expect(parsed!.surfaces).toEqual(["The cli package drives the pipeline."]);
+  });
+
+  it("clips an over-cap bullet at a clause boundary (em-dash / comma, no terminator needed)", () => {
+    const bullet =
+      "The app services package wraps every external AI provider behind one seam — " +
+      "voice, video, subtitles, music, and material search — keeping vendor details out of the domain code";
+    expect(bullet.length).toBeGreaterThan(UNDERSTANDING_SURFACE_MAX_CHARS);
+    const candidate = page("This repository turns short topic briefs into rendered videos.", [bullet]);
+    expect(
+      validateUnderstandingArtifact(candidate).map((e) => e.code),
+    ).toEqual(["surface_too_long"]);
+
+    const clipped = salvageUnderstandingCandidate(candidate);
+    expect(clipped).not.toBeNull();
+    expect(validateUnderstandingArtifact(clipped!)).toEqual([]);
+    const parsed = parseUnderstandingPage(clipped!);
+    expect(parsed!.surfaces[0]!.length).toBeLessThanOrEqual(UNDERSTANDING_SURFACE_MAX_CHARS);
+    expect(bullet.startsWith(parsed!.surfaces[0]!)).toBe(true);
+  });
+
+  it("returns null when no honest clip point exists", () => {
+    const purpose = `x`.repeat(UNDERSTANDING_PURPOSE_MAX_CHARS + 50);
+    expect(salvageUnderstandingCandidate(page(purpose, []))).toBeNull();
+    const bullet = `y`.repeat(UNDERSTANDING_SURFACE_MAX_CHARS + 50);
+    expect(
+      salvageUnderstandingCandidate(
+        page("This repository turns short topic briefs into rendered videos.", [bullet]),
+      ),
+    ).toBeNull();
+  });
+
+  it("unwraps inline code spans (text kept, backticks dropped) and revalidates clean", () => {
+    const purpose = `This repository turns topic briefs into rendered videos via main.py and the web UI for its users.`;
+    const candidate = page(purpose, ["The app package assembles the FastAPI application."])
+      .replace("main.py", "`main.py`")
+      .replace("FastAPI", "`FastAPI`");
+    expect(validateUnderstandingArtifact(candidate).map((e) => e.code)).toEqual([
+      "code_span_forbidden",
+    ]);
+
+    const salvaged = salvageUnderstandingCandidate(candidate);
+    expect(salvaged).not.toBeNull();
+    expect(salvaged).not.toContain("`");
+    expect(salvaged).toContain("main.py");
+    expect(validateUnderstandingArtifact(salvaged!)).toEqual([]);
+  });
+
+  it("returns null when a non-mechanical violation survives the salvage (re-validates the whole contract)", () => {
+    const purpose = `This page sneaks a [link](https://example.com) into prose. ${Array.from({ length: 10 }, (_, i) => sentence(i + 1)).join(" ")}`;
+    const candidate = page(purpose, []);
+    expect(salvageUnderstandingCandidate(candidate)).toBeNull();
+  });
+
+  it("refuses a candidate with a fenced code block", () => {
+    const candidate = page("This repository turns topic briefs into rendered videos for its users.", [])
+      .replace("## Where to look in the code", "```sh\nmain.py\n```\n\n## Where to look in the code");
+    expect(salvageUnderstandingCandidate(candidate)).toBeNull();
   });
 });

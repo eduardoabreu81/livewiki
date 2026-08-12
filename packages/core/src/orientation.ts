@@ -22,6 +22,13 @@ export interface RepoOrientation {
   /** Repo-relative path of the README the purpose was taken from, if any. */
   readmePath: string | null;
   /**
+   * Product name from the README's first H1 (tags stripped, edge
+   * decorations removed), when one exists — the deterministic answer to
+   * "what is this product called", so synthesis never infers the name
+   * from directory or wiki path names.
+   */
+  readmeTitle: string | null;
+  /**
    * Heading text of the README section that documents the fastest local path
    * (quickstart / getting started / …), when one exists.
    */
@@ -47,11 +54,13 @@ export async function extractRepoOrientation(absRoot: string): Promise<RepoOrien
   const root = nodePath.resolve(absRoot);
   const readmePath = await findPrimaryReadme(root);
   let purpose: string | null = null;
+  let readmeTitle: string | null = null;
   let fastPathSection: string | null = null;
   if (readmePath !== null) {
     const source = await readBounded(nodePath.join(root, readmePath));
     if (source !== null) {
       purpose = extractPurpose(source);
+      readmeTitle = extractReadmeTitle(source);
       fastPathSection = findFastPathSection(source);
     }
   }
@@ -59,6 +68,7 @@ export async function extractRepoOrientation(absRoot: string): Promise<RepoOrien
     purpose,
     surfaces: await detectSurfaces(root),
     readmePath,
+    readmeTitle,
     fastPathSection,
   };
 }
@@ -190,6 +200,38 @@ export function extractPurpose(markdown: string): string | null {
 
 /** `<h1>`–`<h6>` open tags (not `<header>`); headings are not purpose prose. */
 const HTML_HEADING_RE = /<h[1-6](\s|>)/i;
+
+/**
+ * Product name from the README's first H1 (markdown `# ` or single-line
+ * `<h1>`), tags stripped, links reduced to their text, and edge
+ * decorations (emoji, badge punctuation) removed. Null when no usable H1
+ * exists; capped at 80 chars. Skips fenced code so a `# comment` inside a
+ * shell example is never mistaken for the title.
+ */
+export function extractReadmeTitle(markdown: string): string | null {
+  let inFence = false;
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (/^(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const md = /^#\s+(.+?)\s*#*\s*$/.exec(line);
+    const html = md === null ? /<h1(?:\s[^>]*)?>([\s\S]*?)<\/h1>/i.exec(line) : null;
+    const raw = md?.[1] ?? html?.[1];
+    if (raw === undefined) continue;
+    const text = stripHtmlTags(raw)
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N})]+$/gu, "")
+      .trim();
+    if (text === "") continue;
+    return text.slice(0, 80);
+  }
+  return null;
+}
 
 /** Removes every HTML tag, keeping only the text content. */
 function stripHtmlTags(text: string): string {

@@ -1076,16 +1076,59 @@ from the corpus) and understanding needed a `--only` recovery
 try, so the lay-reader/why-first rules plausibly lengthen capped prose —
 candidate fix: carve the length-capped builders out of
 LAY_READER_PROMPT_RULE or add a "brevity outranks completeness" clause
-(maintainer decision). Two defects found and fixed with regression
-tests (uncommitted): the prose-title harvest used allowlist-restricted
-`safeIo.readText` and silently never fired (now plain fs like every
-source read in batch.ts; the prose-tier CLI E2E asserts the harvested
-title end-to-end), and `extractPageTitle` accepted a mid-document H1 as
-a title (MPTP READMEs titled their pages "Please set according to your
-actual path…") — now only a title-position H1 (frontmatter body, HTML
-preamble allowed) qualifies. The understanding synthesis named the
-product "livewiki" from the clone's directory name (body text accurate)
-— name-resolution wobble worth watching on the next run.
+(maintainer decision). **Fix implemented + validated the same day
+(uncommitted):** both capped builders gained an aim band with safety
+margin (folder 400–700 of 800; understanding purpose 400–550 of 600,
+bullets ≤120 of 160) plus an explicit "the cap outranks every other
+rule — drop clauses until it fits" clause, and the repair directives
+carry numeric targets (under 700 / under 520 / under 140).
+Micro-validation (paid, 1 call): the 6/6 failure case
+`folder:app-services` passed FIRST TRY with the new prompt (599-char
+purpose, verify OK 66 pages). Two defects found and fixed with
+regression tests (committed ecb5451): the prose-title harvest used
+allowlist-restricted `safeIo.readText` and silently never fired (now
+plain fs like every source read in batch.ts; the prose-tier CLI E2E
+asserts the harvested title end-to-end), and `extractPageTitle`
+accepted a mid-document H1 as a title (MPTP READMEs titled their pages
+"Please set according to your actual path…") — now only a
+title-position H1 (frontmatter body, HTML preamble allowed) qualifies.
+The understanding synthesis named the product "livewiki" from the
+clone's directory name (body text accurate) — name-resolution wobble
+worth watching on the next run.
+**Full measurement round (2026-08-12, uncommitted fixes):** clean
+`init --batch` on the MPTP clone (MiniMax-M3 via the :8900 bridge).
+First attempt was self-contaminated (a `livewiki-prev-r30/` backup left
+inside the clone got indexed as source — corpus kept local-only at
+`/c/tmp/moneyprinter-corpus-30r2-contaminated`); the clean rerun gave
+62 done / 1 failed, exit 1, verify OK (67 pages), accounting EXACT
+(proxy 813,321 == checkpoint 813,277 + 44 smoke). Findings and fixes,
+each with regression tests:
+(1) **folder length-pressure RESOLVED** — `app/services` passed FIRST
+TRY at 754 chars (previous run: 3 failed repairs at 1078/983/977); the
+aim bands work. A deterministic sentence-clip fallback
+(`truncateFolderPurpose`, folder-page.ts) now covers the repair_exhausted
+point for length-only failure sets anyway, and the folder repair
+directive carries exact deletion arithmetic ("delete at least N chars").
+(2) **name-wobble RESOLVED** — `extractReadmeTitle` (orientation.ts)
+pins the product name from the README's own H1 into the understanding
+evidence + a prompt rule that "livewiki" is the documentation TOOL,
+never the product; the regenerated page is titled
+"MoneyPrinterTurbo-Plus" (H1 + frontmatter).
+(3) **understanding is the new length-pressure hotspot** — it failed
+repair_exhausted TWICE (purpose 609/600, bullet 161/160 near-misses,
+then persistent `code_span_forbidden`: MiniMax-M3 wraps file names in
+inline code despite the ban). Fixed with `salvageUnderstandingCandidate`
+(understanding.ts): when the last candidate fails ONLY on mechanically
+fixable codes (purpose_too_long / surface_too_long /
+code_span_forbidden), the tool deletes — backticks unwrapped, purpose
+clipped at a sentence boundary, bullets at a clause boundary — and
+re-validates the WHOLE contract before accepting; anything residual
+keeps the failure. Live validation: `--only understanding` completed
+via the salvage (583-char purpose, all bullets ≤160, verify OK 68
+pages). Round totals: 827,799 tokens, accounting exact end-to-end.
+Gate: focused suites green (folder-page/orientation/understanding/
+batch-repair/batch-understanding), full `pnpm -r test` exit 0 after
+each fix.
 
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
