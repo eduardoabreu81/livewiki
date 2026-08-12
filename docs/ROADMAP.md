@@ -1130,6 +1130,28 @@ Gate: focused suites green (folder-page/orientation/understanding/
 batch-repair/batch-understanding), full `pnpm -r test` exit 0 after
 each fix.
 
+### 31. Untagged comment signals (post-beta)
+
+Source: maintainer question 2026-08-12 + same-day investigation on the
+MPTP clone. Finding: 697 untagged `#` comment lines vs 1 tagged
+(rationale extraction keeps only WHY/NOTE/HACK/TODO/FIXME + docstrings),
+~71% of them Chinese, quality mixed — real intent nuggets ("Errors where
+retrying will never help") alongside pure paraphrase ("check file ext").
+The decisive fact: stage-4 file pages already include the full source
+(60k budget) or per-section source (plan-then-write), so those comments
+ALREADY reach the model — a separate content channel would pay tokens
+twice for the same text and steal source budget. **Rejected as prompt
+content for stage 4.** What stays on the backlog:
+
+1. **Comment density as a signal, not content** — per-symbol comment
+   density as a proxy for "confusing spot in the code", feeding
+   planner/prioritization. Zero prompt cost, deterministic.
+2. **Content channel only under evidence** — reopen untagged comments
+   as evidence for topic/folder/flow pages (the contexts where full
+   source does NOT fit) only if a measurement shows those pages are
+   weak for lack of intent context; then with a quality heuristic
+   (length floor, intent verbs, non-paraphrase) and its own char cap.
+
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
 - **Committed graph/cache artifact in the repo** (their
