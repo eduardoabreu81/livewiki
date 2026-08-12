@@ -1152,6 +1152,16 @@ content for stage 4.** What stays on the backlog:
    weak for lack of intent context; then with a quality heuristic
    (length floor, intent verbs, non-paraphrase) and its own char cap.
 
+### 32. npm Trusted Publishing (OIDC) for releases (post-beta)
+
+Source: npm banner observed at publish time (2026-08-12) — tokens that
+bypass 2FA are being restricted (account changes Aug 2026, direct
+publishing Jan 2027). The 0.1.0 beta was published interactively
+(maintainer session + OTP), which stays fine for manual releases. Before
+any automated/CI release flow: configure Trusted Publishing (GitHub
+Actions OIDC) for @livewiki/{core,cli,mcp} instead of a long-lived
+npm access token, or the classic-token path will stop working under us.
+
 ## Evaluated and rejected (do not re-litigate without new evidence)
 
 - **Committed graph/cache artifact in the repo** (their
