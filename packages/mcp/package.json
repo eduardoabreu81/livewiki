@@ -42,7 +42,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/make-executable.mjs",
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/make-executable.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint:tsc": "tsc -p tsconfig.json --noEmit"
