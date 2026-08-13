@@ -350,7 +350,7 @@ const TOPIC_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
   topic_code_fence: () =>
     `remove the non-Mermaid fenced code block; name symbols and link to their module pages instead of copying implementations.`,
   topic_frontmatter_mismatch: () =>
-    `set frontmatter \`intent\`/\`modules\`/\`flows\` to EXACTLY the accepted values given above — do not add, drop, or reorder entries.`,
+    `set frontmatter \`intent\`/\`modules\`/\`flows\` to EXACTLY the accepted values given above — do not add, drop, or reorder entries. Write \`modules\`/\`flows\`/\`anchors\` as YAML block lists — one \`- entry\` line per value; a comma-joined scalar (e.g. \`modules: a, b, c\`) parses as one string and fails validation.`,
   topic_related_link_mismatch: () =>
     `rewrite \`Related pages\` to link exactly the accepted modules/flows/diagrams/topics-hub paths given above — no more, no fewer.`,
   topic_insufficient_product_evidence: () =>

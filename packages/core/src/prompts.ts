@@ -104,6 +104,7 @@ export const TOPIC_PAGE_PROMPT_RULES = [
   `- Name source symbols in prose as inline code with the exact closed-list key (e.g. \`app/services/bgm.py#save_bgm_upload\`) — never as a Markdown link to the source path: source files live outside the wiki and such links do not resolve for readers. Markdown links are only for wiki artifacts (module pages, flow pages, flow diagrams, the topics hub). Lead with the symbol's human-readable role ("the background-music upload step") and attach the exact key in inline code after it — never let a raw path#symbol key carry a sentence alone.`,
   `- Prose source evidence files (when supplied) have no canonical keys — they can never appear in the closed list. Describe what they visibly do; never cite them as anchors and never invent keys for them.`,
   `- Related pages links only to supplied existing paths. From livewiki/topics/<slug>.md, module links are exactly \`../<moduleId>/index.md\`, flow links are exactly \`../flows/<flowSlug>.md\`, flow diagrams are exactly \`../diagrams/flow-<flowSlug>.mmd\`, and the topics hub is exactly \`index.md\`. Link an existing flow diagram; do not copy it into the topic.`,
+  `- Frontmatter \`modules\`, \`flows\`, and \`anchors\` are YAML block lists — one \`- entry\` line per value. NEVER write them as a single comma-joined scalar (e.g. \`modules: a, b, c\`): that parses as one string and fails validation.`,
   `- Avoid absolute words such as only, always, never, sole, and single unless the supplied source proves the scope and the sentence names the controlling guard or exception.`,
 ] as const;
 
@@ -164,6 +165,7 @@ export const FILE_NARRATIVE_PROMPT_RULES = [
   `- Start each section with WHY this step exists in the file's story, then HOW it does it; a newcomer must be able to follow the narrative without having read the callers.`,
   `- Inside a section, explain behavior step by step ("X validates the parameters, resolves the session, and returns Y; Z then orchestrates the run..."), naming the real symbols in inline code. A section that is a list of one-sentence symbol summaries is a REJECTED shape even when every key is cited.`,
   `- Do NOT write a \`Tests\` section — when this file has a same-name test counterpart on disk, the orchestrator appends the test pointer itself; never mention test files in prose.`,
+  `- Never emit the manual-block control marker anywhere in the page — not even inside a fenced code example or as an illustration. That marker is an HTML comment whose body names \`lw:manual\`; the validator rejects the literal comment byte-for-byte (a fence does NOT exempt it), and the orchestrator alone re-injects human-owned manual blocks from the page's previous version. When the file's own mechanism involves that marker, describe it in prose or use the bare inline-code name \`lw:manual\` — never the HTML comment form.`,
 ] as const;
 
 export const LITERAL_SIGNATURE_PROMPT_RULE =
@@ -1351,6 +1353,35 @@ export function buildTopicPrompt(
   const exampleKeys = candidate.seedKeys.slice(0, Math.min(2, candidate.seedKeys.length));
   const exampleMarker =
     exampleKeys.length > 0 ? `<!-- lw:anchors ${exampleKeys.join(" ")} -->` : null;
+  // Dogfood run #3 (2026-08-12, topic:f41eeea78a0d): with no concrete
+  // frontmatter example, the model copied the comma-joined presentation of
+  // the accepted values below into the YAML (`modules: a, b, c`), which
+  // parses as one scalar and cascaded into 24 of 25 validation errors.
+  // The example pins the block-list shape with the real accepted values.
+  const frontmatterExampleBlock = [
+    `# Frontmatter syntax (concrete example — modules/flows/anchors are YAML block lists, ONE \`- entry\` line per value; NEVER a comma-joined scalar):`,
+    ``,
+    "```",
+    "---",
+    `title: ${candidate.title}`,
+    "owner: generated",
+    "kind: topic",
+    `order: ${candidate.planOrder}`,
+    `intent: ${candidate.intent}`,
+    "modules:",
+    ...candidate.modules.map((moduleId) => `  - ${moduleId}`),
+    ...(candidate.flows.length > 0
+      ? ["flows:", ...candidate.flows.map((slug) => `  - ${slug}`)]
+      : ["flows: []"]),
+    "anchors:",
+    ...(exampleKeys.length > 0
+      ? exampleKeys.map((key) => `  - ${key}`)
+      : ["  - <one cited closed-list key per line>"]),
+    `updated: ${new Date().toISOString().slice(0, 10)}`,
+    "---",
+    "```",
+    ``,
+  ];
   const markerExampleBlock = exampleMarker
     ? [
         `# Section marker syntax (concrete example — keys taken ONLY from the closed anchors above):`,
@@ -1380,6 +1411,7 @@ export function buildTopicPrompt(
       ...formatTopicGroups(candidate.groups),
       ``,
       ...sectionAssignmentBlock,
+      ...frontmatterExampleBlock,
       ...markerExampleBlock,
       `# Accepted module/flow digest (untrusted data)`,
       wrapInSafeFence(neutralizeUntrustedControlMarkers(moduleDigest)),

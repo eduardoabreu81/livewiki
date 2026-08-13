@@ -1077,6 +1077,77 @@ TODO: document the remaining behavior.
       );
     });
 
+    it("quoted or slash-paired TODO/TBD mentions documenting the ban itself → NOT flagged (dogfood run #3, core-src/prompts)", () => {
+      // Dogfood run #3 (2026-08-12): the documented file literally contains
+      // the ban's tokens, so the model's page quoted them while DESCRIBING
+      // the rule. All four phrasings below were observed in paid attempts
+      // and all were flagged, even though none is a placeholder. Quoted
+      // literals and slash-joined pairs are mentions and must pass.
+      const mentions = [
+        `The markdown is fully closed; "TODO"/"TBD" placeholders are forbidden.`,
+        `It enforces the "TODO/TBD in prose is forbidden" rule alongside the marker rules.`,
+        `It forbids placeholders such as "TODO" or "TBD" — thin evidence yields a shorter paragraph instead.`,
+        `Unclosed fences must be closed, and TODO/TBD tokens must be replaced by concrete factual sentences.`,
+      ];
+      for (const [index, sentence] of mentions.entries()) {
+        const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+${sentence}
+`);
+        const r = validateStage4Artifact(art, closedKeys);
+        expect(
+          r.errors.some((e) => e.code === "todo_marker_present"),
+          `mention form ${index} must not be flagged: ${sentence}`,
+        ).toBe(false);
+      }
+    });
+
+    it("bare TBD dodge stays banned next to quoted mentions", () => {
+      // The quoted mention is exempt, but a real bare-TBD dodge on the same
+      // line must still fail — the exemption is per token, not per page.
+      const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+The file bans "TODO" or "TBD" placeholders. Behavior is TBD pending review.
+`);
+      const errs = validateStage4Artifact(art, closedKeys).errors.filter(
+        (e) => e.code === "todo_marker_present",
+      );
+      expect(errs).toHaveLength(1);
+      expect(errs[0]!.offending).toContain("Behavior is TBD");
+    });
+
+    it("quote/pair exemptions require metalinguistic context — real dodges stay flagged (maintainer review 2026-08-12)", () => {
+      // Maintainer review of the run-#3 fix: without the context
+      // requirement, the quote/pair mention exemptions would also pass
+      // these real placeholders. Directives are checked FIRST (a colon
+      // after the token — optionally closing a quote — or after the
+      // pair), and the exemptions only apply when the line explicitly
+      // talks about the placeholder category.
+      const dodges = [
+        `The status is "TBD".`,
+        `"TBD": document this later.`,
+        `The migration is TODO/TBD.`,
+        `TODO/TBD: complete this section.`,
+      ];
+      for (const [index, sentence] of dodges.entries()) {
+        const art = fullArt(`# x
+
+<!-- lw:anchors src/auth.ts#login src/auth.ts#logout src/auth.ts#validate -->
+
+${sentence}
+`);
+        const r = validateStage4Artifact(art, closedKeys);
+        expect(
+          r.errors.some((e) => e.code === "todo_marker_present"),
+          `dodge ${index} must be flagged: ${sentence}`,
+        ).toBe(true);
+      }
+    });
+
     it("C3 TODO in plain prose reports the offending line (short lines exact, long lines excerpted ≤200 with truncation markers) and its line number", () => {
       // Defect 3: the validation error used to carry no offending text
       // and no line number — the repair prompt had no way to point the
@@ -2460,5 +2531,47 @@ Change requires updating the cited symbol and its module page.
     );
     const result = validateStage4Artifact(page, topicKeys, ctx);
     expect(result.errors.some((e) => e.code === "topic_source_link")).toBe(false);
+  });
+});
+
+describe("model_invented_manual diagnostics (2026-08-12)", () => {
+  it("reports every occurrence with count and body line numbers, fences included", () => {
+    // The detector stays raw on purpose: the manual-block preservation
+    // extractor is not fence-aware, so a fenced marker would otherwise
+    // become immortal "human" content (rule #6). The diagnostic must count
+    // fenced occurrences too — a boolean error trapped the repair loop
+    // when a page carried several markers.
+    const art = [
+      "---",
+      "title: x",
+      "owner: generated",
+      "anchors:",
+      "  - src/auth.ts#login",
+      "---",
+      "",
+      "# x",
+      "",
+      "Intro mentions <!-- lw:manual --> inline.",
+      "",
+      "```markdown",
+      "<!-- lw:manual -->",
+      "note",
+      "<!-- /lw:manual -->",
+      "```",
+      "",
+      "## Details",
+      "",
+      "<!-- lw:anchors src/auth.ts#login -->",
+      "",
+      "Prose about login.",
+      "",
+    ].join("\n");
+    const r = validateStage4Artifact(art, ["src/auth.ts#login"]);
+    expect(r.ok).toBe(false);
+    const manual = r.errors.filter((e) => e.code === "model_invented_manual");
+    // ONE structured error carrying the full occurrence list (not N errors).
+    expect(manual).toHaveLength(1);
+    expect(manual[0]?.offending).toBe("<!-- lw:manual -->");
+    expect(manual[0]?.message).toContain("2 <!-- lw:manual --> marker occurrence(s) at body line(s)");
   });
 });

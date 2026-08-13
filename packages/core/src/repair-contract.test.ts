@@ -95,6 +95,16 @@ describe("repair-contract — exhaustiveness (the closed contract)", () => {
 });
 
 describe("repair-contract — directive rendering (behavioral parity with the historical if-chains)", () => {
+  it("topic topic_frontmatter_mismatch: requires YAML block lists and bans the comma-joined scalar (dogfood run #3)", () => {
+    const text = renderActionDirective(
+      "topic",
+      err("topic_frontmatter_mismatch", { offending: "cli-src, commands, core-src" }),
+      { messageSafe: "m", offendingSafe: "cli-src, commands, core-src" },
+    );
+    expect(text).toContain("block list");
+    expect(text).toContain("modules: a, b, c");
+  });
+
   it("topic topic_source_link: names the offending link and the inline-code fix; empty without an offending target", () => {
     const text = renderActionDirective(
       "topic",

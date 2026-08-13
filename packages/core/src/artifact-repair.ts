@@ -15,7 +15,9 @@ export type MechanicalArtifactRepair =
   | "fill_empty_anchored_section"
   | "remove_duplicate_section_anchors"
   | "strip_invented_manual_markers"
-  | "sync_upper_bound_frontmatter_anchors";
+  | "sync_upper_bound_frontmatter_anchors"
+  | "normalize_topic_frontmatter_lists"
+  | "sync_topic_related_links";
 
 export interface MechanicalArtifactRepairResult {
   content: string;
@@ -328,11 +330,47 @@ export function repairUpperBoundArtifactMechanically(
     repairs.push("remove_duplicate_section_anchors");
   }
 
-  if (addToFrontmatter.length > 0 || removeFromFrontmatter.length > 0) {
+  // Topic-only deterministic salvages (dogfood run #3, 2026-08-12,
+  // topic:f41eeea78a0d): the model wrote the frontmatter list fields as
+  // comma-joined SCALARS (`modules: a, b, c`) and omitted the flow-diagram
+  // links from Related pages. The scalar defect cascaded into 24 of 25
+  // errors (anchors read as empty → no_frontmatter → one missing_closed_key
+  // per section-cited key → anchor_missing_required_tier via the
+  // dual-citation rule). Both salvages derive every expected value from the
+  // validation context — NEVER from error-message text — and the mandatory
+  // full re-validation below stays the fail-closed gate. The list salvage
+  // runs BEFORE the anchors add/remove sync: converting the scalar
+  // `anchors:` into a block list makes that sync operate on a parseable
+  // field, and when the conversion happened the stale add/remove buckets
+  // (computed from the pre-conversion errors) are already resolved.
+  let anchorsNormalized = false;
+  if (context.pageKind === "topic") {
+    const normalized = normalizeTopicFrontmatterLists(content, closedSet, context);
+    if (normalized === null) return null;
+    if (normalized.convertedFields.length > 0) {
+      content = normalized.content;
+      repairs.push("normalize_topic_frontmatter_lists");
+      anchorsNormalized = normalized.convertedFields.includes("anchors");
+    }
+  }
+
+  if (
+    (addToFrontmatter.length > 0 || removeFromFrontmatter.length > 0) &&
+    !anchorsNormalized
+  ) {
     const synced = syncFrontmatterAnchorsList(content, addToFrontmatter, removeFromFrontmatter);
     if (synced === null || synced === content) return null;
     content = synced;
     repairs.push("sync_upper_bound_frontmatter_anchors");
+  }
+
+  if (context.pageKind === "topic") {
+    const linked = syncTopicRelatedLinks(content, context);
+    if (linked === null) return null;
+    if (linked !== content) {
+      content = linked;
+      repairs.push("sync_topic_related_links");
+    }
   }
 
   if (repairs.length === 0) return null;
@@ -415,6 +453,183 @@ function syncFrontmatterAnchorsList(
 
   const after = parts.slice(endIdx);
   return [...before, ...listBody, ...after].join("");
+}
+
+/**
+ * Topic salvage (dogfood run #3, 2026-08-12 — topic:f41eeea78a0d): rewrite
+ * comma-joined SCALAR frontmatter list fields (`modules: a, b, c`) as YAML
+ * block lists. Fail-closed per field, and every expected value comes from
+ * the validation context — never from error-message text:
+ *
+ *   - `modules`/`flows`: convert only when the split items, INCLUDING
+ *     order, equal `context.expectedTopicModules`/`expectedTopicFlows`
+ *     exactly; a wrong order or value aborts the whole repair.
+ *   - `anchors`: convert only when every item is distinct, every item is a
+ *     closed-list member, no item is ambiguous (empty or containing
+ *     whitespace), and the item SET equals exactly the keys cited by the
+ *     section markers.
+ *
+ * Fields already in block-list or flow-style (`[a, b]`) form parse fine and
+ * are left untouched. Returns null when a scalar field is detected but its
+ * conditions do not hold; the caller then aborts (the mandatory final
+ * re-validation would produce the same outcome, reached earlier).
+ */
+function normalizeTopicFrontmatterLists(
+  artifact: string,
+  closedSet: ReadonlySet<string>,
+  context: Readonly<Stage4ValidationContext>,
+): { content: string; convertedFields: string[] } | null {
+  if (!artifact.startsWith("---\n") && !artifact.startsWith("---\r\n")) {
+    return { content: artifact, convertedFields: [] };
+  }
+  const parts = artifact.split(/(\r?\n)/);
+  const isClosingDelimiter = (line: string): boolean => /^---[ \t]*$/.test(line);
+  let closingIdx = -1;
+  for (let i = 2; i < parts.length; i += 2) {
+    if (isClosingDelimiter(parts[i] as string)) {
+      closingIdx = i;
+      break;
+    }
+  }
+  if (closingIdx === -1) return { content: artifact, convertedFields: [] };
+  const eol = (parts[1] as string) ?? "\n";
+
+  // Keys cited by section markers, in document order (the `anchors` salvage
+  // requires the scalar's set to equal exactly this set).
+  const bodyText = parts.slice(closingIdx + 2).join("");
+  const maskedBody = maskCodeSpansPreservingLength(bodyText);
+  const sectionKeys: string[] = [];
+  for (const match of maskedBody.matchAll(/<!--\s*lw:anchors\s+([^\s>][^>]*?)\s*-->/g)) {
+    for (const key of match[1]!.trim().split(/\s+/).filter(Boolean)) {
+      if (!sectionKeys.includes(key)) sectionKeys.push(key);
+    }
+  }
+
+  interface FieldFix {
+    lineIdx: number;
+    field: string;
+    items: string[];
+  }
+  const fixes: FieldFix[] = [];
+  for (let i = 2; i < closingIdx; i += 2) {
+    const line = parts[i] as string;
+    const fieldMatch = /^(modules|flows|anchors)[ \t]*:[ \t]*(\S.*)$/.exec(line);
+    if (fieldMatch === null) continue;
+    const field = fieldMatch[1] as "modules" | "flows" | "anchors";
+    const raw = (fieldMatch[2] as string).trim();
+    if (raw.startsWith("[")) continue; // flow-style list already parses
+    const items = raw.split(",").map((item) => item.trim());
+    // An empty or whitespace-containing item is ambiguous — never convert.
+    if (items.some((item) => item === "" || /\s/.test(item))) return null;
+    if (field === "anchors") {
+      if (new Set(items).size !== items.length) return null;
+      if (!items.every((item) => closedSet.has(item))) return null;
+      if (
+        items.length !== sectionKeys.length ||
+        !items.every((item) => sectionKeys.includes(item))
+      ) {
+        return null;
+      }
+    } else {
+      const expected =
+        field === "modules" ? context.expectedTopicModules : (context.expectedTopicFlows ?? []);
+      if (expected === undefined) return null;
+      if (
+        items.length !== expected.length ||
+        !items.every((item, index) => item === expected[index])
+      ) {
+        return null;
+      }
+    }
+    fixes.push({ lineIdx: i, field, items });
+  }
+  if (fixes.length === 0) return { content: artifact, convertedFields: [] };
+
+  const fixByLine = new Map(fixes.map((fix) => [fix.lineIdx, fix]));
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const line = parts[i] as string;
+    const sep = (parts[i + 1] as string | undefined) ?? "";
+    const fix = fixByLine.get(i);
+    if (fix === undefined) {
+      out.push(line, sep);
+      continue;
+    }
+    out.push(`${fix.field}:`, eol);
+    for (const item of fix.items) out.push(`  - ${item}`, eol);
+  }
+  return {
+    content: out.join(""),
+    convertedFields: fixes.map((fix) => fix.field),
+  };
+}
+
+/**
+ * Topic salvage (dogfood run #3, 2026-08-12 — topic:f41eeea78a0d): append
+ * the missing accepted-evidence links to `## Related pages`. The expected
+ * targets are derived from the validation context exactly like the
+ * validator derives them — `index.md`, `../<moduleId>/index.md` per
+ * accepted module, `../flows/<flowSlug>.md` and
+ * `../diagrams/flow-<flowSlug>.mmd` per accepted flow — never from the
+ * error message. External links (http/https/mailto/anchor) are preserved;
+ * an unexpected LOCAL link aborts the whole repair (returns null). A page
+ * without a Related pages section is left for the final re-validation to
+ * reject (missing required section).
+ */
+function syncTopicRelatedLinks(
+  artifact: string,
+  context: Readonly<Stage4ValidationContext>,
+): string | null {
+  const flowSlugs = context.expectedTopicFlows ?? [];
+  const expected: Array<{ target: string; label: string }> = [
+    { target: "index.md", label: "Topics hub" },
+    ...(context.expectedTopicModules ?? []).map((moduleId) => ({
+      target: `../${moduleId}/index.md`,
+      label: `${moduleId} module`,
+    })),
+    ...flowSlugs.map((slug) => ({
+      target: `../flows/${slug}.md`,
+      label: `${slug} flow`,
+    })),
+    ...flowSlugs.map((slug) => ({
+      target: `../diagrams/flow-${slug}.mmd`,
+      label: `${slug} diagram`,
+    })),
+  ];
+  const expectedSet = new Set(expected.map((entry) => entry.target));
+
+  const masked = maskCodeSpansPreservingLength(artifact);
+  const headingRe = /^##[ \t]+(.+?)[ \t]*$/gm;
+  let relatedStart = -1;
+  let relatedEnd = artifact.length;
+  for (const match of masked.matchAll(headingRe)) {
+    const title = match[1]!.trim().toLocaleLowerCase("en-US");
+    if (relatedStart === -1) {
+      if (title === "related pages") relatedStart = match.index!;
+      continue;
+    }
+    relatedEnd = match.index!;
+    break;
+  }
+  if (relatedStart === -1) return artifact;
+
+  const section = artifact.slice(relatedStart, relatedEnd);
+  const actualTargets = new Set(
+    [...section.matchAll(/\[[^\]]+\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)]
+      .map((match) => match[1]!)
+      .filter(Boolean),
+  );
+  for (const target of actualTargets) {
+    if (/^(?:https?:|mailto:|#)/i.test(target)) continue; // external — preserved
+    if (!expectedSet.has(target)) return null; // unexpected local link — fail closed
+  }
+  const missing = expected.filter((entry) => !actualTargets.has(entry.target));
+  if (missing.length === 0) return artifact;
+
+  const eol = artifact.includes("\r\n") ? "\r\n" : "\n";
+  const bullets = missing.map((entry) => `- [${entry.label}](${entry.target})`).join(eol);
+  const newSection = `${section.replace(/\s+$/, "")}${eol}${eol}${bullets}${eol}${eol}`;
+  return artifact.slice(0, relatedStart) + newSection + artifact.slice(relatedEnd);
 }
 
 /**

@@ -580,3 +580,249 @@ describe("repairUpperBoundArtifactMechanically — required-section coverage pre
     expect(repaired).toBeNull();
   });
 });
+
+/**
+ * Dogfood run #3 (2026-08-12, topic:f41eeea78a0d): the model wrote the
+ * topic frontmatter list fields as comma-joined SCALARS and omitted the
+ * flow-diagram link from Related pages — one defect cascaded into 24 of 25
+ * validation errors (scalar anchors read as empty → no_frontmatter → one
+ * missing_closed_key per section-cited key → anchor_missing_required_tier
+ * via the dual-citation rule). The topic salvage converts the scalars into
+ * block lists and appends the missing Related-pages links, deriving every
+ * expected value from the validation context — never from error text.
+ */
+describe("repairUpperBoundArtifactMechanically — topic comma-joined frontmatter salvage (dogfood run #3)", () => {
+  const TOPIC_KEYS = ["src/a.ts#k1", "src/a.ts#k2", "src/a.ts#k3", "src/a.ts#k4", "src/a.ts#k5"];
+  const TOPIC_MODULES = ["mod-a", "mod-b"];
+  const TOPIC_FLOWS = ["flow-one"];
+  const TOPIC_CONTEXT = {
+    pageKind: "topic" as const,
+    moduleId: "my-topic",
+    moduleRole: "product" as const,
+    expectedTopicTitle: "My Topic",
+    expectedTopicOrder: 1,
+    expectedTopicIntent: "Explain the topic.",
+    expectedTopicModules: TOPIC_MODULES,
+    expectedTopicFlows: TOPIC_FLOWS,
+    topicKeyGroups: {
+      contract: ["src/a.ts#k1"],
+      state: ["src/a.ts#k2"],
+      output: ["src/a.ts#k3"],
+      failure: ["src/a.ts#k4"],
+    },
+    topicProductKeys: TOPIC_KEYS,
+  };
+
+  const VALID_FM = [
+    "---",
+    "title: My Topic",
+    "owner: generated",
+    "kind: topic",
+    "order: 1",
+    "intent: Explain the topic.",
+    "modules:",
+    "  - mod-a",
+    "  - mod-b",
+    "flows:",
+    "  - flow-one",
+    "anchors:",
+    ...TOPIC_KEYS.map((key) => `  - ${key}`),
+    "updated: 2026-08-12",
+    "---",
+    "",
+  ].join("\n");
+
+  /** The observed broken shape: list fields as comma-joined scalars. */
+  const BROKEN_FM = [
+    "---",
+    "title: My Topic",
+    "owner: generated",
+    "kind: topic",
+    "order: 1",
+    "intent: Explain the topic.",
+    "modules: mod-a, mod-b",
+    "flows: flow-one",
+    `anchors: ${TOPIC_KEYS.join(", ")}`,
+    "updated: 2026-08-12",
+    "---",
+    "",
+  ].join("\n");
+
+  const BODY = [
+    "# My Topic",
+    "",
+    "The reader needs the topic contract in one place.",
+    "",
+    "## Purpose",
+    "",
+    "<!-- lw:anchors src/a.ts#k1 -->",
+    "",
+    "Purpose grounded in the cited evidence.",
+    "",
+    "## When to use this page",
+    "",
+    "<!-- lw:anchors src/a.ts#k2 -->",
+    "",
+    "Read this when changing the coordinated behavior.",
+    "",
+    "## Behavioral contract",
+    "",
+    "<!-- lw:anchors src/a.ts#k3 -->",
+    "",
+    "The behavioral contract grounded in the cited evidence.",
+    "",
+    "## Failure and recovery",
+    "",
+    "<!-- lw:anchors src/a.ts#k4 -->",
+    "",
+    "The excerpt shows no retry path; the flow fails open.",
+    "",
+    "## Change map",
+    "",
+    "<!-- lw:anchors src/a.ts#k5 -->",
+    "",
+    "Change requires updating the cited symbol and its module page.",
+    "",
+    "## Related pages",
+    "",
+    "- [Topics hub](index.md)",
+    "- [mod-a module](../mod-a/index.md)",
+    "- [mod-b module](../mod-b/index.md)",
+    "- [flow-one flow](../flows/flow-one.md)",
+    "- [flow-one diagram](../diagrams/flow-flow-one.mmd)",
+    "",
+  ].join("\n");
+
+  /** Related pages without the flow-diagram link (the observed 25th error). */
+  const BODY_NO_DIAGRAM_LINK = BODY.replace("- [flow-one diagram](../diagrams/flow-flow-one.mmd)\n", "");
+
+  it("sanity: the well-formed fixture page validates clean", () => {
+    const valid = validateStage4Artifact(VALID_FM + BODY, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(valid.errors).toEqual([]);
+  });
+
+  it("the observed comma-joined cascade (13 errors at fixture scale) converges with zero LLM calls", () => {
+    const broken = BROKEN_FM + BODY_NO_DIAGRAM_LINK;
+    const before = validateStage4Artifact(broken, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(before.ok).toBe(false);
+    const count = (code: string) => before.errors.filter((e) => e.code === code).length;
+    // The exact cascade observed in the paid run, at fixture scale:
+    expect(count("topic_frontmatter_mismatch")).toBe(2); // modules + flows scalars
+    expect(count("no_frontmatter")).toBe(1); // anchors scalar reads as empty
+    expect(count("missing_closed_key")).toBe(5); // every section-cited key
+    expect(count("anchor_missing_required_tier")).toBe(4); // dual-citation rule
+    expect(count("topic_related_link_mismatch")).toBe(1); // missing diagram link
+
+    const repaired = repairUpperBoundArtifactMechanically(
+      broken,
+      before.errors,
+      TOPIC_KEYS,
+      TOPIC_CONTEXT,
+    );
+    expect(repaired).not.toBeNull();
+    expect(repaired!.repairs).toEqual([
+      "normalize_topic_frontmatter_lists",
+      "sync_topic_related_links",
+    ]);
+    // The deterministic rewrite produced real YAML block lists...
+    expect(repaired!.content).toContain("modules:\n  - mod-a\n  - mod-b\n");
+    expect(repaired!.content).toContain("flows:\n  - flow-one\n");
+    expect(repaired!.content).toContain(`anchors:\n${TOPIC_KEYS.map((k) => `  - ${k}`).join("\n")}\n`);
+    // ...and appended the missing diagram link.
+    expect(repaired!.content).toContain("../diagrams/flow-flow-one.mmd");
+    // The repairer already re-validated internally; prove the whole
+    // contract passes with zero residual errors.
+    const after = validateStage4Artifact(repaired!.content, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(after.errors).toEqual([]);
+  });
+
+  it("fail-closed: wrong ORDER in the modules scalar never converts", () => {
+    const broken = (BROKEN_FM + BODY).replace("modules: mod-a, mod-b", "modules: mod-b, mod-a");
+    const before = validateStage4Artifact(broken, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(before.ok).toBe(false);
+    expect(
+      repairUpperBoundArtifactMechanically(broken, before.errors, TOPIC_KEYS, TOPIC_CONTEXT),
+    ).toBeNull();
+  });
+
+  it("fail-closed: an anchors scalar with a key outside the closed list never converts", () => {
+    const broken = (BROKEN_FM + BODY).replace(
+      `anchors: ${TOPIC_KEYS.join(", ")}`,
+      `anchors: ${TOPIC_KEYS.join(", ")}, src/a.ts#zzz`,
+    );
+    const before = validateStage4Artifact(broken, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(before.ok).toBe(false);
+    expect(
+      repairUpperBoundArtifactMechanically(broken, before.errors, TOPIC_KEYS, TOPIC_CONTEXT),
+    ).toBeNull();
+  });
+
+  it("fail-closed: a duplicated item in the anchors scalar never converts", () => {
+    const broken = (BROKEN_FM + BODY).replace(
+      `anchors: ${TOPIC_KEYS.join(", ")}`,
+      `anchors: src/a.ts#k1, ${TOPIC_KEYS.join(", ")}`,
+    );
+    const before = validateStage4Artifact(broken, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(before.ok).toBe(false);
+    expect(
+      repairUpperBoundArtifactMechanically(broken, before.errors, TOPIC_KEYS, TOPIC_CONTEXT),
+    ).toBeNull();
+  });
+
+  it("fail-closed: an ambiguous (whitespace-containing) anchors item never converts", () => {
+    const broken = (BROKEN_FM + BODY).replace(
+      `anchors: ${TOPIC_KEYS.join(", ")}`,
+      `anchors: src/a.ts#k1 src/a.ts#k2, ${TOPIC_KEYS.slice(2).join(", ")}`,
+    );
+    const before = validateStage4Artifact(broken, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(before.ok).toBe(false);
+    expect(
+      repairUpperBoundArtifactMechanically(broken, before.errors, TOPIC_KEYS, TOPIC_CONTEXT),
+    ).toBeNull();
+  });
+
+  it("fail-closed: an unexpected LOCAL link in Related pages blocks the salvage", () => {
+    const broken = (VALID_FM + BODY_NO_DIAGRAM_LINK).replace(
+      "- [flow-one flow](../flows/flow-one.md)",
+      "- [flow-one flow](../flows/flow-one.md)\n- [Some other page](../mod-a/extra.md)",
+    );
+    const before = validateStage4Artifact(broken, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(before.ok).toBe(false);
+    expect(before.errors.some((e) => e.code === "topic_related_link_mismatch")).toBe(true);
+    expect(
+      repairUpperBoundArtifactMechanically(broken, before.errors, TOPIC_KEYS, TOPIC_CONTEXT),
+    ).toBeNull();
+  });
+
+  it("fail-closed: any residual unrelated error prevents acceptance", () => {
+    // The comma-joined cascade PLUS a renamed required section: the salvage
+    // repairs the lists, but the full re-validation still fails — no
+    // partially-fixed artifact may be returned.
+    const broken = (BROKEN_FM + BODY).replace("## Purpose", "## Aim");
+    const before = validateStage4Artifact(broken, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(before.ok).toBe(false);
+    expect(
+      repairUpperBoundArtifactMechanically(broken, before.errors, TOPIC_KEYS, TOPIC_CONTEXT),
+    ).toBeNull();
+  });
+
+  it("external links in Related pages are preserved, not treated as unexpected", () => {
+    const broken = (VALID_FM + BODY_NO_DIAGRAM_LINK).replace(
+      "- [Topics hub](index.md)",
+      "- [Topics hub](index.md)\n- [Upstream spec](https://example.com/spec)",
+    );
+    const before = validateStage4Artifact(broken, TOPIC_KEYS, TOPIC_CONTEXT);
+    expect(before.ok).toBe(false);
+    const repaired = repairUpperBoundArtifactMechanically(
+      broken,
+      before.errors,
+      TOPIC_KEYS,
+      TOPIC_CONTEXT,
+    );
+    expect(repaired).not.toBeNull();
+    expect(repaired!.repairs).toEqual(["sync_topic_related_links"]);
+    expect(repaired!.content).toContain("[Upstream spec](https://example.com/spec)");
+    expect(repaired!.content).toContain("../diagrams/flow-flow-one.mmd");
+    expect(validateStage4Artifact(repaired!.content, TOPIC_KEYS, TOPIC_CONTEXT).errors).toEqual([]);
+  });
+});

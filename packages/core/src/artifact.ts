@@ -46,8 +46,12 @@
  *        except inside a fenced/inline code example or an
  *        `<!-- lw:manual -->` block (`todo_marker_present`). The ban
  *        covers only the model's own placeholder forms (directive
- *        `TODO:`/`TBD:`, standalone marker lines, any `TBD`) —
- *        legitimate prose about the source's TODO items passes.
+ *        `TODO:`/`TBD:`, standalone marker lines, bare `TBD`) —
+ *        legitimate prose about the source's TODO items passes, and
+ *        so do quoted (`"TODO"`) or slash-paired (`TODO/TBD`) mentions
+ *        of the tokens themselves, but only with explicit
+ *        metalinguistic context (placeholder/token/rule/…) on the
+ *        same line.
  *      - Requires non-empty body after the frontmatter.
  *      - Rejects ANY `<!-- lw:manual -->` block in the body (rule #6:
  *        manual blocks are reserved for human content and the orchestrator
@@ -1152,15 +1156,26 @@ export function validateStage4Artifact(
   // party responsible for reinserting them byte-for-byte from the previous version
   // of the page. If the LLM output brings one, the artifact is rejected so that
   // the repair prompt fixes it.
-  if (/<!--\s*lw:manual\s*-->/.test(body)) {
-    errors.push(
-      err(
-        "model_invented_manual",
-        "artifact contains a <!-- lw:manual --> block; these are reserved for human content (rule #6) and the orchestrator is the only one allowed to re-inject them from the previous version of the page",
-        "body",
-        "<!-- lw:manual -->",
-      ),
-    );
+  // Report EVERY occurrence with its 1-based body line: a boolean error
+  // trapped the repair loop when a page carried several markers (a fenced
+  // example plus prose mentions) — each partial deletion failed with the
+  // same generic error. The detector stays raw on purpose: fences do not
+  // exempt the marker, because the manual-block preservation extractor is
+  // not fence-aware either (a fenced marker would otherwise become
+  // immortal "human" content — rule #6).
+  {
+    const manualMarkerHits = [...body.matchAll(/<!--\s*lw:manual\s*-->/g)];
+    if (manualMarkerHits.length > 0) {
+      const hitLines = manualMarkerHits.map((m) => countLines(body, m.index ?? 0) + 1);
+      errors.push(
+        err(
+          "model_invented_manual",
+          `artifact contains ${manualMarkerHits.length} <!-- lw:manual --> marker occurrence(s) at body line(s) ${hitLines.join(", ")}; these are reserved for human content (rule #6) and the orchestrator is the only one allowed to re-inject them from the previous version of the page — DELETE every occurrence, including any inside fenced code examples`,
+          "body",
+          "<!-- lw:manual -->",
+        ),
+      );
+    }
   }
 
   // 6. Non-empty body
@@ -1757,10 +1772,16 @@ interface TodoPlaceholderMatch {
 /**
  * Find the first actual TODO/TBD placeholder in prose.
  *
- * A slash-joined category reference such as "TODO/TBD prose" describes
- * the validation rule itself; it does not leave documentation work pending.
- * Keep that narrow exemption separate from real directives such as
- * "TODO: document this" or "Behavior is TBD", which remain invalid.
+ * Directive forms are always flagged FIRST — a colon right after the
+ * token (optionally closing a quote: "TBD": …) or right after a slash
+ * pair (TODO/TBD: …) is the model's own pending-work marker, quoted or
+ * not. Mention forms are exempt ONLY with explicit metalinguistic
+ * context on the same line (placeholder/token/marker/rule/ban/
+ * forbidden/literal/prose): a slash-joined pair such as "TODO/TBD"
+ * names the placeholder category itself, and a token wrapped in
+ * straight double quotes quotes the literal string. Real dodges such
+ * as "TODO: document this", "Behavior is TBD", `The status is "TBD".`
+ * or "The migration is TODO/TBD." remain invalid.
  */
 function findFirstTodoPlaceholder(text: string): TodoPlaceholderMatch | null {
   const tokenRe = /\b(?:TODO|TBD)\b/gi;
@@ -1771,10 +1792,23 @@ function findFirstTodoPlaceholder(text: string): TodoPlaceholderMatch | null {
   // The ban now covers only the MODEL's own unfinished-work placeholders:
   //   - directive form: "TODO:" / "TBD:" (colon right after the token);
   //   - standalone form: a line/bullet that IS just the marker.
-  // Prose mentions ("tracks remaining work in TODO comments") pass, and
-  // "TBD" is always banned (never produced by rationale evidence).
+  // Prose mentions ("tracks remaining work in TODO comments") pass, and a
+  // bare "TBD" is always banned (never produced by rationale evidence).
+  //
+  // Dogfood run #3 finding (2026-08-12, core-src/prompts): a page that
+  // DESCRIBES this ban kept tripping it — the documented file literally
+  // contains the tokens, so the model quoted them ("TODO"/"TBD") or joined
+  // them into a pair ("TODO/TBD tokens"). Those are factual mentions and
+  // are exempt — but only with metalinguistic context on the same line:
+  // maintainer review caught that the bare quote/pair exemptions would
+  // also pass real dodges ('The status is "TBD".', '"TBD": document this
+  // later.', "The migration is TODO/TBD.", "TODO/TBD: complete this").
   const standaloneRe = /^[-*+>\s]*(?:\d+[.)]\s*)?(?:TODO|TBD)[\s.]*$/i;
-  const categoryRe = /\bTODO\b\s*\/\s*\bTBD\b(?=\s+prose\b)/gi;
+  const categoryRe = /"?\bTODO\b"?\s*\/\s*"?\bTBD\b"?/gi;
+  // Words that mark a line as TALKING ABOUT the placeholder category
+  // rather than leaving documentation work pending.
+  const metaContextRe =
+    /\b(?:placeholders?|tokens?|markers?|rules?|bans?|banned|forbidden|literals?|prose)\b/i;
 
   for (const match of text.matchAll(tokenRe)) {
     const index = match.index!;
@@ -1782,22 +1816,46 @@ function findFirstTodoPlaceholder(text: string): TodoPlaceholderMatch | null {
     const lineEnd = findOriginalLineEnd(text, index);
     const line = text.slice(lineStart, lineEnd);
     const offsetInLine = index - lineStart;
-    // A slash-joined "TODO/TBD prose" pair is a reference to the validation
-    // category itself, not a placeholder — exempt both tokens of the pair.
-    const isCategoryReference = [...line.matchAll(categoryRe)].some((category) => {
+    const afterToken = line.slice(offsetInLine + match[0].length);
+    // Directives run BEFORE any exemption: a colon right after the token
+    // (optionally closing a quote first) is always the model's own
+    // pending-work marker — '"TBD": document this later' stays invalid.
+    if (/^"?\s*:/.test(afterToken.trimStart())) {
+      return { index, text: match[0] };
+    }
+    const pair = [...line.matchAll(categoryRe)].find((category) => {
       const start = category.index!;
       const end = start + category[0].length;
       return offsetInLine >= start && offsetInLine < end;
     });
-    if (isCategoryReference) continue;
-    // "TBD" is always the model's own dodge (rationale evidence feeds
-    // TODO/FIXME-tagged source comments, never TBD) — keep the blanket ban.
+    if (pair !== undefined) {
+      // A pair directive ("TODO/TBD: complete this section") is a real
+      // placeholder, not a category mention.
+      const afterPair = line.slice(pair.index! + pair[0].length);
+      if (/^"?\s*:/.test(afterPair.trimStart())) {
+        return { index, text: match[0] };
+      }
+      // A slash-joined pair (optionally quoting each token) references the
+      // validation category itself — exempt both tokens of the pair, but
+      // only when the line explicitly talks about the category.
+      if (metaContextRe.test(line)) continue;
+    } else {
+      // A token wrapped in straight double quotes quotes the literal
+      // string the source uses (e.g. documenting this very ban) — exempt
+      // only with the same metalinguistic context, so
+      // 'The status is "TBD".' stays invalid.
+      const isQuotedMention =
+        line[offsetInLine - 1] === '"' &&
+        line[offsetInLine + match[0].length] === '"';
+      if (isQuotedMention && metaContextRe.test(line)) continue;
+    }
+    // "TBD" outside an exempted mention is always the model's own dodge
+    // (rationale evidence feeds TODO/FIXME-tagged source comments, never
+    // TBD) — keep the blanket ban.
     if (match[0].toUpperCase() === "TBD") {
       return { index, text: match[0] };
     }
-    const afterToken = line.slice(offsetInLine + match[0].length);
-    const isDirective = afterToken.trimStart().startsWith(":");
-    if (isDirective || standaloneRe.test(line.trim())) {
+    if (standaloneRe.test(line.trim())) {
       return { index, text: match[0] };
     }
   }

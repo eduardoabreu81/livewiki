@@ -3234,3 +3234,165 @@ describe("folder purpose deterministic length fallback (2026-08-12)", () => {
     expect(folderFailure!.error.message).toContain("folder_purpose_too_long");
   });
 });
+
+// === Oversized plan-then-write: immediate mechanical fallback (2026-08-12) ===
+// Root cause of the dogfood run-3 `core-src/batch` loop (8/8 identical
+// `model_invented_manual` failures): an oversized candidate can never become
+// a repair input (the charBudget guard discards it and the next attempt is a
+// fresh initial), so every slot reran the whole plan-then-write pipeline AND
+// the mechanical fallback — gated on the FINAL repair slot — never ran. The
+// oversized path now tries the fail-closed mechanical repair immediately.
+
+function oversizedOpeningBlock(): string {
+  return [
+    "# Authentication helpers",
+    "",
+    "This file implements the product authentication entry points.",
+    "",
+    "## When to use this page",
+    "",
+    "- Review this file's behavior.",
+    "- Change this file's implementation.",
+    "",
+    "## How it fits",
+    "",
+    "This file provides one part of the repository implementation.",
+  ].join("\n");
+}
+
+const OVERSIZED_CLOSED_KEYS = ["src/auth/login.ts#login", "src/auth/login.ts#logout"];
+
+function oversizedPlanResponse(): string {
+  const plan = JSON.stringify({
+    sections: [{ heading: "Mechanism", keys: OVERSIZED_CLOSED_KEYS }],
+  });
+  return ["```json", plan, "```"].join("\n");
+}
+
+function oversizedProseWithManualMarkers(): string {
+  return [
+    "The run loop preserves human notes across rewrites: it extracts every manual block before regenerating a page and restores each block byte-for-byte into the same section afterwards. The `lw:manual` mechanism is reserved for human content.",
+    "",
+    "```markdown",
+    "<!-- lw:manual -->",
+    "Keep this paragraph.",
+    "<!-- /lw:manual -->",
+    "```",
+    "",
+    "A <!-- lw:manual --> block survives regeneration untouched; login and logout are documented above.",
+  ].join("\n");
+}
+
+async function writeOversizedConfig(root: string): Promise<void> {
+  await nodeFs.writeFile(
+    nodePath.join(root, ".livewiki/config.json"),
+    JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, fileSplitSourceBytes: 1 }),
+    "utf8",
+  );
+}
+
+async function readFileTaskCheckpoint(root: string, needle: string): Promise<TaskCheckpoint> {
+  const Database = (await import("better-sqlite3")).default;
+  const db = new Database(nodePath.join(root, ".livewiki/index.db"), {
+    readonly: true,
+  });
+  try {
+    const rows = db
+      .prepare("SELECT target, checkpoint_json FROM batch_tasks WHERE stage = 4")
+      .all() as Array<{ target: string; checkpoint_json: string }>;
+    const row = rows.find((r) => r.target.includes(needle));
+    if (!row) {
+      throw new Error(
+        "no stage-4 task matching " + needle + " — targets: " + rows.map((r) => r.target).join(", "),
+      );
+    }
+    return JSON.parse(row.checkpoint_json) as TaskCheckpoint;
+  } finally {
+    db.close();
+  }
+}
+
+async function findWrittenPage(root: string, needle: string): Promise<string> {
+  const entries = await nodeFs.readdir(nodePath.join(root, "livewiki"), { recursive: true });
+  const hit = entries.map(String).find((e) => e.endsWith(".md") && e.includes(needle));
+  if (!hit) {
+    throw new Error("no written page matching " + needle + " — entries: " + entries.join(", "));
+  }
+  return nodeFs.readFile(nodePath.join(root, "livewiki", hit), "utf8");
+}
+
+describe("oversized plan-then-write — immediate mechanical fallback", () => {
+  it("strips several invented manual markers with ZERO extra LLM calls and completes", async () => {
+    await writeOversizedConfig(repoRoot);
+    llm.responses = [
+      oversizedOpeningBlock(),
+      oversizedPlanResponse(),
+      oversizedProseWithManualMarkers(),
+    ];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      relaxedRound: false,
+      maxRepairAttempts: 2,
+    });
+
+    expect(result.status).toBe("completed");
+    // opening + plan + ONE section = 3 calls; the mechanical strip adds none.
+    expect(llm.callCount).toBe(3);
+
+    const page = await findWrittenPage(repoRoot, "login");
+    expect(page).not.toContain("<!-- lw:manual -->");
+    expect(page).not.toContain("<!-- /lw:manual -->");
+    // The bare inline-code name survives — only the control comments go.
+    expect(page).toContain("`lw:manual`");
+
+    const checkpoint = await readFileTaskCheckpoint(repoRoot, "login");
+    expect(checkpoint.diagnosticHistory).toHaveLength(1);
+    expect(checkpoint.diagnosticHistory?.[0]?.outcome).toBe("success");
+    expect(checkpoint.diagnosticHistory?.[0]?.mechanicalRepairs).toEqual([
+      "strip_invented_manual_markers",
+    ]);
+  });
+
+  it("mixed error set (manual marker + TODO placeholder) stays fail-closed", async () => {
+    await writeOversizedConfig(repoRoot);
+    const prose = [
+      "The retry machinery rewrites the page in bounded rounds. TODO: describe the exact retry schedule.",
+      "",
+      "A <!-- lw:manual --> block is reserved for humans.",
+    ].join("\n");
+    llm.responses = [
+      oversizedOpeningBlock(), oversizedPlanResponse(), prose,
+      oversizedOpeningBlock(), oversizedPlanResponse(), prose,
+      oversizedOpeningBlock(), oversizedPlanResponse(), prose,
+    ];
+
+    const result = await runBatch({
+      repoRoot,
+      llmClient: llm,
+      noRefine: true,
+      skipManifestWrite: true,
+      relaxedRound: false,
+      maxRepairAttempts: 2,
+      contextCharBudget: 256, // candidate always discarded → every slot is a fresh initial
+    });
+
+    expect(result.status).toBe("completed_with_failures");
+    // initial + 2 repair slots = 3 full plan-then-write runs = 9 calls.
+    expect(llm.callCount).toBe(9);
+
+    const checkpoint = await readFileTaskCheckpoint(repoRoot, "login");
+    expect(checkpoint.diagnosticHistory?.map((e) => e.promptKind)).toEqual([
+      "initial", "initial", "initial",
+    ]);
+    expect(checkpoint.diagnosticHistory?.map((e) => e.outcome)).toEqual([
+      "artifact_validation_failed", "artifact_validation_failed", "artifact_validation_failed",
+    ]);
+    const firstCodes = checkpoint.diagnosticHistory?.[0]?.errors.map((e) => e.code) ?? [];
+    expect(firstCodes).toContain("model_invented_manual");
+    expect(firstCodes).toContain("todo_marker_present");
+  });
+});

@@ -5428,6 +5428,34 @@ async function attemptStage4Generation(
       },
     );
     if (!pipelineValidation.ok) {
+      // Oversized candidates can never become repair inputs (the charBudget
+      // guard discards them and the next attempt is always a fresh initial),
+      // so the single-call path's mechanical fallback — gated on the FINAL
+      // repair slot — would never run here, and every slot would rerun the
+      // full plan-then-write pipeline. Try the mechanical repair
+      // immediately instead: it is fail-closed (null unless EVERY error has
+      // a supported mechanical fix) and revalidates the whole contract.
+      const mechanical = repairStage4ArtifactMechanically(
+        pipelineCandidate,
+        pipelineValidation.errors,
+        ctx.closedKeyList,
+        {
+          moduleId: opts.module.id,
+          moduleRole: classifyModuleRole(opts.module, opts.pathRoleConfig),
+        },
+      );
+      if (mechanical !== null) {
+        return {
+          usageEntry,
+          normalizedRaw: pipelineCandidate,
+          diagnosticCandidate: mechanical.content,
+          diagnosticOutcome: null,
+          artifact: mechanical.content,
+          validationErrors: [],
+          llmError: null,
+          mechanicalRepairs: mechanical.repairs,
+        };
+      }
       return {
         usageEntry,
         normalizedRaw: pipelineCandidate,
