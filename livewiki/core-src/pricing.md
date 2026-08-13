@@ -46,6 +46,8 @@ export function lookupPricing(model: string, override?: PricingOverride): Pricin
 
 Resolution order is three-tiered. First, `lookupPricing` consults `override?.[model]` — the user's `.livewiki/config.json` always wins because vendors change their public price before this package's release can catch up. Second, it falls back to `PRICING_TABLE[model]`, the built-in `Record<string, ModelPrice>` covering the popular MVP models across Anthropic Claude 4.5+ and the OpenAI-compatible providers (OpenRouter, LiteLLM, Ollama cloud, etc.). Third, when both lookups miss, it returns `{ tokensOnly: true }` so the report shows raw tokens without a fabricated USD figure. The `refDate` it stamps on the success branch is `PRICING_REFERENCE_DATE`, a `const` string exported alongside the table so every consumer can advertise how fresh the embedded prices are.
 
+At the 2026-08-13 reference date, the built-in USD-per-million-token entries are Claude Opus 4.5 at $5 input / $25 output, Claude Sonnet 5 at its $2 / $10 introductory rate through 2026-08-31, Claude Haiku 4.5 at $1 / $5, GPT-4o at $2.50 / $10, and GPT-4o mini at $0.15 / $0.60. The date is part of the output contract precisely because these defaults are a release snapshot, not a live billing feed.
+
 ## Computing the cost of a single call
 
 <!-- lw:anchors packages/core/src/pricing.ts#calculateCostUsd -->

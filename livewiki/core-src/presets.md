@@ -63,6 +63,8 @@ export const AVAILABLE_PRESETS: readonly PresetName[] = [
 
 Two contract points worth flagging for new entries: `envVar` is the *name* of the environment variable, never its value (so this file is safe to import from anywhere without leaking credentials); and default prices are best-effort, anchored to `PRICING_REFERENCE_DATE` in `pricing.ts`, and may be overridden per model via `config.pricing.<model>`.
 
+For the 2026-08-13 release snapshot, the Anthropic preset names Claude Opus 4.5, Sonnet 5, and Haiku 4.5, while the OpenAI preset prices GPT-4o at $2.50 input / $10 output and GPT-4o mini at $0.15 / $0.60 per million tokens. Sonnet 5's $2 / $10 entry is explicitly the introductory rate ending 2026-08-31; callers that need later billing accuracy should override it until the next table review.
+
 ## Preset lookup and type narrowing
 
 <!-- lw:anchors packages/core/src/presets.ts#isKnownPreset packages/core/src/presets.ts#resolvePreset packages/core/src/presets.ts#UnknownPresetError packages/core/src/presets.ts#UnknownPresetError.constructor -->

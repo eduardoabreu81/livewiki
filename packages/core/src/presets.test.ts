@@ -66,10 +66,10 @@ describe("preset.anthropic", () => {
   it("envVar é ANTHROPIC_API_KEY", () => {
     expect(PRESET_TABLE.anthropic.envVar).toBe("ANTHROPIC_API_KEY");
   });
-  it("pricing inclui Claude 4.5 family", () => {
+  it("pricing includes the current Claude models", () => {
     expect(PRESET_TABLE.anthropic.pricing["claude-opus-4-5"]).toBeDefined();
     expect(PRESET_TABLE.anthropic.pricing["claude-sonnet-5"]).toBeDefined();
-    expect(PRESET_TABLE.anthropic.pricing["claude-haiku-4"]).toBeDefined();
+    expect(PRESET_TABLE.anthropic.pricing["claude-haiku-4-5"]).toBeDefined();
   });
 });
 
@@ -95,6 +95,10 @@ describe("preset.openai", () => {
   });
   it("envVar é OPENAI_API_KEY", () => {
     expect(PRESET_TABLE.openai.envVar).toBe("OPENAI_API_KEY");
+  });
+  it("pricing matches the embedded table", () => {
+    expect(PRESET_TABLE.openai.pricing["gpt-4o"]).toEqual({ input: 2.5, output: 10 });
+    expect(PRESET_TABLE.openai.pricing["gpt-4o-mini"]).toEqual({ input: 0.15, output: 0.6 });
   });
 });
 
@@ -209,7 +213,7 @@ describe("resolveProviderConfig", () => {
     // Override aplicado
     expect(r.pricing["claude-sonnet-5"]).toEqual({ input: 999, output: 999 });
     // Default do preset preservado pros outros modelos
-    expect(r.pricing["claude-opus-4-5"]).toEqual({ input: 15, output: 75 });
+    expect(r.pricing["claude-opus-4-5"]).toEqual({ input: 5, output: 25 });
   });
 
   it("config.provider sobrescreve adapter do preset (escape hatch)", () => {

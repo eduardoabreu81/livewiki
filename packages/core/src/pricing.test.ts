@@ -15,7 +15,7 @@ describe("pricing — tabela embutida", () => {
   it("cobre modelos populares do MVP (Claude 4.5 + OpenAI-compat)", () => {
     expect(PRICING_TABLE["claude-opus-4-5"]).toBeDefined();
     expect(PRICING_TABLE["claude-sonnet-5"]).toBeDefined();
-    expect(PRICING_TABLE["claude-haiku-4"]).toBeDefined();
+    expect(PRICING_TABLE["claude-haiku-4-5"]).toBeDefined();
     expect(PRICING_TABLE["gpt-4o"]).toBeDefined();
   });
 
@@ -32,8 +32,8 @@ describe("pricing.lookupPricing", () => {
     const r = lookupPricing("claude-sonnet-5");
     expect(r.tokensOnly).toBe(false);
     if (!r.tokensOnly) {
-      expect(r.inputUsd).toBe(3);
-      expect(r.outputUsd).toBe(15);
+      expect(r.inputUsd).toBe(2);
+      expect(r.outputUsd).toBe(10);
       expect(r.refDate).toBe(PRICING_REFERENCE_DATE);
     }
   });
@@ -53,11 +53,11 @@ describe("pricing.lookupPricing", () => {
   });
 
   it("override só se aplica a modelos listados — outros caem na tabela", () => {
-    const r = lookupPricing("claude-haiku-4", { "claude-sonnet-5": { input: 1, output: 5 } });
+    const r = lookupPricing("claude-haiku-4-5", { "claude-sonnet-5": { input: 1, output: 5 } });
     expect(r.tokensOnly).toBe(false);
     if (!r.tokensOnly) {
       // haiku está só na tabela embutida
-      expect(r.inputUsd).toBe(PRICING_TABLE["claude-haiku-4"]!.input);
+      expect(r.inputUsd).toBe(PRICING_TABLE["claude-haiku-4-5"]!.input);
     }
   });
 });
@@ -65,12 +65,12 @@ describe("pricing.lookupPricing", () => {
 describe("pricing.calculateCostUsd", () => {
   it("calcula custo de uma chamada", () => {
     const c = calculateCostUsd(1_000_000, 500_000, "claude-sonnet-5");
-    // 1M input * $3/1M = $3 + 500k * $15/1M = $7.5 → total $10.50
+    // 1M input * $2/1M = $2 + 500k * $10/1M = $5 → total $7
     expect(c).not.toBeNull();
     if (c) {
-      expect(c.input).toBeCloseTo(3.0, 4);
-      expect(c.output).toBeCloseTo(7.5, 4);
-      expect(c.total).toBeCloseTo(10.5, 4);
+      expect(c.input).toBeCloseTo(2.0, 4);
+      expect(c.output).toBeCloseTo(5.0, 4);
+      expect(c.total).toBeCloseTo(7.0, 4);
       expect(c.refDate).toBe(PRICING_REFERENCE_DATE);
     }
   });

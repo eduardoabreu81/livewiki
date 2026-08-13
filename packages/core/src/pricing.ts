@@ -21,7 +21,7 @@
  */
 
 /** Data em que a tabela embutida foi compilada. Atualizar a cada release. */
-export const PRICING_REFERENCE_DATE = "2026-07-09";
+export const PRICING_REFERENCE_DATE = "2026-08-13";
 
 /** USD por 1M tokens. Source: páginas públicas de pricing dos providers. */
 export interface ModelPrice {
@@ -40,13 +40,14 @@ export type PricingTable = Record<string, ModelPrice>;
  * reporte transparente. Usuário que precisa de precisão usa o override.
  */
 export const PRICING_TABLE: PricingTable = {
-  // Anthropic Claude 4.5 family
-  "claude-opus-4-5": { input: 15, output: 75 },
-  "claude-sonnet-5": { input: 3, output: 15 },
-  "claude-haiku-4": { input: 0.8, output: 4 },
+  // Anthropic Claude family. Sonnet 5 uses introductory pricing through
+  // 2026-08-31; the reference date above makes that temporary rate explicit.
+  "claude-opus-4-5": { input: 5, output: 25 },
+  "claude-sonnet-5": { input: 2, output: 10 },
+  "claude-haiku-4-5": { input: 1, output: 5 },
 
   // OpenAI-compat (pra OpenRouter, LiteLLM, Ollama cloud, etc.)
-  "gpt-4o": { input: 5, output: 15 },
+  "gpt-4o": { input: 2.5, output: 10 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
 };
 

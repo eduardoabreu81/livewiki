@@ -1,8 +1,8 @@
 # Dogfood instance of packages/cli/templates/github-actions/docs-debt.yml.
-# Same mechanics, but builds the CLI from the checkout because
-# @livewiki/cli is not published to npm yet. Runs in report mode (never
-# fails) for the first window; flip LIVEWIKI_DEBT_MODE to enforce once
-# the signal is trusted. Detection is deterministic — zero LLM tokens.
+# Same mechanics, but builds the CLI from the checkout so the dogfood gate
+# validates the exact commit under test rather than the latest npm release.
+# It runs in report mode; flip LIVEWIKI_DEBT_MODE to enforce when desired.
+# Detection is deterministic — zero LLM tokens.
 
 name: livewiki docs debt (dogfood)
 
@@ -37,7 +37,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install and build (pre-publish dogfood)
+      - name: Install and build dogfood checkout
         run: |
           pnpm install --frozen-lockfile
           pnpm -r build
