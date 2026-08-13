@@ -1,0 +1,25 @@
+graph LR
+  subgraph folder_page["packages/core/src/folder-page.ts"]
+    bounds["FOLDER_PURPOSE_MIN_CHARS / FOLDER_PURPOSE_MAX_CHARS"]
+    validate["validateFolderPurpose"]
+    truncate["truncateFolderPurpose"]
+    buildCtx["buildFolderPurposeContext"]
+    extractTitle["extractPageTitle"]
+    render["renderFolderPage"]
+    coverageLine["plainTestCoverageLine"]
+    roleMap["FOLDER_ROLE_SENTENCE (non-product)"]
+  end
+  subgraph external["External collaborators"]
+    planner["page-units.ts: FolderUnit / FileUnit / folderCoverageSignal"]
+    fm["frontmatter.ts: parseFrontmatter"]
+  end
+  planner --> render
+  planner --> buildCtx
+  fm --> extractTitle
+  bounds --> validate
+  validate --> truncate
+  truncate --> render
+  extractTitle --> render
+  roleMap --> render
+  planner --> coverageLine
+  coverageLine --> render

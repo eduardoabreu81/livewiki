@@ -1,0 +1,11 @@
+flowchart LR
+  Config["config.ts (loads .livewiki/config.json)"] --> RPC["resolveProviderConfig"]
+  Table["PRESET_TABLE\n(data: name, adapter, baseUrl, envVar, pricing, notes, thinkingDefault, ...)"] --> RPC
+  RP["resolvePreset"] --> Table
+  UP["UnknownPresetError"] -.thrown by.-> RP
+  IKP["isKnownPreset"] --> Table
+  AV["AVAILABLE_PRESETS\n(ordered list for errors/help)"] --> UP
+  Table --> AV
+  RPC --> Out["ResolvedProviderConfig\n(preset + overrides merged)"]
+  Out --> Pricing["pricing.ts (lookupPricing)"]
+  Out --> Adapter["LlmClient instantiation"]

@@ -1,0 +1,13 @@
+flowchart LR
+  Disk["(.livewiki/config.json)"]:::store -->|safe-io readText| LoadConfig[loadConfig]
+  LoadConfig --> Shape[validateConfigShape]
+  Shape --> Defaults[applyDefaults]
+  Defaults --> Batch[validateConfigForBatch]
+  Batch -- throws --> Err[MissingProviderConfigError]
+  Batch --> Provider[resolveProviderFromConfig]
+  Provider --> BaseUrl[resolveBaseUrl]
+  Defaults --> Ignores[resolveExtraIgnores]
+  Ignores --> Walker[(walker stage 1)]
+  Defaults --> SaveConfig[saveConfig]
+  SaveConfig -->|safe-io writeText| Disk
+  classDef store fill:#f6f6f6,stroke:#999;

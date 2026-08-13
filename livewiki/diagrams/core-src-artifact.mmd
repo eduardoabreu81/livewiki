@@ -1,0 +1,13 @@
+flowchart LR
+    rawModel["raw LLM output"] --> norm["normalizeStage4Artifact"]
+    norm -->|"ok=true"| validated["validateStage4Artifact"]
+    norm -->|"errors"| repair["repair prompt"]
+    validated -->|"ok=true"| written["page written to disk"]
+    validated -->|"errors"| repair
+    mark["markDegradedArtifact"] --> validated
+    extract["extractInlineFlowDiagram / extractInlineModuleDiagram"] --> metrics["countFlowDiagramElements"]
+    metrics --> fc["countFlowchartElements"]
+    metrics --> seq["countSequenceElements"]
+    metrics --> st["countStateElements"]
+    validated -.->|"closed key list"| frontmatter["frontmatter.ts"]
+    validated -.->|"masked body scans"| markdownmask["markdown-mask.ts"]

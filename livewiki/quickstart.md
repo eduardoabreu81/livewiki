@@ -2,53 +2,59 @@
 
 ## What this repository is
 
-livewiki is an agent-first living documentation tool that turns a source repository into a Markdown wiki anchored to real code symbols. It serves coding agents and engineering teams who need a navigable, verifiable map of a codebase, maintained through an LLM-written, deterministically-checked pipeline. Users invoke the livewiki CLI to index a tree, generate documentation, and verify every claim against tree-sitter symbol hashes, with MCP and CI integrations for ongoing maintenance.
+livewiki is an agent-first living documentation tool that keeps a Markdown wiki inside a code repository. It is built for teams that want LLM-authored docs held honest by deterministic checks: symbol pages anchor to real code, staleness is measured from tree-sitter hashes without spending tokens, and a verify pass re-reads every page from disk to reject broken links. The product is consumed three ways — through the livewiki CLI for scaffolding and commands, through an MCP server that exposes the same tooling to LLM clients, and through shared engine code that every surface depends on.
 
 *(Synthesized from the verified wiki pages — see `livewiki/understanding.md`.)*
 
-The repository README also states: livewiki is an agent-first living documentation tool: a Markdown wiki that lives inside your repository, is written by an LLM, and is kept honest by deterministic machinery that never calls a model — every page anchors to real code symbols, staleness is computed from tree-sitter hashes with zero tokens, and `verify` rejects any claim that does not resolve to the code.
+The repository README also states: livewiki is an agent-first living documentation tool: a Markdown wiki that lives inside your repository, is written by an LLM, and is kept honest by deterministic machinery that never calls a model — code pages anchor to real symbols (synthesis pages like `understanding.md` are anchor-free by contract), staleness is computed from tree-sitter hashes with zero tokens, and `verify` re-reads every page from disk and rejects any anchor or internal link that does not resolve.
 
 *(Purpose excerpt from the repository README: `README.md` — one evidence input, not the authority.)*
 
 **Entry points and surfaces**
 
-- livewiki CLI command-line interface that parses argv, resolves the target repository, and routes subcommands to the core pipeline
-- core batch documentation engine that orchestrates indexing, artifact normalization, validation, topic planning, and update work-packages
-- deterministic indexer and SQLite-backed code index that hashes symbols and computes staleness with zero LLM tokens
-- LLM client with Anthropic and OpenAI-compatible adapters for the generation stages of the pipeline
-- repository-understanding synthesis and prompt template layer shared across generation stages
-- Phase 7 static viewer that renders the wiki as a self-contained site with a synthetic Activity dashboard
-- livewiki MCP stdio server paired with a SQLite FTS5 search index for MCP-compatible clients
-- CLI command registry that wires Commander subcommands to core operations and output formatting
-- Init and install commands backed by an on-disk manifest snapshot for first-run setup
-- Opt-in hook and CI templates for git, Claude Code, and GitHub Actions docs-debt detection
+- packages/cli — the livewiki command-line package, bundling manifest, docs, TypeScript config, and Vitest test runner.
+- packages/cli/src/commands — every livewiki subcommand registered on the root Commander program.
+- packages/cli/templates — inert scaffolding files shipped by the CLI for bootstrapping new projects.
+- packages/cli/templates/claude-code — the Claude Code settings.local.json scaffold the CLI drops into new projects.
+- packages/cli/templates/github-actions — the docs-debt.yml GitHub Actions workflow the CLI ships as ready-made CI.
+- packages/cli/skills/document-as-you-go — the SKILL.md defining the document-as-you-go workflow that prompts capturing decisions inline while coding.
+- packages/mcp — the Model Context Protocol package that exposes livewiki's tooling over a standardized tool-calling interface.
+- packages/mcp/src — the MCP server source root, an stdio server that serves LLM clients such as Claude Code.
+- packages/core — the shared engine package: TypeScript sources, configuration, and test harness other packages depend on.
+- packages/core/src/llm — the LlmClient interface, shared GenerateResult types, and the single fetch/retry/timeout wrapper every provider uses.
 
 **Fastest local path:** see the "Quick start" section of `README.md`.
 
 ## What you'll find in this wiki
 
-- **[core indexing, imports, flows, and frontmatter](core-src-04.md)** — This page documents the `@livewiki/core` source files that drive the stage 5–adjacent pipeline: import extraction, import resolution, flow candidate detection, frontmatter parsing, content hashing, the indexer orchestration, and the…
-- **[Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md)** — This page documents the responsibilities of four cooperating modules in `packages/core/src`: `safe-io.ts`, `section-guard.ts`, `status.ts`, and `symbols.ts`.
-- **[Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md)** — This page documents the stage 4 artifact pipeline that normalizes and validates generated Markdown, the anchor ledger that reconciles those pages against the code index, the mechanical repairer for deterministic fixes, and the auxiliary…
-- **[core topics, understanding, update metrics, update, and verify](core-src-10.md)** — This page documents the five source files in `packages/core/src/` that together implement stage-5 semantic topic planning, the repository-understanding synthesis, the incremental `update` work-package flow, its append-only metrics ledger,…
-- **[Init, install, manifest, markdown-mask, and mermaid-validator support](core-src-05.md)** — This page documents the core support layer that backs the `livewiki init` and `livewiki install` commands, the on-disk `livewiki/.manifest.json` snapshot, and the Markdown and Mermaid validation helpers shared across the verification…
-- **["Core Source 03: Config, Index, Export, Diagrams, Diff Preview"](core-src-03.md)** — This page documents the deterministic, non-LLM subsystems that back livewiki's source repo support: the per-repo JSON config, the SQLite schema and migrations that hold the index, the diagram generators that produce Mermaid from facts, the…
+- **[packages/cli/src/commands](commands/index.md)** — This directory holds every `livewiki` subcommand registered on the root Commander program in the `@livewiki/cli` package.
+- **[packages/mcp/src](mcp-src/index.md)** — This directory is the source root of the `@livewiki/mcp` package, the Model Context Protocol (MCP) server that exposes livewiki's documentation tooling to LLM clients such as Claude Code over stdio.
+- **[packages/core/src/llm](llm/index.md)** — The `packages/core/src/llm/` directory is the engine's seam to external large-language-model providers: it defines the `LlmClient` interface and shared `GenerateResult` types, supplies a single fetch/retry/timeout wrapper used by every…
+- **[packages/cli/templates/claude-code](claude-code/index.md)** — This directory holds a Claude Code template shipped by the CLI: a single `settings.local.json` scaffold that consumers receive when scaffolding a Claude Code–style project from the CLI.
+- **[packages/cli](cli/index.md)** — The `packages/cli` directory hosts the command-line interface package for the project, bundling its manifest (`package.json`), documentation (`README.md`), TypeScript configuration (`tsconfig.json`), and Vitest test runner setup…
+- **[packages/core](core/index.md)** — The `packages/core` directory is the package that holds the shared engine of the livewiki project: the TypeScript sources, configuration, and test harness that other packages depend on.
 
-Use this wiki to choose a task, inspect the repository architecture, query focused pages from an agent, and keep documentation debt under control.
+Use this wiki to choose a task, inspect the repository architecture, query focused pages from an agent, and keep the documentation up to date as the code changes.
+
+## Understand the product
+
+- [Testing](topics/testing-f41eeea7.md)
+- Browse the complete [Concept topics](topics/index.md) index.
 
 ## Work by intent
 
 - **Change product behavior:** start with [Tasks](tasks.md).
 - **Follow end-to-end behavior:**
-  - [CLI command surface to core pipeline wiring](flows/cli-src-to-core-src-02.md)
+  - [From CLI command to LLM provider — the request path livewiki walks](flows/cli-src-to-llm.md)
+  - [MCP server source entry to LLM client sink](flows/mcp-src-to-llm.md)
   - Browse the complete [How it works](flows/index.md) index.
 - **Inspect implementation relationships:** open the [Architecture overview](architecture/overview.md).
-- **Maintain tests, fixtures, tooling, benchmarks, or repository documentation:** open the [Auxiliary modules](auxiliary/index.md) inventory.
+- **Maintain tests, fixtures, tooling, benchmarks, or repository documentation:** open the [Auxiliary areas](auxiliary/index.md) inventory.
 
 ## Document a repo
 
 1. Run `livewiki init` to index the repository and create deterministic navigation.
-2. Run `livewiki init --batch` when you also want generated module pages.
+2. Run `livewiki init --batch` when you also want the generated folder and file pages.
 3. Run `livewiki verify` before relying on or publishing the wiki.
 
 ## Query the wiki from an agent
@@ -57,7 +63,7 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 2. Use `livewiki_search` to find relevant pages.
 3. Use `livewiki_read` to inspect the selected page in full.
 
-## Pay documentation debt
+## Keep the documentation up to date (for agents)
 
 1. Inspect open debt with `livewiki_debt` or `livewiki status --json`.
 2. Update a page with `livewiki_write_doc`, or edit it directly while preserving its ownership rules.
@@ -65,6 +71,6 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 ## Repository facts
 
-- **206 files** indexed
-- **1225 symbols** extracted
-- **51 modules** identified
+- **220 files** documented
+- **30 folders** covered
+- **1252 code symbols** indexed

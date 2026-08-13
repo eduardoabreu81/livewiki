@@ -1,0 +1,11 @@
+flowchart LR
+  Source["Markdown source string"] --> Extract["extractAnchors"]
+  FM["parseFrontmatter<br/>(frontmatter.js)"] --> Extract
+  Mask["maskCodeSpansPreservingLength<br/>(markdown-mask.js)"] --> Extract
+  Extract --> PageAnchors["pageAnchors"]
+  Extract --> SectionAnchors["sectionAnchors[]"]
+  Extract --> ManualBlocks["manualBlocks[]"]
+  SectionAnchors --> IsInside["isInsideAny"]
+  ManualBlocks --> IsInside
+  Extract --> Slug["slugify"]
+  Slug --> SectionAnchors

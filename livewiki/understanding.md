@@ -2,22 +2,22 @@
 title: livewiki
 owner: generated
 kind: understanding
-updated: 2026-08-04
+updated: 2026-08-12
 ---
 
 # livewiki
 
-livewiki is an agent-first living documentation tool that turns a source repository into a Markdown wiki anchored to real code symbols. It serves coding agents and engineering teams who need a navigable, verifiable map of a codebase, maintained through an LLM-written, deterministically-checked pipeline. Users invoke the livewiki CLI to index a tree, generate documentation, and verify every claim against tree-sitter symbol hashes, with MCP and CI integrations for ongoing maintenance.
+livewiki is an agent-first living documentation tool that keeps a Markdown wiki inside a code repository. It is built for teams that want LLM-authored docs held honest by deterministic checks: symbol pages anchor to real code, staleness is measured from tree-sitter hashes without spending tokens, and a verify pass re-reads every page from disk to reject broken links. The product is consumed three ways — through the livewiki CLI for scaffolding and commands, through an MCP server that exposes the same tooling to LLM clients, and through shared engine code that every surface depends on.
 
-## Key surfaces
+## Where to look in the code
 
-- livewiki CLI command-line interface that parses argv, resolves the target repository, and routes subcommands to the core pipeline
-- core batch documentation engine that orchestrates indexing, artifact normalization, validation, topic planning, and update work-packages
-- deterministic indexer and SQLite-backed code index that hashes symbols and computes staleness with zero LLM tokens
-- LLM client with Anthropic and OpenAI-compatible adapters for the generation stages of the pipeline
-- repository-understanding synthesis and prompt template layer shared across generation stages
-- Phase 7 static viewer that renders the wiki as a self-contained site with a synthetic Activity dashboard
-- livewiki MCP stdio server paired with a SQLite FTS5 search index for MCP-compatible clients
-- CLI command registry that wires Commander subcommands to core operations and output formatting
-- Init and install commands backed by an on-disk manifest snapshot for first-run setup
-- Opt-in hook and CI templates for git, Claude Code, and GitHub Actions docs-debt detection
+- packages/cli — the livewiki command-line package, bundling manifest, docs, TypeScript config, and Vitest test runner.
+- packages/cli/src/commands — every livewiki subcommand registered on the root Commander program.
+- packages/cli/templates — inert scaffolding files shipped by the CLI for bootstrapping new projects.
+- packages/cli/templates/claude-code — the Claude Code settings.local.json scaffold the CLI drops into new projects.
+- packages/cli/templates/github-actions — the docs-debt.yml GitHub Actions workflow the CLI ships as ready-made CI.
+- packages/cli/skills/document-as-you-go — the SKILL.md defining the document-as-you-go workflow that prompts capturing decisions inline while coding.
+- packages/mcp — the Model Context Protocol package that exposes livewiki's tooling over a standardized tool-calling interface.
+- packages/mcp/src — the MCP server source root, an stdio server that serves LLM clients such as Claude Code.
+- packages/core — the shared engine package: TypeScript sources, configuration, and test harness other packages depend on.
+- packages/core/src/llm — the LlmClient interface, shared GenerateResult types, and the single fetch/retry/timeout wrapper every provider uses.

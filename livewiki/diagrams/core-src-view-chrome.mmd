@@ -1,0 +1,14 @@
+flowchart LR
+  subgraph core["packages/core/src/view-chrome.ts"]
+    GROUP_ORDER["GROUP_ORDER"]
+    EN["EN table"]
+    PT["PT table"]
+    CHROME_TABLES["CHROME_TABLES map"]
+    resolveViewerChrome["resolveViewerChrome"]
+  end
+  lang(["language: string | undefined"]) --> resolveViewerChrome
+  resolveViewerChrome --> CHROME_TABLES
+  CHROME_TABLES --> EN
+  CHROME_TABLES --> PT
+  resolveViewerChrome --> viewer(["ViewerChrome"])
+  GROUP_ORDER -.used by sidebar.-> viewer

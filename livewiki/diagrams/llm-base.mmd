@@ -1,0 +1,16 @@
+flowchart LR
+  Caller[Provider LlmClient] --> RW[requestWithRetry]
+  RW --> WT[withTimeoutMs]
+  RW --> IS[isRetryableStatus]
+  RW --> PR[parseRetryAfterMs]
+  RW --> SL[sleep]
+  RW --> RT[readText]
+  RW --> AC[AbortController timer]
+  RW --> LT[LlmTimeoutError]
+  RW --> LR[LlmRequestError]
+  LT -.constructor.-> LTC[LlmTimeoutError.constructor]
+  AC --> LT
+  PR -.honored on.-> RW
+  IS -.429 / 5xx.-> RW
+  Caller -.uses.-> DF[DEFAULT_LLM_TIMEOUT_MS]
+  DF --> RW

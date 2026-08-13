@@ -1,0 +1,11 @@
+flowchart LR
+  CLI["Commander CLI"] --> RU["registerUpdate"]
+  CLI --> ROOT["resolveRepoRoot"]
+  ROOT --> RU
+  RU --> UPDATE["@livewiki/core/update"]
+  RU --> STATUS["@livewiki/core/status"]
+  RU --> EMIT["../output.js"]
+  RU --> FORMAT["formatHuman"]
+  UPDATE --> PACKAGE["loadWorkPackage"]
+  UPDATE --> RECORD["recordDocWrittenBack"]
+  FORMAT --> PACKAGE

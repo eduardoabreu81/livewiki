@@ -1,0 +1,33 @@
+flowchart LR
+  FC[FlowCandidate]
+  MOD[ReadonlyArray Module]
+  BUD[FlowDiagramBudget]
+  CTX[buildDiagramContext]
+  TH[FLOW_DIAGRAM_MODULE_GRANULARITY_THRESHOLD]
+  MODIR[moduleGranularityIr]
+  SYMIR[symbolGranularityIr]
+  TR[truncateFlowchartToBudget]
+  REN[renderFlowchartMermaid]
+  GEN[generateFlowDiagram]
+  PAGE[pageContent string]
+  MASK[maskCodeSpansPreservingLength]
+  PH[flowDiagramPlaceholder]
+  INS[insertFlowDiagramSection]
+
+  FC --> CTX
+  MOD --> CTX
+  CTX --> MODIR
+  CTX --> SYMIR
+  TH --> GEN
+  FC --> GEN
+  MOD --> GEN
+  BUD --> GEN
+  GEN --> MODIR
+  GEN --> SYMIR
+  MODIR --> TR
+  SYMIR --> TR
+  TR --> REN
+  REN --> GEN
+  PAGE --> INS
+  MASK --> INS
+  PH --> INS

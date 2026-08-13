@@ -1,0 +1,11 @@
+flowchart LR
+  caller["Indexer caller"] --> walkRepo["walkRepo()"]
+  walkRepo --> buildIgnore["buildIgnore()"]
+  buildIgnore --> ignoreLib["npm 'ignore' filter"]
+  walkRepo --> readdir["fs.readdir(withFileTypes)"]
+  walkRepo --> filters["Filter layer"]
+  filters --> deniedExt["DENIED_EXTENSIONS"]
+  filters --> deniedBase["DENIED_BASENAMES"]
+  filters --> isMinified["isMinified()"]
+  filters --> langMap["EXTENSION_LANG fallback"]
+  walkRepo --> out["WalkResult[] (sorted)"]

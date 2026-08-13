@@ -1,0 +1,31 @@
+flowchart LR
+  subgraph manifest_ts[packages/core/src/manifest.ts]
+    BUILD["buildManifest"]
+    HASH["computeSnapshotHash"]
+    LIST["listFiles"]
+    READ["readManifest"]
+    WRITE["writeManifestIfChanged"]
+    EQ["manifestsEqual"]
+    PEQ["pendingBatchEqual"]
+    CONST["MANIFEST_VERSION<br/>MANIFEST_REL_PATH"]
+  end
+  safeIo["safe-io.js"]
+  hashes["hashes.js (sha256)"]
+  batch["batch-state.js<br/>(PendingBatchRef)"]
+  disk[("livewiki/.manifest.json")]
+  livewikiDir[("livewiki/ tree")]
+
+  WRITE --> READ
+  WRITE --> EQ
+  EQ --> PEQ
+  READ --> safeIo
+  WRITE --> safeIo
+  READ --> disk
+  WRITE --> disk
+  HASH --> LIST
+  HASH --> hashes
+  LIST --> livewikiDir
+  BUILD --> CONST
+  WRITE --> BUILD
+  HASH --> WRITE
+  PEQ --> batch

@@ -1,0 +1,23 @@
+graph LR
+  Config["config.ts (validateConfigForBatch, resolveProviderFromConfig, resolveBaseUrl)"]
+  Factory["llm/index.ts: createLlmClient"]
+  ErrMissing["llm/index.ts: MissingApiKeyError"]
+  ErrRequest["llm/index.ts: LlmRequestError"]
+  Base["llm/base.ts (LlmTimeoutError, DEFAULT_LLM_TIMEOUT_MS, retry/timeout)"]
+  Anthropic["llm/anthropic.ts: AnthropicAdapter"]
+  OpenAI["llm/openai-compat.ts: OpenAiCompatAdapter"]
+  Batch["batch.ts (caller)"]
+  Env["process.env (ANTHROPIC_API_KEY / OPENAI_API_KEY)"]
+
+  Batch --> Factory
+  Factory --> Config
+  Factory --> Env
+  Factory --> ErrMissing
+  Factory --> Anthropic
+  Factory --> OpenAI
+  Anthropic --> Base
+  OpenAI --> Base
+  Anthropic --> ErrRequest
+  OpenAI --> ErrRequest
+  Batch --> ErrMissing
+  Batch --> ErrRequest

@@ -1,0 +1,54 @@
+flowchart TB
+  run["run"]
+  orchestrate["orchestrate"]
+  collectWikiPages["collectWikiPages"]
+  upsertDocPage["upsertDocPage"]
+  upsertAnchor["upsertAnchor"]
+  reconcileManualBlocks["reconcileManualBlocks"]
+  detectMoves["detectMoves"]
+  rewriteSymbolKeyInPage["rewriteSymbolKeyInPage"]
+  createDebt["createDebt"]
+  hasOpenDebt["hasOpenDebt"]
+  upsertUndocumented["upsertUndocumented"]
+  assigneeFor["assigneeFor"]
+  extractAnchors["extractAnchors (from anchors.ts)"]
+  findFrontmatterEnd["findFrontmatterEnd"]
+  rewriteFrontmatterAnchorsList["rewriteFrontmatterAnchorsList"]
+  rewriteBodyMarkers["rewriteBodyMarkers"]
+  extractManualBlockRangesFromBody["extractManualBlockRangesFromBody"]
+  escapeRegex["escapeRegex"]
+  endOfLine["endOfLine"]
+  nextLineStart["nextLineStart"]
+  isDelimiterLineAt["isDelimiterLineAt"]
+  db["better-sqlite3 db"]
+  markdown["safe-io markdown I/O"]
+
+  run --> orchestrate
+  orchestrate --> collectWikiPages
+  orchestrate --> upsertDocPage
+  orchestrate --> upsertAnchor
+  orchestrate --> reconcileManualBlocks
+  orchestrate --> detectMoves
+  orchestrate --> rewriteSymbolKeyInPage
+  orchestrate --> createDebt
+  orchestrate --> hasOpenDebt
+  orchestrate --> upsertUndocumented
+  orchestrate --> assigneeFor
+  collectWikiPages --> orchestrate
+  upsertDocPage --> db
+  upsertAnchor --> db
+  reconcileManualBlocks --> db
+  detectMoves --> db
+  createDebt --> db
+  hasOpenDebt --> db
+  upsertUndocumented --> db
+  rewriteSymbolKeyInPage --> markdown
+  rewriteSymbolKeyInPage --> findFrontmatterEnd
+  rewriteSymbolKeyInPage --> rewriteFrontmatterAnchorsList
+  rewriteSymbolKeyInPage --> rewriteBodyMarkers
+  rewriteSymbolKeyInPage --> extractManualBlockRangesFromBody
+  rewriteFrontmatterAnchorsList --> escapeRegex
+  findFrontmatterEnd --> isDelimiterLineAt
+  findFrontmatterEnd --> endOfLine
+  findFrontmatterEnd --> nextLineStart
+  orchestrate --> extractAnchors

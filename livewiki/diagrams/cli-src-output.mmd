@@ -1,0 +1,16 @@
+graph TD
+  outputTs["packages/cli/src/output.ts"]
+  emitFn["emit (dispatcher)"]
+  emitHumanFn["emitHuman (text writer)"]
+  emitJsonFn["emitJson (JSON writer)"]
+  stdout["process.stdout"]
+  cliCmds["Sibling CLI command modules"]
+  emitOpts["EmitOptions interface"]
+  cliCmds -->|"calls emit()"| emitFn
+  cliCmds -->|"calls emitHuman()"| emitHumanFn
+  cliCmds -->|"calls emitJson()"| emitJsonFn
+  cliFn["emit"] -->|"json=true"| emitJsonFn
+  emitFn -->|"json=false"| emitHumanFn
+  emitHumanFn -->|"write text + newline"| stdout
+  emitJsonFn -->|"write JSON.stringify + newline"| stdout
+  outputTs -.->|"exposes"| emitOpts

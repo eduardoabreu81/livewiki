@@ -1,0 +1,12 @@
+flowchart TD
+    CLI[Commander index command] --> Config[Config loader]
+    CLI --> Ignore[Ignore-pattern collector]
+    CLI --> Indexer[Core indexer]
+    CLI --> Ledger[Core anchor ledger]
+    Indexer --> Output[Result emitter]
+    Ledger --> Output
+    Config --> Indexer
+    Config --> Ledger
+    Output --> Human[Human report]
+    Output --> JSON[Structured JSON]
+    Output --> Quiet[Quiet mode]

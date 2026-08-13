@@ -1,0 +1,31 @@
+flowchart LR
+  subgraph updateTS[packages/core/src/update.ts]
+    loadWorkPackage[loadWorkPackage]
+    snippetForSymbol[snippetForSymbol]
+    lookupSymbol[lookupSymbol]
+    recordDocWrittenBack[recordDocWrittenBack]
+    CHARS_PER_TOKEN[CHARS_PER_TOKEN]
+    SNIPPET_WINDOW[SNIPPET_WINDOW]
+  end
+  manifestMod[packages/core/src/manifest.ts]
+  statusMod[packages/core/src/status.ts]
+  dbMod[packages/core/src/db.ts]
+  safeIoMod[packages/core/src/safe-io.js]
+  metricsMod[packages/core/src/update-metrics.ts]
+  impactMod[packages/core/src/change-impact.js]
+  fsMod[node:fs/promises]
+  pathMod[node:path]
+  loadWorkPackage --> manifestMod
+  loadWorkPackage --> statusMod
+  loadWorkPackage --> impactMod
+  loadWorkPackage --> metricsMod
+  loadWorkPackage --> snippetForSymbol
+  loadWorkPackage -.uses.-> CHARS_PER_TOKEN
+  loadWorkPackage -.uses.-> SNIPPET_WINDOW
+  snippetForSymbol --> lookupSymbol
+  snippetForSymbol --> fsMod
+  snippetForSymbol --> pathMod
+  lookupSymbol --> safeIoMod
+  lookupSymbol --> dbMod
+  recordDocWrittenBack --> metricsMod
+  recordDocWrittenBack --> pathMod

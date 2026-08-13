@@ -1,0 +1,19 @@
+graph LR
+  CLI["CLI entry point"]
+  Reg["registerServe"]
+  Cmd["Commander subcommand: serve"]
+  Resolve["resolve repoRoot from cwd and opts.repo"]
+  Start["startMcpStdioServer from @livewiki/mcp/stdio"]
+  Loop["Node event loop drains"]
+  Signals["SIGINT and SIGTERM handlers"]
+  Close["server.close best-effort"]
+  Stderr["stderr message and exitCode 1"]
+
+  CLI --> Reg
+  Reg --> Cmd
+  Cmd --> Resolve
+  Resolve --> Start
+  Start --> Loop
+  Cmd --> Signals
+  Signals --> Close
+  Start -. failure .-> Stderr

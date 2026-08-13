@@ -1,0 +1,25 @@
+flowchart TD
+    entry["extractRepoOrientation(absRoot)"]
+    find["findPrimaryReadme"]
+    list["readdirNames"]
+    read["readBounded"]
+    purpose["extractPurpose"]
+    title["extractReadmeTitle"]
+    fast["findFastPathSection"]
+    surfaces["detectSurfaces"]
+    proseHelpers["stripHtmlTags<br/>isMeaningfulProse<br/>isListLeadIn<br/>isBadgeOrLinkOnlyLine"]
+    clip["clipSentence"]
+    out["RepoOrientation"]
+
+    entry --> find
+    find --> list
+    entry --> read
+    entry --> purpose
+    entry --> title
+    entry --> fast
+    entry --> surfaces
+    surfaces --> list
+    purpose --> proseHelpers
+    purpose --> clip
+    title --> proseHelpers
+    out <-. returned .-> entry

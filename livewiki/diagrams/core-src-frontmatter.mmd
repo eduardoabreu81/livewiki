@@ -1,0 +1,10 @@
+flowchart TD
+  Source[Raw source string] --> Parse[parseFrontmatter]
+  Parse -->|has --- block| YamlBlock[parseYamlBlock]
+  Parse -->|no --- block| NullFM["frontmatter: null"]
+  YamlBlock --> Strip[stripComment]
+  YamlBlock --> FrontmatterMap[Frontmatter record]
+  FrontmatterMap --> GetAnchors[getAnchors]
+  FrontmatterMap --> GetOwner[getOwner]
+  YamlBlock -->|malformed| Error[FrontmatterParseError]
+  Error --> Caller[Caller handles error]

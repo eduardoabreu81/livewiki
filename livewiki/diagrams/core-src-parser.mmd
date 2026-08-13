@@ -1,0 +1,16 @@
+graph LR
+  caller[Caller / indexer] --> initParser
+  caller --> parseSource
+  caller --> grammarForExtension
+  caller --> listSupportedGrammars
+  caller --> grammarState
+  caller --> _grammarToExtensionForTest
+  initParser --> wasmRuntime[web-tree-sitter WASM runtime]
+  parseSource --> grammarsDir
+  parseSource --> loadLanguage
+  loadLanguage --> grammarsDir
+  loadLanguage --> languageCache[languageCache Map]
+  grammarState --> grammarsDir
+  grammarState --> hashes[sha256]
+  listSupportedGrammars --> grammarsDir
+  grammarsDir --> pkgJson[package.json relative lookup]

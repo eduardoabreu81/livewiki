@@ -123,6 +123,14 @@ livewiki view     # self-contained offline site: search, Mermaid, dark mode
 Then browse `livewiki/quickstart.md` — or open the site that `view`
 builds.
 
+## See it in action
+
+This repository documents itself with livewiki. Browse the generated
+[quickstart](livewiki/quickstart.md),
+[architecture overview](livewiki/architecture/overview.md), and
+[Testing topic](livewiki/topics/testing-f41eeea7.md). The published corpus
+passes `livewiki verify` with zero issues.
+
 ## Day two and beyond: the incremental loop
 
 The wiki is alive. When the code changes, livewiki notices for free:
@@ -193,9 +201,8 @@ described the two corpora as "close to complementary".
 
 - Blind dual-evaluator comparison against OpenWiki: near-tie on quality,
   ahead on coverage, ~8% of the token cost — full table above.
-- Self-hosting dogfood: this repository documents itself — batch run of
-  138 tasks, **0 failures, verify zero issues, 742,693 tokens** with
-  checkpoint-exact accounting.
+- Self-hosting dogfood: this repository documents itself, and the published
+  corpus passes `livewiki verify` with zero issues.
 - Cross-platform CI green on ubuntu / windows / macOS (Node 24).
 - Debt detection on every merge costs **zero tokens** — see
   `packages/cli/templates/github-actions/docs-debt.yml`.

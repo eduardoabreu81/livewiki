@@ -1,0 +1,18 @@
+flowchart LR
+  subgraph core["packages/core/src/blast-radius.ts"]
+    CBA["computeBlastRadius (exported)"]
+    FAP["findAffectedPages (internal)"]
+  end
+  DB[("better-sqlite3 database")]
+  CALLS["calls table<br/>(resolved_callee_key)"]
+  ANCHORS["anchors table"]
+  DOCPAGES["doc_pages table"]
+  CALLSYM["./symbols.js<br/>CallConfidence type"]
+
+  CBA -- "reads resolved callers" --> CALLS
+  CBA -- "asks for pages" --> FAP
+  FAP -- "JOIN anchors ⨝ doc_pages" --> ANCHORS
+  FAP -- "JOIN anchors ⨝ doc_pages" --> DOCPAGES
+  CBA -- "uses" --> CALLSYM
+  CBA --> DB
+  FAP --> DB

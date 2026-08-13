@@ -1,0 +1,18 @@
+graph TD
+  CLI["CLI: livewiki batch"] --> Core
+  subgraph Core["packages/core/src/batch-status.ts"]
+    Core --> buildStatusReport["buildStatusReport"]
+    Core --> listRuns["listRuns"]
+    buildStatusReport --> aggregateUsageFromCheckpoint["aggregateUsageFromCheckpoint"]
+    buildStatusReport --> mergeStageUsage["mergeStageUsage"]
+    buildStatusReport --> emptyStageUsage["emptyStageUsage"]
+    buildStatusReport --> parseRunSummary["parseRunSummary"]
+    parseRunSummary --> safeJsonParse["safeJsonParse"]
+  end
+  buildStatusReport --> SafeIo["safe-io.resolveAndValidate"]
+  buildStatusReport --> Db["db.openIndex"]
+  listRuns --> SafeIo
+  listRuns --> Db
+  buildStatusReport --> Pricing["pricing.PRICING_REFERENCE_DATE"]
+  Db --> SQLite[("batch_runs / batch_tasks")]
+  buildStatusReport --> BatchState["batch-state.ts types"]

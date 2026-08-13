@@ -1,0 +1,26 @@
+flowchart LR
+  subgraph dbTs["packages/core/src/db.ts"]
+    CV["CURRENT_SCHEMA_VERSION"]
+    SK["SCHEMA_VERSION_KEY"]
+    SS["SCHEMA_SQL"]
+    MV3["MIGRATION_SQL_V3"]
+    M34["migrateV3ToV4"]
+    M45["migrateV4ToV5"]
+    M56["migrateV5ToV6"]
+    M67["migrateV6ToV7"]
+    M78["migrateV7ToV8"]
+    MF["migrationsFor"]
+    P3["postV3Migrations"]
+    OI["openIndex"]
+  end
+  SS --> OI
+  CV --> OI
+  SK --> OI
+  MF --> OI
+  P3 --> OI
+  MV3 --> MF
+  M34 --> P3
+  M45 --> P3
+  M56 --> P3
+  M67 --> P3
+  M78 --> P3

@@ -1,0 +1,19 @@
+flowchart TB
+  subgraph markdown_mask["markdown-mask.ts"]
+    mask["maskCodeSpans\nmaskCodeSpansPreservingLength"]
+    fenceMask["maskFencedCodeBlocks\nmaskFencedCodeBlocksPreservingLength"]
+    inlineMask["maskInlineCode"]
+    inspect["hasUnclosedFence\nhasUnclosedMarkdown"]
+    diag["unclosedMarkdownDiagnostic"]
+    util["createFenceState\nconsumeFenceLine\nboundedExcerpt"]
+  end
+  fenceMask --> util
+  mask --> fenceMask
+  mask --> inlineMask
+  inspect --> fenceMask
+  inspect --> inlineMask
+  diag --> inspect
+  diag --> util
+  mask --> verify["verify.ts"]
+  mask --> artifact["artifact.ts"]
+  mask --> anchors["anchors.ts"]

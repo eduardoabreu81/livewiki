@@ -1,0 +1,6 @@
+graph LR
+  CLI["CLI bootstrap"] -->|attaches| Verify["commands/verify.ts"]
+  Verify -->|runs| Core["@livewiki/core/verify"]
+  Core -->|VerifyResult| Verify
+  Verify -->|stdout| Out["Human or JSON report"]
+  Verify -->|exitCode| Proc["Node process"]

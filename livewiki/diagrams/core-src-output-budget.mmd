@@ -1,0 +1,17 @@
+graph LR
+  output_budget["output-budget.ts"]
+  ModulePreset["MODULE_OUTPUT_BUDGET_OPTIONS"]
+  TopicPreset["TOPIC_REFINE_OUTPUT_BUDGET_OPTIONS"]
+  Compute["computeDynamicOutputTokenBudget"]
+  Signals["OutputBudgetSignals (anchorCount, anchorSourceChars)"]
+  Options["OutputBudgetOptions (base, perAnchor, floor, ceiling)"]
+  Provider["LLM provider max_tokens"]
+
+  output_budget --> ModulePreset
+  output_budget --> TopicPreset
+  output_budget --> Compute
+  ModulePreset --> Options
+  TopicPreset --> Options
+  Signals --> Compute
+  Options --> Compute
+  Compute --> Provider

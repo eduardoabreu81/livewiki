@@ -1,0 +1,8 @@
+flowchart LR
+  Indexer["indexer.ts"] -->|feeds normalized text to| TreeSitter["tree-sitter parser"]
+  Indexer -->|hashes whole file via| Sha256["sha256"]
+  Indexer -->|hashes per-symbol slice via| Sha256Slice["sha256Slice"]
+  Indexer -->|normalizes EOL via| NormalizeEol["normalizeEol"]
+  Indexer -->|recomputes legacy hash via| ExpandEol["expandEolToCrlf"]
+  Sha256Slice --> Sha256
+  ExpandEol -.->|"inverse of"| NormalizeEol

@@ -1,0 +1,13 @@
+graph LR
+  modulesTs["modules.ts"]
+  pageUnitsTs["page-units.ts (stage 2)"]
+  importResTs["import-resolution.ts"]
+  hashesTs["hashes.ts"]
+  flowsTs["flows.ts (stage 5)"]
+  stage4["stage 4 writer"]
+
+  pageUnitsTs --> modulesTs
+  modulesTs --> importResTs
+  modulesTs --> hashesTs
+  modulesTs --> stage4
+  flowsTs --> modulesTs

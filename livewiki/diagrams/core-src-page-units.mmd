@@ -1,0 +1,8 @@
+graph TD
+  core_modules["modules.ts<br/>classifyPathRole<br/>makeUniqueDeterministicIds"] --> planner
+  input_inventory["Indexed file paths<br/>+ symbolCountByPath<br/>+ sizeByPath"] --> planner
+  planner["page-units.ts<br/>planPageUnits"] --> fileUnits["FileUnit[]"]
+  planner --> folderUnits["FolderUnit[]"]
+  folderUnits --> signal["folderCoverageSignal<br/>(per folder)"]
+  threshold["DEFAULT_FILE_SPLIT_SOURCE_BYTES<br/>(+ opts.fileSplitSourceBytes)"] --> planner
+  helpers["stripTestInfix<br/>fileBaseName<br/>dirOf"] --> planner

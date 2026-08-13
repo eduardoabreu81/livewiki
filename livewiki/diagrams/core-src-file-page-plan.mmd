@@ -1,0 +1,23 @@
+graph TD
+  modelPlan["Model pass-1 plan text"]
+  parseFilePlan["parseFilePlan<br/>(validate plan)"]
+  fallbackPlan["deterministicFallbackPlan<br/>(source-order chunks)"]
+  sectionPlan["FileSectionPlan[]"]
+  sourceText["Full source text + SymbolSpan[]"]
+  slice["extractSectionSource<br/>(slice + budget cap)"]
+  sectionProse["Model pass-2 prose per section"]
+  opening["Pass-0 opening block"]
+  assembly["assembleFilePage"]
+  page["Final Markdown page"]
+
+  modelPlan --> parseFilePlan
+  parseFilePlan -- "ok: false (x2)" --> fallbackPlan
+  fallbackPlan --> sectionPlan
+  parseFilePlan -- "ok: true" --> sectionPlan
+  sectionPlan --> assembly
+  sourceText --> slice
+  slice --> sectionProse
+  sectionPlan --> sectionProse
+  opening --> assembly
+  sectionProse --> assembly
+  assembly --> page

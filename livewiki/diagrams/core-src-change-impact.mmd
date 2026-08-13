@@ -1,0 +1,26 @@
+flowchart LR
+  computeChangeImpact[computeChangeImpact]
+  IMPACT_BUDGETS[IMPACT_BUDGETS]
+  emptyImpact[emptyImpact]
+  seedFromDebt[seedFromDebt]
+  indexDbExists[indexDbExists]
+  computeDirectImporters[computeDirectImporters]
+  previewWorkingTreeDebt[(diff-preview.ts)]
+  runStatus[(status.ts)]
+  resolveImportEdges[(import-resolution.ts)]
+  openIndex[(db.ts)]
+  snippetForSymbol[(update.ts)]
+  ChangeImpact[(ChangeImpact)]
+
+  computeChangeImpact -- reads caps --> IMPACT_BUDGETS
+  computeChangeImpact -- working-tree seed --> previewWorkingTreeDebt
+  computeChangeImpact -- debt seed --> seedFromDebt
+  seedFromDebt -- gate --> indexDbExists
+  seedFromDebt -- reads --> runStatus
+  computeChangeImpact -- gate --> indexDbExists
+  computeChangeImpact -- importers --> computeDirectImporters
+  computeDirectImporters -- reads --> openIndex
+  computeDirectImporters -- uses --> resolveImportEdges
+  computeChangeImpact -- snippets --> snippetForSymbol
+  computeChangeImpact -- degrade --> emptyImpact
+  computeChangeImpact -- emits --> ChangeImpact

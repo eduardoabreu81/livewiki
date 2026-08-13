@@ -1,0 +1,11 @@
+graph TD
+  AnthropicAdapter["AnthropicAdapter<br/>(packages/core/src/llm/anthropic.ts)"]
+  LlmClient["LlmClient interface<br/>(./index.js)"]
+  Types["GenerateRequest / GenerateResult / StopReason<br/>(./types.js)"]
+  Base["requestWithRetry / withTimeoutMs / AdapterConfig<br/>(./base.js)"]
+  AnthropicAPI["POST /v1/messages<br/>Anthropic HTTP API"]
+
+  AnthropicAdapter -- "implements" --> LlmClient
+  AnthropicAdapter -- "consumes types from" --> Types
+  AnthropicAdapter -- "delegates HTTP/timeout/retry to" --> Base
+  AnthropicAdapter -- "HTTP request to" --> AnthropicAPI

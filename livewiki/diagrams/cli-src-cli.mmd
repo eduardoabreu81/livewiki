@@ -1,0 +1,11 @@
+graph TD
+  caller["bin entry point"] --> run["run(argv)"]
+  run --> createProgram["createProgram()"]
+  createProgram --> readVersion["readVersion()"]
+  createProgram --> commander["commander Command"]
+  commander --> regs["registerInit, registerIndex, registerStatus, registerUpdate, registerVerify, registerServe, registerBatch, registerExport, registerView, registerPointer, registerInstall"]
+  regs --> handlers["command handlers in packages/cli/src/commands/*.ts"]
+  resolveRepoRoot["resolveRepoRoot(repoOpt)"]
+  handlers --> resolveRepoRoot
+  resolveRepoRoot --> cwd["process.cwd() + nodePath.resolve"]
+  readVersion --> pkg["../package.json (via file: URL)"]

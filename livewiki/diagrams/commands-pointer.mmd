@@ -1,0 +1,18 @@
+graph LR
+  registerPointer["registerPointer(program)"]
+  promptYesNo["promptYesNo(question)"]
+  formatPointerResult["formatPointerResult(result, verb)"]
+  formatStatusHuman["formatStatusHuman(status)"]
+  _internal["_internal (nodeFs)"]
+  core["@livewiki/core/pointer"]
+  cli["../cli.js (resolveRepoRoot)"]
+  output["../output.js (emit)"]
+  fs["node:fs/promises (nodeFs)"]
+
+  registerPointer --> core
+  registerPointer --> cli
+  registerPointer --> output
+  registerPointer --> promptYesNo
+  registerPointer --> formatPointerResult
+  registerPointer --> formatStatusHuman
+  _internal --> fs

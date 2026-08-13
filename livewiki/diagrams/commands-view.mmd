@@ -1,0 +1,13 @@
+graph LR
+  Root[cli.ts root program]
+  View[commands/view.ts]
+  CoreView[core/view buildSite]
+  CoreCfg[core/config loadConfig]
+  Out[output.ts emitHuman/emitJson]
+  Browser[openBrowser helper]
+
+  Root --> View
+  View --> CoreCfg
+  View --> CoreView
+  View --> Browser
+  View --> Out

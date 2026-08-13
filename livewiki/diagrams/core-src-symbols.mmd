@@ -1,0 +1,19 @@
+graph TD
+  Parser["tree-sitter Tree + source"] --> Symbols["extractSymbols / extractSymbolsWithRanges"]
+  Parser --> Calls["extractCalls"]
+  Parser --> Rationales["extractRationales"]
+
+  Symbols --> Walker["walkNode"]
+  Walker --> Helpers["makeRecord / toSymbolRecord / signatureFor"]
+  Walker --> Qualifiers["goReceiverTypeName / rustImplTypeName"]
+
+  Calls --> CallWalker["walkForCalls"]
+  CallWalker --> Callee["extractCalleeName"]
+  Qualifiers --> CallWalker
+
+  Rationales --> Collector["collectRationaleCandidates"]
+  Collector --> Group["groupContiguousBlocks"]
+  Rationales --> Attr["attributeRationale"]
+  Rationales --> Normalize["normalizeRationaleText"]
+  Rationales --> Sniff["isLikelyGenerated / isTsDocstringComment / isRustDocComment"]
+  JavaHelper["javaCreationTypeName"] --> CallWalker

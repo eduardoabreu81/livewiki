@@ -1,0 +1,30 @@
+flowchart LR
+  classDef src fill:#eef,stroke:#446
+  classDef proc fill:#efe,stroke:#464
+  classDef out fill:#fee,stroke:#644
+  CLI["CLI command layer"]:::src
+  BuildSite["buildSite"]:::proc
+  DiskSrc["createDiskWikiSource"]:::proc
+  GitRefSrc["createGitRefWikiSource"]:::proc
+  Verify["verify.ts (collectWikiArtifactPaths / resolveWikiLink)"]:::src
+  Markdown["frontmatter.ts / anchors.ts / markdown-mask.ts"]:::src
+  Renderer["createMarkdownRenderer / renderPage"]:::proc
+  Stamps["probeWikiStamp / probeGitHubRemoteBase"]:::proc
+  Badges["applyFreshnessBadges / runGitLog"]:::proc
+  Shell["renderShell / buildSidebar / buildSearchIndexJs"]:::proc
+  Assets["readMermaidAsset / renderViewAppJs"]:::proc
+  Site[".livewiki/site/"]:::out
+
+  CLI --> BuildSite
+  BuildSite --> DiskSrc
+  BuildSite --> GitRefSrc
+  DiskSrc --> Verify
+  GitRefSrc --> Verify
+  BuildSite --> Stamps
+  BuildSite --> Renderer
+  Renderer --> Markdown
+  BuildSite --> Badges
+  Renderer --> Shell
+  Shell --> Assets
+  Shell --> Site
+  Assets --> Site

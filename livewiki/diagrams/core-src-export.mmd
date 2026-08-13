@@ -1,0 +1,31 @@
+flowchart LR
+  subgraph Export["packages/core/src/export.ts"]
+    CLI[exportWiki] --> VAL[validateTarget]
+    CLI --> ENUM_SRC[enumerateSourcePages]
+    CLI --> FLAT[flattenPath]
+    CLI --> XF[transformPage]
+    CLI --> ENUM_DST[enumerateDestination]
+    CLI --> WRITE[Phase 1 writes via safeIo]
+    CLI --> REMOVE[Phase 2 removes via safeIo]
+    XF --> XF_MD[transformMarkdownPage]
+    XF --> XF_MMD[transformMermaidPage]
+    XF_MD --> HDR[renderMarkdownHeader]
+    XF_MD --> PLACEHOLDER[replaceMermaidPlaceholder]
+    XF_MD --> REWRITE[rewriteInternalLinks]
+    REWRITE --> RESOLVE[resolveLinkSource]
+    ENUM_DST --> DETECT[detectMarker]
+    MARKER[buildMarker] --> PFX[GENERATED_MARKER_PREFIX]
+    MARKER --> SFX[GENERATED_MARKER_SUFFIX]
+    CLI --> EX[ExportError]
+  end
+  subgraph External["External"]
+    SAFE[packages/core/src/safe-io]
+    FM[packages/core/src/frontmatter]
+    MASK[packages/core/src/markdown-mask]
+  end
+  ENUM_SRC --> SAFE
+  ENUM_DST --> SAFE
+  WRITE --> SAFE
+  REMOVE --> SAFE
+  XF_MD --> FM
+  XF_MD --> MASK

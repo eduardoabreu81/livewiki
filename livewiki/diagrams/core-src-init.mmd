@@ -1,0 +1,33 @@
+flowchart LR
+  classDef entry fill:#fde68a,stroke:#b45309,color:#111;
+  classDef plan fill:#bfdbfe,stroke:#1d4ed8,color:#111;
+  classDef write fill:#bbf7d0,stroke:#15803d,color:#111;
+  classDef sync fill:#fbcfe8,stroke:#be185d,color:#111;
+  classDef hook fill:#e9d5ff,stroke:#6d28d9,color:#111;
+
+  runInit["runInit"]:::entry
+  buildPlan["buildPlan"]:::plan
+  syncClassDiagrams["syncClassDiagrams"]:::write
+  syncStaleFlowArtifacts["syncStaleFlowArtifacts"]:::sync
+  syncStaleTopicArtifacts["syncStaleTopicArtifacts"]:::sync
+  syncStaleModulePages["syncStaleModulePages"]:::sync
+  regenerateArchitectureOverview["regenerateArchitectureOverview"]:::hook
+  generateArchitectureOverview["generateArchitectureOverview"]:::write
+  formatNeighbors["formatNeighbors"]:::write
+  escapeHtmlId["escapeHtmlId"]:::write
+  readFlowPageOwner["readFlowPageOwner"]:::sync
+  runBatch["runBatch (dynamic)"]:::hook
+
+  runInit --> buildPlan
+  runInit --> syncClassDiagrams
+  runInit --> generateArchitectureOverview
+  runInit --> runBatch
+  runBatch --> regenerateArchitectureOverview
+  regenerateArchitectureOverview --> buildPlan
+  regenerateArchitectureOverview --> generateArchitectureOverview
+  generateArchitectureOverview --> formatNeighbors
+  generateArchitectureOverview --> escapeHtmlId
+  syncClassDiagrams --> syncStaleFlowArtifacts
+  syncStaleFlowArtifacts --> readFlowPageOwner
+  syncStaleTopicArtifacts --> readFlowPageOwner
+  syncStaleModulePages --> readFlowPageOwner

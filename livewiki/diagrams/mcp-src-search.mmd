@@ -1,0 +1,39 @@
+flowchart LR
+  subgraph search["packages/mcp/src/search.ts"]
+    openAndIndex["openAndIndex"]
+    reindexAllPages["reindexAllPages"]
+    reindexAll["reindexAll"]
+    collectMarkdownFiles["collectMarkdownFiles"]
+    walk["walk"]
+    indexPage["indexPage"]
+    removePage["removePage"]
+    searchF["search"]
+    snippetAround["snippetAround"]
+    queryTerms["queryTerms"]
+    splitIdentifiers["splitIdentifiers"]
+    close["close"]
+  end
+  subgraph fs["node:fs/promises"]
+    readdir["readdir"]
+    readFile["readFile"]
+  end
+  subgraph sqlite["better-sqlite3"]
+    db[("search.db\nwiki_search\nwiki_search_tokens")]
+  end
+  openAndIndex --> reindexAll
+  reindexAllPages --> reindexAll
+  reindexAll --> collectMarkdownFiles
+  collectMarkdownFiles --> walk
+  walk --> readdir
+  reindexAll --> readFile
+  reindexAll --> splitIdentifiers
+  indexPage --> splitIdentifiers
+  searchF --> queryTerms
+  queryTerms --> splitIdentifiers
+  searchF --> snippetAround
+  reindexAll --> db
+  indexPage --> db
+  removePage --> db
+  searchF --> db
+  openAndIndex --> db
+  close --> db

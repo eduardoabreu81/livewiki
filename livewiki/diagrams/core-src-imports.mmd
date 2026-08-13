@@ -1,0 +1,10 @@
+flowchart LR
+  A["collectImportsForFiles"] -->|"readFile per path"| FS["node:fs/promises"]
+  A -->|"relPath + content"| B["collectImports"]
+  B -->|"initParser + parseSource"| P["parser.ts"]
+  B -->|"Tree + lang"| C["extractImportsFromTree"]
+  C -->|"import_spec"| D["pushGoImportSpec"]
+  C -->|"use_declaration argument"| E["pushRustUsePath"]
+  C --> F["ExtractedImport[]"]
+  D --> F
+  E --> F

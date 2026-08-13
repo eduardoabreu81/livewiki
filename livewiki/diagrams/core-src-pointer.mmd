@@ -1,0 +1,41 @@
+flowchart LR
+  subgraph pointer["packages/core/src/pointer.ts"]
+    POINTER_START[POINTER_START]
+    POINTER_END[POINTER_END]
+    POINTER_FILES[POINTER_FILES]
+    buildPointerBlock[buildPointerBlock]
+    findPointerBlock[findPointerBlock]
+    applyPointerReplace[applyPointerReplace]
+    applyPointerRemove[applyPointerRemove]
+    pickPointerFile[pickPointerFile]
+    insertPointer[insertPointer]
+    removePointer[removePointer]
+    readPointerStatus[readPointerStatus]
+    ensurePointerFile[ensurePointerFile]
+    _internal[_internal]
+  end
+  safeio["safe-io.ts (allowPointer)"]
+  fs["node:fs/promises"]
+  cli["CLI / init flow"]
+
+  buildPointerBlock --> POINTER_START
+  buildPointerBlock --> POINTER_END
+  applyPointerReplace --> findPointerBlock
+  applyPointerRemove --> findPointerBlock
+  insertPointer --> pickPointerFile
+  insertPointer --> applyPointerReplace
+  insertPointer --> buildPointerBlock
+  removePointer --> pickPointerFile
+  removePointer --> applyPointerRemove
+  readPointerStatus --> findPointerBlock
+  ensurePointerFile --> POINTER_FILES
+  insertPointer --> safeio
+  removePointer --> safeio
+  readPointerStatus --> safeio
+  ensurePointerFile --> safeio
+  pickPointerFile --> POINTER_FILES
+  _internal --> fs
+  cli --> insertPointer
+  cli --> removePointer
+  cli --> readPointerStatus
+  cli --> ensurePointerFile

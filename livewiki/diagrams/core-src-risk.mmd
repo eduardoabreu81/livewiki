@@ -1,0 +1,13 @@
+graph TD
+  risk["risk.ts"]
+  flows["flows.ts<br/>(isTestPath)"]
+  ires["import-resolution.ts<br/>(resolveImportEdges)"]
+  mods["modules.ts<br/>(normalizeRepoPath)"]
+  spawn["node:child_process<br/>(spawn)"]
+  callers["status / update CLI"]
+
+  callers --> risk
+  risk --> flows
+  risk --> ires
+  risk --> mods
+  risk --> spawn

@@ -1,0 +1,8 @@
+flowchart LR
+  caller["Caller in packages/core"] --> validate["validateMermaidSyntax"]
+  validate --> queue["validationQueue<br/>(Promise chain)"]
+  queue --> parse["parseWithTemporaryDom"]
+  parse --> jsdom["parserDom<br/>(JSDOM instance)"]
+  parse --> mermaid["mermaid<br/>(lazy import, parse only)"]
+  parse --> restore["restoreGlobal"]
+  restore --> globals["globalThis.window / document"]

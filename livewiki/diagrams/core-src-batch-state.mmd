@@ -1,0 +1,23 @@
+flowchart LR
+  subgraph batch_state["packages/core/src/batch-state.ts"]
+    types["Checkpoint / diagnostic types"]
+    caps["Diagnostic caps"]
+    summarize["summarizeDiagnosticErrors"]
+  end
+  llm["packages/core/src/llm/types.ts"]
+  prompts["packages/core/src/prompts.ts"]
+  repair["packages/core/src/artifact-repair.ts"]
+  topics["packages/core/src/topics.ts"]
+  community["packages/core/src/community.ts"]
+  orchestrator["batch orchestrator"]
+  db[("batch_tasks.checkpoint_json")]
+
+  types --> llm
+  types --> prompts
+  types --> repair
+  types --> topics
+  types --> community
+  orchestrator --> summarize
+  summarize --> caps
+  orchestrator --> types
+  orchestrator --> db

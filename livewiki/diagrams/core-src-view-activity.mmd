@@ -1,0 +1,30 @@
+graph TD
+  ledger[("update_metrics.json ledger")]
+  build["buildActivityModel"]
+  model["ActivityModel"]
+  render["renderActivityPage"]
+  fragment["ActivityPageFragment"]
+  weekly["renderWeeklyBarChart"]
+  burndown["renderBurndownChart"]
+  axis["axisFrame"]
+  wrap["svgWrap"]
+  legend["legend"]
+  helpers["Deterministic display helpers"]
+  time["UTC date helpers"]
+  viewer["view.ts (consumer)"]
+  ledger --> build
+  build --> model
+  model --> render
+  render --> fragment
+  render --> weekly
+  render --> burndown
+  render --> legend
+  render --> helpers
+  weekly --> axis
+  weekly --> wrap
+  burndown --> axis
+  burndown --> wrap
+  burndown --> time
+  build --> time
+  viewer --> build
+  viewer --> render

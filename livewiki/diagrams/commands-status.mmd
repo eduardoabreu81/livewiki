@@ -1,0 +1,6 @@
+flowchart LR
+    CLI[commander livewiki program] --> registerStatus
+    registerStatus -- with diff flag --> previewWorkingTreeDebt
+    registerStatus -- without diff flag --> runStatus
+    previewWorkingTreeDebt --> formatDiffPreviewHuman
+    runStatus --> formatStatusHuman

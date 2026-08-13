@@ -1,46 +1,38 @@
 ---
-title: Auxiliary modules
+title: Auxiliary areas
 owner: generated
 ---
 
-# Auxiliary modules
+# Auxiliary areas
 
 Reference inventory for tests, fixtures, tooling, benchmarks, and repository documentation.
 
 ## Automated tests
 
-- [Core source tests — part 2 of 7](../core-src-tests-02.md)
-- [CLI source tests](../cli-src-tests.md)
-- [Core source tests — part 1 of 7](../core-src-tests-01.md)
-- [Core source tests — part 6 of 7](../core-src-tests-06.md)
-- [Core source tests — part 3 of 7](../core-src-tests-03.md)
-- [Core source tests — part 4 of 7](../core-src-tests-04.md)
-- [Core source tests — part 7 of 7](../core-src-tests-07.md)
-- [MCP source tests](../mcp-src-tests.md)
-- [Core source tests — part 5 of 7](../core-src-tests-05.md)
-- [LLM source tests](../llm-tests.md)
+- [packages/core/src](../core-src/index.md)
+- [packages/cli/src](../cli-src/index.md)
 
 ## Test fixtures
 
-- [Sample rust repo source](../sample-rust-repo-src.md)
-- [Fixture server source](../fixture-server.md)
-- [Sample go repo server module](../sample-go-repo-server.md)
-- [Sample ts repo source](../sample-ts-repo-src.md)
-- [Fase2 repo source](../fase2-repo-src.md)
-- [Fixture source](../fixture.md)
-- [Model source](../model.md)
-- [Cmd module](../cmd.md)
-- [Lib module](../lib.md)
-- [Sample go repo module](../sample-go-repo.md)
-- [Sample rust repo module](../sample-rust-repo.md)
+- [packages/core/test/fixtures/sample-rust-repo/src](../sample-rust-repo-src/index.md)
+- [packages/core/test/fixtures/sample-java-repo/src/main/java/com/fixture/server](../fixture-server/index.md)
+- [packages/core/test/fixtures/sample-go-repo/server](../sample-go-repo-server/index.md)
+- [packages/core/test/fixtures/sample-ts-repo/src](../sample-ts-repo-src/index.md)
+- [packages/core/test/fixtures/fase2-repo/src](../fase2-repo-src/index.md)
+- [packages/core/test/fixtures/sample-java-repo/src/main/java/com/fixture](../fixture/index.md)
+- [packages/core/test/fixtures/sample-java-repo/src/main/java/com/fixture/model](../model/index.md)
+- [packages/core/test/fixtures/sample-go-repo/cmd](../cmd/index.md)
+- [packages/core/test/fixtures/sample-ts-repo/lib](../lib/index.md)
+- [packages/core/test/fixtures/sample-go-repo](../sample-go-repo/index.md)
+- [packages/core/test/fixtures/sample-rust-repo](../sample-rust-repo/index.md)
 
 ## Tooling and benchmarks
 
-- [Scripts module](../scripts.md)
-- [CLI scripts module](../cli-scripts.md)
-- [MCP scripts module](../mcp-scripts.md)
+- [scripts](../scripts/index.md)
+- [packages/cli/scripts](../cli-scripts/index.md)
+- [packages/mcp/scripts](../mcp-scripts/index.md)
 
 ## Repository documentation
 
-- [Documentation](../docs.md)
-- [Plans module](../plans.md)
+- [docs](../docs/index.md)
+- [docs/plans](../plans/index.md)

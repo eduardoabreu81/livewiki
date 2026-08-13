@@ -1,0 +1,23 @@
+graph LR
+  core_diagrams[packages/core/src/diagrams.ts]
+  modules_ts[modules.ts]
+  db_js[db.js]
+  artifact_writer[artifact writer / verify]
+  viewer[viewer]
+  structure_mmd[structure.mmd]
+  modules_mmd[modules.mmd]
+  classes_mmd[classes.mmd]
+  module_pages[module pages]
+  core_diagrams -->|imports types| modules_ts
+  core_diagrams -->|imports types| db_js
+  core_diagrams -->|writes| structure_mmd
+  core_diagrams -->|writes| modules_mmd
+  core_diagrams -->|writes| classes_mmd
+  core_diagrams -->|placeholder line| module_pages
+  artifact_writer -->|reads| structure_mmd
+  artifact_writer -->|reads| modules_mmd
+  artifact_writer -->|reads| classes_mmd
+  viewer -->|renders| structure_mmd
+  viewer -->|renders| modules_mmd
+  viewer -->|renders| classes_mmd
+  viewer -->|resolves placeholder| module_pages

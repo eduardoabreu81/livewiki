@@ -1,0 +1,38 @@
+flowchart TB
+  subgraph Inputs
+    Modules["loadModulePresentations / loadModuleDigests"]
+    Flows["loadFlowPresentations"]
+    Topics["loadTopicPresentations"]
+    Orient["extractRepoOrientation"]
+  end
+  subgraph Core["understanding.ts"]
+    Build["buildUnderstandingEvidence"]
+    Basis["hasUnderstandingBasis"]
+    Hash["computeUnderstandingEvidenceHash"]
+    Render["renderUnderstandingEvidence"]
+    Validate["validateUnderstandingArtifact"]
+    Salvage["salvageUnderstandingCandidate"]
+    Clip["clipAtClauseBoundary"]
+    Parse["parseUnderstandingPage"]
+  end
+  subgraph Outputs
+    Disk["livewiki/understanding.md"]
+    Quickstart["generateQuickstart"]
+    Readme["README export"]
+  end
+  Modules --> Build
+  Flows --> Build
+  Topics --> Build
+  Orient --> Build
+  Build --> Basis
+  Build --> Hash
+  Build --> Render
+  Render -->|"prompt evidence"| LLM["one-shot LLM call"]
+  LLM -->|"candidate text"| Validate
+  Validate -->|"fail (mechanical)"| Salvage
+  Salvage --> Clip
+  Salvage --> Validate
+  Validate -->|"pass"| Disk
+  Disk --> Parse
+  Parse --> Quickstart
+  Parse --> Readme

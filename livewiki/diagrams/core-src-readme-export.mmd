@@ -1,0 +1,23 @@
+graph TD
+  exportReadme["exportReadme (orchestrator)"]
+  buildReadme["buildReadme"]
+  applyReadme["applyReadme"]
+  readWikiPage["readWikiPage"]
+  extractDigests["extractDigests"]
+  extractHubLinks["extractHubLinks"]
+  synthesizePurpose["synthesizePurposeFromDigests"]
+  safeIo["safe-io (allowReadme)"]
+  wikiFiles["livewiki/ quickstart + flows/topics hubs"]
+  readmeFile["README.md"]
+
+  exportReadme --> buildReadme
+  exportReadme --> applyReadme
+  exportReadme --> safeIo
+  exportReadme --> readmeFile
+  buildReadme --> readWikiPage
+  buildReadme --> extractDigests
+  buildReadme --> extractHubLinks
+  buildReadme --> synthesizePurpose
+  readWikiPage --> safeIo
+  readWikiPage --> wikiFiles
+  safeIo --> readmeFile

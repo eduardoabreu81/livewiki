@@ -1,0 +1,7 @@
+flowchart LR
+  Config[".livewiki/config.json<br/>pricing override"] --> Lookup
+  Table["PRICING_TABLE<br/>(built-in)"] --> Lookup
+  Lookup["lookupPricing(model, override)"] --> Cost
+  Cost["calculateCostUsd(in, out, model, override)"] --> Format
+  Format["formatCost(cost, model)"] --> Report["batch report line"]
+  RefDate["PRICING_REFERENCE_DATE"] -. stamps .-> Lookup

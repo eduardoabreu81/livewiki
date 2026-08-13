@@ -1,0 +1,13 @@
+flowchart LR
+    bin["livewiki-mcp bin (index.ts)"]
+    cli["livewiki serve (CLI)"]
+    stdio["stdio.ts\nstartMcpStdioServer"]
+    serverFactory["server.ts\ncreateServer"]
+    transport["StdioServerTransport"]
+    mcp["McpServer (returned)"]
+    bin --> stdio
+    cli --> stdio
+    stdio --> serverFactory
+    serverFactory --> mcp
+    stdio --> transport
+    transport --> mcp

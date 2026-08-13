@@ -1,0 +1,16 @@
+graph TD
+  subgraph community["packages/core/src/community.ts"]
+    detect["detectFileCommunities"]
+    compare["comparePartitions"]
+    report["CommunityCrossCheckReport"]
+  end
+  subgraph inputs["Inputs"]
+    edges["ResolvedImportEdge[]"]
+    paths["filePaths: string[]"]
+    modules["Module[] (stage-2 partition)"]
+  end
+  edges --> detect
+  paths --> detect
+  detect -->|"Map<path, communityId>"| compare
+  modules --> compare
+  compare --> report

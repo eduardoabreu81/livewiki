@@ -1,7 +1,4 @@
 graph LR
-  _claude[".claude"]
-  _claude_settings_local_json[".claude/settings.local.json"]
-  _claude --> _claude_settings_local_json
   _github[".github"]
   _github_workflows[".github/workflows"]
   _github --> _github_workflows
@@ -17,12 +14,18 @@ graph LR
   docs --> docs_ROADMAP_md
   docs_plans["docs/plans"]
   docs --> docs_plans
+  docs_plans_2026_08_04_semantic_page_slugs_md["docs/plans/2026-08-04-semantic-page-slugs.md"]
+  docs_plans --> docs_plans_2026_08_04_semantic_page_slugs_md
   docs_plans_2026_08_04_test_role_classification_md["docs/plans/2026-08-04-test-role-classification.md"]
   docs_plans --> docs_plans_2026_08_04_test_role_classification_md
+  docs_plans_2026_08_07_real_repository_page_units_md["docs/plans/2026-08-07-real-repository-page-units.md"]
+  docs_plans --> docs_plans_2026_08_07_real_repository_page_units_md
   package_json["package.json"]
   packages["packages"]
   packages_cli["packages/cli"]
   packages --> packages_cli
+  packages_cli_README_md["packages/cli/README.md"]
+  packages_cli --> packages_cli_README_md
   packages_cli_package_json["packages/cli/package.json"]
   packages_cli --> packages_cli_package_json
   packages_cli_scripts["packages/cli/scripts"]
@@ -51,6 +54,8 @@ graph LR
   packages_cli_src --> packages_cli_src_cli_e2e_test_ts
   packages_cli_src_cli_export_e2e_test_ts["packages/cli/src/cli-export-e2e.test.ts"]
   packages_cli_src --> packages_cli_src_cli_export_e2e_test_ts
+  packages_cli_src_cli_serve_e2e_test_ts["packages/cli/src/cli-serve-e2e.test.ts"]
+  packages_cli_src --> packages_cli_src_cli_serve_e2e_test_ts
   packages_cli_src_cli_view_e2e_test_ts["packages/cli/src/cli-view-e2e.test.ts"]
   packages_cli_src --> packages_cli_src_cli_view_e2e_test_ts
   packages_cli_src_cli_test_ts["packages/cli/src/cli.test.ts"]
@@ -75,8 +80,6 @@ graph LR
   packages_cli_src_commands --> packages_cli_src_commands_serve_ts
   packages_cli_src_commands_status_ts["packages/cli/src/commands/status.ts"]
   packages_cli_src_commands --> packages_cli_src_commands_status_ts
-  packages_cli_src_commands_stub_ts["packages/cli/src/commands/stub.ts"]
-  packages_cli_src_commands --> packages_cli_src_commands_stub_ts
   packages_cli_src_commands_update_ts["packages/cli/src/commands/update.ts"]
   packages_cli_src_commands --> packages_cli_src_commands_update_ts
   packages_cli_src_commands_verify_ts["packages/cli/src/commands/verify.ts"]
@@ -111,6 +114,8 @@ graph LR
   packages_cli --> packages_cli_vitest_config_ts
   packages_core["packages/core"]
   packages --> packages_core
+  packages_core_README_md["packages/core/README.md"]
+  packages_core --> packages_core_README_md
   packages_core_package_json["packages/core/package.json"]
   packages_core --> packages_core_package_json
   packages_core_src["packages/core/src"]
@@ -203,6 +208,10 @@ graph LR
   packages_core_src --> packages_core_src_export_test_ts
   packages_core_src_export_ts["packages/core/src/export.ts"]
   packages_core_src --> packages_core_src_export_ts
+  packages_core_src_file_page_plan_test_ts["packages/core/src/file-page-plan.test.ts"]
+  packages_core_src --> packages_core_src_file_page_plan_test_ts
+  packages_core_src_file_page_plan_ts["packages/core/src/file-page-plan.ts"]
+  packages_core_src --> packages_core_src_file_page_plan_ts
   packages_core_src_flow_diagram_test_ts["packages/core/src/flow-diagram.test.ts"]
   packages_core_src --> packages_core_src_flow_diagram_test_ts
   packages_core_src_flow_diagram_ts["packages/core/src/flow-diagram.ts"]
@@ -211,6 +220,10 @@ graph LR
   packages_core_src --> packages_core_src_flows_test_ts
   packages_core_src_flows_ts["packages/core/src/flows.ts"]
   packages_core_src --> packages_core_src_flows_ts
+  packages_core_src_folder_page_test_ts["packages/core/src/folder-page.test.ts"]
+  packages_core_src --> packages_core_src_folder_page_test_ts
+  packages_core_src_folder_page_ts["packages/core/src/folder-page.ts"]
+  packages_core_src --> packages_core_src_folder_page_ts
   packages_core_src_frontmatter_test_ts["packages/core/src/frontmatter.test.ts"]
   packages_core_src --> packages_core_src_frontmatter_test_ts
   packages_core_src_frontmatter_ts["packages/core/src/frontmatter.ts"]
@@ -297,6 +310,10 @@ graph LR
   packages_core_src --> packages_core_src_output_budget_test_ts
   packages_core_src_output_budget_ts["packages/core/src/output-budget.ts"]
   packages_core_src --> packages_core_src_output_budget_ts
+  packages_core_src_page_units_test_ts["packages/core/src/page-units.test.ts"]
+  packages_core_src --> packages_core_src_page_units_test_ts
+  packages_core_src_page_units_ts["packages/core/src/page-units.ts"]
+  packages_core_src --> packages_core_src_page_units_ts
   packages_core_src_parser_test_ts["packages/core/src/parser.test.ts"]
   packages_core_src --> packages_core_src_parser_test_ts
   packages_core_src_parser_ts["packages/core/src/parser.ts"]
@@ -371,6 +388,10 @@ graph LR
   packages_core_src --> packages_core_src_view_activity_test_ts
   packages_core_src_view_activity_ts["packages/core/src/view-activity.ts"]
   packages_core_src --> packages_core_src_view_activity_ts
+  packages_core_src_view_chrome_test_ts["packages/core/src/view-chrome.test.ts"]
+  packages_core_src --> packages_core_src_view_chrome_test_ts
+  packages_core_src_view_chrome_ts["packages/core/src/view-chrome.ts"]
+  packages_core_src --> packages_core_src_view_chrome_ts
   packages_core_src_view_test_ts["packages/core/src/view.test.ts"]
   packages_core_src --> packages_core_src_view_test_ts
   packages_core_src_view_ts["packages/core/src/view.ts"]
@@ -455,6 +476,8 @@ graph LR
   packages_core --> packages_core_vitest_config_ts
   packages_mcp["packages/mcp"]
   packages --> packages_mcp
+  packages_mcp_README_md["packages/mcp/README.md"]
+  packages_mcp --> packages_mcp_README_md
   packages_mcp_package_json["packages/mcp/package.json"]
   packages_mcp --> packages_mcp_package_json
   packages_mcp_scripts["packages/mcp/scripts"]
@@ -475,12 +498,16 @@ graph LR
   packages_mcp_src --> packages_mcp_src_server_test_ts
   packages_mcp_src_server_ts["packages/mcp/src/server.ts"]
   packages_mcp_src --> packages_mcp_src_server_ts
+  packages_mcp_src_stdio_ts["packages/mcp/src/stdio.ts"]
+  packages_mcp_src --> packages_mcp_src_stdio_ts
   packages_mcp_tsconfig_json["packages/mcp/tsconfig.json"]
   packages_mcp --> packages_mcp_tsconfig_json
   packages_mcp_vitest_config_ts["packages/mcp/vitest.config.ts"]
   packages_mcp --> packages_mcp_vitest_config_ts
   pnpm_workspace_yaml["pnpm-workspace.yaml"]
   scripts["scripts"]
+  scripts_clean_dist_mjs["scripts/clean-dist.mjs"]
+  scripts --> scripts_clean_dist_mjs
   scripts_offline_inventory_t0_mjs["scripts/offline-inventory-t0.mjs"]
   scripts --> scripts_offline_inventory_t0_mjs
   tsconfig_base_json["tsconfig.base.json"]

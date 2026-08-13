@@ -1,0 +1,50 @@
+graph TD
+  classDef hub fill:#eef,stroke:#446
+  classDef gen fill:#efe,stroke:#464
+  classDef disk fill:#fee,stroke:#644
+  classDef owner fill:#fef,stroke:#646
+
+  Orientation[orientation.ts<br/>RepoOrientation]:::hub
+  Modules[modules.ts<br/>Module + classifyModuleRole]:::hub
+  Frontmatter[frontmatter.ts<br/>parseFrontmatter]:::hub
+  SafeIO[safe-io.ts]:::hub
+  Mask[markdown-mask.ts]:::hub
+  Disk[(wiki pages on disk)]:::disk
+
+  Navigation[navigation.ts]:::hub
+  LoadMod[loadModulePresentations<br/>loadFlowPresentations<br/>loadTopicPresentations]:::gen
+  Digest[loadModuleDigests<br/>parseModuleOpening<br/>extractModuleResponsibility]:::gen
+  Build[buildOrientationBlock<br/>buildModuleDigestBlock<br/>buildNavigateBlock<br/>groupTasksModules]:::gen
+  Titles[buildDisplayTitleFallbacks]:::gen
+  Pages[generateQuickstart<br/>generateTasksPage<br/>generateAuxiliaryIndex<br/>generateFlowsIndex<br/>generateTopicsIndex]:::gen
+  Sync[syncTopicsIndexHub<br/>syncFlowsIndexHub<br/>syncAuxiliaryIndexHub<br/>ensureTopicsIndexScaffold]:::gen
+  Update[updateModuleNavigateBlocks<br/>updateFlowTopicLinks]:::gen
+  OwnerGate[readHubDeclaredOwner]:::owner
+  Coverage[moduleSourceExceedsBudget<br/>sumModuleSourceBytes]:::gen
+
+  Disk --> LoadMod
+  Orientation --> Digest
+  Modules --> Digest
+  Modules --> Build
+  Modules --> Titles
+  Modules --> Update
+  Modules --> Coverage
+  Mask --> Digest
+  Frontmatter --> LoadMod
+  Frontmatter --> OwnerGate
+  SafeIO --> LoadMod
+  SafeIO --> Sync
+  SafeIO --> Update
+  SafeIO --> Coverage
+  Titles --> LoadMod
+  Digest --> Build
+  Build --> Pages
+  LoadMod --> Pages
+  Build --> Update
+  LoadMod --> Update
+  LoadMod --> Sync
+  Coverage --> Update
+  OwnerGate --> Sync
+  OwnerGate --> Update
+  Pages --> Sync
+  Update --> Disk

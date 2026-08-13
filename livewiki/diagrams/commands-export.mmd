@@ -1,0 +1,14 @@
+flowchart LR
+  registerExport["registerExport<br/>(commands/export.ts)"] --> validateTarget["validateTarget<br/>(core/export)"]
+  registerExport --> runReadmeExport["runReadmeExport<br/>(commands/export.ts)"]
+  runReadmeExport --> exportReadme["exportReadme<br/>(core/readme-export)"]
+  registerExport --> exportWiki["exportWiki<br/>(core/export)"]
+  registerExport --> exportErrorToResult["exportErrorToResult<br/>(commands/export.ts)"]
+  exportErrorToResult --> ExportError["ExportError<br/>(core/export)"]
+  registerExport --> emit["emit<br/>(commands/export.ts)"]
+  runReadmeExport --> emitReadme["emitReadme<br/>(commands/export.ts)"]
+  resolveRepoRoot["resolveRepoRoot<br/>(cli.ts)"] --> registerExport
+  coreExport["@livewiki/core/export"] --> validateTarget
+  coreExport --> exportWiki
+  coreExport --> ExportError
+  coreReadme["@livewiki/core/readme-export"] --> exportReadme

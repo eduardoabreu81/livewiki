@@ -1,0 +1,41 @@
+flowchart LR
+  subgraph Inputs
+    IMP["imports.ts\nExtractedImport[]"]
+    WF["loadWorkspacePackages\n→ WorkspacePackage[]"]
+    TS["loadEffectiveTsconfig\n→ EffectiveTsconfigs"]
+    GO["loadGoModulePath\n→ goModulePath"]
+    RS["loadRustCrateName\n→ rustCrateName"]
+    KF["knownFiles\nReadonlySet<string>"]
+  end
+  RESOLVE["resolveImportEdges"]
+  subgraph Dispatch
+    D_TS["resolveSpecifier\n+ resolvePackageTarget\n+ resolveExportsValue\n+ mapCompiledTargetToSource\n+ sourceCandidatesForCompiled"]
+    D_PY["resolvePythonSpecifier\n+ pythonSourceBaseDir\n+ resolvePythonModulePath"]
+    D_GO["resolveGoSpecifier"]
+    D_RS["resolveRustSpecifier\n+ rustModuleDir\n+ rustCrateSourceRoot\n+ resolveRustModulePath\n+ joinRustPath"]
+    D_JV["resolveJavaSpecifier\n+ directJavaFilesOf"]
+  end
+  subgraph Helpers
+    H_REL["resolveRelativeImport\n(modules.ts)"]
+    H_FS["readWorkspaceGlobs\n+ parsePnpmWorkspaceGlobs\n+ expandWorkspaceGlob\n+ hasPackageManifest\n+ readPackageManifest\n+ readTextIfExists"]
+    H_MISC["isPlainObject\n+ stringEntries\n+ stripLeadingDotSlash\n+ normalizeDirOption"]
+  end
+  OUT["ResolvedImportEdge[]\n(sorted, deduped)"]
+  IMP --> RESOLVE
+  WF --> RESOLVE
+  TS --> RESOLVE
+  GO --> RESOLVE
+  RS --> RESOLVE
+  KF --> RESOLVE
+  RESOLVE --> D_TS
+  RESOLVE --> D_PY
+  RESOLVE --> D_GO
+  RESOLVE --> D_RS
+  RESOLVE --> D_JV
+  D_TS --> H_REL
+  H_FS --> WF
+  D_TS --> H_MISC
+  D_PY --> H_MISC
+  D_RS --> H_MISC
+  D_JV --> H_MISC
+  RESOLVE --> OUT

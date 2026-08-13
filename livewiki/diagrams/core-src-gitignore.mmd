@@ -1,0 +1,11 @@
+flowchart LR
+  caller["init command"] --> ensure["ensureGitignoreEntries"]
+  ensure --> read["readGitignore"]
+  ensure --> extract["extractManagedBlock"]
+  ensure --> merge["mergeBlockLines"]
+  ensure --> render["renderBlock"]
+  ensure --> replace["replaceManagedBlock"]
+  extract --> replace
+  render --> replace
+  replace --> fs[("node:fs/promises")]
+  read --> fs

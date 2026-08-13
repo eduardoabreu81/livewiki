@@ -1,0 +1,25 @@
+graph TD
+  classDef ext fill:#eef,stroke:#88a;
+  classDef fn fill:#efe,stroke:#8a8;
+  classDef data fill:#fee,stroke:#a88;
+
+  Orchestrator["Stage-4 orchestrator"]:::ext
+  Classifier["classifyModuleRole"]:::ext
+  Symbols["Indexed symbol rows + closed key list"]:::data
+
+  Gen["generateAuxiliaryModulePage"]:::fn
+  How["howItFitsParagraph"]:::fn
+  Ref["referenceParagraph"]:::fn
+  Disambig["disambiguateHeadings"]:::fn
+  Human["humanizeModuleId"]:::fn
+
+  Page["Auxiliary Markdown page"]:::data
+
+  Orchestrator --> Gen
+  Orchestrator --> Symbols
+  Classifier --> Orchestrator
+  Gen --> How
+  Gen --> Ref
+  Gen --> Disambig
+  Gen --> Human
+  Gen --> Page

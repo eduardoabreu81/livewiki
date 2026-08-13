@@ -1,0 +1,12 @@
+flowchart LR
+  CLI["packages/cli/src/commands/init.ts"]
+  Core["@livewiki/core/init (runInit)"]
+  Output["../output.js (emit)"]
+  Repo["../cli.js (resolveRepoRoot)"]
+  Commander["commander (program)"]
+
+  CLI -- "registers 'init' subcommand" --> Commander
+  CLI -- "delegates work to" --> Core
+  CLI -- "resolveRepoRoot" --> Repo
+  CLI -- "json/human dispatch" --> Output
+  Core -- "InitPlanReport / filesWritten / batchSummary" --> CLI

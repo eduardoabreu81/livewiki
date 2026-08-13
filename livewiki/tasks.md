@@ -5,45 +5,44 @@ owner: generated
 
 # Tasks
 
-Choose an end-to-end behavior or a product area. Auxiliary repository roles are available through one separate inventory.
+Choose an end-to-end behavior or a product area. Tests, fixtures, tooling, and documentation pages live in one separate inventory.
+
+## Concept topics
+
+### [Testing](topics/testing-f41eeea7.md)
 
 ## End-to-end behavior
 
-### [CLI command surface to core pipeline wiring](flows/cli-src-to-core-src-02.md)
+### [From CLI command to LLM provider — the request path livewiki walks](flows/cli-src-to-llm.md)
+
+### [MCP server source entry to LLM client sink](flows/mcp-src-to-llm.md)
 
 ## Implementation reference
 
-### Packages core source
+### [packages/cli/src/commands](commands/index.md)
 
-- [core indexing, imports, flows, and frontmatter](core-src-04.md)
-- [Safe I/O, section guarding, status reporting, and symbol extraction](core-src-09.md)
-- [Stage 4 artifact normalization, validation, and auxiliary page assembly](core-src-01.md)
-- [core topics, understanding, update metrics, update, and verify](core-src-10.md)
-- [Init, install, manifest, markdown-mask, and mermaid-validator support](core-src-05.md)
-- ["Core Source 03: Config, Index, Export, Diagrams, Diff Preview"](core-src-03.md)
-- [core-src-06 — module identification, splitting, and navigation metadata](core-src-06.md)
-- [Core prompt templates, repair contract, README export, and risk-weighted debt ranking](core-src-08.md)
-- ["Core source utilities for orientation, output budgeting, parsing, pointer blocks, presets, and pricing"](core-src-07.md)
-- [Batch orchestration, status reporting, and graph analysis core](core-src-02.md)
-- [LLM client and provider adapters](llm.md)
-- [Viewer build pipeline and Activity dashboard](core-src-11.md)
-- [CLI command registry for the livewiki workspace](commands.md)
-- [livewiki CLI entrypoint and output formatting](cli-src.md)
-- ["@livewiki/mcp stdio server and search index"](mcp-src.md)
-- [claude-code settings.local.json template](claude-code.md)
-- ["@livewiki/cli — livewiki command-line interface"](cli.md)
-- [Core Engine Package](core.md)
-- [document-as-you-go skill](document-as-you-go.md)
-- [livewiki docs-debt GitHub Actions workflow](github-actions.md)
-- [livewiki MCP server package](mcp.md)
-- [CLI hook and CI templates](templates.md)
+### [packages/mcp/src](mcp-src/index.md)
 
-### Other modules
+### [packages/core/src/llm](llm/index.md)
 
-- [Claude tooling local permissions](.claude.md)
-- [livewiki repository root](root.md)
-- [GitHub Actions workflows for livewiki CI and docs-debt gating](workflows.md)
+### [packages/cli/templates/claude-code](claude-code/index.md)
+
+### [packages/cli](cli/index.md)
+
+### [packages/core](core/index.md)
+
+### [packages/cli/skills/document-as-you-go](document-as-you-go/index.md)
+
+### [packages/cli/templates/github-actions](github-actions/index.md)
+
+### [packages/mcp](mcp/index.md)
+
+### [(repository root)](root/index.md)
+
+### [packages/cli/templates](templates/index.md)
+
+### [.github/workflows](workflows/index.md)
 
 ## Auxiliary work
 
-Use the complete [Auxiliary modules](auxiliary/index.md) inventory for tests, fixtures, tooling, benchmarks, and repository documentation.
+Use the complete [Auxiliary areas](auxiliary/index.md) inventory for tests, fixtures, tooling, benchmarks, and repository documentation.

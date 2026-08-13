@@ -1,0 +1,6 @@
+graph TD
+  RationaleEvidence[packages/core/src/rationale-evidence.ts]
+  RationaleEvidence --> BatchGen[packages/core/src/batch.ts — buildModuleDocContext / buildTopicDocContext]
+  RationaleEvidence --> TopicPlanner[packages/core/src/topics.ts — planner estimate]
+  BatchGen -->|assembles rationale block| OutputDoc[generated module/topic doc]
+  TopicPlanner -->|sizes per-candidate estimate| PlannerOutput[planner accounting]

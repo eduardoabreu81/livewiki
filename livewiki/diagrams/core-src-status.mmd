@@ -1,0 +1,27 @@
+graph LR
+  subgraph status["packages/core/src/status.ts"]
+    run["run"]
+    collect["collect"]
+    applyFreshness["applyFreshness"]
+    applyRiskRanking["applyRiskRanking"]
+    collectDegradedPages["collectDegradedPages"]
+    anchoredLangs["anchoredLangs"]
+    formatHuman["formatHuman"]
+    formatSnapshotAge["formatSnapshotAge"]
+    formatLocalTimestamp["formatLocalTimestamp"]
+    formatActivityEvent["formatActivityEvent"]
+    formatDuration["formatDuration"]
+  end
+  run --> collect
+  run --> applyFreshness
+  run --> applyRiskRanking
+  run --> collectDegradedPages
+  collect --> anchoredLangs
+  applyRiskRanking --> anchoredLangs
+  formatHuman --> formatSnapshotAge
+  formatHuman --> formatLocalTimestamp
+  formatHuman --> formatActivityEvent
+  formatActivityEvent --> formatDuration
+  collect --> DB[(".livewiki/index.db")]
+  applyFreshness --> DB
+  applyRiskRanking --> DB

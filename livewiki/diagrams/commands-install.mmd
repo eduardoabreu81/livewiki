@@ -1,0 +1,16 @@
+flowchart LR
+  cliCli["packages/cli/src/cli.ts (resolveRepoRoot)"] --> registerInstall
+  installTs["packages/cli/src/commands/install.ts"]
+  registerInstall["registerInstall(program)"] --> detectAgents["detectAgents (core)"]
+  registerInstall --> readSources["readSources"]
+  registerInstall --> planInstall["planInstall (core)"]
+  registerInstall --> promptYesNo["promptYesNo"]
+  registerInstall --> applyInstall["applyInstall (core)"]
+  registerInstall --> formatDetectionHuman["formatDetectionHuman"]
+  registerInstall --> formatPlanHuman["formatPlanHuman"]
+  registerInstall --> formatResultsHuman["formatResultsHuman"]
+  registerInstall --> formatResultJson["formatResultJson"]
+  registerInstall --> emit["emit / emitHuman (../output.js)"]
+  readSources --> pkgFs["templates/ + skills/ on disk"]
+  planInstall --> sources["InstallSources"]
+  applyInstall --> planOut["InstallAction[]"]

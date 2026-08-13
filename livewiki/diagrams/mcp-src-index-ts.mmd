@@ -1,0 +1,9 @@
+flowchart TD
+    A["packages/mcp/src/index.ts (entry point)"] --> B["parseArgs(argv)"]
+    A --> C["main()"]
+    B --> D["resolve --repo (default cwd)"]
+    C --> E["startMcpStdioServer({ repoRoot })"]
+    E --> F["./stdio.js (server + StdioServerTransport)"]
+    C --> G["SIGINT / SIGTERM handlers"]
+    G --> H["server.close()"]
+    A --> I["process.exit: 0 clean, 1 fatal"]

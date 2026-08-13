@@ -1,0 +1,18 @@
+graph TD
+  indexer[Indexer write transaction]
+  extract[symbols.ts / calls insert]
+  resolve["resolveCalls(db)"]
+  deriveCC["computeCallerCentrality(db)"]
+  deriveCXM["computeCrossModuleCallees(db, modules)"]
+  flows["flows.ts detectFlowCandidates"]
+  topics["topics.ts selectTopicAnchors"]
+  db[(calls table)]
+
+  indexer --> extract
+  extract --> resolve
+  resolve --> db
+  db --> deriveCC
+  db --> deriveCXM
+  modules[module paths config] --> deriveCXM
+  deriveCC --> topics
+  deriveCXM --> flows

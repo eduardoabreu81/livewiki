@@ -1,0 +1,27 @@
+graph LR
+  flows_ts["flows.ts"]
+  modules_ts["modules.ts"]
+  diagrams_ts["diagrams.ts"]
+  config_ts["config.ts"]
+  import_resolution_ts["import-resolution.ts"]
+  subgraph flows_ts
+    detect["detectFlowCandidates"]
+    signals["computeModuleSignals + matchedPatterns"]
+    build["buildCandidate + buildSeedKeyGroups"]
+    cap["capGroupsToSeedKeys"]
+    assign["assignFlowKeySections"]
+    helpers["isTestPath / isExternalSpecifier / crossesBoundary / isProperPrefix / compareLongestFirst / comparePathLex / normalizeFileMap / displayName"]
+    budget["FLOW_PER_ROOT_PATH_BUDGET / FLOW_MAX_PATH_LENGTH"]
+  end
+  flows_ts --> modules_ts
+  flows_ts --> diagrams_ts
+  flows_ts --> config_ts
+  flows_ts --> import_resolution_ts
+  detect --> budget
+  detect --> signals
+  detect --> build
+  build --> cap
+  build --> assign
+  detect --> helpers
+  build --> helpers
+  signals --> helpers

@@ -1,0 +1,9 @@
+graph TD
+  core_section_guard["section-guard.ts"]
+  core_markdown_mask["markdown-mask.ts<br/>(maskCodeSpansPreservingLength)"]
+  core_prompts["prompts.ts<br/>(ArtifactValidationError)"]
+  core_artifact["artifact.ts<br/>(slugifyHeading, masked scan)"]
+
+  core_section_guard --> core_markdown_mask
+  core_section_guard --> core_prompts
+  core_section_guard -. "must stay in sync" .- core_artifact

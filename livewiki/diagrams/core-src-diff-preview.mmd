@@ -1,0 +1,14 @@
+flowchart LR
+  subgraph caller["CLI / caller"]
+    CLI["livewiki status --diff"]
+  end
+  CLI --> PWT["previewWorkingTreeDebt"]
+  PWT --> RGD["runGitDiff<br/>(spawn git diff)"]
+  RGD --> PGO["parseGitDiffOutput"]
+  PGO --> PWT
+  PWT --> IDX["safe-io + indexer pipeline<br/>parseSource + extractSymbols"]
+  PWT --> DB["openIndex<br/>(SELECT only, read-only)"]
+  DB --> PWT
+  PWT --> FMT["formatDiffPreviewHuman"]
+  FMT --> NOTE["MOVED_SCOPE_NOTE"]
+  FMT --> CLI
