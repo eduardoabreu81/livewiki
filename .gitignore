@@ -8,6 +8,7 @@ coverage/
 *.tsbuildinfo
 # Internal project docs (agent-facing, never public)
 AGENTS.md
+AGENTS.local.md
 docs/PROJECT_LOG.md
 docs/PROJECT_CONTEXT.md
 
