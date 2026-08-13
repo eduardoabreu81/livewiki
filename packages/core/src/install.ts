@@ -16,8 +16,9 @@
  *   - Every write target is OUTSIDE the repo allowlist (home-dir agent
  *     configs), so this module deliberately does NOT go through safe-io —
  *     safe-io only knows repo-internal paths. Instead, `planInstall`
- *     computes the exact bytes of every write up front and the CLI shows
- *     them before writing (`--print` = full dry-run, zero writes).
+ *     computes every write up front. Non-sensitive actions can be rendered
+ *     exactly in dry-run output; credential content remains internal and is
+ *     redacted from apply results.
  *   - Never overwrites user content: an existing foreign git hook, an
  *     unparseable JSON config, or a different file at the skill target is
  *     a REFUSAL, not a merge attempt.
@@ -30,6 +31,7 @@
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import { insertPointer, readPointerStatus, buildPointerBlock } from "./pointer.js";
+import { credentialStorePath, readCredentialStoreSync } from "./credentials.js";
 
 // ── Registry (pure data) ────────────────────────────────────────────────────
 
@@ -575,7 +577,8 @@ export type InstallActionKind =
   | "agent-hook"
   | "skill"
   | "git-hook"
-  | "pointer";
+  | "pointer"
+  | "credentials";
 
 export type InstallActionStatus = "write" | "skip" | "refuse" | "requires-opt-in";
 
@@ -595,6 +598,10 @@ export interface InstallAction {
   content: string | null;
   /** chmod 0o755 after write (git hook). */
   executable?: boolean;
+  /** Exact POSIX file mode to enforce after writing. Ignored on Windows. */
+  mode?: number;
+  /** Result formatters must never expose content from a sensitive action. */
+  sensitive?: boolean;
 }
 
 /** Contents of the shipped templates/skill, read by the CLI (its package owns the files). */
@@ -612,6 +619,15 @@ export interface PlanInstallOptions {
   sources: InstallSources;
   /** Rule #2 opt-in: without it the pointer action is requires-opt-in. */
   writePointer?: boolean;
+}
+
+export interface PlanCredentialInstallOptions {
+  repoRoot: string;
+  home: string;
+  credential: {
+    envVar: string;
+    value: string;
+  };
 }
 
 async function readIfExists(abs: string): Promise<string | null> {
@@ -801,15 +817,45 @@ async function planPointer(
   };
 }
 
+function planCredentialStore(
+  home: string,
+  credential: PlanCredentialInstallOptions["credential"],
+): InstallAction {
+  if (credential.envVar.trim() === "" || credential.value.length === 0) {
+    throw new Error("Credential env-var name and value must be non-empty.");
+  }
+  const targetPath = credentialStorePath(home);
+  const existing = readCredentialStoreSync(home) ?? {};
+  return {
+    kind: "credentials",
+    targetPath,
+    status: "write",
+    content: JSON.stringify(
+      { ...existing, [credential.envVar]: credential.value },
+      null,
+      2,
+    ) + "\n",
+    mode: 0o600,
+    sensitive: true,
+  };
+}
+
 /**
  * Computes the full install plan: per-agent MCP config merge, claude-code
  * Stop hook, shared skill copy (deduped), repo-level git hook and opt-in
  * pointer. Each writable action carries the EXACT bytes that
  * `applyInstall` will write — dry-run and write share one code path.
  */
-export async function planInstall(opts: PlanInstallOptions): Promise<InstallAction[]> {
+export function planInstall(opts: PlanInstallOptions): Promise<InstallAction[]>;
+export function planInstall(opts: PlanCredentialInstallOptions): Promise<InstallAction[]>;
+export async function planInstall(
+  opts: PlanInstallOptions | PlanCredentialInstallOptions,
+): Promise<InstallAction[]> {
   const home = nodePath.resolve(opts.home);
   const repoRoot = nodePath.resolve(opts.repoRoot);
+  if ("credential" in opts) {
+    return [planCredentialStore(home, opts.credential)];
+  }
   const actions: InstallAction[] = [];
 
   for (const id of opts.agents) {
@@ -848,29 +894,36 @@ export async function applyInstall(
 ): Promise<InstallActionResult[]> {
   const results: InstallActionResult[] = [];
   for (const action of actions) {
+    const resultAction = action.sensitive ? { ...action, content: null } : action;
     if (action.status !== "write") {
-      results.push({ action, applied: false, ...(action.reason !== undefined ? { detail: action.reason } : {}) });
+      results.push({ action: resultAction, applied: false, ...(action.reason !== undefined ? { detail: action.reason } : {}) });
       continue;
     }
     try {
       if (action.kind === "pointer") {
         const res = await insertPointer(repoRoot);
-        results.push({ action, applied: res.action !== "unchanged", detail: `pointer ${res.action} in ${res.file}` });
+        results.push({ action: resultAction, applied: res.action !== "unchanged", detail: `pointer ${res.action} in ${res.file}` });
         continue;
       }
       if (action.content === null) {
-        results.push({ action, applied: false, detail: "internal: writable action without content" });
+        results.push({ action: resultAction, applied: false, detail: "internal: writable action without content" });
         continue;
       }
       await nodeFs.mkdir(nodePath.dirname(action.targetPath), { recursive: true });
-      await nodeFs.writeFile(action.targetPath, action.content, "utf8");
+      await nodeFs.writeFile(action.targetPath, action.content, {
+        encoding: "utf8",
+        ...(action.mode !== undefined ? { mode: action.mode } : {}),
+      });
+      if (action.mode !== undefined && process.platform !== "win32") {
+        await nodeFs.chmod(action.targetPath, action.mode);
+      }
       if (action.executable) {
         // Best-effort on Windows (no-op semantics there); required on Unix.
         await nodeFs.chmod(action.targetPath, 0o755).catch(() => undefined);
       }
-      results.push({ action, applied: true, detail: `wrote ${action.targetPath}` });
+      results.push({ action: resultAction, applied: true, detail: `wrote ${action.targetPath}` });
     } catch (err) {
-      results.push({ action, applied: false, detail: `error: ${(err as Error).message}` });
+      results.push({ action: resultAction, applied: false, detail: `error: ${(err as Error).message}` });
     }
   }
   return results;

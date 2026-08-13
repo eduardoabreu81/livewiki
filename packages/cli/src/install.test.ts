@@ -149,4 +149,18 @@ describe("livewiki install non-interactive safety", () => {
     await runCli(["install", "--repo", repoRoot, "--agents", "kimi", "--yes"]);
     expect(process.exitCode ?? 0).toBe(0);
   });
+
+  it("points to livewiki config when no batch executor is configured", async () => {
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".git", "hooks"), { recursive: true });
+    const { stdout } = await runCli([
+      "install",
+      "--repo",
+      repoRoot,
+      "--agents",
+      "kimi",
+      "--yes",
+    ]);
+    expect(process.exitCode ?? 0).toBe(0);
+    expect(stdout).toContain("livewiki config");
+  });
 });

@@ -4,14 +4,13 @@
  * SPEC §"Layout gerado no repo-alvo" (commit b272907): `.livewiki/config.json`
  * guarda provider, linguagens, ignores, language e (Fase 3) pricing override.
  *
- * **Sem modelo default hardcoded** (commit 3894f6e — API key só via env var;
- * sem modelo default). Se `provider` ou `model` estiverem ausentes quando o
- * batch LLM rodar, `validateConfigForBatch()` lança `MissingProviderConfigError`
- * com mensagem clara apontando pro `.livewiki/config.json`.
+ * **No hard-coded default model** (commit 3894f6e). If `provider` or `model`
+ * is absent when an LLM batch starts, `validateConfigForBatch()` throws
+ * `MissingProviderConfigError` with a clear route to `livewiki config`.
  *
- * **API key NUNCA mora aqui** — fica em `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
- * (env var). Esta config pode versionar sem expor credencial. Coberto por
- * `key-leak.test.ts` no step 3.
+ * **API keys NEVER live here**. They resolve from the process environment or
+ * the global credential store, so this repo-local config remains safe to
+ * version. Covered by `key-leak.test.ts`.
  */
 
 import * as nodePath from "node:path";
@@ -390,24 +389,18 @@ export const CONFIG_DEFAULTS = {
 } as const;
 
 /**
- * Erro lançado quando o batch é disparado sem provider/modelo configurado.
- * Mensagem aponta pro `.livewiki/config.json` E cita um modelo popular só
- * como EXEMPLO (não como fallback silencioso — `livewiki` NUNCA escolhe
- * modelo sem o usuário declarar explicitamente).
+ * Error raised when a batch starts without an explicitly configured provider
+ * and model. The message routes the user to the interactive configuration
+ * flow; livewiki never chooses a model silently.
  */
 export class MissingProviderConfigError extends Error {
   public readonly repoRoot: string;
   constructor(repoRoot: string, missingFields: Array<"provider" | "model">) {
-    const example =
-      `Configure in .livewiki/config.json:\n` +
-      `  {\n` +
-      `    "provider": "anthropic",   // or "openai-compat"\n` +
-      `    "model": "claude-sonnet-5", // example only — pick what you want\n` +
-      `  }\n` +
-      `API key stays in env: ANTHROPIC_API_KEY or OPENAI_API_KEY.`;
     super(
       `Cannot run LLM batch: missing ${missingFields.join(" and ")} in config. ` +
-        `Repo: ${repoRoot}. ${example}`,
+        `Repo: ${repoRoot}. For interactive setup, run livewiki config. ` +
+        `For headless use, set preset and model in .livewiki/config.json, then set ` +
+        `the preset credential environment variable (for example ANTHROPIC_API_KEY).`,
     );
     this.name = "MissingProviderConfigError";
     this.repoRoot = repoRoot;

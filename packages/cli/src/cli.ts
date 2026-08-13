@@ -12,6 +12,7 @@ import { registerExport } from "./commands/export.js";
 import { registerView } from "./commands/view.js";
 import { registerPointer } from "./commands/pointer.js";
 import { registerInstall } from "./commands/install.js";
+import { registerConfig } from "./commands/config.js";
 
 /**
  * Version read from @livewiki/cli's package.json. Synchronous — the file is
@@ -62,6 +63,7 @@ export function createProgram(): Command {
   registerView(program);
   registerPointer(program);
   registerInstall(program);
+  registerConfig(program);
 
   return program;
 }

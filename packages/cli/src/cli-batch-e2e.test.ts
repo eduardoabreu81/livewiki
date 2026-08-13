@@ -941,15 +941,15 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
 
   it("init --batch SEM config LLM falha com mensagem clara apontando pro config", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
-    // SEM .livewiki/config.json E SEM env var
+    // No .livewiki/config.json and no environment credential.
     const prevKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
     expect(r.status).toBe(1); // erro
-    // Mensagem aponta pro config.json E cita claude-sonnet-5 como EXEMPLO (não default silencioso)
+    // The remediation points to the interactive configuration flow.
     expect(r.stderr).toMatch(/Cannot run LLM batch/);
     expect(r.stderr).toMatch(/missing provider/);
-    expect(r.stderr).toMatch(/claude-sonnet-5.*example only/);
+    expect(r.stderr).toMatch(/livewiki config/);
     expect(r.stderr).toMatch(/ANTHROPIC_API_KEY/);
   });
 

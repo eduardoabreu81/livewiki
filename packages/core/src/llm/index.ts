@@ -12,8 +12,9 @@
  * (delegando pro config.ts). Se provider ou model ausentes, lança
  * MissingProviderConfigError com mensagem clara.
  *
- * **API key SÓ via env var**: `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
- * NUNCA lida de config.json, checkpoint_json, logs ou mensagens de erro.
+ * **Credential resolution**: the process environment takes precedence over
+ * the global credential store. Keys are NEVER read from config.json,
+ * checkpoint_json, logs, or error messages.
  */
 
 import type { LivewikiConfig, LlmProvider } from "../config.js";
@@ -26,6 +27,7 @@ import {
 import type { GenerateRequest, GenerateResult } from "./types.js";
 import { AnthropicAdapter } from "./anthropic.js";
 import { OpenAiCompatAdapter } from "./openai-compat.js";
+import { resolveCredentialSync } from "../credentials.js";
 
 /** Interface pública do client. Só o que `batch.ts` (e outros) precisam. */
 export interface LlmClient {
@@ -35,7 +37,7 @@ export interface LlmClient {
 }
 
 /**
- * Cria o LLM client a partir do config validado + env var da API key.
+ * Creates the LLM client from validated repo config and a resolved credential.
  *
  * Resolução do provider:
  *   1. config.preset (Fase 5 step 5) → expande em adapter/baseUrl/envVar/pricing
@@ -49,7 +51,7 @@ export interface LlmClient {
  * Throw chain:
  *   - config.provider/preset ausente (validateConfigForBatch)
  *   - config.model ausente (validateConfigForBatch)
- *   - env var da API key ausente (resolveProviderFromConfig + MissingApiKeyError)
+ *   - credential absent from both environment and global store
  */
 export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient {
   // Validates provider/model and timeoutMs (even when not from loadConfig).
@@ -60,8 +62,8 @@ export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmCl
   // baseUrl: prefer config explícita, senão preset baseUrl, senão default por provider
   const baseUrl = resolved.baseUrl || resolveBaseUrl(config);
 
-  // Lê a key da env var certa (vem do preset OU do adapter legacy)
-  const apiKey = process.env[resolved.envVar];
+  const credential = resolveCredentialSync(resolved.envVar).value;
+  const apiKey = credential ?? (resolved.credentialOptional ? "livewiki-local" : null);
   if (!apiKey) {
     throw new MissingApiKeyError(resolved.adapter, resolved.envVar);
   }
@@ -86,8 +88,8 @@ export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmCl
 }
 
 /**
- * Erro lançado quando env var da API key está ausente.
- * Mensagem NUNCA menciona o valor (não tem como vazar o que não está lá).
+ * Error raised when a remote provider credential is unavailable.
+ * The message names only the environment-variable slot, never a value.
  */
 export class MissingApiKeyError extends Error {
   public readonly provider: LlmProvider;
@@ -95,7 +97,7 @@ export class MissingApiKeyError extends Error {
   constructor(provider: LlmProvider, envVar: string) {
     super(
       `Missing API key for provider "${provider}". ` +
-        `Set env var ${envVar} before running the batch. ` +
+        `Run livewiki config or set env var ${envVar} before running the batch. ` +
         `Keys never live in config.json, checkpoint_json, logs, or error messages.`,
     );
     this.name = "MissingApiKeyError";

@@ -126,6 +126,12 @@ describe("preset.openrouter / deepseek / kimi / gemini / nvidia", () => {
 });
 
 describe("preset.ollama / lmstudio (locais)", () => {
+  it("marks optional credentials as preset data, not name-based behavior", () => {
+    expect(PRESET_TABLE.ollama.credentialOptional).toBe(true);
+    expect(PRESET_TABLE.lmstudio.credentialOptional).toBe(true);
+    expect(PRESET_TABLE.anthropic.credentialOptional).not.toBe(true);
+  });
+
   it("usam adapter openai-compat", () => {
     expect(PRESET_TABLE.ollama.adapter).toBe("openai-compat");
     expect(PRESET_TABLE.lmstudio.adapter).toBe("openai-compat");
@@ -193,6 +199,12 @@ describe("resolveProviderConfig", () => {
     const r = resolveProviderConfig({ preset: "minimax" });
     expect(r.adapter).toBe("anthropic");
     expect(r.envVar).toBe("MiniMax_API_KEY");
+  });
+
+  it("propagates credentialOptional from preset data", () => {
+    expect(resolveProviderConfig({ preset: "ollama" }).credentialOptional).toBe(true);
+    expect(resolveProviderConfig({ preset: "anthropic" }).credentialOptional).toBe(false);
+    expect(resolveProviderConfig({ provider: "openai-compat" }).credentialOptional).toBe(false);
   });
 
   it("config.baseUrl sobrescreve preset.baseUrl", () => {

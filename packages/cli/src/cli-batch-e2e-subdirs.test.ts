@@ -434,7 +434,7 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       expect(r.status).toBe(1);
       expect(r.stderr).toMatch(/Cannot run LLM batch/);
       expect(r.stderr).toMatch(/missing provider/);
-      expect(r.stderr).toMatch(/claude-sonnet-5.*example only/);
+      expect(r.stderr).toMatch(/livewiki config/);
     } finally {
       if (prev) process.env.OPENAI_API_KEY = prev;
     }

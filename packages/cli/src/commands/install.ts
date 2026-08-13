@@ -13,6 +13,7 @@ import {
   type InstallAction,
   type InstallSources,
 } from "@livewiki/core/install";
+import { loadConfig } from "@livewiki/core/config";
 import { emit, emitHuman } from "../output.js";
 import { resolveRepoRoot } from "../cli.js";
 
@@ -87,6 +88,15 @@ export function registerInstall(program: Command): void {
       }
 
       try {
+        const repoConfig = await loadConfig(repoRoot).catch(() => null);
+        const needsExecutorConfig =
+          repoConfig === null ||
+          (!repoConfig.preset && !repoConfig.provider) ||
+          !repoConfig.model;
+        const configNextStep = needsExecutorConfig
+          ? "No batch executor is configured. Run livewiki config before the first full-repository batch."
+          : null;
+
         // ── Detection ────────────────────────────────────────────────────
         const detections = await detectAgents({
           home,
@@ -110,8 +120,11 @@ export function registerInstall(program: Command): void {
         if (opts.print) {
           emit(
             json,
-            { ok: true, dryRun: true, home, detections, plan },
-            formatDetectionHuman(detections, home) + "\n\n" + formatPlanHuman(plan, toInstall),
+            { ok: true, dryRun: true, home, detections, plan, nextStep: configNextStep },
+            formatDetectionHuman(detections, home) +
+              "\n\n" +
+              formatPlanHuman(plan, toInstall) +
+              (configNextStep ? `\n\nNext: ${configNextStep}` : ""),
           );
           return;
         }
@@ -155,8 +168,15 @@ export function registerInstall(program: Command): void {
         );
         emit(
           json,
-          { ok: failed.length === 0, home, detections, results: results.map(formatResultJson) },
-          formatResultsHuman(detections, home, plan, results),
+          {
+            ok: failed.length === 0,
+            home,
+            detections,
+            results: results.map(formatResultJson),
+            nextStep: configNextStep,
+          },
+          formatResultsHuman(detections, home, plan, results) +
+            (configNextStep ? `\n\nNext: ${configNextStep}` : ""),
         );
         if (refusals.length > 0 || failed.length > 0) {
           process.exitCode = 1;
@@ -245,7 +265,8 @@ function formatPlanHuman(plan: readonly InstallAction[], toInstall: readonly Age
     }
     if (a.status === "write" && a.content !== null) {
       lines.push("      --- content ---");
-      for (const line of a.content.split("\n")) lines.push(`      ${line}`);
+      if (a.sensitive) lines.push("      (redacted)");
+      else for (const line of a.content.split("\n")) lines.push(`      ${line}`);
       lines.push("      --- end ---");
     }
   }

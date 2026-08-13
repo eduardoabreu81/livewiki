@@ -54,6 +54,8 @@ export interface ProviderPreset {
   readonly baseUrl: string;
   /** Nome da env var que carrega a API key (NÃO o valor). */
   readonly envVar: string;
+  /** Whether the adapter may run without a credential (for unauthenticated endpoints). */
+  readonly credentialOptional?: boolean;
   /** Pricing default por modelo (USD/1M tokens). Best-effort. */
   readonly pricing: PricingTable;
   /**
@@ -248,6 +250,7 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
     adapter: "openai-compat",
     baseUrl: "http://localhost:11434",
     envVar: "OLLAMA_API_KEY", // Opcional — Ollama local ignora a key
+    credentialOptional: true,
     pricing: {
       // Ollama local não cobra por token (roda na máquina do usuário).
       // Reportamos preço zero explícito (não "sem preço") pra deixar claro
@@ -265,6 +268,7 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
     adapter: "openai-compat",
     baseUrl: "http://localhost:1234",
     envVar: "LMSTUDIO_API_KEY", // Opcional — LMStudio local ignora a key
+    credentialOptional: true,
     pricing: {
       "local-model": { input: 0, output: 0 },
     },
@@ -309,6 +313,7 @@ export interface ResolvedProviderConfig {
   adapter: PresetAdapter;
   baseUrl: string;
   envVar: string;
+  credentialOptional: boolean;
   /** Pricing merged: config.pricing sobrescreve preset.pricing por modelo. */
   pricing: PricingTable;
   /** Notas do preset (info, não usado em runtime). */
@@ -347,6 +352,7 @@ export function resolveProviderConfig(args: {
       adapter,
       baseUrl: args.baseUrl ?? p.baseUrl,
       envVar: p.envVar,
+      credentialOptional: p.credentialOptional ?? false,
       pricing: { ...p.pricing, ...(args.pricing ?? {}) },
       notes: p.notes,
       thinkingDefault: p.thinkingDefault ?? "omit",
@@ -365,6 +371,7 @@ export function resolveProviderConfig(args: {
       adapter: args.provider,
       baseUrl: args.baseUrl ?? "", // caller resolve via resolveBaseUrl
       envVar: args.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
+      credentialOptional: false,
       pricing: args.pricing ?? {},
       notes: "(no preset — using legacy provider field)",
       // openai-compat without preset: MiniMax model names still get thinking disabled in the adapter.

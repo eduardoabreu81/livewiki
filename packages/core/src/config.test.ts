@@ -233,11 +233,12 @@ describe("config.validateConfigForBatch — sem modelo default hardcoded", () =>
     } catch (err) {
       expect(err).toBeInstanceOf(MissingProviderConfigError);
       const msg = (err as Error).message;
-      // Mensagem cita exemplo (claude-sonnet-5), mas NÃO como fallback silencioso
       expect(msg).toMatch(/missing provider and model/);
-      expect(msg).toContain("claude-sonnet-5"); // example
-      expect(msg).toContain("example only"); // explícito que é exemplo
-      expect(msg).toContain("ANTHROPIC_API_KEY"); // lembra do env var
+      expect(msg).toContain("livewiki config");
+      expect(msg).toContain(".livewiki/config.json");
+      expect(msg).toContain("preset");
+      expect(msg).toContain("model");
+      expect(msg).toContain("ANTHROPIC_API_KEY");
     }
   });
 

@@ -1,9 +1,8 @@
 /**
  * key-leak — regressão CRÍTICA: API key NUNCA pode aparecer em nenhum output.
  *
- * SPEC §"Stack" (commit 3894f6e): "API key SÓ via env var (ANTHROPIC_API_KEY /
- * OPENAI_API_KEY); nunca em config.json, checkpoint_json, logs ou erros —
- * com teste garantindo."
+ * Credentials may come from the environment or the global credential store,
+ * but never from repo config, checkpoint_json, logs, or errors.
  *
  * Este teste simula todos os call sites do LLM + config + batch-state com
  * uma chave fake identificável ("KEY-LEAK-CANARY-DONOTUSE-7f3a") e verifica
@@ -129,6 +128,42 @@ describe("key-leak — API key nunca vaza", () => {
     const loaded = await loadConfig(repoRoot);
     const loadedJson = JSON.stringify(loaded);
     assertCanaryNotPresent(loadedJson, "loaded config as JSON");
+  });
+
+  it("the new credential store never crosses into repo config or errors", async () => {
+    const home = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-keyleak-home-"));
+    const previousHome = process.env.LIVEWIKI_HOME;
+    const previousAnthropic = process.env.ANTHROPIC_API_KEY;
+    process.env.LIVEWIKI_HOME = home;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const { planInstall, applyInstall } = await import("./install.js");
+      const plan = await planInstall({
+        repoRoot,
+        home,
+        credential: { envVar: "ANTHROPIC_API_KEY", value: CANARY_KEY },
+      });
+      const results = await applyInstall(plan, repoRoot);
+      assertCanaryNotPresent(JSON.stringify(results), "credential apply results");
+
+      const { saveConfig } = await import("./config.js");
+      await saveConfig(repoRoot, {
+        preset: "anthropic",
+        model: "claude-sonnet-5",
+        language: "en",
+      });
+      const repoConfig = await nodeFs.readFile(
+        nodePath.join(repoRoot, ".livewiki", "config.json"),
+        "utf8",
+      );
+      assertCanaryNotPresent(repoConfig, "repo config after credential write");
+    } finally {
+      if (previousHome === undefined) delete process.env.LIVEWIKI_HOME;
+      else process.env.LIVEWIKI_HOME = previousHome;
+      if (previousAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousAnthropic;
+      await nodeFs.rm(home, { recursive: true, force: true });
+    }
   });
 
   it("checkpoint_json com usageHistory NÃO vaza key em nenhum item", async () => {

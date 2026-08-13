@@ -17,7 +17,7 @@ describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
     expect(program.name()).toBe("livewiki");
   });
 
-  it("registra os 11 comandos (9 da SPEC + pointer da Fase 5 + install do backlog #4)", () => {
+  it("registers the 12 commands, including config", () => {
     const program = createProgram();
     const names = program.commands.map((c) => c.name());
     expect(names).toEqual([
@@ -32,6 +32,7 @@ describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
       "view",
       "pointer",
       "install",
+      "config",
     ]);
   });
 
@@ -73,6 +74,7 @@ describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
       "view",
       "pointer",
       "install",
+      "config",
     ]) {
       expect(captured).toContain(name);
     }
