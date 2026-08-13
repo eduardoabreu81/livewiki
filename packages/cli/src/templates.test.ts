@@ -32,6 +32,66 @@ const here = nodePath.dirname(fileURLToPath(import.meta.url));
 // src/cli/ → packages/cli/src/templates.test.ts
 // templates/ → packages/cli/templates/
 const templatesDir = nodePath.resolve(here, "..", "templates");
+const skillsDir = nodePath.resolve(here, "..", "skills");
+
+function frontmatterField(content: string, field: string): string | null {
+  const match = new RegExp(`^${field}:\\s*(.+)$`, "m").exec(content);
+  return match?.[1]?.trim() ?? null;
+}
+
+describe("packaged skills", () => {
+  let maintenance: string;
+  let bootstrap: string;
+
+  beforeAll(async () => {
+    [maintenance, bootstrap] = await Promise.all([
+      nodeFs.readFile(nodePath.join(skillsDir, "document-as-you-go", "SKILL.md"), "utf8"),
+      nodeFs.readFile(nodePath.join(skillsDir, "bootstrap-wiki", "SKILL.md"), "utf8"),
+    ]);
+  });
+
+  it("ships valid, distinct frontmatter triggers for maintenance and initial bootstrap", () => {
+    for (const content of [maintenance, bootstrap]) {
+      expect(content.startsWith("---\n")).toBe(true);
+      expect(content.indexOf("\n---\n", 4)).toBeGreaterThan(4);
+      expect(frontmatterField(content, "name")).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+      expect(frontmatterField(content, "description")).toBeTruthy();
+    }
+    expect(frontmatterField(maintenance, "name")).toBe("document-as-you-go");
+    expect(frontmatterField(bootstrap, "name")).toBe("bootstrap-wiki");
+    expect(frontmatterField(maintenance, "description")).toMatch(/termina uma tarefa|commit/i);
+    expect(frontmatterField(bootstrap, "description")).toMatch(/initial|no wiki|bootstrap/i);
+    expect(frontmatterField(bootstrap, "description")).not.toMatch(/commit|debt/i);
+  });
+
+  it("defines the MCP bootstrap loop and the resumable bounded-context guardrail", () => {
+    expect(bootstrap).toMatch(/livewiki_next_task/);
+    expect(bootstrap).toMatch(/source paths/i);
+    expect(bootstrap).toMatch(/livewiki_write_doc/);
+    expect(bootstrap).toMatch(/taskId/);
+    expect(bootstrap).toMatch(/batch(?:es)?/i);
+    expect(bootstrap).toMatch(/safe to stop|stopping .* safe/i);
+    expect(bootstrap).toMatch(/resume(?:s|d)? the same run/i);
+  });
+
+  it("keeps the two skills separate and cross-referenced", () => {
+    expect(maintenance).toContain("bootstrap-wiki");
+    expect(bootstrap).toContain("document-as-you-go");
+  });
+
+  it("keeps credentials, unattended batch, and token estimates out of bootstrap guidance", () => {
+    expect(bootstrap).not.toMatch(/API key|provider|model/i);
+    expect(bootstrap).not.toContain("init --batch");
+    expect(bootstrap).not.toMatch(/estimate(?:d|s)? tokens|token estimate/i);
+  });
+
+  it("corrects the two obsolete maintenance claims without rewriting its workflow", () => {
+    expect(maintenance).not.toMatch(/init --batch.*resolva com LLM/i);
+    expect(maintenance).not.toMatch(/MCP server usa a key do env var/i);
+    expect(maintenance).toMatch(/undocumented[\s\S]*bootstrap-wiki/i);
+    expect(maintenance).toMatch(/MCP[\s\S]*sem usar credencial/i);
+  });
+});
 
 describe("templates/git/post-commit", () => {
   let content: string;

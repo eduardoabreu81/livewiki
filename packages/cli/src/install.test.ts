@@ -79,6 +79,8 @@ describe("livewiki install --print", () => {
     expect(stdout).toContain("kimi");
     expect(stdout).toContain("codex");
     expect(stdout).toContain("mcp-config");
+    expect(stdout).toContain("document-as-you-go");
+    expect(stdout).toContain("bootstrap-wiki");
 
     // Zero writes: HOME empty, repo has no .git and no AGENTS.md
     expect(await nodeFs.readdir(home)).toEqual([]);
@@ -93,13 +95,15 @@ describe("livewiki install --print", () => {
       "--repo",
       repoRoot,
       "--agents",
-      "gemini",
+      "codex",
     ]);
     expect(process.exitCode ?? 0).toBe(0);
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.ok).toBe(true);
     expect(parsed.dryRun).toBe(true);
     expect(parsed.plan.length).toBeGreaterThan(0);
+    expect(parsed.plan.filter((action: { kind: string }) => action.kind === "skill"))
+      .toHaveLength(2);
     expect(await nodeFs.readdir(home)).toEqual([]);
   });
 });
@@ -140,6 +144,7 @@ describe("livewiki install non-interactive safety", () => {
     expect(mcp.mcpServers.livewiki.args).toContain("--repo");
     // Skill installed to the shared dir
     await nodeFs.access(nodePath.join(home, ".agents", "skills", "document-as-you-go", "SKILL.md"));
+    await nodeFs.access(nodePath.join(home, ".agents", "skills", "bootstrap-wiki", "SKILL.md"));
     // Git hook installed
     await nodeFs.access(nodePath.join(repoRoot, ".git", "hooks", "post-commit"));
     // Pointer NOT written without --write-pointer (rule #2)

@@ -20,7 +20,8 @@ import {
   type InstallSources,
 } from "./install.js";
 
-const FAKE_SKILL = "---\nname: document-as-you-go\n---\nfake skill content\n";
+const FAKE_DOCUMENT_SKILL = "---\nname: document-as-you-go\n---\nfake maintenance skill\n";
+const FAKE_BOOTSTRAP_SKILL = "---\nname: bootstrap-wiki\n---\nfake bootstrap skill\n";
 const FAKE_GIT_HOOK = "#!/usr/bin/env bash\n# livewiki post-commit hook (template)\nexit 0\n";
 const FAKE_CLAUDE_SETTINGS = JSON.stringify({
   hooks: {
@@ -35,7 +36,10 @@ const FAKE_CLAUDE_SETTINGS = JSON.stringify({
 const SOURCES: InstallSources = {
   gitPostCommit: FAKE_GIT_HOOK,
   claudeCodeSettings: FAKE_CLAUDE_SETTINGS,
-  skillDocumentAsYouGo: FAKE_SKILL,
+  skills: [
+    { name: "document-as-you-go", content: FAKE_DOCUMENT_SKILL },
+    { name: "bootstrap-wiki", content: FAKE_BOOTSTRAP_SKILL },
+  ],
 };
 
 let home: string;
@@ -270,35 +274,52 @@ describe("install.planInstall + applyInstall", () => {
     expect(plan.find((a) => a.kind === "git-hook")!.status).toBe("skip");
   });
 
-  it("skill: writes when absent, skips byte-identical, refuses a different file", async () => {
-    const skillPath = nodePath.join(home, SHARED_SKILL_TARGET);
+  it("skills: writes both, skips byte-identical, and refuses a different file without merging", async () => {
+    const documentSkillPath = nodePath.join(home, SHARED_SKILL_TARGET);
+    const bootstrapSkillPath = nodePath.join(
+      home,
+      ".agents",
+      "skills",
+      "bootstrap-wiki",
+      "SKILL.md",
+    );
 
     let plan = await planInstall({ repoRoot, home, agents: ["kimi"], sources: SOURCES });
-    const write = plan.find((a) => a.kind === "skill")!;
-    expect(write.status).toBe("write");
+    const writes = plan.filter((a) => a.kind === "skill");
+    expect(writes).toHaveLength(2);
+    expect(writes.every((action) => action.status === "write")).toBe(true);
     await applyInstall(plan, repoRoot);
-    expect(await nodeFs.readFile(skillPath, "utf8")).toBe(FAKE_SKILL);
+    expect(await nodeFs.readFile(documentSkillPath, "utf8")).toBe(FAKE_DOCUMENT_SKILL);
+    expect(await nodeFs.readFile(bootstrapSkillPath, "utf8")).toBe(FAKE_BOOTSTRAP_SKILL);
 
     plan = await planInstall({ repoRoot, home, agents: ["kimi"], sources: SOURCES });
-    expect(plan.find((a) => a.kind === "skill")!.status).toBe("skip");
+    expect(plan.filter((a) => a.kind === "skill").map((a) => a.status)).toEqual([
+      "skip",
+      "skip",
+    ]);
 
-    await nodeFs.writeFile(skillPath, "user customizations\n", "utf8");
+    await nodeFs.writeFile(bootstrapSkillPath, "user customizations\n", "utf8");
     plan = await planInstall({ repoRoot, home, agents: ["kimi"], sources: SOURCES });
-    const refuse = plan.find((a) => a.kind === "skill")!;
+    const refuse = plan.find(
+      (a) => a.kind === "skill" && a.targetPath === bootstrapSkillPath,
+    )!;
     expect(refuse.status).toBe("refuse");
     expect(refuse.reason).toMatch(/not overwriting user content/);
     await applyInstall(plan, repoRoot);
-    expect(await nodeFs.readFile(skillPath, "utf8")).toBe("user customizations\n");
+    expect(await nodeFs.readFile(bootstrapSkillPath, "utf8")).toBe("user customizations\n");
+    expect(await nodeFs.readFile(documentSkillPath, "utf8")).toBe(FAKE_DOCUMENT_SKILL);
   });
 
-  it("skill action is deduped and only planned for shared-skill agents", async () => {
+  it("skill actions are deduped across agents and only planned for shared-skill agents", async () => {
     const plan = await planInstall({
       repoRoot,
       home,
       agents: ["claude-code", "codex", "kimi"],
       sources: SOURCES,
     });
-    expect(plan.filter((a) => a.kind === "skill")).toHaveLength(1);
+    const skillActions = plan.filter((a) => a.kind === "skill");
+    expect(skillActions).toHaveLength(2);
+    expect(new Set(skillActions.map((action) => action.targetPath)).size).toBe(2);
 
     const none = await planInstall({ repoRoot, home, agents: ["cursor", "gemini"], sources: SOURCES });
     expect(none.filter((a) => a.kind === "skill")).toHaveLength(0);

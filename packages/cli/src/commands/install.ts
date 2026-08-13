@@ -51,7 +51,7 @@ export function registerInstall(program: Command): void {
     .command("install")
     .description(
       "detect installed coding agents (claude-code, codex, cursor, kimi, gemini) and " +
-        "configure the livewiki MCP entry, hook templates, shared skill, and opt-in pointer. " +
+        "configure the livewiki MCP entry, hook templates, shared skills, and opt-in pointer. " +
         "Every write outside the repo is shown before it happens; --print is a full dry-run.",
     )
     .option("--agents <csv>", `explicit agent subset (comma-separated). Values: ${AGENT_REGISTRY.map((a) => a.id).join(", ")}`)
@@ -189,19 +189,27 @@ export function registerInstall(program: Command): void {
 }
 
 /**
- * Reads the shipped templates/skill. They live in the CLI package root
+ * Reads the shipped templates/skills. They live in the CLI package root
  * (`templates/`, `skills/` — shipped via package.json "files"), which is
  * two levels up from both src/commands/ and dist/commands/.
  */
 async function readSources(): Promise<InstallSources> {
   const here = nodePath.dirname(fileURLToPath(import.meta.url));
   const pkgRoot = nodePath.resolve(here, "..", "..");
-  const [gitPostCommit, claudeCodeSettings, skillDocumentAsYouGo] = await Promise.all([
+  const [gitPostCommit, claudeCodeSettings, skillDocumentAsYouGo, skillBootstrapWiki] = await Promise.all([
     nodeFs.readFile(nodePath.join(pkgRoot, "templates", "git", "post-commit"), "utf8"),
     nodeFs.readFile(nodePath.join(pkgRoot, "templates", "claude-code", "settings.local.json"), "utf8"),
     nodeFs.readFile(nodePath.join(pkgRoot, "skills", "document-as-you-go", "SKILL.md"), "utf8"),
+    nodeFs.readFile(nodePath.join(pkgRoot, "skills", "bootstrap-wiki", "SKILL.md"), "utf8"),
   ]);
-  return { gitPostCommit, claudeCodeSettings, skillDocumentAsYouGo };
+  return {
+    gitPostCommit,
+    claudeCodeSettings,
+    skills: [
+      { name: "document-as-you-go", content: skillDocumentAsYouGo },
+      { name: "bootstrap-wiki", content: skillBootstrapWiki },
+    ],
+  };
 }
 
 async function promptYesNo(question: string): Promise<boolean> {

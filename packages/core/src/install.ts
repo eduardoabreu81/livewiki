@@ -184,8 +184,10 @@ export function getAgentDefinition(id: string): AgentDefinition | undefined {
   return AGENT_REGISTRY.find((a) => a.id === id);
 }
 
-/** Home-relative target of the shared skill copy. */
+/** Backward-compatible home-relative target of the maintenance skill. */
 export const SHARED_SKILL_TARGET = ".agents/skills/document-as-you-go/SKILL.md";
+
+const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 // ── Detection ───────────────────────────────────────────────────────────────
 
@@ -604,11 +606,18 @@ export interface InstallAction {
   sensitive?: boolean;
 }
 
-/** Contents of the shipped templates/skill, read by the CLI (its package owns the files). */
+export interface InstallSkillSource {
+  /** Directory name below ~/.agents/skills/. */
+  name: string;
+  /** Exact SKILL.md bytes shipped by the CLI package. */
+  content: string;
+}
+
+/** Contents of the shipped templates/skills, read by the CLI package. */
 export interface InstallSources {
   gitPostCommit: string;
   claudeCodeSettings: string;
-  skillDocumentAsYouGo: string;
+  skills: readonly InstallSkillSource[];
 }
 
 export interface PlanInstallOptions {
@@ -708,29 +717,49 @@ async function planSkill(
   home: string,
   agents: readonly AgentId[],
   sources: InstallSources,
-): Promise<InstallAction | null> {
-  if (!agents.some((id) => getAgentDefinition(id)?.usesSharedSkills)) return null;
-  const targetPath = nodePath.join(home, SHARED_SKILL_TARGET);
-  const existing = await readIfExists(targetPath);
-  if (existing === null) {
-    return { kind: "skill", targetPath, status: "write", content: sources.skillDocumentAsYouGo };
+): Promise<InstallAction[]> {
+  if (!agents.some((id) => getAgentDefinition(id)?.usesSharedSkills)) return [];
+
+  const actions: InstallAction[] = [];
+  const names = new Set<string>();
+  for (const skill of sources.skills) {
+    if (!SKILL_NAME_RE.test(skill.name)) {
+      throw new Error(`invalid shared skill name: ${JSON.stringify(skill.name)}`);
+    }
+    if (names.has(skill.name)) {
+      throw new Error(`duplicate shared skill source: ${skill.name}`);
+    }
+    names.add(skill.name);
+
+    const targetPath = nodePath.join(
+      home,
+      ".agents",
+      "skills",
+      skill.name,
+      "SKILL.md",
+    );
+    const existing = await readIfExists(targetPath);
+    if (existing === null) {
+      actions.push({ kind: "skill", targetPath, status: "write", content: skill.content });
+    } else if (existing === skill.content) {
+      actions.push({
+        kind: "skill",
+        targetPath,
+        status: "skip",
+        content: null,
+        reason: "skill already installed (byte-identical)",
+      });
+    } else {
+      actions.push({
+        kind: "skill",
+        targetPath,
+        status: "refuse",
+        content: null,
+        reason: "a different file already occupies the skill target; not overwriting user content",
+      });
+    }
   }
-  if (existing === sources.skillDocumentAsYouGo) {
-    return {
-      kind: "skill",
-      targetPath,
-      status: "skip",
-      content: null,
-      reason: "skill already installed (byte-identical)",
-    };
-  }
-  return {
-    kind: "skill",
-    targetPath,
-    status: "refuse",
-    content: null,
-    reason: "a different file already occupies the skill target; not overwriting user content",
-  };
+  return actions;
 }
 
 async function planGitHook(
@@ -842,7 +871,7 @@ function planCredentialStore(
 
 /**
  * Computes the full install plan: per-agent MCP config merge, claude-code
- * Stop hook, shared skill copy (deduped), repo-level git hook and opt-in
+ * Stop hook, shared skill copies (deduped), repo-level git hook and opt-in
  * pointer. Each writable action carries the EXACT bytes that
  * `applyInstall` will write — dry-run and write share one code path.
  */
@@ -866,8 +895,7 @@ export async function planInstall(
     if (hook) actions.push(hook);
   }
 
-  const skill = await planSkill(home, opts.agents, opts.sources);
-  if (skill) actions.push(skill);
+  actions.push(...await planSkill(home, opts.agents, opts.sources));
 
   actions.push(await planGitHook(repoRoot, opts.sources));
   actions.push(await planPointer(repoRoot, Boolean(opts.writePointer)));

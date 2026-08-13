@@ -114,8 +114,8 @@ produto.
 ## Quando você NÃO deve pagar a dívida
 
 - **Dívida `assignee=human`**: revisão humana — sinalize, não escreva.
-- **Sem âncora correspondente (undocumented)**: o agente não tem contexto
-  fresco suficiente; é melhor que o `livewiki init --batch` resolva com LLM.
+- **Sem âncora correspondente (undocumented)**: isso pertence à documentação
+  inicial. Use a skill `bootstrap-wiki`, que conduz a fila de bootstrap via MCP.
 - **Mudança trivial (typo, formatting)**: avalie se vale a pena pagar;
   dívida trivial pode esperar pela próxima rodada.
 
@@ -140,5 +140,6 @@ livewiki update --record-write <N>   # contabilizar doc escrita
 ## Privacidade
 
 A skill NÃO toca em API key, NÃO chama LLM diretamente. Se você tem MCP
-configurado, o MCP server usa a key do env var. Sem MCP, edite manualmente.
+configurado, o servidor valida e escreve a página sem usar credencial de LLM.
+Sem MCP, edite manualmente.
 Nunca peça ao humano para colar a key.
