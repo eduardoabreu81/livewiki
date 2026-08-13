@@ -1,25 +1,14 @@
 # livewiki
 
-livewiki is an agent-first living documentation tool: a Markdown wiki that
-lives inside your repository, is written by an LLM, and is kept honest by
-deterministic machinery that never calls a model — code pages anchor to
-real symbols (synthesis pages like `understanding.md` are anchor-free by
-contract), staleness is computed from tree-sitter hashes with zero tokens,
-and `verify` re-reads every page from disk and rejects any anchor or
-internal link that does not resolve.
+livewiki keeps technical documentation next to the code it describes. It
+builds a Markdown wiki, detects what changed, and checks that references to
+code and other pages still resolve. An LLM writes the prose; livewiki plans
+the work, tracks documentation debt, preserves human edits, and validates the
+result.
 
 [![npm](https://img.shields.io/npm/v/@livewiki/cli)](https://www.npmjs.com/package/@livewiki/cli)
 [![CI](https://github.com/eduardoabreu81/livewiki/actions/workflows/cross-platform-ci.yml/badge.svg)](https://github.com/eduardoabreu81/livewiki/actions/workflows/cross-platform-ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-## Why
-
-Documentation rots because nothing checks it. livewiki's promise is the
-opposite economics of most AI doc tools: **detecting** what went stale
-costs nothing (no LLM call, ever), and **writing** is the only thing that
-costs tokens — done by your own agent in-session, or by a resumable batch
-pipeline with exact per-task accounting. Human content (`owner: human`
-pages, `lw:manual` blocks) is preserved byte-for-byte, always.
 
 `livewiki view` builds a self-contained offline site from the wiki:
 
@@ -39,116 +28,113 @@ Requires **Node.js 24 or newer**.
 npm install -g @livewiki/cli
 ```
 
-(or prefix every command with `npx @livewiki/cli` instead of installing)
+You can also prefix commands with `npx @livewiki/cli` instead of installing
+globally.
 
-### 2. Initialize your repository
+### 2. Initialize the repository
 
-From the root of the repo you want documented:
+From the root of the repository you want documented:
 
 ```bash
 livewiki init
 ```
 
-This indexes the code (tree-sitter, fully offline) and creates the
-deterministic wiki layout under `livewiki/` plus the derived cache under
-`.livewiki/` (automatically added to your `.gitignore` — the cache never
-travels in git).
+This indexes the code locally and creates the wiki skeleton under `livewiki/`.
+It also creates the derived cache under `.livewiki/` and adds that directory
+to `.gitignore`. Initialization is deterministic: it does not call an LLM or
+spend tokens.
 
-### 3. Write the docs — two ways, pick one
+### 3. Bootstrap the wiki once
 
-**livewiki never requires its own LLM account.** Detection (index, debt,
-verify) is 100% deterministic and free; only *writing prose* needs a
-model, and that model can be the agent you already use.
+The first full-repository documentation pass needs an autonomous prose
+executor. In the current release, the batch pipeline connects directly to a
+configured LLM API.
 
-**Option A — your own agent (no extra API key, no extra cost).**
-Best for keeping an existing wiki fresh — this is the day-to-day mode.
-Wire livewiki into the agent you already code with:
+Run the interactive configuration wizard:
 
 ```bash
-livewiki install
+livewiki config
 ```
 
-It detects your agent (Claude Code, Cursor, Codex, Kimi, and 9 more) and
-sets up the MCP server, the document-as-you-go skill, and git hooks.
-From then on the agent pays documentation debt **in-session**, as you
-change code, using its own model — guided by `livewiki/quickstart.md`
-and gated by `livewiki verify`. The unattended full-repo bootstrap is
-Option B's job — the installed skill routes first-time documentation
-there.
+It asks for a preset, model, language, an optional base URL, and the API key,
+which is typed without echo. Provider settings are saved in
+`.livewiki/config.json`; the key is kept separately in
+`~/.livewiki/credentials.json`. On POSIX the credentials file is written with
+mode `0600`. On Windows it inherits the user profile's ACL; there is no direct
+`chmod` equivalent.
 
-**Option B — autonomous batch (uses a provider key).**
-For a full-repo documentation run unattended, point livewiki at a
-provider in `.livewiki/config.json`:
+Inspect the effective settings and credential origin without printing the key:
 
-```json
-{
-  "preset": "anthropic",
-  "model": "claude-sonnet-5",
-  "language": "en"
-}
+```bash
+livewiki config show
 ```
 
-The API key comes from the environment — **never** from the config file:
+Environment variables take precedence over the credentials file and remain
+the supported path for CI, containers, and other headless automation. For
+example:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Available presets: `anthropic`, `openai`, `openrouter`, `deepseek`,
-`kimi`, `minimax`, `gemini`, `nvidia`, `ollama`, `lmstudio` (the last two
-run local models and need no key). Then:
+Or in PowerShell:
+
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+```
+
+Available presets are `anthropic`, `openai`, `openrouter`, `deepseek`, `kimi`,
+`minimax`, `gemini`, `nvidia`, `ollama`, and `lmstudio`.
+
+For `ollama` and `lmstudio` the credential is optional. Leave it empty to reach
+a local server that needs no authentication, or supply a key — together with a
+custom base URL, which the wizard also asks for — to reach an authenticated
+remote endpoint such as Ollama Cloud or a LiteLLM proxy.
+
+Then run the bootstrap:
 
 ```bash
 livewiki init --batch
 ```
 
-A resumable 5-stage pipeline (scan → page units → prioritize → document →
-flows/topics) writes one page per symbol-bearing product file plus one per
-folder, plus product flows, concept topics, and an `understanding.md`
-synthesis — code pages cite anchors drawn from a closed list of real
-symbols. Interrupt it anytime; `livewiki batch resume <runId>` continues
-from the exact task, and `livewiki batch status` reports tokens first,
-dollars second.
-
-Both options produce the same wiki and mix freely: batch the backlog
-once, then let your agent keep it fresh in-session.
-
-### 4. Check the result
+The resumable pipeline scans the repository, plans real page units, prioritizes
+them, and writes pages for product files and folders. When enabled and
+eligible, it also writes product flows, concept topics, diagrams, and an
+`understanding.md` synthesis. Code pages cite symbols from the repository's
+index. If interrupted, resume the same run with:
 
 ```bash
-livewiki verify   # anti-hallucination gate: every anchor re-read from disk
-livewiki view     # self-contained offline site: search, Mermaid, dark mode
+livewiki batch resume <runId>
 ```
 
-Then browse `livewiki/quickstart.md` — or open the site that `view`
-builds.
+### 4. Keep it alive with your coding agent
 
-## See it in action
-
-This repository documents itself with livewiki. Browse the generated
-[quickstart](livewiki/quickstart.md),
-[architecture overview](livewiki/architecture/overview.md), and
-[Testing topic](livewiki/topics/testing-f41eeea7.md). The published corpus
-passes `livewiki verify` with zero issues.
-
-## Day two and beyond: the incremental loop
-
-The wiki is alive. When the code changes, livewiki notices for free:
+After the bootstrap, maintenance is incremental. Connect livewiki to the
+coding agent you already use:
 
 ```bash
-livewiki index    # re-hash symbols, emit changed|moved|deleted debt
-livewiki status   # open debt, risk-ranked (test gap, fan-in, churn)
+livewiki install
 ```
 
-Pay the debt with your own agent (recommended) or directly:
+The installer detects supported agents — including Claude Code, Cursor,
+Codex, and Kimi — and can set up the MCP server, document-as-you-go skill, and
+git hooks. As code changes, the active agent reads the wiki and open debt,
+updates affected pages through MCP, and runs the same validation used by the
+CLI. The agent's existing session supplies the model for this maintenance
+work; livewiki does not launch a separate batch for each edit.
 
-- **Agent-native:** `livewiki install` detects your agent (Claude Code,
-  Cursor, Codex, Kimi, and 9 more) and wires the MCP server, hooks, and
-  the document-as-you-go skill — debt gets paid as you work.
-- **Manual:** edit the page, keep the anchors honest, run
-  `livewiki verify` (exit ≠ 0 on any issue — CI-friendly).
+You can inspect the incremental state directly:
 
-MCP server, standalone (any MCP client):
+```bash
+livewiki index    # detect changed, moved, and deleted symbols
+livewiki status   # show open documentation debt, ranked by risk
+```
+
+Bootstrap and maintenance are consecutive phases of the same lifecycle:
+bootstrap the repository once, then let the agent keep it current as the code
+changes.
+
+For a manual connection from a stdio-capable MCP client:
 
 ```json
 {
@@ -161,64 +147,84 @@ MCP server, standalone (any MCP client):
 }
 ```
 
-Tools: full-text search, page read, validated write (post-write `verify`
-with rollback), open debt, debt resolution, and per-symbol blast radius.
+### 5. Verify and browse
+
+```bash
+livewiki verify   # validate code references, internal links, and wiki artifacts
+livewiki view     # build an offline site with search, Mermaid, and dark mode
+```
+
+`verify` reads the wiki fresh from disk and exits non-zero when it finds an
+error. The generated site is self-contained and does not need a running
+livewiki server.
+
+## What a generated page looks like
+
+This excerpt is copied from this repository's generated
+[`livewiki/core-src/verify.md`](livewiki/core-src/verify.md):
+
+````markdown
+## Discovery: walking the wiki from disk
+
+The verifier never trusts the index for which pages exist — a doc freshly written by an LLM must be caught without first running `index`. Two walkers enumerate the `livewiki/` directory from disk; both skip hidden directories but keep dot-prefixed files (for example, a tier-2 page from a `.github/` source dir like `livewiki/.github.md`).
+
+<!-- lw:anchors packages/core/src/verify.ts#collectWikiPages packages/core/src/verify.ts#collectWikiArtifactPaths -->
+
+```ts
+async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
+```
+````
+
+The visible prose explains the implementation; the `lw:anchors` marker ties
+the section to real indexed symbols so staleness and invalid references can be
+detected mechanically.
+
+## See it in action
+
+This repository documents itself with livewiki. Browse the generated
+[quickstart](livewiki/quickstart.md),
+[architecture overview](livewiki/architecture/overview.md), and
+[Testing topic](livewiki/topics/testing-f41eeea7.md). The published corpus
+passes `livewiki verify` with zero issues.
 
 ## How it works
 
-- **Incremental (the heart):** edit code → `livewiki index` re-hashes
-  symbols → the anchor ledger emits `changed|moved|deleted` debt → your
-  agent (or you) pays it → `livewiki verify` re-checks every anchor fresh
-  from disk.
-- **Batch:** `livewiki init --batch` runs the 5-stage pipeline with
-  checkpoints, bounded repair, transactional writes, and token-first
-  reporting.
-- **Surfaces:** the same wiki serves the CLI, the MCP server,
-  deterministic exports (`livewiki export`), and the offline viewer —
-  including builds from any git ref (`livewiki view --ref <tag>`).
+The access surface and the prose executor are separate concerns. The CLI, MCP
+server, and installed skill expose livewiki; either the configured API-backed
+batch or the active coding agent supplies the prose at the appropriate phase.
 
-## Measured against OpenWiki
+- **Deterministic layer:** the CLI indexes source files, extracts symbols,
+  computes staleness, plans work, tracks debt, and verifies the wiki without
+  calling a model.
+- **Writing layer:** the bootstrap batch calls the API selected in the local
+  repository config; later, an active coding agent can maintain pages through
+  the MCP server and installed skill.
+- **Validation layer:** code-page anchors come from a closed list of indexed
+  symbols, internal wiki links are resolved from disk, and invalid writes are
+  rejected.
+- **Human ownership:** generated rewrites refuse human-owned pages and preserve
+  `lw:manual` blocks byte-for-byte.
+- **Shared surfaces:** the same wiki is available through the CLI, MCP server,
+  deterministic exports, and offline viewer, including viewer builds from a
+  git ref with `livewiki view --ref <tag>`.
 
-Blind A/B on the same real-world repository (a MoneyPrinterTurbo-Plus
-clone): two independent evaluators (claude and codex) scored masked
-corpora — ours and a frozen OpenWiki control — without knowing which was
-which. Final round of a 5-round measurement series:
+Documentation-debt detection can run in CI on every merge without calling an
+LLM or spending tokens; see the [GitHub Actions template](packages/cli/templates/github-actions/docs-debt.yml).
 
-| | livewiki | OpenWiki |
-| --- | --- | --- |
-| Weighted quality — evaluator A | 7.65 | 8.05 |
-| Weighted quality — evaluator B | 7.85 | 8.30 |
-| Coverage — both evaluators | **9/9** | lower on both cards |
-| Unresolvable links in corpus | **0** (564/564 resolve) | — |
-| Tokens for a full-repo run | **1,078,557** | 13,900,000 |
-
-Reading it honestly: quality is a near-tie (Δ0.40–0.45 behind on
-weighted scores), coverage is the one dimension where both evaluators
-scored livewiki **ahead** — at **~8% of the token cost**. Evaluator A
-described the two corpora as "close to complementary".
-
-## Results so far
-
-- Blind dual-evaluator comparison against OpenWiki: near-tie on quality,
-  ahead on coverage, ~8% of the token cost — full table above.
-- Self-hosting dogfood: this repository documents itself, and the published
-  corpus passes `livewiki verify` with zero issues.
-- Cross-platform CI green on ubuntu / windows / macOS (Node 24).
-- Debt detection on every merge costs **zero tokens** — see
-  `packages/cli/templates/github-actions/docs-debt.yml`.
+Historical comparison methodology and dated results are archived in [Benchmarks](docs/BENCHMARKS.md).
 
 ## Packages
 
 | Package | Purpose |
 | --- | --- |
 | [`@livewiki/cli`](https://www.npmjs.com/package/@livewiki/cli) | The `livewiki` command |
-| [`@livewiki/mcp`](https://www.npmjs.com/package/@livewiki/mcp) | MCP server for any MCP client |
+| [`@livewiki/mcp`](https://www.npmjs.com/package/@livewiki/mcp) | MCP server for stdio-capable MCP clients |
 | [`@livewiki/core`](https://www.npmjs.com/package/@livewiki/core) | Library: indexer, anchors, ledger, pipeline |
 
 ## Documentation
 
-- [SPEC.md](SPEC.md) — behavioral source of truth
-- [VISION.md](VISION.md) — rationale and non-goals
+- [SPEC.md](SPEC.md) — behavior and format contracts
+- [VISION.md](VISION.md) — product rationale and non-goals
 - [docs/ROADMAP.md](docs/ROADMAP.md) — approved backlog and execution order
 
 ## License
