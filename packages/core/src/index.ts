@@ -28,6 +28,7 @@ export * as artifact from "./artifact.js";
 export * as manifest from "./manifest.js";
 export * as batch from "./batch.js";
 export * as batchStatus from "./batch-status.js";
+export * as agentBootstrap from "./agent-bootstrap.js";
 export * as init from "./init.js";
 export * as update from "./update.js";
 export * as updateMetrics from "./update-metrics.js";

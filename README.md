@@ -46,11 +46,27 @@ spend tokens.
 
 ### 3. Bootstrap the wiki once
 
-The first full-repository documentation pass needs an autonomous prose
-executor. In the current release, the batch pipeline connects directly to a
-configured LLM API.
+Connect livewiki to the coding agent you already use:
 
-Run the interactive configuration wizard:
+```bash
+livewiki install
+```
+
+The installer detects supported agents — including Claude Code, Cursor,
+Codex, and Kimi — and can set up the MCP server, document-as-you-go skill, and
+git hooks. Then ask the agent to bootstrap the wiki with livewiki. Through
+MCP, it repeatedly calls `livewiki_next_task`, reads the returned source paths
+with its own tools, and submits each page through `livewiki_write_doc` with the
+returned `taskId`.
+
+This route uses the model already available to the agent. It needs no livewiki
+provider, model, or API credential. livewiki still owns the deterministic work
+plan, the complete closed list of allowed symbol keys, bounded attempts,
+validation, rollback, checkpoints, and final `verify` pass. If the MCP session
+stops, the next `livewiki_next_task` call resumes the same run.
+
+For unattended automation, the same bootstrap can instead run through a
+configured LLM API. Run the interactive configuration wizard:
 
 ```bash
 livewiki config
@@ -91,7 +107,7 @@ a local server that needs no authentication, or supply a key — together with a
 custom base URL, which the wizard also asks for — to reach an authenticated
 remote endpoint such as Ollama Cloud or a LiteLLM proxy.
 
-Then run the bootstrap:
+Then run the unattended bootstrap:
 
 ```bash
 livewiki init --batch
@@ -109,19 +125,11 @@ livewiki batch resume <runId>
 
 ### 4. Keep it alive with your coding agent
 
-After the bootstrap, maintenance is incremental. Connect livewiki to the
-coding agent you already use:
-
-```bash
-livewiki install
-```
-
-The installer detects supported agents — including Claude Code, Cursor,
-Codex, and Kimi — and can set up the MCP server, document-as-you-go skill, and
-git hooks. As code changes, the active agent reads the wiki and open debt,
-updates affected pages through MCP, and runs the same validation used by the
-CLI. The agent's existing session supplies the model for this maintenance
-work; livewiki does not launch a separate batch for each edit.
+After the bootstrap, maintenance is incremental. As code changes, the active
+agent reads the wiki and open debt, updates affected pages through MCP, and
+runs the same validation used by the CLI. The agent's existing session
+supplies the model for this work; livewiki does not launch a separate batch
+for each edit.
 
 You can inspect the incremental state directly:
 
@@ -196,9 +204,9 @@ batch or the active coding agent supplies the prose at the appropriate phase.
 - **Deterministic layer:** the CLI indexes source files, extracts symbols,
   computes staleness, plans work, tracks debt, and verifies the wiki without
   calling a model.
-- **Writing layer:** the bootstrap batch calls the API selected in the local
-  repository config; later, an active coding agent can maintain pages through
-  the MCP server and installed skill.
+- **Writing layer:** a connected coding agent can bootstrap and maintain the
+  wiki through the MCP task queue with its existing model. An API-backed batch
+  remains available for unattended bootstrap automation.
 - **Validation layer:** code-page anchors come from a closed list of indexed
   symbols, internal wiki links are resolved from disk, and invalid writes are
   rejected.

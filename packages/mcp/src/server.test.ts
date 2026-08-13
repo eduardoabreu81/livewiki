@@ -88,7 +88,7 @@ function git(args: string[]): void {
 }
 
 describe("MCP server — Fase 4", () => {
-  it("tools/list retorna as 7 tools (SPEC + Phase 3 livewiki_impact)", async () => {
+  it("tools/list returns the 8 tools, including the agent bootstrap queue", async () => {
     const c = await connect();
     try {
       const { tools } = await c.client.listTools();
@@ -96,6 +96,7 @@ describe("MCP server — Fase 4", () => {
       expect(names).toEqual([
         "livewiki_debt",
         "livewiki_impact",
+        "livewiki_next_task",
         "livewiki_quickstart",
         "livewiki_read",
         "livewiki_resolve_debt",

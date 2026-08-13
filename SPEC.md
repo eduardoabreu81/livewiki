@@ -643,6 +643,7 @@ when git is absent or the directory is not a repo it degrades silently (churn fa
 | `livewiki_read` | reads a wiki page by path |
 | `livewiki_search` | full-text search over the wiki (SQLite FTS5) |
 | `livewiki_debt` | open debt (equivalent to `status --json`) |
+| `livewiki_next_task` | starts or resumes the agent-written bootstrap queue and returns the next prioritized Markdown task |
 | `livewiki_write_doc` | writes/updates a page (path validated by the allowlist; runs `verify` on the content before accepting) |
 | `livewiki_resolve_debt` | marks debt as paid (tied to a write) |
 | `livewiki_impact` | blast radius of a symbol key: resolved call-graph callers + the wiki pages documenting them (best-effort, bounded by maxDepth/maxNodes) |
@@ -653,6 +654,30 @@ Any verify failure, including a crash of the verifier itself, triggers a
 best-effort rollback so no unverified page is left behind. If rollback fails,
 the tool returns an error that names the suspect path and warns that the disk
 may contain an unverified page requiring operator inspection.
+
+**Agent-written bootstrap queue.** `livewiki_next_task` creates or resumes a
+run whose origin is `agent`. Stages 1–3 and task ordering are deterministic;
+the connected MCP client supplies page prose with its own model. Each returned
+task carries a generic `kind` (`file-page`, `folder-page`, `flow`, `topic`, or
+`understanding`), target path, complete closed list of canonical keys, source
+paths, and the format contract produced by the existing prompt builders. It
+does not carry source-code bytes. The client reads those paths with its own
+tools and submits Markdown through `livewiki_write_doc` with the returned
+`taskId`.
+
+A queued `write_doc` submission is validated against the task-specific page
+contract and the repository verifier before the task is completed. Failed
+submissions consume a server-owned bounded attempt; exhaustion marks the task
+failed and the queue advances. Completed tasks are never reoffered, while an
+in-flight task is reoffered after an MCP disconnect. Existing `owner: human`
+pages remain byte-identical and `lw:manual` blocks are preserved. Agent runs
+persist `usage: null`, report accounting as `unavailable`, and record topic
+refine as `not-run` — never as zero tokens or an estimated token count.
+
+This queue never configures or creates an LLM client and never launches an
+external agent process. Agent products are MCP consumers, not provider presets
+or executors invoked by livewiki. The API-backed batch and its resume path are
+unchanged.
 
 **Workflow-adjacency hints (Etapa 2d).** Every SUCCESS tool response carries a
 static `_hints` block suggesting the next most useful tool calls, so arbitrary
@@ -1189,7 +1214,7 @@ diagram file exists. `verify` checks navigable `.md` and `.mmd` targets while
 ignoring link-shaped examples inside Markdown code. Generator tests parse their
 output with the real Mermaid parser; parser packages remain development-only.
 
-### Phase 4 — MCP server ✅ criterion: connected to Claude Code, the 6 tools work; `livewiki_write_doc` rejects a path outside `livewiki/` and content that fails verify
+### Phase 4 — MCP server ✅ criterion: connected to Claude Code, the MCP tools work; `livewiki_write_doc` rejects a path outside `livewiki/` and content that fails verify
 FTS5 for search, stdio server, integration tests with the MCP inspector.
 
 ### Phase 5 — Skills, hooks, and complete incremental mode ✅ criterion: end-to-end flow — agent changes code, hook detects, agent pays off the debt via MCP, `verify` passes, manifest updated

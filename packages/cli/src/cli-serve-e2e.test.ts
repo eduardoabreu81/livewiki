@@ -4,7 +4,7 @@
  * stdio with the official SDK client, asserting:
  *
  *   1. The initialize handshake succeeds.
- *   2. Exactly the 7 documented tools are listed.
+ *   2. Exactly the 8 documented tools are listed.
  *   3. stdout carries ONLY the MCP protocol (any diagnostic on stderr).
  *   4. Closing the client terminates the child process (no orphan).
  *      The exit CODE is deliberately NOT asserted: the SDK transport
@@ -33,6 +33,7 @@ const EXPECTED_TOOLS = [
   "livewiki_read",
   "livewiki_search",
   "livewiki_debt",
+  "livewiki_next_task",
   "livewiki_write_doc",
   "livewiki_resolve_debt",
   "livewiki_impact",
@@ -62,7 +63,7 @@ function cliBin(): string {
 }
 
 describe("livewiki serve (MCP over stdio, real binary)", () => {
-  it("handshakes, lists the 7 tools, and shuts down cleanly", async () => {
+  it("handshakes, lists the 8 tools, and shuts down cleanly", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [cliBin(), "serve", "--repo", repoRoot],

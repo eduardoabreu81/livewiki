@@ -12,6 +12,9 @@
  * Phase 3 adds a 7th tool:
  *   - livewiki_impact      — blast radius de um símbolo (callers + páginas afetadas)
  *
+ * Agent bootstrap adds an 8th tool:
+ *   - livewiki_next_task   — entrega a próxima tarefa validada da fila MCP
+ *
  * Princípio arquitetural: escrita passa por core/safe-io (regra #1 da SPEC).
  * write_doc valida o path contra allowlist (livewiki/, .livewiki/) E roda
  * `verify` no conteúdo antes de aceitar. Path fora de livewiki/ é erro;
@@ -76,6 +79,9 @@ const TOOL_HINTS: Record<string, ToolHint[]> = {
     { tool: "livewiki_write_doc", when: "to update an affected page after changing the code it documents" },
     { tool: "livewiki_debt", when: "to check open documentation debt for the changed symbols (repo-wide impact mode)" },
   ],
+  livewiki_next_task: [
+    { tool: "livewiki_write_doc", when: "to submit the task result with the returned taskId" },
+  ],
   livewiki_write_doc: [
     { tool: "livewiki_debt", when: "to re-check which debt items remain open after the write" },
     { tool: "livewiki_resolve_debt", when: "to close the debt items this write addressed" },
@@ -98,6 +104,10 @@ import { recordUpdateMetric } from "@livewiki/core/update-metrics";
 import { CHARS_PER_TOKEN } from "@livewiki/core/update";
 import { run as runIndexer } from "@livewiki/core/indexer";
 import { run as runLedger } from "@livewiki/core/anchor-ledger";
+import {
+  nextAgentBootstrapTask,
+  submitAgentBootstrapTask,
+} from "@livewiki/core/agent-bootstrap";
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs/promises";
 import { watch, realpathSync, type FSWatcher } from "node:fs";
@@ -268,7 +278,7 @@ function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
 }
 
 /**
- * Cria e configura o McpServer com as 6 tools. NÃO conecta o transport —
+ * Cria e configura o McpServer com as 8 tools. NÃO conecta o transport —
  * isso fica a cargo do caller (index.ts usa StdioServerTransport).
  */
 export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
@@ -461,19 +471,54 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     },
   );
 
+  // ─── livewiki_next_task ────────────────────────────────────────────────
+  // Starts or resumes the deterministic agent bootstrap queue. The response
+  // carries source paths, never source bytes; the connected agent reads the
+  // checkout with its own tools and submits Markdown through write_doc.
+  server.tool(
+    "livewiki_next_task",
+    "Starts or resumes a full wiki bootstrap written by this MCP client. Returns the next prioritized Markdown task with its target path, complete closed symbol-key list, source file paths, and canonical format contract. No provider, model, or API credential is required.",
+    {},
+    async () => {
+      try {
+        const result = await nextAgentBootstrapTask(repoRoot);
+        if (result.status !== "task") {
+          await reindexAllPages(searchIdx, repoRoot);
+        }
+        return textResult(
+          JSON.stringify(
+            { ...result, _hints: TOOL_HINTS.livewiki_next_task },
+            null,
+            2,
+          ),
+        );
+      } catch (err) {
+        return errorResult(
+          err instanceof Error ? err.message : "failed to load the agent bootstrap queue",
+        );
+      }
+    },
+  );
+
   // ─── livewiki_write_doc ────────────────────────────────────────────────
   // CRÍTICO (SPEC §"MCP tools"): valida allowlist (livewiki/) e roda verify
   // antes de aceitar. Path fora de livewiki/ → rejeitado. Conteúdo com
   // broken_anchor → rejeitado com detalhe.
   server.tool(
     "livewiki_write_doc",
-    "Writes or updates a wiki page. Path MUST be inside livewiki/ (allowlist). Content is validated via `verify` before being accepted — pages with broken anchors are rejected. Returns the verify result on success.",
+    "Writes or updates a wiki page. Path MUST be inside livewiki/ (allowlist). Content is validated via `verify` before being accepted — pages with broken anchors are rejected. Pass the taskId returned by livewiki_next_task to validate against that task's full page contract and complete it atomically.",
     {
       path: z
         .string()
         .min(1)
         .describe("Relative path inside livewiki/, e.g. 'livewiki/auth.md'"),
       content: z.string().describe("Full markdown content (with frontmatter)"),
+      taskId: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Optional task ID returned by livewiki_next_task"),
       /** Quando true, pula o verify (não recomendado; usar só pra escrever
        *  páginas legítimas como quickstart que não ancoram símbolos) */
       skipVerify: z
@@ -481,7 +526,39 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         .optional()
         .describe("Skip verify step (default false). Only use for non-anchor pages."),
     },
-    async ({ path, content, skipVerify }) => {
+    async ({ path, content, taskId, skipVerify }) => {
+      if (taskId !== undefined) {
+        if (skipVerify === true) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            "skipVerify cannot be used with an agent bootstrap task",
+          );
+        }
+        try {
+          const result = await submitAgentBootstrapTask({
+            repoRoot,
+            taskId,
+            path,
+            content,
+            verify,
+          });
+          if (!result.ok) {
+            return errorResult(JSON.stringify(result, null, 2));
+          }
+          // Queue writes can also synchronize deterministic hubs. Rebuild the
+          // small local FTS index so those companion changes are visible too.
+          await reindexAllPages(searchIdx, repoRoot);
+          return hintedTextResult(
+            "livewiki_write_doc",
+            `wrote ${result.writtenPaths.join(", ")} and completed task #${taskId} (verified)`,
+          );
+        } catch (err) {
+          return errorResult(
+            err instanceof Error ? err.message : `failed to submit task #${taskId}`,
+          );
+        }
+      }
+
       // 1) Allowlist — safe-io.validateDeclared já falha com PathOutsideAllowlistError.
       //    writeText chamará resolveAndValidate (com symlink check).
       try {

@@ -69,6 +69,46 @@ describe("batch human format — usageIncomplete", () => {
     expect(out).not.toContain(USAGE_INCOMPLETE_NOTE);
   });
 
+  it("reports agent-written run accounting as unavailable instead of zero tokens", () => {
+    const totals = {
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: null,
+      models: [] as string[],
+      usageIncomplete: true,
+    };
+    const out = formatStatusHuman({
+      run: {
+        id: 8,
+        status: "completed",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+        startedBy: "agent",
+        summary: {
+          totals,
+          byStage: {},
+          byModule: [],
+          tasksDone: 4,
+          tasksFailed: 0,
+          tasksPending: 0,
+          modulesRefined: null,
+          executor: "agent",
+          accounting: "unavailable",
+          topicRefine: "not-run",
+        },
+      },
+      totals,
+      byStage: {},
+      byModule: [],
+      tasks: [],
+      failures: [],
+      pricingRefDate: "2026-01-01",
+    });
+    expect(out).toContain("Tokens: unavailable");
+    expect(out).not.toContain("0 input + 0 output");
+    expect(out).not.toContain("estimated");
+  });
+
   it("formatResultHuman includes incomplete note when usageIncomplete", () => {
     const out = formatResultHuman({
       runId: 3,

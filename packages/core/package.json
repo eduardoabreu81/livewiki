@@ -98,6 +98,10 @@
       "types": "./dist/batch-status.d.ts",
       "import": "./dist/batch-status.js"
     },
+    "./agent-bootstrap": {
+      "types": "./dist/agent-bootstrap.d.ts",
+      "import": "./dist/agent-bootstrap.js"
+    },
     "./update": {
       "types": "./dist/update.d.ts",
       "import": "./dist/update.js"

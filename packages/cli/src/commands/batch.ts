@@ -218,45 +218,50 @@ export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusR
     }
   }
   lines.push("");
-  lines.push("Tokens (primary metric):");
   const t = report.totals;
-  lines.push(
-    `  Total:        ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output` +
-      (t.models.length > 0 ? `  (${t.models.join(", ")})` : ""),
-  );
-  if (t.usageIncomplete) {
-    lines.push(`  ${USAGE_INCOMPLETE_NOTE}`);
-  }
-  for (const [stage, u] of Object.entries(report.byStage)) {
-    lines.push(
-      `  Stage ${stage}:      ${u.inputTokens.toLocaleString()} input + ${u.outputTokens.toLocaleString()} output`,
-    );
-  }
-  // USD as a secondary line, always marked "estimated" — omitted without drama
-  // when the model has no pricing.
-  const hasAnyUsd = t.costUsd !== null
-    || Object.values(report.byStage).some((u) => u.costUsd !== null);
-  if (hasAnyUsd) {
-    lines.push("");
-    lines.push(`USD (estimated, table as of ${report.pricingRefDate}):`);
-    const totalStr = t.costUsd !== null ? `$${t.costUsd.toFixed(4)}` : "(no price)";
-    lines.push(`  Total:        ${totalStr}`);
-    for (const [stage, u] of Object.entries(report.byStage)) {
-      const c = u.costUsd !== null ? `$${u.costUsd.toFixed(4)}` : "(no price)";
-      lines.push(`  Stage ${stage}:      ${c}`);
-    }
+  const accountingUnavailable = report.run.summary?.accounting === "unavailable";
+  if (accountingUnavailable) {
+    lines.push("Tokens: unavailable (written by the connected agent; MCP does not report model usage)");
   } else {
-    lines.push("");
-    lines.push(`USD: omitted (no model with pricing in table as of ${report.pricingRefDate})`);
-  }
-  if (report.byModule.length > 0) {
-    lines.push("");
-    lines.push("Per module (tokens):");
-    for (const m of report.byModule) {
-      const usd = m.costUsd !== null ? `  ~$${m.costUsd.toFixed(4)}` : "";
+    lines.push("Tokens (primary metric):");
+    lines.push(
+      `  Total:        ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output` +
+        (t.models.length > 0 ? `  (${t.models.join(", ")})` : ""),
+    );
+    if (t.usageIncomplete) {
+      lines.push(`  ${USAGE_INCOMPLETE_NOTE}`);
+    }
+    for (const [stage, u] of Object.entries(report.byStage)) {
       lines.push(
-        `  ${m.module.padEnd(20)} ${m.inputTokens.toLocaleString()} + ${m.outputTokens.toLocaleString()}${usd}`,
+        `  Stage ${stage}:      ${u.inputTokens.toLocaleString()} input + ${u.outputTokens.toLocaleString()} output`,
       );
+    }
+    // USD as a secondary line, always marked "estimated" — omitted without drama
+    // when the model has no pricing.
+    const hasAnyUsd = t.costUsd !== null
+      || Object.values(report.byStage).some((u) => u.costUsd !== null);
+    if (hasAnyUsd) {
+      lines.push("");
+      lines.push(`USD (estimated, table as of ${report.pricingRefDate}):`);
+      const totalStr = t.costUsd !== null ? `$${t.costUsd.toFixed(4)}` : "(no price)";
+      lines.push(`  Total:        ${totalStr}`);
+      for (const [stage, u] of Object.entries(report.byStage)) {
+        const c = u.costUsd !== null ? `$${u.costUsd.toFixed(4)}` : "(no price)";
+        lines.push(`  Stage ${stage}:      ${c}`);
+      }
+    } else {
+      lines.push("");
+      lines.push(`USD: omitted (no model with pricing in table as of ${report.pricingRefDate})`);
+    }
+    if (report.byModule.length > 0) {
+      lines.push("");
+      lines.push("Per module (tokens):");
+      for (const m of report.byModule) {
+        const usd = m.costUsd !== null ? `  ~$${m.costUsd.toFixed(4)}` : "";
+        lines.push(
+          `  ${m.module.padEnd(20)} ${m.inputTokens.toLocaleString()} + ${m.outputTokens.toLocaleString()}${usd}`,
+        );
+      }
     }
   }
   if (report.failures.length > 0) {

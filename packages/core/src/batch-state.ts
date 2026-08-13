@@ -187,6 +187,12 @@ export interface TaskCheckpoint {
    * or run status.
    */
   communityCrossCheck?: CommunityCrossCheckReport;
+  /**
+   * MCP bootstrap queue metadata. Additive and absent from API-backed runs.
+   * The queue is generic by task kind; the persisted descriptor is enough
+   * to re-offer an abandoned task after the MCP server restarts.
+   */
+  agentTask?: import("./agent-bootstrap.js").PersistedAgentTask;
 }
 
 export interface TaskError {
@@ -291,6 +297,12 @@ export interface BatchRunSummary {
    * in summaries persisted before this field existed.
    */
   degradedPages?: string[];
+  /** Execution surface for additive status/report compatibility. */
+  executor?: "api" | "agent";
+  /** Agent sessions do not expose token usage; never report fabricated zero. */
+  accounting?: "available" | "unavailable";
+  /** The MCP bootstrap deliberately keeps the deterministic topic plan. */
+  topicRefine?: "not-run";
 }
 
 /** Módulo lightweight (sem symbolCount) pra serializar no summary_json. */

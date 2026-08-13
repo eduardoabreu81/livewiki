@@ -29,8 +29,19 @@ LLM.
 
 ### 2. Bootstrap once
 
-The unattended full-repository pass currently connects directly to an LLM
-API. Run the interactive wizard:
+Connect livewiki to your coding agent:
+
+```bash
+livewiki install
+```
+
+Through the MCP server, the agent can call `livewiki_next_task`, read the
+returned source paths, and submit each page with `livewiki_write_doc` and the
+returned `taskId`. This uses the model from the agent's existing session and
+requires no provider, model, or API credential in livewiki. The queue owns
+priority, bounded attempts, checkpoints, validation, and resume.
+
+For an unattended API-backed bootstrap, run the interactive wizard:
 
 ```bash
 livewiki config
@@ -60,15 +71,8 @@ custom base URL to reach an authenticated remote endpoint.
 
 ### 3. Maintain incrementally
 
-After the bootstrap, connect livewiki to the coding agent you already use:
-
-```bash
-livewiki install
-```
-
-The installer can wire the MCP server, git hooks, and document-as-you-go skill.
-The active agent then uses its existing session to inspect debt and update
-affected pages as code changes.
+After the bootstrap, the active agent uses the same MCP connection and its
+existing session to inspect debt and update affected pages as code changes.
 
 ```bash
 livewiki index     # detect changed, moved, and deleted symbols
