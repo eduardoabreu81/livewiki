@@ -7,6 +7,7 @@ import type { StatusReport } from "./status.js";
 import { run as runStatus } from "./status.js";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
+import { openIndex } from "./db.js";
 
 describe("status.formatHuman", () => {
   it("formats empty report", () => {
@@ -14,6 +15,7 @@ describe("status.formatHuman", () => {
       files: { total: 0, byLang: {}, tiers: {}, top: [] },
       symbols: { total: 0, byKind: {} },
       debt: {
+        baseline: "unavailable",
         total: 0,
         byEvent: { changed: 0, moved: 0, deleted: 0 },
         byAssignee: { agent: 0, human: 0 },
@@ -49,6 +51,7 @@ describe("status.formatHuman", () => {
         byKind: { function: 100, class: 30, method: 50, export: 20 },
       },
       debt: {
+        baseline: "available",
         total: 3,
         byEvent: { changed: 2, moved: 1, deleted: 0 },
         byAssignee: { agent: 2, human: 1 },
@@ -121,6 +124,7 @@ describe("status.formatHuman", () => {
       files: { total: 0, byLang: {}, tiers: {}, top: [] },
       symbols: { total: 0, byKind: {} },
       debt: {
+        baseline: "unavailable",
         total: 0,
         byEvent: { changed: 0, moved: 0, deleted: 0 },
         byAssignee: { agent: 0, human: 0 },
@@ -204,6 +208,7 @@ describe("status.formatHuman", () => {
       },
       symbols: { total: 15, byKind: { function: 15 } },
       debt: {
+        baseline: "unavailable",
         total: 0,
         byEvent: { changed: 0, moved: 0, deleted: 0 },
         byAssignee: { agent: 0, human: 0 },
@@ -229,6 +234,7 @@ describe("status.formatHuman", () => {
       },
       symbols: { total: 4, byKind: { function: 4 } },
       debt: {
+        baseline: "unavailable",
         total: 0,
         byEvent: { changed: 0, moved: 0, deleted: 0 },
         byAssignee: { agent: 0, human: 0 },
@@ -249,6 +255,7 @@ describe("status.formatHuman", () => {
       files: { total: 0, byLang: {}, tiers: {}, top: [] },
       symbols: { total: 0, byKind: {} },
       debt: {
+        baseline: "available",
         total: 1,
         byEvent: { changed: 1, moved: 0, deleted: 0 },
         byAssignee: { agent: 1, human: 0 },
@@ -272,6 +279,62 @@ describe("status.formatHuman", () => {
     };
     const out = formatHuman(report);
     expect(out).toContain("[changed] agent src/b.ts#beta [risk 50]");
+  });
+});
+
+describe("status debt baseline", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), "livewiki-status-baseline-"));
+    await mkdir(join(repoRoot, ".livewiki"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  function deleteLedgerRuns(): void {
+    const db = openIndex(join(repoRoot, ".livewiki", "index.db"));
+    try {
+      db.prepare("DELETE FROM meta WHERE key = 'ledger_runs'").run();
+    } finally {
+      db.close();
+    }
+  }
+
+  it("reports unavailable after the first ledger run and preserves existing debt fields", async () => {
+    await runLedger(repoRoot, { quiet: true });
+
+    const report = await runStatus(repoRoot);
+    expect(report.debt.baseline).toBe("unavailable");
+    expect(report.debt).toMatchObject({
+      total: 0,
+      byEvent: { changed: 0, moved: 0, deleted: 0 },
+      byAssignee: { agent: 0, human: 0 },
+      items: [],
+    });
+  });
+
+  it("reports available after the second ledger run", async () => {
+    await runLedger(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    expect((await runStatus(repoRoot)).debt.baseline).toBe("available");
+  });
+
+  it("treats a pre-existing database without ledger_runs as mature and keeps it mature", async () => {
+    await runLedger(repoRoot, { quiet: true });
+    deleteLedgerRuns();
+
+    expect((await runStatus(repoRoot)).debt.baseline).toBe("available");
+
+    await runLedger(repoRoot, { quiet: true });
+    expect((await runStatus(repoRoot)).debt.baseline).toBe("available");
+  });
+
+  it("reports unavailable when neither ledger_runs nor last_ledger_at exists", async () => {
+    expect((await runStatus(repoRoot)).debt.baseline).toBe("unavailable");
   });
 });
 

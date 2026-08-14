@@ -619,7 +619,15 @@ async function orchestrate(
       "AND key IN (SELECT key FROM symbols WHERE status = 'active')",
   );
 
-  // 10. Meta: last ledger timestamp.
+  // 10. Meta: ledger maturity and last ledger timestamp. Databases created
+  // before ledger_runs existed already have last_ledger_at; seed those at 2
+  // so their next run cannot be misclassified as a first-ever comparison.
+  db.prepare(
+    "INSERT INTO meta (key, value) " +
+      "VALUES ('ledger_runs', CASE WHEN EXISTS " +
+      "(SELECT 1 FROM meta WHERE key = 'last_ledger_at') THEN '2' ELSE '1' END) " +
+      "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+  ).run();
   db.prepare(
     "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_ledger_at', ?)",
   ).run(String(Date.now()));

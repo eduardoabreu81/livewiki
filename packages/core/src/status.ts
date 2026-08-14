@@ -31,6 +31,7 @@ import { loadGoModulePath, loadRustCrateName } from "./import-resolution.js";
 
 /** Coverage tier of a language (SPEC §"Coverage ladder"). */
 export type LangTier = "anchored" | "prose";
+export type DebtBaseline = "available" | "unavailable";
 
 /**
  * Languages whose files have a tree-sitter grammar (tier 1): the values of
@@ -80,6 +81,7 @@ export interface StatusReport {
     byKind: Record<string, number>;
   };
   debt: {
+    baseline: DebtBaseline;
     total: number;
     byEvent: { changed: number; moved: number; deleted: number };
     byAssignee: { agent: number; human: number };
@@ -259,11 +261,22 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
   const lastLedgerRow = db.prepare("SELECT value FROM meta WHERE key = 'last_ledger_at'").get() as
     | { value: string }
     | undefined;
+  const ledgerRunsRow = db.prepare("SELECT value FROM meta WHERE key = 'ledger_runs'").get() as
+    | { value: string }
+    | undefined;
+  const ledgerRuns = ledgerRunsRow ? Number.parseInt(ledgerRunsRow.value, 10) : null;
+  // Databases created before ledger_runs existed can still prove that the
+  // ledger ran from last_ledger_at. Treat that legacy state as mature rather
+  // than falsely reporting an unavailable baseline after an upgrade.
+  const debtBaseline: DebtBaseline =
+    ledgerRuns === null ? (lastLedgerRow ? "available" : "unavailable") :
+      ledgerRuns > 1 ? "available" : "unavailable";
 
   return {
     files: { total: files.length, byLang, tiers, top },
     symbols: { total: symbols.length, byKind },
     debt: {
+      baseline: debtBaseline,
       total: debtRows.length,
       byEvent: debtByEvent,
       byAssignee: debtByAssignee,

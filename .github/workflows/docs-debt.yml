@@ -1,8 +1,8 @@
 # Dogfood instance of packages/cli/templates/github-actions/docs-debt.yml.
-# Same mechanics, but builds the CLI from the checkout so the dogfood gate
-# validates the exact commit under test rather than the latest npm release.
-# It runs in report mode; flip LIVEWIKI_DEBT_MODE to enforce when desired.
-# Detection is deterministic — zero LLM tokens.
+# It builds the CLI from the checkout and reports four independent signals:
+# baseline availability, detected debt, verify issues, and undocumented symbols.
+# Fresh CI checkouts have no content-debt baseline, so this runs in report mode.
+# Indexing and verification are deterministic and spend zero LLM tokens.
 
 name: livewiki docs debt (dogfood)
 
@@ -49,36 +49,82 @@ jobs:
         shell: bash
         env:
           STATUS_JSON: ${{ runner.temp }}/livewiki-status.json
+          VERIFY_JSON: ${{ runner.temp }}/livewiki-verify.json
         run: |
           set -euo pipefail
           node packages/cli/dist/index.js status --json > "$STATUS_JSON"
+          node packages/cli/dist/index.js verify --json > "$VERIFY_JSON" || true
           node -e '
             const fs = require("node:fs");
             const s = JSON.parse(fs.readFileSync(process.env.STATUS_JSON, "utf8"));
+            const v = JSON.parse(fs.readFileSync(process.env.VERIFY_JSON, "utf8"));
             const debt = s.debt ?? { total: 0, byEvent: {}, items: [] };
+            const baseline = debt.baseline ?? "unavailable";
+            const issues = Array.isArray(v.issues) ? v.issues : [];
+            const undocumented = s.undocumented ?? { total: 0, sample: [] };
+            const cell = (value) => String(value ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
             const lines = [];
-            lines.push("## livewiki docs debt");
+            lines.push("## livewiki documentation health");
             lines.push("");
-            if (debt.total === 0) {
-              lines.push("**No documentation debt — zero tokens spent.**");
+            lines.push("### Baseline");
+            lines.push("");
+            if (baseline === "available") {
+              lines.push("**Available.** Content-debt comparisons use prior ledger state from this checkout.");
             } else {
-              lines.push(`**${debt.total} open debt item(s)** — changed: ${debt.byEvent.changed ?? 0}, ` +
-                `moved: ${debt.byEvent.moved ?? 0}, deleted: ${debt.byEvent.deleted ?? 0}.`);
+              lines.push("**Unavailable.** Content debt cannot be measured in this checkout: the index is new and has no previous ledger state.");
+            }
+            lines.push("");
+            lines.push("### Documentation debt");
+            lines.push("");
+            if (baseline === "unavailable") {
+              lines.push("**Not measurable in this checkout.** `changed` debt cannot be detected without a baseline; only `deleted` is reliable here.");
               lines.push("");
-              lines.push("| risk | event | assignee | anchor |");
-              lines.push("|---:|---|---|---|");
-              for (const it of (debt.items ?? []).slice(0, 10)) {
+              lines.push(`Detected anyway: ${debt.byEvent?.deleted ?? 0} deleted item(s).`);
+            } else {
+              lines.push(`**${debt.total ?? 0} open item(s).** Changed: ${debt.byEvent?.changed ?? 0}, ` +
+                `moved: ${debt.byEvent?.moved ?? 0}, deleted: ${debt.byEvent?.deleted ?? 0}.`);
+            }
+            const visibleDebtItems = baseline === "unavailable"
+              ? (debt.items ?? []).filter((item) => item.event === "deleted")
+              : (debt.items ?? []);
+            if (visibleDebtItems.length > 0) {
+              lines.push("");
+              lines.push("| risk | event | assignee | page | anchor |");
+              lines.push("|---:|---|---|---|---|");
+              for (const it of visibleDebtItems.slice(0, 10)) {
                 const risk = it.risk && typeof it.risk.score === "number" ? it.risk.score : "—";
-                lines.push(`| ${risk} | ${it.event} | ${it.assignee} | \`${it.symbol_key ?? it.wiki_path ?? "?"}\` |`);
+                lines.push(`| ${risk} | ${cell(it.event)} | ${cell(it.assignee)} | \`${cell(it.wiki_path ?? "—")}\` | \`${cell(it.symbol_key ?? "?")}\` |`);
               }
+            }
+            lines.push("");
+            lines.push("### Verify issues");
+            lines.push("");
+            lines.push(`**${issues.length} issue(s)** across ${v.pagesChecked ?? 0} page(s).`);
+            if (issues.length > 0) {
               lines.push("");
-              lines.push("Pay the debt with `livewiki update` (in-session) or `livewiki update --llm`, " +
-                "then `livewiki verify`. Detection above cost zero tokens.");
+              lines.push("| severity | code | page | detail |");
+              lines.push("|---|---|---|---|");
+              for (const issue of issues.slice(0, 10)) {
+                lines.push(`| ${cell(issue.severity)} | ${cell(issue.code)} | \`${cell(issue.wikiPath)}\` | ${cell(issue.detail)} |`);
+              }
+            }
+            lines.push("");
+            lines.push("### Undocumented symbols");
+            lines.push("");
+            lines.push(`**${undocumented.total ?? 0} undocumented symbol(s).**`);
+            if ((undocumented.sample ?? []).length > 0) {
+              lines.push("");
+              for (const item of undocumented.sample.slice(0, 10)) {
+                lines.push(`- \`${cell(item.symbol_key)}\``);
+              }
             }
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
             console.log(lines.join("\n"));
-            if (debt.total > 0 && process.env.LIVEWIKI_DEBT_MODE !== "report") {
-              console.error(`docs debt: ${debt.total} open item(s) — failing (mode=enforce)`);
+            const failures = [];
+            if (baseline === "unavailable") failures.push("content-debt baseline unavailable");
+            if (issues.length > 0) failures.push(`${issues.length} verify issue(s)`);
+            if (failures.length > 0 && process.env.LIVEWIKI_DEBT_MODE !== "report") {
+              console.error(`livewiki documentation gate: ${failures.join("; ")} — failing (mode=enforce)`);
               process.exit(1);
             }
           '

@@ -141,17 +141,23 @@ cp node_modules/@livewiki/cli/templates/github-actions/docs-debt.yml \
 
 **What it does:** checkout (`fetch-depth: 0`, because the risk/churn
 factor reads `git log`) → `livewiki index --quiet` → `livewiki status
---json` → a debt summary in the job's step summary. No secrets, no
-GitHub App, `contents: read` only. A no-debt merge costs **zero tokens**
-— that is the point: the anchor ledger answers "does this merge need
-docs?" deterministically.
+--json` + `livewiki verify --json` → four separate sections in the job
+summary: baseline availability, detected debt, verify issues, and
+undocumented symbols. No secrets, no GitHub App, `contents: read` only,
+and zero tokens of LLM usage.
+
+A fresh CI checkout has no prior ledger state, so changed content debt is
+not measurable there. The report says so explicitly; it never turns an
+unavailable baseline into a false zero.
 
 **Two modes** (env `LIVEWIKI_DEBT_MODE` at the top of the file):
 
-| Mode | Debt > 0 |
+| Mode | Behavior |
 |---|---|
-| `enforce` (default) | job FAILS — the red check on the merge is the notification |
-| `report` | never fails — the step summary is the only signal |
+| `report` (default) | never fails — the step summary is the signal |
+| `enforce` | fails when the baseline is unavailable or `verify` finds issues |
+
+Debt and undocumented totals are report-only in both modes.
 
 **v1 never calls an LLM and never writes anywhere.** The paid v2 sketch
 (provider pays the debt, then opens a draft PR with the merge author as

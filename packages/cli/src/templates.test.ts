@@ -3,6 +3,7 @@ import * as nodeFs from "node:fs/promises";
 import * as nodeFsSync from "node:fs";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -37,6 +38,46 @@ const skillsDir = nodePath.resolve(here, "..", "skills");
 function frontmatterField(content: string, field: string): string | null {
   const match = new RegExp(`^${field}:\\s*(.+)$`, "m").exec(content);
   return match?.[1]?.trim() ?? null;
+}
+
+function extractDocsDebtReporter(yaml: string): string {
+  const match = yaml.match(/node -e '\r?\n([\s\S]*?)\r?\n\s*'\s*$/);
+  expect(match, "docs-debt workflow must contain an inline Node reporter").not.toBeNull();
+  return match![1]!;
+}
+
+async function runDocsDebtReporter(
+  yaml: string,
+  status: unknown,
+  verify: unknown,
+  mode: "report" | "enforce",
+): Promise<{ exitCode: number | null; stdout: string; stderr: string; summary: string }> {
+  const tmp = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-docs-debt-reporter-"));
+  const statusPath = nodePath.join(tmp, "status.json");
+  const verifyPath = nodePath.join(tmp, "verify.json");
+  const summaryPath = nodePath.join(tmp, "summary.md");
+  try {
+    await nodeFs.writeFile(statusPath, JSON.stringify(status));
+    await nodeFs.writeFile(verifyPath, JSON.stringify(verify));
+    const result = spawnSync(process.execPath, ["-e", extractDocsDebtReporter(yaml)], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        STATUS_JSON: statusPath,
+        VERIFY_JSON: verifyPath,
+        GITHUB_STEP_SUMMARY: summaryPath,
+        LIVEWIKI_DEBT_MODE: mode,
+      },
+    });
+    return {
+      exitCode: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      summary: await nodeFs.readFile(summaryPath, "utf8"),
+    };
+  } finally {
+    await nodeFs.rm(tmp, { recursive: true, force: true });
+  }
 }
 
 describe("packaged skills", () => {
@@ -206,16 +247,18 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     expect(content).toMatch(/workflow_dispatch:/);
   });
 
-  it("detecção determinística: index --quiet + status --json, zero LLM", () => {
+  it("detecção determinística: index + status + verify, zero LLM", () => {
     expect(content).toMatch(/index\s+--quiet/);
     expect(content).toMatch(/status\s+--json/);
+    expect(content).toMatch(/verify\s+--json/);
     expect(content).toMatch(/zero tokens/i);
-    // v1 executa EXATAMENTE dois comandos CLI (index + status) — qualquer
+    // O reporter executa exatamente três comandos CLI (index + status + verify) — qualquer
     // caminho pago (update --llm) só existe como texto informativo.
     const calls = content.match(/npx --yes @livewiki\/cli \S+/g) ?? [];
     expect(calls.sort()).toEqual([
       "npx --yes @livewiki/cli index",
       "npx --yes @livewiki/cli status",
+      "npx --yes @livewiki/cli verify",
     ]);
   });
 
@@ -224,9 +267,97 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     expect(content).toMatch(/fetch-depth:\s*0/);
   });
 
-  it("modo enforce falha o job; toggle report documentado", () => {
-    expect(content).toMatch(/LIVEWIKI_DEBT_MODE:\s*enforce/);
+  it("usa report por padrão e documenta o gate fail-closed de enforce", () => {
+    expect(content).toMatch(/LIVEWIKI_DEBT_MODE:\s*report/);
+    expect(content).toMatch(/baseline === "unavailable"/);
+    expect(content).toMatch(/issues\.length > 0/);
     expect(content).toMatch(/LIVEWIKI_DEBT_MODE\s*!==\s*"report"/);
+    expect(content).not.toMatch(/debt\.total > 0/);
+    expect(content).not.toMatch(/undocumented\.total > 0/);
+  });
+
+  it("renderiza quatro seções honestas e aplica somente os gates decididos", async () => {
+    const status = {
+      debt: {
+        baseline: "unavailable",
+        total: 0,
+        byEvent: { changed: 0, moved: 0, deleted: 0 },
+        items: [],
+      },
+      undocumented: { total: 409, sample: [{ symbol_key: "src/a.ts#alpha" }] },
+    };
+    const cleanVerify = { ok: true, pagesChecked: 133, issues: [] };
+
+    const report = await runDocsDebtReporter(content, status, cleanVerify, "report");
+    expect(report.exitCode).toBe(0);
+    expect(report.summary).toContain("### Baseline");
+    expect(report.summary).toContain("**Unavailable.**");
+    expect(report.summary).toContain("### Documentation debt");
+    expect(report.summary).toContain("**Not measurable in this checkout.**");
+    expect(report.summary).toContain("Detected anyway: 0 deleted item(s).");
+    expect(report.summary).not.toContain("**0 open item(s).**");
+    expect(report.summary).toContain("### Verify issues");
+    expect(report.summary).toContain("**0 issue(s)** across 133 page(s).");
+    expect(report.summary).toContain("### Undocumented symbols");
+    expect(report.summary).toContain("**409 undocumented symbol(s).**");
+    expect(report.summary).not.toContain("No documentation debt");
+
+    const unavailableEnforce = await runDocsDebtReporter(
+      content,
+      status,
+      cleanVerify,
+      "enforce",
+    );
+    expect(unavailableEnforce.exitCode).toBe(1);
+    expect(unavailableEnforce.stderr).toContain("content-debt baseline unavailable");
+
+    const availableWithReportedTotals = {
+      ...status,
+      debt: {
+        ...status.debt,
+        baseline: "available",
+        total: 7,
+        byEvent: { changed: 7, moved: 0, deleted: 0 },
+        items: [
+          {
+            event: "changed",
+            assignee: "agent",
+            wiki_path: "livewiki/core-db.md",
+            symbol_key: "packages/core/src/db.ts#CURRENT_SCHEMA_VERSION",
+          },
+        ],
+      },
+    };
+    const totalsOnly = await runDocsDebtReporter(
+      content,
+      availableWithReportedTotals,
+      cleanVerify,
+      "enforce",
+    );
+    expect(totalsOnly.exitCode).toBe(0);
+    expect(totalsOnly.summary).toContain("| risk | event | assignee | page | anchor |");
+    expect(totalsOnly.summary).toContain("`livewiki/core-db.md`");
+
+    const brokenVerify = {
+      ok: false,
+      pagesChecked: 133,
+      issues: [
+        {
+          severity: "error",
+          code: "broken_anchor",
+          wikiPath: "livewiki/a.md",
+          detail: "src/a.ts#missing does not exist",
+        },
+      ],
+    };
+    const verifyEnforce = await runDocsDebtReporter(
+      content,
+      availableWithReportedTotals,
+      brokenVerify,
+      "enforce",
+    );
+    expect(verifyEnforce.exitCode).toBe(1);
+    expect(verifyEnforce.stderr).toContain("1 verify issue(s)");
   });
 
   it("dogfood (.github/workflows/docs-debt.yml) espelha os passos-chave via build local", async () => {
@@ -238,9 +369,11 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     expect(dogfood).toMatch(/pnpm -r build/);
     expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js index --quiet/);
     expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js status --json/);
+    expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js verify --json/);
     expect(dogfood).toMatch(/fetch-depth:\s*0/);
     // E roda em report mode na primeira janela (nunca falha).
     expect(dogfood).toMatch(/LIVEWIKI_DEBT_MODE:\s*report/);
+    expect(extractDocsDebtReporter(dogfood)).toBe(extractDocsDebtReporter(content));
   });
 });
 
