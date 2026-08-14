@@ -15,7 +15,7 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -24,7 +24,7 @@ export const SCHEMA_VERSION_KEY = "schema_version";
  *
  * Schema v3 (commit 6183214) adiciona:
  *   - debt.symbol_key — sobrevive ao anchor ser removida (resolve órfão)
- *   - idx_debt_open — índice parcial pra dedup de dívida aberta por (anchor_id, event)
+ *   - idx_debt_open — partial index for open documentation work
  *
  * Schema v4 (Fase 3 — contabilidade de tokens + batch resiliente):
  *   - batch_runs.started_by, finished_at, summary_json — auditoria completa do run
@@ -89,11 +89,10 @@ CREATE TABLE IF NOT EXISTS debt (
   doc_page_id INTEGER
 );
 
--- Dedup de dívida aberta por (anchor_id, event). Partial index WHERE
--- resolved_at IS NULL é leve (só linhas abertas) e cobre a query de checagem
--- usada pelo ledger em todo anchor.
+-- One open documentation work unit per symbol, page, and event. The COALESCE
+-- expression gives legacy/null page references a stable comparison key.
 CREATE INDEX IF NOT EXISTS idx_debt_open
-  ON debt(anchor_id, event) WHERE resolved_at IS NULL;
+  ON debt(symbol_key, COALESCE(doc_page_id, -1), event) WHERE resolved_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS undocumented (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -228,7 +227,7 @@ CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_symbols_status ON symbols(status);
 
 CREATE INDEX IF NOT EXISTS idx_debt_open
-  ON debt(anchor_id, event) WHERE resolved_at IS NULL;
+  ON debt(symbol_key, COALESCE(doc_page_id, -1), event) WHERE resolved_at IS NULL;
 `;
 
 /**
@@ -349,6 +348,42 @@ export function migrateV7ToV8(db: Database.Database): void {
 }
 
 /**
+ * v9: debt is a documentation work unit keyed by symbol, page, and event.
+ * Removes duplicate open rows left by legitimate page + section anchors and
+ * invalidates open `deleted` rows whose symbol is active again. Resolved rows
+ * are historical payment records and remain byte-for-byte untouched.
+ */
+export function migrateV8ToV9(db: Database.Database): void {
+  db.transaction(() => {
+    db.exec("DROP INDEX IF EXISTS idx_debt_open");
+    db.exec(`
+      DELETE FROM debt
+      WHERE resolved_at IS NULL
+        AND id NOT IN (
+          SELECT MIN(id)
+          FROM debt
+          WHERE resolved_at IS NULL
+          GROUP BY symbol_key, COALESCE(doc_page_id, -1), event
+        );
+
+      DELETE FROM debt
+      WHERE event = 'deleted'
+        AND resolved_at IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM symbols
+          WHERE symbols.key = debt.symbol_key
+            AND symbols.status = 'active'
+        );
+
+      CREATE INDEX idx_debt_open
+        ON debt(symbol_key, COALESCE(doc_page_id, -1), event)
+        WHERE resolved_at IS NULL;
+    `);
+  })();
+}
+
+/**
  * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
  * Cada entry é o SQL (string) OU a função (db) => void pra aplicar quando o
  * DB está em uma versão menor.
@@ -377,6 +412,7 @@ export function postV3Migrations(
   if (fromVersion < 6 && toVersion >= 6) out.push(migrateV5ToV6);
   if (fromVersion < 7 && toVersion >= 7) out.push(migrateV6ToV7);
   if (fromVersion < 8 && toVersion >= 8) out.push(migrateV7ToV8);
+  if (fromVersion < 9 && toVersion >= 9) out.push(migrateV8ToV9);
   return out;
 }
 
@@ -394,6 +430,24 @@ export function openIndex(dbPath: string): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("synchronous = NORMAL");
+
+  // SCHEMA_SQL carries the v9 index expression, which references columns that
+  // pre-v8 databases do not have yet. A temporary legacy index with the same
+  // name lets CREATE INDEX IF NOT EXISTS remain safe until migrations add the
+  // columns; migrateV8ToV9 then replaces it with the current definition.
+  const legacyDebt = db.prepare(
+    "SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = 'debt'",
+  ).get() as { hit: number } | undefined;
+  if (legacyDebt) {
+    const debtColumns = db.prepare("PRAGMA table_info(debt)").all() as Array<{ name: string }>;
+    const names = new Set(debtColumns.map((column) => column.name));
+    if (!names.has("symbol_key") || !names.has("doc_page_id")) {
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_debt_open " +
+          "ON debt(anchor_id, event) WHERE resolved_at IS NULL",
+      );
+    }
+  }
   db.exec(SCHEMA_SQL);
 
   const versionRow = db

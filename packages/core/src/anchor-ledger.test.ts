@@ -405,7 +405,7 @@ anchors:
     expect(debts).toEqual([{ event: "deleted", n: 1 }]);
   });
 
-it("editar função 3x: dedup mantém 1 changed aberta até ser resolvida", async () => {
+  it("editar função 3x: dedup mantém 1 changed aberta até ser resolvida", async () => {
     // Mudanças consecutivas do mesmo símbolo (sem a doc ter sido atualizada)
     // resultam em UMA única dívida "changed" aberta — Fix B dedup via hasOpenDebt.
     // Resolução só acontece quando o author da wiki atualiza o anchor (manual ou
@@ -434,6 +434,103 @@ anchors:
     );
     // 3 edições consecutivas, mesma anchor, sem resolução → 1 changed aberta.
     expect(debts).toEqual([{ event: "changed", n: 1 }]);
+  });
+
+  it("counts frontmatter and section anchors for one symbol on one page as one changed debt", async () => {
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+
+## Bar
+<!-- lw:anchors src/foo.ts#bar -->
+Documents bar.
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    expect(
+      nodeSqliteQuery(repoRoot, "SELECT COUNT(*) AS n FROM anchors"),
+    ).toEqual([{ n: 2 }]);
+
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    const result = await runLedger(repoRoot, { quiet: true });
+
+    expect(result.debtCreated).toBe(1);
+    expect(result.debtByEvent.changed).toBe(1);
+    expect(
+      nodeSqliteQuery(
+        repoRoot,
+        "SELECT symbol_key, doc_page_id, event FROM debt WHERE resolved_at IS NULL",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("keeps changed debt separate when the same symbol is anchored on two pages", async () => {
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    for (const page of ["one", "two"]) {
+      await writeWiki(`livewiki/${page}.md`, `---
+title: ${page}
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+`);
+    }
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    const result = await runLedger(repoRoot, { quiet: true });
+
+    expect(result.debtCreated).toBe(2);
+    expect(result.debtByEvent.changed).toBe(2);
+    expect(
+      nodeSqliteQuery(
+        repoRoot,
+        "SELECT COUNT(DISTINCT doc_page_id) AS n FROM debt WHERE event = 'changed' AND resolved_at IS NULL",
+      ),
+    ).toEqual([{ n: 2 }]);
+  });
+
+  it("deletes stale deleted debt when the symbol reappears and leaves the real changed debt", async () => {
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    expect(
+      nodeSqliteQuery(
+        repoRoot,
+        "SELECT event, resolved_at FROM debt ORDER BY id",
+      ),
+    ).toEqual([{ event: "deleted", resolved_at: null }]);
+
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    const result = await runLedger(repoRoot, { quiet: true });
+
+    expect(result.debtCreated).toBe(1);
+    expect(result.debtByEvent.changed).toBe(1);
+    expect(
+      nodeSqliteQuery(
+        repoRoot,
+        "SELECT event, resolved_at FROM debt ORDER BY id",
+      ),
+    ).toEqual([{ event: "changed", resolved_at: null }]);
   });
 });
 

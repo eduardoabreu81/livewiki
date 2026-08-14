@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
-import { openIndex, CURRENT_SCHEMA_VERSION, SCHEMA_VERSION_KEY } from "./db.js";
+import {
+  openIndex,
+  CURRENT_SCHEMA_VERSION,
+  SCHEMA_VERSION_KEY,
+  migrateV8ToV9,
+} from "./db.js";
 
 let dbPath: string;
 
@@ -459,6 +464,177 @@ describe("db.openIndex", () => {
         .all() as Array<{ id: number; doc_page_id: number | null }>;
       expect(rows[0]!.doc_page_id).toBe(1); // backfilled from the anchor
       expect(rows[1]!.doc_page_id).toBeNull(); // no anchor — stays null
+    } finally {
+      db.close();
+    }
+  });
+
+  it("migrates v8 to v9: deduplicates open work units, preserves the lowest id and resolved history, and removes stale deleted debt", () => {
+    const Database = require("better-sqlite3");
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '8');
+      CREATE TABLE files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        path TEXT NOT NULL UNIQUE,
+        lang TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        mtime INTEGER NOT NULL,
+        indexed_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
+      );
+      INSERT INTO files (id, path, lang, content_hash, size, mtime, indexed_at, status)
+        VALUES (1, 'src/a.ts', 'typescript', 'fh', 1, 1, 1, 'active');
+      CREATE TABLE symbols (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id),
+        key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        signature TEXT,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
+      );
+      INSERT INTO symbols (file_id, key, name, kind, start_line, end_line, content_hash, status)
+        VALUES (1, 'src/a.ts#active', 'active', 'function', 1, 1, 'sh', 'active');
+      CREATE TABLE doc_pages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wiki_path TEXT NOT NULL UNIQUE,
+        owner TEXT NOT NULL,
+        title TEXT
+      );
+      INSERT INTO doc_pages (id, wiki_path, owner, title) VALUES
+        (1, 'livewiki/a.md', 'generated', 'A'),
+        (2, 'livewiki/b.md', 'generated', 'B');
+      CREATE TABLE anchors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_page_id INTEGER,
+        section_slug TEXT,
+        symbol_key TEXT NOT NULL,
+        symbol_hash_at_doc TEXT NOT NULL,
+        in_manual_block INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO anchors (id, doc_page_id, section_slug, symbol_key, symbol_hash_at_doc, created_at) VALUES
+        (10, 1, NULL, 'src/a.ts#active', 'old', 1),
+        (11, 1, 'active', 'src/a.ts#active', 'old', 1),
+        (12, 2, NULL, 'src/a.ts#active', 'old', 1);
+      CREATE TABLE debt (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        anchor_id INTEGER,
+        event TEXT NOT NULL,
+        assignee TEXT NOT NULL,
+        symbol_key TEXT,
+        detail TEXT,
+        detected_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        doc_page_id INTEGER
+      );
+      CREATE INDEX idx_debt_open ON debt(anchor_id, event) WHERE resolved_at IS NULL;
+      INSERT INTO debt (id, anchor_id, event, assignee, symbol_key, detected_at, resolved_at, doc_page_id) VALUES
+        (101, 10, 'changed', 'agent', 'src/a.ts#active', 1, NULL, 1),
+        (102, 11, 'changed', 'agent', 'src/a.ts#active', 2, NULL, 1),
+        (103, 12, 'changed', 'agent', 'src/a.ts#active', 3, NULL, 2),
+        (104, NULL, 'changed', 'agent', 'src/missing.ts#orphan', 4, NULL, NULL),
+        (105, NULL, 'changed', 'agent', 'src/missing.ts#orphan', 5, NULL, NULL),
+        (106, 11, 'changed', 'agent', 'src/a.ts#active', 6, 7, 1),
+        (107, 10, 'deleted', 'agent', 'src/a.ts#active', 8, NULL, 1),
+        (108, NULL, 'deleted', 'agent', 'src/missing.ts#gone', 9, NULL, 1);
+    `);
+    legacyDb.close();
+
+    const db = openIndex(dbPath);
+    try {
+      expect(CURRENT_SCHEMA_VERSION).toBe(9);
+      const version = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(version?.value).toBe("9");
+
+      const rows = db.prepare(
+        "SELECT id, event, symbol_key, doc_page_id, resolved_at FROM debt ORDER BY id",
+      ).all();
+      expect(rows).toEqual([
+        { id: 101, event: "changed", symbol_key: "src/a.ts#active", doc_page_id: 1, resolved_at: null },
+        { id: 103, event: "changed", symbol_key: "src/a.ts#active", doc_page_id: 2, resolved_at: null },
+        { id: 104, event: "changed", symbol_key: "src/missing.ts#orphan", doc_page_id: null, resolved_at: null },
+        { id: 106, event: "changed", symbol_key: "src/a.ts#active", doc_page_id: 1, resolved_at: 7 },
+        { id: 108, event: "deleted", symbol_key: "src/missing.ts#gone", doc_page_id: 1, resolved_at: null },
+      ]);
+
+      const indexSql = db.prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_debt_open'",
+      ).get() as { sql: string };
+      expect(indexSql.sql).toContain("symbol_key");
+      expect(indexSql.sql).toContain("COALESCE(doc_page_id, -1)");
+
+      migrateV8ToV9(db);
+      expect(db.prepare("SELECT id FROM debt ORDER BY id").all()).toEqual([
+        { id: 101 },
+        { id: 103 },
+        { id: 104 },
+        { id: 106 },
+        { id: 108 },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("deduplicates null-page debt without collapsing it into page-scoped debt", () => {
+    const db = openIndex(dbPath);
+    try {
+      db.prepare(
+        "INSERT INTO doc_pages (wiki_path, owner, content_hash, updated_at) VALUES (?, ?, ?, ?)",
+      ).run("livewiki/a.md", "generated", "h", 1);
+      const insertDebt = db.prepare(
+        "INSERT INTO debt (anchor_id, event, assignee, symbol_key, detected_at, doc_page_id) " +
+          "VALUES (NULL, 'changed', 'agent', ?, ?, ?)",
+      );
+      insertDebt.run("src/a.ts#alpha", 1, null);
+      insertDebt.run("src/a.ts#alpha", 2, null);
+      insertDebt.run("src/a.ts#alpha", 3, 1);
+
+      migrateV8ToV9(db);
+
+      expect(
+        db.prepare(
+          "SELECT id, symbol_key, doc_page_id, event FROM debt ORDER BY id",
+        ).all(),
+      ).toEqual([
+        { id: 1, symbol_key: "src/a.ts#alpha", doc_page_id: null, event: "changed" },
+        { id: 3, symbol_key: "src/a.ts#alpha", doc_page_id: 1, event: "changed" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v8 → v9 migration is idempotent: running it on a v9 DB preserves every debt row", () => {
+    openIndex(dbPath).close();
+    const db = openIndex(dbPath);
+    try {
+      db.prepare(
+        "INSERT INTO debt (anchor_id, event, assignee, symbol_key, detected_at, resolved_at, doc_page_id) " +
+          "VALUES (NULL, 'changed', 'agent', 'src/a.ts#alpha', 1, NULL, NULL)",
+      ).run();
+      db.prepare(
+        "INSERT INTO debt (anchor_id, event, assignee, symbol_key, detected_at, resolved_at, doc_page_id) " +
+          "VALUES (NULL, 'changed', 'agent', 'src/a.ts#alpha', 2, 3, NULL)",
+      ).run();
+      const before = db.prepare("SELECT * FROM debt ORDER BY id").all();
+
+      expect(() => migrateV8ToV9(db)).not.toThrow();
+
+      expect(db.prepare("SELECT * FROM debt ORDER BY id").all()).toEqual(before);
+      const version = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
+        | { value: string }
+        | undefined;
+      expect(version?.value).toBe("9");
     } finally {
       db.close();
     }

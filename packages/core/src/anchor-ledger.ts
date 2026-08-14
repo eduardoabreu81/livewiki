@@ -516,7 +516,7 @@ async function orchestrate(
       // symbol sumiu do código (não está no índice)
       // Se for o resultado de um moved, sym exists com novo nome — mas ca.symbolKey já foi atualizado
       const anchorId = prev?.id ?? null;
-      if (anchorId !== null && hasOpenDebt(db, anchorId, "deleted")) {
+      if (hasOpenDebt(db, ca.symbolKey, ca.docPageId, "deleted")) {
         // dedup — não recriar dívida já aberta
       } else {
         createDebt(db, anchorId, "deleted", assignee, null, ca.symbolKey, ca.docPageId);
@@ -526,9 +526,13 @@ async function orchestrate(
       continue;
     }
 
+    // A prior deletion stopped being true when the symbol reappeared. Remove
+    // the stale row instead of resolving it: no documentation work paid it.
+    deleteOpenDebt(db, ca.symbolKey, ca.docPageId, "deleted");
+
     // symbol existe — checa hash
     if (prev && prev.symbol_hash_at_doc !== sym.content_hash) {
-      if (!hasOpenDebt(db, prev.id, "changed")) {
+      if (!hasOpenDebt(db, ca.symbolKey, ca.docPageId, "changed")) {
         createDebt(db, prev.id, "changed", assignee, null, ca.symbolKey, ca.docPageId);
         result.debtCreated++;
         result.debtByEvent.changed++;
@@ -564,7 +568,9 @@ async function orchestrate(
       const newIdentityKey = `${info.docPageId}|${sectionPart}|${newKey}`;
       const canonicalId = canonicalAnchorIdByNewIdentity.get(newIdentityKey);
       if (canonicalId === undefined) continue;
-      if (hasOpenDebt(db, canonicalId, "moved")) continue;
+      // Moved debt keeps its canonical-anchor identity. Unlike changed and
+      // deleted work, its assignee can differ by manual/generated occurrence.
+      if (hasOpenDebtByAnchor(db, canonicalId, "moved")) continue;
       const assignee = assigneeFor(info.owner, info.inManualBlock);
       const detail = JSON.stringify({ from: oldKey, to: newKey });
       createDebt(db, canonicalId, "moved", assignee, detail, newKey, info.docPageId);
@@ -726,21 +732,48 @@ function createDebt(
 
 /**
  * Fix B (achado revisão Fase 2): dedup de dívida.
- * Retorna true se já existe dívida ABERTA (resolved_at IS NULL) para a
- * (anchor_id, event). Usado para evitar que cada `index` re-flagre os mesmos
- * itens. O índice parcial `idx_debt_open` torna essa query O(1).
+ * Returns true when one open documentation work unit already exists for the
+ * same symbol, page, and event. A page-level and a section-level anchor for
+ * the same symbol are evidence for one page update, not two debts.
  */
 function hasOpenDebt(
   db: import("better-sqlite3").Database,
-  anchorId: number,
+  symbolKey: string,
+  docPageId: number | null,
   event: DebtEvent,
 ): boolean {
   const row = db
     .prepare(
-      "SELECT 1 AS hit FROM debt WHERE anchor_id = ? AND event = ? " +
+      "SELECT 1 AS hit FROM debt WHERE symbol_key = ? " +
+        "AND COALESCE(doc_page_id, -1) = COALESCE(?, -1) AND event = ? " +
         "AND resolved_at IS NULL LIMIT 1",
     )
-    .get(anchorId, event) as { hit: number } | undefined;
+    .get(symbolKey, docPageId, event) as { hit: number } | undefined;
+  return row !== undefined;
+}
+
+function deleteOpenDebt(
+  db: import("better-sqlite3").Database,
+  symbolKey: string,
+  docPageId: number | null,
+  event: DebtEvent,
+): void {
+  db.prepare(
+    "DELETE FROM debt WHERE symbol_key = ? " +
+      "AND COALESCE(doc_page_id, -1) = COALESCE(?, -1) AND event = ? " +
+      "AND resolved_at IS NULL",
+  ).run(symbolKey, docPageId, event);
+}
+
+function hasOpenDebtByAnchor(
+  db: import("better-sqlite3").Database,
+  anchorId: number,
+  event: DebtEvent,
+): boolean {
+  const row = db.prepare(
+    "SELECT 1 AS hit FROM debt WHERE anchor_id = ? AND event = ? " +
+      "AND resolved_at IS NULL LIMIT 1",
+  ).get(anchorId, event) as { hit: number } | undefined;
   return row !== undefined;
 }
 

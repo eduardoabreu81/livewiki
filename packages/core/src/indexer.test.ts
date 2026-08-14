@@ -122,7 +122,7 @@ describe("indexer end-to-end", () => {
     expect(report.symbols.byKind.method).toBe(2);
     expect(report.symbols.byKind.function).toBe(2);
     expect(report.symbols.byKind.export).toBe(1);
-    expect(report.meta.schemaVersion).toBe(8);
+    expect(report.meta.schemaVersion).toBe(9);
   });
 
   it("indexes duplicate method names and persists one active row per key", async () => {
