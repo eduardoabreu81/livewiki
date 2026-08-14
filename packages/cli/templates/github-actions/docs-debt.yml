@@ -32,6 +32,7 @@ permissions:
 env:
   # report: never fails — the step summary is the signal (safe default).
   # enforce: fails when baseline is unavailable or verify finds issues.
+  # Today enforce fails on every CI run because fresh checkouts never have a baseline; it becomes useful once baselines are recorded in the repository.
   LIVEWIKI_DEBT_MODE: report
 
 jobs:

@@ -159,6 +159,10 @@ unavailable baseline into a false zero.
 
 Debt and undocumented totals are report-only in both modes.
 
+Today `enforce` fails on every CI run: a fresh checkout never has a
+baseline. It becomes useful once livewiki records baselines in the
+repository itself.
+
 **v1 never calls an LLM and never writes anywhere.** The paid v2 sketch
 (provider pays the debt, then opens a draft PR with the merge author as
 reviewer): configure provider secrets, run `livewiki update --llm`,
