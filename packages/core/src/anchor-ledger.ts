@@ -516,6 +516,9 @@ async function orchestrate(
       // symbol sumiu do código (não está no índice)
       // Se for o resultado de um moved, sym exists com novo nome — mas ca.symbolKey já foi atualizado
       const anchorId = prev?.id ?? null;
+      if (assignee === "human") {
+        promoteOpenDebtToHuman(db, ca.symbolKey, ca.docPageId, "deleted");
+      }
       if (hasOpenDebt(db, ca.symbolKey, ca.docPageId, "deleted")) {
         // dedup — não recriar dívida já aberta
       } else {
@@ -529,6 +532,14 @@ async function orchestrate(
     // A prior deletion stopped being true when the symbol reappeared. Remove
     // the stale row instead of resolving it: no documentation work paid it.
     deleteOpenDebt(db, ca.symbolKey, ca.docPageId, "deleted");
+
+    // Ownership promotion is independent of hash divergence so databases
+    // that persisted the pre-fix agent assignment self-correct on the next
+    // ledger run. Promotion is monotonic: agent occurrences never demote an
+    // existing human-owned work unit.
+    if (assignee === "human") {
+      promoteOpenDebtToHuman(db, ca.symbolKey, ca.docPageId, "changed");
+    }
 
     // symbol existe — checa hash
     if (prev && prev.symbol_hash_at_doc !== sym.content_hash) {
@@ -750,6 +761,19 @@ function hasOpenDebt(
     )
     .get(symbolKey, docPageId, event) as { hit: number } | undefined;
   return row !== undefined;
+}
+
+function promoteOpenDebtToHuman(
+  db: import("better-sqlite3").Database,
+  symbolKey: string,
+  docPageId: number | null,
+  event: DebtEvent,
+): void {
+  db.prepare(
+    "UPDATE debt SET assignee = 'human' WHERE symbol_key = ? " +
+      "AND COALESCE(doc_page_id, -1) = COALESCE(?, -1) AND event = ? " +
+      "AND resolved_at IS NULL AND assignee = 'agent'",
+  ).run(symbolKey, docPageId, event);
 }
 
 function deleteOpenDebt(

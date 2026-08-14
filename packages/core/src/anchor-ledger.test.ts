@@ -186,6 +186,112 @@ anchors:
     expect(debts).toContainEqual({ event: "changed", assignee: "human" });
   });
 
+  it("promotes deduplicated changed debt to human when a matching section anchor is manual", async () => {
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+
+## Manual
+<!-- lw:manual -->
+<!-- lw:anchors src/foo.ts#bar -->
+Human-maintained documentation.
+<!-- /lw:manual -->
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    const result = await runLedger(repoRoot, { quiet: true });
+
+    expect(result.debtCreated).toBe(1);
+    expect(result.debtByEvent.changed).toBe(1);
+    expect(
+      nodeSqliteQuery(
+        repoRoot,
+        "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
+      ),
+    ).toEqual([{ event: "changed", assignee: "human" }]);
+  });
+
+  it("self-corrects previously misassigned changed debt without another code change", async () => {
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+
+## Manual
+<!-- lw:manual -->
+<!-- lw:anchors src/foo.ts#bar -->
+Human-maintained documentation.
+<!-- /lw:manual -->
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    nodeSqliteExec(
+      repoRoot,
+      "UPDATE debt SET assignee = 'agent' WHERE event = 'changed' AND resolved_at IS NULL",
+    );
+
+    const result = await runLedger(repoRoot, { quiet: true });
+
+    expect(result.debtCreated).toBe(0);
+    expect(result.debtByEvent.changed).toBe(0);
+    expect(
+      nodeSqliteQuery(
+        repoRoot,
+        "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
+      ),
+    ).toEqual([{ event: "changed", assignee: "human" }]);
+  });
+
+  it("never demotes an open human debt when later occurrences resolve to agent", async () => {
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: human
+anchors:
+  - src/foo.ts#bar
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/foo.ts", "export function bar() { return 2; }");
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+`);
+    await writeCode("src/foo.ts", "export function bar() { return 3; }");
+    await runIndexer(repoRoot, { quiet: true });
+    const result = await runLedger(repoRoot, { quiet: true });
+
+    expect(result.debtCreated).toBe(0);
+    expect(
+      nodeSqliteQuery(
+        repoRoot,
+        "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
+      ),
+    ).toEqual([{ event: "changed", assignee: "human" }]);
+  });
+
   it("section anchor também gera changed ao editar função ancorada", async () => {
     await writeCode("src/foo.ts", "export function bar() { return 1; }");
     await writeWiki("livewiki/foo.md", `---
@@ -464,9 +570,47 @@ Documents bar.
     expect(
       nodeSqliteQuery(
         repoRoot,
-        "SELECT symbol_key, doc_page_id, event FROM debt WHERE resolved_at IS NULL",
+        "SELECT symbol_key, doc_page_id, event, assignee FROM debt WHERE resolved_at IS NULL",
       ),
-    ).toHaveLength(1);
+    ).toEqual([
+      expect.objectContaining({
+        symbol_key: "src/foo.ts#bar",
+        event: "changed",
+        assignee: "agent",
+      }),
+    ]);
+  });
+
+  it("promotes deduplicated deleted debt to human when a matching section anchor is manual", async () => {
+    await writeCode("src/foo.ts", "export function bar() { return 1; }");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+owner: generated
+anchors:
+  - src/foo.ts#bar
+---
+
+## Manual
+<!-- lw:manual -->
+<!-- lw:anchors src/foo.ts#bar -->
+Human-maintained documentation.
+<!-- /lw:manual -->
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
+    await runIndexer(repoRoot, { quiet: true });
+    const result = await runLedger(repoRoot, { quiet: true });
+
+    expect(result.debtCreated).toBe(1);
+    expect(result.debtByEvent.deleted).toBe(1);
+    expect(
+      nodeSqliteQuery(
+        repoRoot,
+        "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
+      ),
+    ).toEqual([{ event: "deleted", assignee: "human" }]);
   });
 
   it("keeps changed debt separate when the same symbol is anchored on two pages", async () => {
