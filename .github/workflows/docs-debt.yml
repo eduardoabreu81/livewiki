@@ -62,6 +62,8 @@ jobs:
             const baseline = debt.baseline ?? "unavailable";
             const issues = Array.isArray(v.issues) ? v.issues : [];
             const undocumented = s.undocumented ?? { total: 0, sample: [] };
+            const undocumentedByRole = undocumented.byRole ?? {};
+            const productUndocumented = undocumentedByRole.product ?? { total: 0, sample: [] };
             const cell = (value) => String(value ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
             const lines = [];
             lines.push("## livewiki documentation health");
@@ -109,12 +111,19 @@ jobs:
               }
             }
             lines.push("");
-            lines.push("### Undocumented symbols");
+            lines.push("### Undocumented product symbols");
             lines.push("");
-            lines.push(`**${undocumented.total ?? 0} undocumented symbol(s).**`);
-            if ((undocumented.sample ?? []).length > 0) {
+            lines.push(`**${productUndocumented.total ?? 0} product symbol(s) without documentation.**`);
+            for (const role of ["test", "fixture", "tooling", "docs"]) {
+              const count = undocumentedByRole[role]?.total ?? 0;
+              if (count > 0) {
+                lines.push("");
+                lines.push(`${count} ${role} symbol(s) are tracked separately and are not documentation work.`);
+              }
+            }
+            if ((productUndocumented.sample ?? []).length > 0) {
               lines.push("");
-              for (const item of undocumented.sample.slice(0, 10)) {
+              for (const item of productUndocumented.sample.slice(0, 10)) {
                 lines.push(`- \`${cell(item.symbol_key)}\``);
               }
             }

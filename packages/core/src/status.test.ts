@@ -21,7 +21,7 @@ describe("status.formatHuman", () => {
         byAssignee: { agent: 0, human: 0 },
         items: [],
       },
-      undocumented: { total: 0, sample: [] },
+      undocumented: { total: 0, sample: [], byRole: {} },
       metrics: null,
       degraded: { total: 0, pages: [] },
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
@@ -76,7 +76,11 @@ describe("status.formatHuman", () => {
           },
         ],
       },
-      undocumented: { total: 5, sample: [{ symbol_key: "src/x.ts#y" }] },
+      undocumented: {
+        total: 5,
+        sample: [{ symbol_key: "src/x.ts#y" }],
+        byRole: { product: { total: 5, sample: [{ symbol_key: "src/x.ts#y" }] } },
+      },
       metrics: {
         packagesEmitted: 5,
         totalPackageTokens: 4000,
@@ -130,7 +134,7 @@ describe("status.formatHuman", () => {
         byAssignee: { agent: 0, human: 0 },
         items: [],
       },
-      undocumented: { total: 0, sample: [] },
+      undocumented: { total: 0, sample: [], byRole: {} },
       metrics: {
         packagesEmitted: 2,
         totalPackageTokens: 800,
@@ -214,7 +218,7 @@ describe("status.formatHuman", () => {
         byAssignee: { agent: 0, human: 0 },
         items: [],
       },
-      undocumented: { total: 0, sample: [] },
+      undocumented: { total: 0, sample: [], byRole: {} },
       metrics: null,
       degraded: { total: 0, pages: [] },
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
@@ -240,7 +244,7 @@ describe("status.formatHuman", () => {
         byAssignee: { agent: 0, human: 0 },
         items: [],
       },
-      undocumented: { total: 0, sample: [] },
+      undocumented: { total: 0, sample: [], byRole: {} },
       metrics: null,
       degraded: { total: 0, pages: [] },
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
@@ -272,7 +276,7 @@ describe("status.formatHuman", () => {
           },
         ],
       },
-      undocumented: { total: 0, sample: [] },
+      undocumented: { total: 0, sample: [], byRole: {} },
       metrics: null,
       degraded: { total: 0, pages: [] },
       meta: { schemaVersion: 1, lastIndexedAt: null, lastLedgerAt: null },
@@ -335,6 +339,83 @@ describe("status debt baseline", () => {
 
   it("reports unavailable when neither ledger_runs nor last_ledger_at exists", async () => {
     expect((await runStatus(repoRoot)).debt.baseline).toBe("unavailable");
+  });
+});
+
+describe("status undocumented symbols by path role", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), "livewiki-status-undocumented-role-"));
+    await mkdir(join(repoRoot, ".livewiki"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  async function writeRepoFile(rel: string, content: string): Promise<void> {
+    const abs = join(repoRoot, rel);
+    await mkdir(join(abs, ".."), { recursive: true });
+    await writeFile(abs, content);
+  }
+
+  it("preserves the raw inventory while separating product and test symbols", async () => {
+    await writeRepoFile("src/app.ts", "export function productEntry() { return 1; }\n");
+    await writeRepoFile("src/app.test.ts", "export function testHelper() { return 1; }\n");
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    const report = await runStatus(repoRoot);
+
+    expect(report.undocumented.total).toBe(2);
+    expect(report.undocumented.sample.map((item) => item.symbol_key).sort()).toEqual([
+      "src/app.test.ts#testHelper",
+      "src/app.ts#productEntry",
+    ]);
+    expect(report.undocumented.byRole).toEqual({
+      product: { total: 1, sample: [{ symbol_key: "src/app.ts#productEntry" }] },
+      test: { total: 1, sample: [{ symbol_key: "src/app.test.ts#testHelper" }] },
+    });
+    expect(
+      Object.values(report.undocumented.byRole).reduce((sum, role) => sum + role.total, 0),
+    ).toBe(report.undocumented.total);
+    expect(report.undocumented.byRole.fixture).toBeUndefined();
+  });
+
+  it("uses the canonical non-JavaScript test layout classification", async () => {
+    await writeRepoFile(
+      "src/test/java/com/example/Helper.java",
+      "package com.example;\npublic class Helper {}\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    const report = await runStatus(repoRoot);
+
+    expect(report.undocumented.byRole.test).toEqual({
+      total: 1,
+      sample: [{ symbol_key: "src/test/java/com/example/Helper.java#Helper" }],
+    });
+    expect(report.undocumented.byRole.product).toBeUndefined();
+  });
+
+  it("respects user-defined pathRoles patterns", async () => {
+    await writeRepoFile("src/checks/helper.ts", "export function customCheck() { return 1; }\n");
+    await writeFile(
+      join(repoRoot, ".livewiki", "config.json"),
+      JSON.stringify({ pathRoles: { testPatterns: ["src/checks/**"] } }) + "\n",
+    );
+
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+    const report = await runStatus(repoRoot);
+
+    expect(report.undocumented.byRole.test).toEqual({
+      total: 1,
+      sample: [{ symbol_key: "src/checks/helper.ts#customCheck" }],
+    });
+    expect(report.undocumented.byRole.product).toBeUndefined();
   });
 });
 

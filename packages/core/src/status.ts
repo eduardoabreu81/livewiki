@@ -28,6 +28,7 @@ import {
   type RiskScore,
 } from "./risk.js";
 import { loadGoModulePath, loadRustCrateName } from "./import-resolution.js";
+import { classifyPathRole, type PathRole } from "./modules.js";
 
 /** Coverage tier of a language (SPEC §"Coverage ladder"). */
 export type LangTier = "anchored" | "prose";
@@ -90,6 +91,14 @@ export interface StatusReport {
   undocumented: {
     total: number;
     sample: Array<{ symbol_key: string }>;
+    /**
+     * Additive presentation split by the canonical file-path role. The raw
+     * inventory above remains unchanged for existing consumers; empty roles
+     * are omitted instead of being emitted as zero-valued placeholders.
+     */
+    byRole: Partial<
+      Record<PathRole, { total: number; sample: Array<{ symbol_key: string }> }>
+    >;
   };
   /**
    * Contabilidade incremental (Fase 5 — SPEC §"Contabilidade de tokens"):
@@ -137,7 +146,13 @@ export async function run(
   const dbPath = await safeIo.resolveAndValidate(absRoot, dbPathRel);
   const db = openIndex(dbPath);
   try {
-    const report = collect(db, opts.topN ?? 10);
+    let config: LivewikiConfig;
+    try {
+      config = applyDefaults(await loadConfig(absRoot));
+    } catch {
+      config = applyDefaults({});
+    }
+    const report = collect(db, opts.topN ?? 10, config);
     // Backlog #3: index freshness, bounded by the index itself (stat the
     // indexed files only — never a repo walk).
     await applyFreshness(db, absRoot, report);
@@ -145,7 +160,7 @@ export async function run(
     // metadata only). Runs only when open debt exists; recomputes imports
     // on demand, so status on a clean repo never parses files.
     if (report.debt.items.length > 0) {
-      await applyRiskRanking(db, absRoot, report);
+      await applyRiskRanking(db, absRoot, report, config);
     }
     // Métricas incrementais (best-effort — falha aqui não quebra status)
     try {
@@ -172,7 +187,11 @@ interface DebtRow {
   wiki_path: string | null;
 }
 
-function collect(db: import("better-sqlite3").Database, topN: number): StatusReport {
+function collect(
+  db: import("better-sqlite3").Database,
+  topN: number,
+  config: LivewikiConfig,
+): StatusReport {
   const files = db
     .prepare("SELECT * FROM files WHERE status = 'active'")
     .all() as FileRow[];
@@ -251,6 +270,23 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
   const undocRows = db
     .prepare("SELECT symbol_key FROM undocumented WHERE dismissed = 0")
     .all() as Array<{ symbol_key: string }>;
+  const undocumentedByRole: StatusReport["undocumented"]["byRole"] = {};
+  const symbolPathByKey = new Map(
+    symbols.flatMap((symbol) => {
+      const file = fileById.get(symbol.file_id);
+      return file ? [[symbol.key, file.path] as const] : [];
+    }),
+  );
+  for (const row of undocRows) {
+    const path = symbolPathByKey.get(row.symbol_key);
+    // The ledger rebuilds this inventory from active symbols, so every row has a path here.
+    if (path === undefined) continue;
+    const role = classifyPathRole(path, config.pathRoles);
+    const summary = undocumentedByRole[role] ?? { total: 0, sample: [] };
+    summary.total++;
+    if (summary.sample.length < 20) summary.sample.push({ symbol_key: row.symbol_key });
+    undocumentedByRole[role] = summary;
+  }
 
   const versionRow = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
     | { value: string }
@@ -285,6 +321,7 @@ function collect(db: import("better-sqlite3").Database, topN: number): StatusRep
     undocumented: {
       total: undocRows.length,
       sample: undocRows.slice(0, 20),
+      byRole: undocumentedByRole,
     },
     // metrics é setado por run() após collect (precisa repoRoot, não db)
     metrics: null,
@@ -311,13 +348,8 @@ async function applyRiskRanking(
   db: import("better-sqlite3").Database,
   absRoot: string,
   report: StatusReport,
+  config: LivewikiConfig,
 ): Promise<void> {
-  let config: LivewikiConfig;
-  try {
-    config = applyDefaults(await loadConfig(absRoot));
-  } catch {
-    config = applyDefaults({});
-  }
   if (config.riskAnalysis === false) return;
 
   const files = db

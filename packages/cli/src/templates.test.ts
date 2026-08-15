@@ -284,7 +284,20 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
         byEvent: { changed: 0, moved: 0, deleted: 0 },
         items: [],
       },
-      undocumented: { total: 409, sample: [{ symbol_key: "src/a.ts#alpha" }] },
+      undocumented: {
+        total: 413,
+        sample: [
+          { symbol_key: "packages/cli/src/templates.test.ts#runDocsDebtReporter" },
+          { symbol_key: "src/a.ts#alpha" },
+        ],
+        byRole: {
+          product: { total: 68, sample: [{ symbol_key: "src/a.ts#alpha" }] },
+          test: {
+            total: 345,
+            sample: [{ symbol_key: "packages/cli/src/templates.test.ts#runDocsDebtReporter" }],
+          },
+        },
+      },
     };
     const cleanVerify = { ok: true, pagesChecked: 133, issues: [] };
 
@@ -298,8 +311,14 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     expect(report.summary).not.toContain("**0 open item(s).**");
     expect(report.summary).toContain("### Verify issues");
     expect(report.summary).toContain("**0 issue(s)** across 133 page(s).");
-    expect(report.summary).toContain("### Undocumented symbols");
-    expect(report.summary).toContain("**409 undocumented symbol(s).**");
+    expect(report.summary).toContain("### Undocumented product symbols");
+    expect(report.summary).toContain("**68 product symbol(s) without documentation.**");
+    expect(report.summary).toContain(
+      "345 test symbol(s) are tracked separately and are not documentation work.",
+    );
+    expect(report.summary).toContain("`src/a.ts#alpha`");
+    expect(report.summary).not.toContain("`packages/cli/src/templates.test.ts#runDocsDebtReporter`");
+    expect(report.summary).not.toContain("**413 undocumented symbol(s).**");
     expect(report.summary).not.toContain("No documentation debt");
 
     const unavailableEnforce = await runDocsDebtReporter(
