@@ -20,7 +20,7 @@ import { runBatch } from "@livewiki/core/batch";
 import { loadConfig } from "@livewiki/core/config";
 ```
 
-**Stability notice:** 0.1.x — the programmatic surface is not yet frozen.
+**Stability notice:** 0.2.x — the programmatic surface is not yet frozen.
 Modules may move between minor versions; pin exact versions and read the
 changelog before upgrading. The stable contract is the CLI/MCP behavior
 and the on-disk wiki format, not this API.

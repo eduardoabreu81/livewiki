@@ -100,7 +100,8 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 ```
 
 Available presets are `anthropic`, `openai`, `openrouter`, `deepseek`, `kimi`,
-`minimax`, `gemini`, `nvidia`, `ollama`, and `lmstudio`.
+`minimax`, `gemini`, `nvidia`, `ollama`, `lmstudio`, `fireworks`, `novita`,
+`gmi`, `stepfun`, `huggingface`, `xai`, and `alibaba`.
 
 For `ollama` and `lmstudio` the credential is optional. Leave it empty to reach
 a local server that needs no authentication, or supply a key — together with a
@@ -212,6 +213,10 @@ batch or the active coding agent supplies the prose at the appropriate phase.
   rejected.
 - **Human ownership:** generated rewrites refuse human-owned pages and preserve
   `lw:manual` blocks byte-for-byte.
+- **Portable baseline:** the accepted state of every documentation obligation
+  is versioned in `livewiki/.baseline.json`, so debt and staleness are enforced
+  against a real baseline rather than a fresh index — and the wiki state
+  survives a deleted local cache without re-running proven work.
 - **Shared surfaces:** the same wiki is available through the CLI, MCP server,
   deterministic exports, and offline viewer, including viewer builds from a
   git ref with `livewiki view --ref <tag>`.
