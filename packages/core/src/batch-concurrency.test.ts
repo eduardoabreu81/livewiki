@@ -233,7 +233,10 @@ describe("batchConcurrency — stage-4 worker pool (roadmap item 7)", () => {
 
     // (a) all tasks complete; usage sums equal the sequential run's totals.
     expect(seq.status).toBe("completed");
-    expect(pool.status).toBe("completed");
+    expect(
+      pool.status,
+      `failures: ${pool.failures.map((f) => `${f.module}:${f.error.code}:${f.error.message}`).join(" || ")}`,
+    ).toBe("completed");
     expect(pool.tasksDone).toBe(seq.tasksDone);
     expect(pool.tasksFailed).toBe(seq.tasksFailed);
     expect(pool.failures).toEqual([]);
@@ -392,7 +395,10 @@ describe("batchConcurrency — stage-4 worker pool (roadmap item 7)", () => {
       skipManifestWrite: true,
       concurrency: 2,
     });
-    expect(result.status).toBe("completed");
+    expect(
+      result.status,
+      `failures: ${result.failures.map((f) => `${f.module}:${f.error.code}:${f.error.message}`).join(" || ")}`,
+    ).toBe("completed");
 
     // runBatch drains the fire-and-forget ledger write before returning.
     const snap = await snapshotMetrics(repo);
