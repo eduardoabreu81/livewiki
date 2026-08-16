@@ -1,16 +1,15 @@
-flowchart LR
-  cli["cli.ts<br/>(root program)"]
-  batch["commands/batch.ts<br/>registerBatch"]
-  output["output.ts<br/>emit()"]
-  core_batch["@livewiki/core/batch<br/>runBatch / resumeBatch / runOnly"]
-  core_status["@livewiki/core/batch-status<br/>buildStatusReport / listRuns"]
-  fmt["commands/batch.ts<br/>format*Human helpers"]
-  exit["commands/batch.ts<br/>setExitCode"]
-
-  cli --> batch
-  batch --> core_batch
-  batch --> core_status
-  batch --> output
-  core_status --> fmt
-  core_batch --> fmt
-  batch --> exit
+graph TD
+    A[registerBatch] --> B[buildStatusReport]
+    A --> C[listRuns]
+    A --> D[resumeBatch]
+    A --> E[runOnly]
+    B --> F[formatStatusHuman]
+    C --> G[formatListHuman]
+    D --> H[formatResultHuman]
+    E --> H
+    F --> I[setExitCode]
+    H --> I
+    F --> J[appendStage4Diagnostics]
+    J --> K[formatDiagnosticLine]
+    H --> L[USAGE_INCOMPLETE_NOTE]
+    F --> L

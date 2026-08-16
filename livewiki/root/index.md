@@ -20,5 +20,5 @@ This is the repository root for livewiki, holding top-level configuration and pr
 ## Navigate
 
 
-> Coverage note: this folder's source (6 files, ~111k chars) is too large to read in full; this page documents its main entry points.
+> Coverage note: this folder's source (6 files, ~125k chars) is too large to read in full; this page documents its main entry points.
 <!-- livewiki:navigate:end -->

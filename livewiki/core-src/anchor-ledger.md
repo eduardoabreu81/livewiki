@@ -1,47 +1,53 @@
 ---
-title: Anchor ledger
+title: Anchor-Ledger Synchronization
 owner: generated
 anchors:
-  - packages/core/src/anchor-ledger.ts#AnchorParseError
-  - packages/core/src/anchor-ledger.ts#AnchorParseError.constructor
-  - packages/core/src/anchor-ledger.ts#assigneeFor
-  - packages/core/src/anchor-ledger.ts#collectWikiPages
-  - packages/core/src/anchor-ledger.ts#createDebt
-  - packages/core/src/anchor-ledger.ts#detectMoves
-  - packages/core/src/anchor-ledger.ts#endOfLine
-  - packages/core/src/anchor-ledger.ts#escapeRegex
-  - packages/core/src/anchor-ledger.ts#extractManualBlockRangesFromBody
-  - packages/core/src/anchor-ledger.ts#findFrontmatterEnd
-  - packages/core/src/anchor-ledger.ts#hasOpenDebt
-  - packages/core/src/anchor-ledger.ts#hashContent
-  - packages/core/src/anchor-ledger.ts#isDelimiterLineAt
-  - packages/core/src/anchor-ledger.ts#nextLineStart
-  - packages/core/src/anchor-ledger.ts#orchestrate
-  - packages/core/src/anchor-ledger.ts#reconcileManualBlocks
-  - packages/core/src/anchor-ledger.ts#rewriteBodyMarkers
-  - packages/core/src/anchor-ledger.ts#rewriteFrontmatterAnchorsList
-  - packages/core/src/anchor-ledger.ts#rewriteSymbolKeyInPage
-  - packages/core/src/anchor-ledger.ts#run
-  - packages/core/src/anchor-ledger.ts#upsertAnchor
-  - packages/core/src/anchor-ledger.ts#upsertDocPage
-  - packages/core/src/anchor-ledger.ts#upsertUndocumented
+- packages/core/src/anchor-ledger.ts#AnchorParseError
+- packages/core/src/anchor-ledger.ts#AnchorParseError.constructor
+- packages/core/src/anchor-ledger.ts#addDesiredBaselineDebt
+- packages/core/src/anchor-ledger.ts#addDesiredMoveDebt
+- packages/core/src/anchor-ledger.ts#assigneeFor
+- packages/core/src/anchor-ledger.ts#baselineDebtIdentity
+- packages/core/src/anchor-ledger.ts#collectWikiPages
+- packages/core/src/anchor-ledger.ts#createDebt
+- packages/core/src/anchor-ledger.ts#deleteOpenDebt
+- packages/core/src/anchor-ledger.ts#detectMoves
+- packages/core/src/anchor-ledger.ts#endOfLine
+- packages/core/src/anchor-ledger.ts#escapeRegex
+- packages/core/src/anchor-ledger.ts#extractManualBlockRangesFromBody
+- packages/core/src/anchor-ledger.ts#findFrontmatterEnd
+- packages/core/src/anchor-ledger.ts#hasOpenDebt
+- packages/core/src/anchor-ledger.ts#hasOpenDebtByAnchor
+- packages/core/src/anchor-ledger.ts#hashContent
+- packages/core/src/anchor-ledger.ts#isDelimiterLineAt
+- packages/core/src/anchor-ledger.ts#nextLineStart
+- packages/core/src/anchor-ledger.ts#orchestrate
+- packages/core/src/anchor-ledger.ts#promoteOpenDebtToHuman
+- packages/core/src/anchor-ledger.ts#reconcileManualBlocks
+- packages/core/src/anchor-ledger.ts#rewriteBodyMarkers
+- packages/core/src/anchor-ledger.ts#rewriteFrontmatterAnchorsList
+- packages/core/src/anchor-ledger.ts#rewriteSymbolKeyInPage
+- packages/core/src/anchor-ledger.ts#run
+- packages/core/src/anchor-ledger.ts#syncBaselineDebt
+- packages/core/src/anchor-ledger.ts#upsertAnchor
+- packages/core/src/anchor-ledger.ts#upsertDocPage
+- packages/core/src/anchor-ledger.ts#upsertUndocumented
 ---
 
-# Anchor ledger
+# Anchor-Ledger Synchronization
 
-This page is the technical reference for the anchor-ledger module, which keeps the wiki's anchor tables in sync with the code index and produces the change debt that other surfaces consume.
+This module keeps the wiki's documentation anchors consistent with the livewiki code index and records any resulting documentation debt.
 
 ## When to use this page
 
-- **Run** the `ledger` phase of livewiki to refresh anchors and debt after a code index pass.
-- **Debug** spurious `changed` / `moved` / `deleted` debt by tracing which step recorded the row.
-- **Investigate** why a moved symbol's anchor was rewritten in Markdown or skipped because of manual-block or human-owner rules.
+- Trace how the ledger discovers wiki pages, extracts anchors, and writes them into the SQLite database.
+- Understand how changed, moved, and deleted documentation work items are created, deduplicated, and assigned to an agent or a human.
+- Learn the safety rules that prevent automated rewriting of human-owned pages and manual blocks.
+- Debug or extend move detection, including the conservative twin policy that avoids re-anchoring to a surviving same-name symbol.
 
 ## How it fits
 
-The anchor-ledger sits in the `packages/core/src` repository tree and depends on three sibling modules: `safe-io` for path-allowlisted disk reads and writes, `db` for opening the SQLite index and the row types it stores, and `anchors` for parsing each wiki page's frontmatter and section markers. Hashing is delegated to `hashes` and Markdown masking to `markdown-mask`. Its single exported entry point is `run`, which prepares the `.livewiki/` cache directory, resolves the SQLite path through the safe-io validator, opens the database, and calls `orchestrate`. The orchestrator then walks the wiki pages, upserts `doc_pages` and `anchors`, reconciles the `manual_blocks` multiset, detects symbol moves, rewrites Markdown anchor references when a move is safe, diffs each anchor against the live symbol index, and expires pages that no longer exist on disk.
-
-Most user-facing terminology in this module is specific to livewiki: an **anchor** is a `(doc_page_id, section_slug, symbol_key)` triple stored in the SQLite `anchors` table; a **debt** is a row in the `debt` table marking a `changed`, `moved`, or `deleted` event that a human or agent must reconcile; a **manual block** is a Markdown region wrapped in `lw:manual` markers that the automated rewrite paths must never touch; the **owner** is the frontmatter field (`generated`, `human`, or `mixed`) that decides who is responsible for a page's anchors; the **assignee** is the agent or human that the debt is routed to.
+`packages/core/src/anchor-ledger.ts` is livewiki's reconciliation engine. It reads every Markdown page under the `livewiki/` directory, parses frontmatter and section anchors, upserts them into the `anchors` table, and compares current state against the previous run to create rows in the `debt` table for changes, moves, and deletions. It also rewrites symbol keys in the Markdown itself when a move is detected, but only for pages generated by the agent — human-owned pages and `lw:manual` blocks are never touched. The module relies on `safe-io` for path-restricted file access, `extractAnchors` for parsing pages, and the shared database module for persistence.
 
 ## Diagram
 
@@ -49,11 +55,11 @@ Most user-facing terminology in this module is specific to livewiki: an **anchor
 %% livewiki/diagrams/core-src-anchor-ledger.mmd
 ```
 
-## Entry point and lifecycle
+## Orchestration
 
 <!-- lw:anchors packages/core/src/anchor-ledger.ts#run packages/core/src/anchor-ledger.ts#orchestrate -->
 
-The `run` function is the public command surface. It resolves the repository root, ensures the `.livewiki/` directory exists via `safeIo.mkdir`, validates the database path through `safeIo.resolveAndValidate`, opens the SQLite index, and finally delegates to `orchestrate`. The orchestrator returns a `LedgerResult` that the CLI streams as JSON or human-readable output, and the database is closed in a `finally` block so a thrown error never leaks the open connection.
+The module is driven by `run`, which prepares the environment and then hands off to `orchestrate`, the pipeline that performs the actual reconciliation.
 
 ```ts
 export async function run(
@@ -62,54 +68,174 @@ export async function run(
 ): Promise<LedgerResult>
 ```
 
-`run` accepts a repository root path and an optional `LedgerOptions` bag, and returns a promise that resolves to a `LedgerResult` describing what was upserted, how much debt was created, and which symbol pairs were treated as moves. The function closes the database it opened in a `finally` block; an error thrown by `orchestrate` re-raises after that cleanup.
+`run` takes the repository root and optional options, and returns a summary of what the ledger pass accomplished. It resolves the absolute root, creates the `.livewiki/` cache directory if missing, opens the SQLite index database, calls `orchestrate`, and always closes the database in a `finally` block.
+
+`orchestrate` then executes the full flow step by step:
+
+1. It loads the portable baseline state and collects every Markdown page under `livewiki/`. Once a baseline file exists, the ledger runs in "portable baseline" mode where detection is documentation-identity-only, which avoids the legacy rewrite path.
+2. It loads the existing database state into in-memory maps for documents, anchors, active symbols, and deleted symbols. Anchor identity is `(doc_page_id, section_slug, symbol_key)` because the page slot can hold multiple symbols from the frontmatter list.
+3. The page loop reads each file, extracts anchors via `extractAnchors`, upserts the document and anchor rows, and reconciles manual-block rows.
+4. Move detection runs on deleted symbols, followed by pre-move expected-set filtering and per-anchor move handling that performs Markdown rewrites.
+5. A stable-identity reconciliation deletes persisted anchors no longer present in the freshly parsed Markdown.
+6. The diff loop creates `changed` and `deleted` debt, updates stored hashes, and promotes assignees to human when the rules require it.
+7. Move debt is created per canonical anchor identity with deduplication.
+8. Pages removed from disk are removed from the database along with their anchors.
+9. Undocumented symbols are recomputed, baseline debt is synced if a baseline exists, dead symbol rows are cleaned up, and ledger metadata timestamps are updated.
+
+## Move Detection
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#detectMoves -->
+
+A deleted symbol may be a relocation rather than a true removal, and the ledger must classify it as a move so documentation can be re-anchored. `detectMoves` implements this classification with a conservative twin policy.
 
 ```ts
-async function orchestrate(
+function detectMoves(
+  deletedSymbols: Map<string, SymbolRow>,
+  activeSymbols: Map<string, SymbolRow>,
+  movedMap: Map<string, string>,
+  result: LedgerResult,
+): void
+```
+
+`detectMoves` takes maps of deleted and active symbols, an output map for move pairs, and a result accumulator, and returns nothing. It populates `movedMap` and records pairs in `result.movedPairs`.
+
+The function first indexes active symbols by `content_hash` for fast lookup, and counts active symbols per `(name, kind)` pair. For each deleted symbol, it tries to find a match: first by identical `content_hash`, then by falling back to name plus signature in a different file. If a match is found and its key differs from the deleted key, it applies the twin policy: if another active symbol with the same short name and kind survives anywhere, the disappearance is classified as an edit or deletion, never a move — because rewriting the anchor to a twin would point documentation at code its prose doesn't describe.
+
+## Debt Management
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#createDebt packages/core/src/anchor-ledger.ts#hasOpenDebt packages/core/src/anchor-ledger.ts#promoteOpenDebtToHuman packages/core/src/anchor-ledger.ts#deleteOpenDebt packages/core/src/anchor-ledger.ts#hasOpenDebtByAnchor -->
+
+Debt is the ledger's output: each row represents documentation work required because code or wiki drifted. Creation is deduplicated so repeated runs don't pile up identical work items.
+
+```ts
+function createDebt(
+  db: import("better-sqlite3").Database,
+  anchorId: number | null,
+  event: DebtEvent,
+  assignee: Assignee,
+  detail: string | null,
+  symbolKey: string,
+  docPageId: number | null,
+): void
+```
+
+`createDebt` takes the database, an anchor ID, an event type, an assignee, optional JSON detail, the symbol key, and the doc page ID, and inserts a new unresolved debt row. It stores `symbol_key` and `doc_page_id` as durable columns so the work item survives even if the anchor row is later removed.
+
+```ts
+function hasOpenDebt(
+  db: import("better-sqlite3").Database,
+  symbolKey: string,
+  docPageId: number | null,
+  event: DebtEvent,
+): boolean
+```
+
+`hasOpenDebt` reports whether an unresolved debt already exists for the same symbol, page (treating NULL consistently), and event. A page-level and a section-level anchor for the same symbol count as one page update, not two debts.
+
+```ts
+function promoteOpenDebtToHuman(
+  db: import("better-sqlite3").Database,
+  symbolKey: string,
+  docPageId: number | null,
+  event: DebtEvent,
+): void
+```
+
+`promoteOpenDebtToHuman` updates open agent-assigned debt to human for the given symbol, page, and event. This is monotonic — agent occurrences never demote an existing human-owned work unit.
+
+```ts
+function deleteOpenDebt(
+  db: import("better-sqlite3").Database,
+  symbolKey: string,
+  docPageId: number | null,
+  event: DebtEvent,
+): void
+```
+
+`deleteOpenDebt` removes all open debt rows matching the symbol, page, and event. This runs when a prior deletion stops being true because the symbol reappeared.
+
+```ts
+function hasOpenDebtByAnchor(
+  db: import("better-sqlite3").Database,
+  anchorId: number,
+  event: DebtEvent,
+): boolean
+```
+
+`hasOpenDebtByAnchor` checks for an open debt tied to a specific anchor row ID and event. It is used for moved-debt deduplication where the canonical anchor identity is the stable reference across runs.
+
+## Assignment and Undocumented Handling
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#assigneeFor packages/core/src/anchor-ledger.ts#upsertUndocumented -->
+
+Work assignment picks whether an agent or a human resolves a debt, and the undocumented calculation identifies symbols with no current anchor.
+
+```ts
+function assigneeFor(owner: Owner, inManualBlock: boolean): Assignee
+```
+
+`assigneeFor` takes the page owner and whether the anchor is inside a manual block, and returns `"human"` or `"agent"`. Any anchor inside a manual block always resolves to human — rule #6 forbids automated rewriting there. Otherwise, a human-owned page stays human and any other owner resolves to agent.
+
+```ts
+function upsertUndocumented(
+  db: import("better-sqlite3").Database,
+  activeSymbols: Map<string, SymbolRow>,
+  anchors: Array<{ symbolKey: string }>,
+  result: LedgerResult,
+): void
+```
+
+`upsertUndocumented` takes the database, the active symbols map, the current anchor keys, and the result accumulator. It clears the `undocumented` table and re-inserts every active symbol missing from the anchors, recording the detection timestamp and leaving `dismissed` at 0, and stores the count in the result.
+
+## Baseline Debt Sync
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#syncBaselineDebt packages/core/src/anchor-ledger.ts#addDesiredBaselineDebt packages/core/src/anchor-ledger.ts#addDesiredMoveDebt packages/core/src/anchor-ledger.ts#baselineDebtIdentity -->
+
+When a portable baseline exists, the ledger reconciles its open debt against the baseline's health evaluation instead of relying only on the historical diff.
+
+```ts
+async function syncBaselineDebt(
   db: import("better-sqlite3").Database,
   absRoot: string,
-  opts: LedgerOptions,
-): Promise<LedgerResult>
+  baseline: DocumentationBaseline,
+  activeSymbols: Map<string, SymbolRow>,
+  result: LedgerResult,
+): Promise<void>
 ```
 
-`orchestrate` is the single pipeline that walks the wiki, upserts rows, computes moves, and records debt. It collects pages, snapshots the current state of `doc_pages`, `anchors`, and `symbols` into in-memory maps, and then runs the staged pipeline described in the following sections; the function returns the populated `LedgerResult` and emits no other side effects beyond the SQLite mutations and the Markdown rewrites it orchestrates.
-
-## Page collection and failure-tolerant parsing
-
-<!-- lw:anchors packages/core/src/anchor-ledger.ts#collectWikiPages packages/core/src/anchor-ledger.ts#AnchorParseError packages/core/src/anchor-ledger.ts#AnchorParseError.constructor -->
-
-The first stage of the pipeline enumerates the wiki pages that matter to the ledger. `collectWikiPages` walks `livewiki/` recursively, descending only into non-hidden directories (dot-prefixed directories are skipped; dot-prefixed files such as `.github.md` are still collected as long as they end in `.md`). Returned paths are POSIX-style relative paths anchored at the repository root, which is the canonical form stored in `doc_pages.wiki_path`.
+`syncBaselineDebt` takes the database, repo root, loaded baseline, active symbols, and result accumulator, and returns nothing directly. It collects the baseline inventory, evaluates health, builds a "desired" set of debt identities, then upserts open debt rows to match. It deletes rows no longer desired, upgrades agent-assigned rows to human when needed, and creates missing rows using the baseline's symbol and page.
 
 ```ts
-async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
+function addDesiredBaselineDebt(
+  desired: Map<string, { event: DebtEvent; wikiPath: string; symbolKey: string; assignee: Assignee; detail: string | null }>,
+  entry: EvaluatedBaselineEntry,
+  event: "changed" | "deleted",
+  detail: string | null,
+): void
 ```
 
-`collectWikiPages` takes an absolute repository root and returns a promise that resolves to an array of objects whose `relPath` is the POSIX-style relative path of every `.md` file under `livewiki/`. The function skips hidden directories and silently treats a missing `livewiki/` directory as an empty collection, so the ledger can still run on a fresh checkout.
-
-For each page, the orchestrator reads the source through `safeIo.readText` and parses it with `extractAnchors`. A read failure or a parse failure counts as a skipped page, emits a warning when `opts.quiet` is false, and the page is intentionally left out of the in-memory `currentAnchors` list so its persisted rows survive untouched until a successful run. The `AnchorParseError` class is the explicit error type callers can rely on when a parse fails; it wraps the underlying cause and prefixes the message with the failing wiki path.
+`addDesiredBaselineDebt` takes the desired map, a baseline entry, an event type, and detail, and registers that entry under its baseline identity.
 
 ```ts
-export class AnchorParseError extends Error {
-  constructor(wikiPath: string, cause: Error) {
-    super(`Falha ao parsear âncoras em ${wikiPath}: ${cause.message}`);
-    this.name = "AnchorParseError";
-  }
-}
+function addDesiredMoveDebt(
+  desired: Map<string, { event: DebtEvent; wikiPath: string; symbolKey: string; assignee: Assignee; detail: string | null }>,
+  move: BaselineMoveCandidate,
+): void
 ```
 
-`AnchorParseError` accepts a wiki path and a `cause` Error, sets `name` to `"AnchorParseError"`, and forwards a `super` message that names the offending path and the inner cause. The constructor only sets `name` and forwards the message; no other fields are assigned.
-
-## Anchor identity and persistence
-
-<!-- lw:anchors packages/core/src/anchor-ledger.ts#hashContent packages/core/src/anchor-ledger.ts#upsertDocPage packages/core/src/anchor-ledger.ts#upsertAnchor -->
-
-The ledger converts each parsed page into durable `doc_pages` and `anchors` rows. The anchor identity is `(doc_page_id, section_slug, symbol_key)`, and the orchestrator keeps a single in-memory map keyed by `${doc_page_id}|${section_slug ?? ""}|${symbol_key}` so duplicated identities in the same pass collapse onto one row rather than overwriting unrelated anchors.
+`addDesiredMoveDebt` takes the desired map and a move candidate, and registers a moved debt, serializing the `from`/`to` pair into detail.
 
 ```ts
-function hashContent(content: string): string
+function baselineDebtIdentity(wikiPath: string, symbolKey: string, event: string): string
 ```
 
-`hashContent` accepts a Markdown string and returns the SHA-256 hex digest, delegating directly to the project's shared hash helper so the ledger and the index use the same encoding.
+`baselineDebtIdentity` takes a wiki path, symbol key, and event, and returns a NUL-delimited identity string used to match desired debt against existing open rows.
+
+## Page and Anchor Persistence
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#upsertDocPage packages/core/src/anchor-ledger.ts#upsertAnchor packages/core/src/anchor-ledger.ts#hashContent packages/core/src/anchor-ledger.ts#collectWikiPages -->
+
+The ledger persists the current state of each wiki page and anchor so future runs can diff against it.
 
 ```ts
 function upsertDocPage(
@@ -121,7 +247,7 @@ function upsertDocPage(
 ): number
 ```
 
-`upsertDocPage` returns the integer `doc_pages.id` for the page: it updates the existing row in place when the path is already tracked (also refreshing `owner`, `content_hash`, and `updated_at`), otherwise it inserts a new row and returns the freshly assigned id. The return value is the row id, which is what every downstream anchor row keys against.
+`upsertDocPage` takes the database, wiki path, owner, content hash, and existing document map, and returns the document page ID. It updates the row if present, otherwise inserts a new one.
 
 ```ts
 function upsertAnchor(
@@ -136,46 +262,25 @@ function upsertAnchor(
 ): number
 ```
 
-`upsertAnchor` returns the anchor row id, reusing the existing row when the identity already exists (refreshing `in_manual_block` if the user edited a manual block) or inserting a new row keyed by the triple above. The first insertion records the symbol's current hash as `symbol_hash_at_doc` so the very first run cannot trigger a bogus `changed` event on the next pass, and the in-memory map is updated immediately so a duplicate occurrence of the same identity in the same pass cannot insert a second row.
-
-## Manual block reconciliation
-
-<!-- lw:anchors packages/core/src/anchor-ledger.ts#reconcileManualBlocks -->
-
-Reconciliation runs per page after the page's anchors are upserted. The `manual_blocks` table has no UNIQUE constraint, so the module maintains a deliberate multiset semantics: duplicate historical rows are collapsed, exact-position matches preserve the stored baseline hash, content matches that move within the page only update offsets, and unmatched existing rows are left in place so verification can detect a removed or altered block later.
+`upsertAnchor` takes the database, document ID, section slug, symbol key, owner, manual-block flag, existing anchor map, and initial symbol hash, and returns the anchor ID. It updates the row if the identity exists, otherwise it inserts a new row already carrying the current symbol hash to avoid the first-run empty-hash bug.
 
 ```ts
-function reconcileManualBlocks(
-  db: import("better-sqlite3").Database,
-  docPageId: number,
-  currentBlocks: ReadonlyArray<{
-    start: number;
-    end: number;
-    contentHash: string;
-  }>,
-): void
+function hashContent(content: string): string
 ```
 
-`reconcileManualBlocks` keeps the `manual_blocks` multiset for a single page coherent with the current Markdown. It returns nothing; the reconciliation operates entirely on the database plus the page's analysis result. The visible contract is: exact-position rows preserve the stored baseline hash (step 2a), moved blocks update offsets only (step 2b), unmatched current blocks are inserted as fresh baselines, and unmatched existing rows are intentionally left untouched so verification can detect the change.
-
-## Move detection and Markdown rewrite
-
-<!-- lw:anchors packages/core/src/anchor-ledger.ts#detectMoves packages/core/src/anchor-ledger.ts#rewriteSymbolKeyInPage packages/core/src/anchor-ledger.ts#findFrontmatterEnd packages/core/src/anchor-ledger.ts#isDelimiterLineAt packages/core/src/anchor-ledger.ts#endOfLine packages/core/src/anchor-ledger.ts#nextLineStart packages/core/src/anchor-ledger.ts#extractManualBlockRangesFromBody packages/core/src/anchor-ledger.ts#rewriteFrontmatterAnchorsList packages/core/src/anchor-ledger.ts#rewriteBodyMarkers packages/core/src/anchor-ledger.ts#escapeRegex -->
-
-Move detection runs after every page is parsed. The orchestrator loads every deleted symbol and every active symbol, and `detectMoves` pairs them up by content hash first and by name-plus-signature in a different file as a fallback. The conservative twin policy enforced here is the heart of the file: a disappeared symbol is accepted as `moved` only when no other active symbol with the same short name and same kind survives anywhere; otherwise the disappearance is classified as `changed` or `deleted` by the normal diff loop and the original anchor is preserved.
+`hashContent` takes a string and returns its SHA-256 hash for page content identity.
 
 ```ts
-function detectMoves(
-  deletedSymbols: Map<string, SymbolRow>,
-  activeSymbols: Map<string, SymbolRow>,
-  movedMap: Map<string, string>,
-  result: LedgerResult,
-): void
+async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
 ```
 
-`detectMoves` accepts the deleted and active symbol maps, an empty `movedMap` to populate, and the `LedgerResult` it appends the detected pairs to. It returns nothing; the caller's responsibility is to consume the map during the move handling step. Self-pairs (`oldKey === newKey`) and cases where a same-name same-kind twin survives are skipped, so the rewrite path only fires for true relocations.
+`collectWikiPages` takes the absolute repo root and returns a list of relative Markdown paths under `livewiki/`. It walks the tree depth-first, skipping hidden directories but allowing dot-prefixed page names, and normalizes separators to forward slashes.
 
-When a move is accepted, the orchestrator rewrites the corresponding anchor in the Markdown before touching the database. `rewriteSymbolKeyInPage` reloads the page through `safeIo.readText`, locates the frontmatter boundary, and edits the frontmatter and body in independent slices so a length change in one cannot invalidate offsets in the other. Manual block ranges and code spans are skipped, and the rewrite is idempotent because the second pass finds no `oldKey` to replace.
+## Anchor Rewriting
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#rewriteSymbolKeyInPage -->
+
+When a symbol is confirmed as moved, the anchor must be rewritten in the Markdown itself — the Markdown is the source of truth. `rewriteSymbolKeyInPage` orchestrates this safely.
 
 ```ts
 async function rewriteSymbolKeyInPage(
@@ -186,41 +291,43 @@ async function rewriteSymbolKeyInPage(
 ): Promise<boolean>
 ```
 
-`rewriteSymbolKeyInPage` rewrites every occurrence of `oldKey` in the page's anchor lists and markers, returning `true` when the file was modified and `false` otherwise. If the page has been deleted from disk by the time the rewrite runs, the function returns `false` silently because the anchor row has already been removed by the page-deletion path.
+`rewriteSymbolKeyInPage` takes the repo root, wiki path, old symbol key, and new symbol key, and returns `true` if the file was modified. It reads the source, finds the frontmatter end, slices the frontmatter and body independently, applies the list and marker rewrites, and writes back only if something changed. If the page disappeared from disk, it returns `false` without writing.
 
-The slice edits are delegated to two pure helpers. `rewriteFrontmatterAnchorsList` locates the top-level `anchors:` field and replaces list entries that match `oldKey`, leaving inline YAML comments and other top-level fields untouched. `rewriteBodyMarkers` walks the masked body, skipping any marker that sits inside a manual block or inside a code span (fenced or inline), and applies edits from highest offset to lowest so length differences between `oldKey` and `newKey` cannot corrupt earlier offsets. `extractManualBlockRangesFromBody` returns the body-local byte ranges of `lw:manual` blocks, and `escapeRegex` is the shared helper that lets the replacement regex treat `oldKey` literally.
+## Frontmatter Parsing Helpers
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#findFrontmatterEnd packages/core/src/anchor-ledger.ts#isDelimiterLineAt packages/core/src/anchor-ledger.ts#endOfLine packages/core/src/anchor-ledger.ts#nextLineStart -->
+
+Rewriting the frontmatter anchors list requires precise, line-aware parsing that preserves line endings exactly.
 
 ```ts
 function findFrontmatterEnd(source: string): number
 ```
 
-`findFrontmatterEnd` accepts the full source string and returns the offset where the body starts, computed from the closing `---` line of the frontmatter. It returns `0` when the source has no real frontmatter; otherwise it returns the offset immediately after the closing line's terminator (or `source.length` if the file ends right after the closing line).
+`findFrontmatterEnd` takes the full source and returns the byte offset where the body begins, or `0` if there is no real frontmatter. It checks the opening line is a real delimiter, then scans forward to the closing `---` line.
 
 ```ts
 function isDelimiterLineAt(source: string, offset: number): boolean
 ```
 
-`isDelimiterLineAt` returns `true` when the line starting at `offset` is a real delimiter line: the first three characters are `---` and the remainder, after stripping spaces and tabs, is empty. The line terminator is not consumed by this check.
+`isDelimiterLineAt` reports whether the line at the offset is a real `---` delimiter: the first three characters are hyphens and the rest is only spaces or tabs, ending at a terminator or EOF.
 
 ```ts
 function endOfLine(source: string, lineStart: number): number
 ```
 
-`endOfLine` returns the offset immediately after the terminator that ends the line at `lineStart`, accounting for CRLF and LF line endings. A line that runs to EOF without a terminator returns `source.length`.
+`endOfLine` returns the offset immediately after the line terminator for LF, CRLF, or EOF-without-terminator.
 
 ```ts
 function nextLineStart(source: string, lineStart: number): number
 ```
 
-`nextLineStart` returns the offset of the start of the line after the line that begins at `lineStart`, or `-1` when the line runs to EOF without a terminator.
+`nextLineStart` returns the offset of the next line's start, or `-1` if the line runs to EOF without a terminator.
 
-```ts
-function extractManualBlockRangesFromBody(
-  body: string,
-): Array<{ start: number; end: number }>
-```
+## Frontmatter Anchor List Rewrite
 
-`extractManualBlockRangesFromBody` accepts the body slice and returns body-local byte ranges for every open/close pair of `lw:manual` markers it finds. The ranges are used downstream to protect human content from automated rewrites while ensuring that a literal `lw:manual` written inside a frontmatter value cannot accidentally shield body markers.
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#rewriteFrontmatterAnchorsList -->
+
+This function edits the YAML frontmatter's `anchors:` list, replacing an old symbol key with a new one while preserving comments and surrounding structure.
 
 ```ts
 function rewriteFrontmatterAnchorsList(
@@ -230,7 +337,13 @@ function rewriteFrontmatterAnchorsList(
 ): string
 ```
 
-`rewriteFrontmatterAnchorsList` accepts the frontmatter segment and the `oldKey`/`newKey` pair, and returns the rewritten frontmatter segment. List entries that match `oldKey` are replaced with `newKey`; trailing YAML comments are preserved byte-for-byte; non-`anchors` lists are skipped.
+`rewriteFrontmatterAnchorsList` takes the frontmatter segment, old key, and new key, and returns the rewritten segment. It splits the segment into lines preserving terminators, locates the top-level `anchors:` line, and finds the end of the list body at the next top-level key or closing `---`. Only entries matching `- oldKey` are replaced; the optional trailing comment is preserved byte-for-byte.
+
+## Body Marker Rewrite
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#rewriteBodyMarkers packages/core/src/anchor-ledger.ts#extractManualBlockRangesFromBody packages/core/src/anchor-ledger.ts#escapeRegex -->
+
+Body anchor markers are `lw:anchors` HTML comments listing symbol keys. Rewriting must respect manual blocks and code spans.
 
 ```ts
 function rewriteBodyMarkers(
@@ -241,68 +354,50 @@ function rewriteBodyMarkers(
 ): string
 ```
 
-`rewriteBodyMarkers` accepts the body slice, the `oldKey`/`newKey` pair, and the manual-block ranges, and returns the rewritten body with the matched `lw:anchors` markers replaced. Markers inside manual blocks or inside code spans are skipped, and edits are applied from highest offset to lowest.
+`rewriteBodyMarkers` takes the body segment, old key, new key, and manual-block ranges, and returns the rewritten body. It masks code spans to preserve offsets, scans for `lw:anchors` markers outside manual blocks, swaps the old key in the tokenized list, and applies edits from the highest offset down.
+
+```ts
+function extractManualBlockRangesFromBody(
+  body: string,
+): Array<{ start: number; end: number }>
+```
+
+`extractManualBlockRangesFromBody` takes the body slice and returns byte ranges of complete `lw:manual` ... `/lw:manual` blocks. It scans for start and end markers, sorts events by offset, and pairs each start with the next unmatched end.
 
 ```ts
 function escapeRegex(s: string): string
 ```
 
-`escapeRegex` accepts a string and returns the same string with regex metacharacters escaped so the calling code can interpolate the symbol key into a regular expression safely.
+`escapeRegex` takes a string and returns it with all regex metacharacters escaped so symbol keys can be embedded safely in regular expressions.
 
-## Debt creation and dedup
+## Manual Block Reconciliation
 
-<!-- lw:anchors packages/core/src/anchor-ledger.ts#createDebt packages/core/src/anchor-ledger.ts#hasOpenDebt packages/core/src/anchor-ledger.ts#assigneeFor -->
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#reconcileManualBlocks -->
 
-The diff loop produces debt rows after the move handling step. For every current anchor, the orchestrator looks up the persisted row and the live symbol. A missing symbol triggers deleted debt (unless a row with the same anchor id and event is already open), a changed hash triggers changed debt (again only if there is no open row for the same anchor id and event), and the persisted hash is updated so the next run sees a stable baseline.
+The `manual_blocks` table tracks byte ranges of human-authored blocks so `verify` can detect unauthorized edits. `reconcileManualBlocks` keeps the table deduplicated and aligned with current content.
 
 ```ts
-function createDebt(
+function reconcileManualBlocks(
   db: import("better-sqlite3").Database,
-  anchorId: number | null,
-  event: DebtEvent,
-  assignee: Assignee,
-  detail: string | null,
-  symbolKey: string,
-  docPageId: number | null,
+  docPageId: number,
+  currentBlocks: ReadonlyArray<{ start: number; end: number; contentHash: string }>,
 ): void
 ```
 
-`createDebt` inserts a single `debt` row carrying the anchor id, the event name, the assignee, an optional JSON detail payload, the symbol key, and the durable `doc_page_id`. The function returns nothing; the caller's responsibility is to compute the assignee and supply the dedup-friendly identifiers.
+`reconcileManualBlocks` takes the database, document page ID, and current block list, and returns nothing while mutating the table. It collapses exact duplicate historical rows, then matches each current block to an unused existing row: an exact offset match keeps the stored baseline hash; a same-hash-different-offset match updates only offsets. Unmatched current blocks are inserted fresh, and unmatched existing rows stay so a removed block remains detectable.
+
+## Error Handling
+
+<!-- lw:anchors packages/core/src/anchor-ledger.ts#AnchorParseError packages/core/src/anchor-ledger.ts#AnchorParseError.constructor -->
+
+A dedicated error type signals anchor-extraction failures so callers can distinguish parse problems from other failures.
 
 ```ts
-function hasOpenDebt(
-  db: import("better-sqlite3").Database,
-  anchorId: number,
-  event: DebtEvent,
-): boolean
+export class AnchorParseError extends Error {
+  constructor(wikiPath: string, cause: Error) {
 ```
 
-`hasOpenDebt` returns `true` when the `debt` table already holds an unresolved row (`resolved_at IS NULL`) for the given `(anchorId, event)`. The partial index `idx_debt_open` makes the lookup O(1) in the visible schema.
-
-```ts
-function assigneeFor(owner: Owner, inManualBlock: boolean): Assignee
-```
-
-`assigneeFor` accepts the page's `Owner` and a boolean indicating whether the anchor sits inside a manual block, and returns `"human"` for any anchor that lives inside a manual block (regardless of the page-level owner) and otherwise returns `"human"` for human-owned pages and `"agent"` for generated or mixed pages. The visible contract is the conservative rule: manual blocks always route to human review, even on a generated page.
-
-## Undocumented symbol telemetry and finalization
-
-<!-- lw:anchors packages/core/src/anchor-ledger.ts#upsertUndocumented -->
-
-The last ledger step refreshes the `undocumented` table so it lists every active symbol that no current anchor references. Move handling and the earlier reconciliation step have already trimmed stale rows, so the diff loop's `currentAnchors` array is the authoritative list of documented symbols.
-
-```ts
-function upsertUndocumented(
-  db: import("better-sqlite3").Database,
-  activeSymbols: Map<string, SymbolRow>,
-  anchors: Array<{ symbolKey: string }>,
-  result: LedgerResult,
-): void
-```
-
-`upsertUndocumented` accepts the active symbol map, the current `anchors` array, and the in-flight `LedgerResult`, truncates the `undocumented` table, and re-inserts one row per active symbol that has no current anchor. It returns nothing; the function updates `result.undocumentedSymbols` in place so the caller can report the count.
-
-After this step, the orchestrator expunges deleted symbol rows that have an active replacement (supersession noise from file edits), records `last_ledger_at` in the `meta` table, and returns the populated `LedgerResult`.
+`AnchorParseError` extends the built-in `Error`. Its constructor takes the wiki page path and the underlying cause, produces a message naming the failed file, and sets the error `name` to `AnchorParseError` for programmatic identification.
 
 ## Tests
 

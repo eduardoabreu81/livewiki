@@ -1,33 +1,30 @@
 ---
-title: "livewiki batch command — run, resume, and inspect Phase 3 batches"
+title: Batch Command — Status, Resume, and Run Management
 owner: generated
 anchors:
-  - packages/cli/src/commands/batch.ts#USAGE_INCOMPLETE_NOTE
-  - packages/cli/src/commands/batch.ts#appendStage4Diagnostics
-  - packages/cli/src/commands/batch.ts#formatDiagnosticLine
-  - packages/cli/src/commands/batch.ts#formatListHuman
-  - packages/cli/src/commands/batch.ts#formatResultHuman
-  - packages/cli/src/commands/batch.ts#formatStatusHuman
-  - packages/cli/src/commands/batch.ts#registerBatch
-  - packages/cli/src/commands/batch.ts#setExitCode
+- packages/cli/src/commands/batch.ts#USAGE_INCOMPLETE_NOTE
+- packages/cli/src/commands/batch.ts#appendStage4Diagnostics
+- packages/cli/src/commands/batch.ts#formatDiagnosticLine
+- packages/cli/src/commands/batch.ts#formatListHuman
+- packages/cli/src/commands/batch.ts#formatResultHuman
+- packages/cli/src/commands/batch.ts#formatStatusHuman
+- packages/cli/src/commands/batch.ts#registerBatch
+- packages/cli/src/commands/batch.ts#setExitCode
 ---
 
-# livewiki batch command
+# Batch Command — Status, Resume, and Run Management
 
-This page documents the `livewiki batch` CLI subcommand: it runs, resumes, inspects, and lists Phase 3 documentation-generation batches.
+This page explains how the `livewiki batch` CLI command is registered and how its human-readable outputs and exit codes are produced.
 
 ## When to use this page
 
-- **Register the `batch` subcommand** on the root `livewiki` Commander program and route its subcommands (`status`, `resume`, `--only`, `list`, or implicit `<runId>`).
-- **Render human-readable status and result reports** for a batch run, including tokens, estimated USD, failures with retry commands, and degraded-page recovery notes.
-- **Map a batch run's terminal status string to a process exit code** (`completed` → 0, `completed_with_failures` → 1, `aborted` → 2) while honoring `--json`.
-- **Surface compact per-attempt diagnostic history** for stage-4 failures so operators can correlate CLI output with the persisted checkpoint `error.message`.
+- Learn how to invoke `livewiki batch` and its subcommands (`status`, `resume`, `list`, `--only`) from the command line.
+- Understand the mapping between batch run statuses and process exit codes.
+- Review how tokens, USD, task counts, failures, and degraded pages are rendered in human-readable output.
 
 ## How it fits
 
-`packages/cli/src/commands/batch.ts` is the Phase 3 entry point inside the `packages/cli` surface. It registers a single `batch` command on the root Commander `program` and delegates the actual work to two core modules: `@livewiki/core/batch` owns the long-running actions (`runBatch`, `resumeBatch`, `runOnly`), and `@livewiki/core/batch-status` owns the read-only actions (`buildStatusReport`, `listRuns`). All structured output is funneled through `emit()` from `../output.js` so a single call site produces both the JSON payload and its human counterpart, and the file also owns the small formatting helpers that turn a status/result/list payload into the text shown when `--json` is *not* set, plus a one-line exit-code mapper.
-
-In the wider CLI architecture this module sits between the root program in `cli.ts` and the core batch engines. The root program calls `registerBatch` once during boot; every batch-shaped user request then enters the action handler, resolves the repo root, and routes to either the run/resume/runOnly engines or the status/list reports. Because `emit()` is the only output sink, swapping `--json` on or off changes presentation without touching the dispatch logic. The exit-code mapper closes the loop: it reads the terminal `status` string that the engines return, translates it into `process.exitCode`, and lets Node finish pending I/O before the process actually ends — which keeps Windows libuv handles from being torn down mid-write. In short, `commands/batch.ts` is the thin CLI adapter that turns engine results into a stable, scriptable surface.
+`packages/cli/src/commands/batch.ts` is the CLI-facing layer for the Phase 3 batch machinery. It wires user input to core functions from `@livewiki/core/batch` and `@livewiki/core/batch-status`, converts results into either JSON or human-readable text, and sets the process exit code. The file lives under `packages/cli/src/commands/`, alongside other command registrars, and shares helpers like `emit` and `resolveRepoRoot` from the surrounding CLI infrastructure.
 
 ## Diagram
 
@@ -35,86 +32,90 @@ In the wider CLI architecture this module sits between the root program in `cli.
 %% livewiki/diagrams/commands-batch.mmd
 ```
 
-## Command registration and dispatch
+## Command Registration and Dispatch
 
 <!-- lw:anchors packages/cli/src/commands/batch.ts#registerBatch -->
 
-`registerBatch` is the single exported hook that the CLI's root program calls to attach the `batch` subcommand tree. Its signature is:
+The `registerBatch` function is the entry point that binds the `batch` command to the Commander program. It exists to translate user intent into calls to the core batch engine, then present the outcome consistently.
 
 ```ts
-export function registerBatch(program: Command): void
+export function registerBatch(program: Command): void {
 ```
 
-It takes the Commander root `program` and returns nothing; it mutates `program` by adding a `batch` command with three options (`--only`, `--no-refine`, `--concurrency`) and one action handler that performs all subcommand dispatch.
+It takes the Commander `Command` object and attaches a `batch` subcommand with options (`--only`, `--no-refine`, `--concurrency`) and an action handler. The handler reads global options like `--json` and `--repo`, resolves the repository root, and then dispatches based on the positional arguments.
 
-The action handler first resolves the absolute repo root (`resolveRepoRoot(opts.repo)` plus `path.resolve(process.cwd(), repoRoot)`), parses `concurrency` to a number if provided, and then branches on positional `args` and the `--only` flag. The branches, in source order, are:
+The dispatch logic is ordered so that `--only` takes precedence over the default status path. With no arguments and no `--only`, it builds a status report for the last run. With `list`, it lists runs. With `status [runId]`, it reports a specific run. With `resume <runId>`, it resumes pending or failed tasks. With `--only <target>`, it re-runs a single task from the last run. Finally, a bare integer argument is treated as an alias for `status` with that run ID.
 
-1. `args.length === 0 && !opts.only` — implicit `batch status` of the last run. Calls `buildStatusReport(absRoot)`, emits JSON or human output, and sets the exit code.
-2. `sub === "list"` — calls `listRuns(absRoot)`, emits, and returns without touching `setExitCode` (list is informational).
-3. `sub === "status"` — same as the implicit case but with an optional numeric `runId`; throws `invalid runId` if the positional arg is non-numeric.
-4. `sub === "resume"` — calls `resumeBatch(...)`, forwarding `noRefine: true` only when Commander's negated `--no-refine` produced `opts.refine === false`, and forwarding `concurrency` only when the user set it. Throws a usage error if no `runId` is given.
-5. `opts.only` — calls `runOnly(...)` with the requested target. The `runId` positional is accepted for symmetry but ignored; `runOnly` always resumes the last run's task.
-6. Positional numeric fallback — `batch <runId>` is treated as an alias for `batch status <runId>`.
+Each branch produces a result or report, passes it to `emit` with the JSON flag and a human formatter, and then calls `setExitCode` to reflect the run's status. Errors are caught and printed to stderr, and the exit code is set to 1 without an abrupt `process.exit`, which avoids libuv crashes on Windows.
 
-Any other first arg throws an `unknown subcommand` error that prints a short usage line.
+## Human-Readable Status Output
 
-Two side effects of the dispatch deserve attention:
+<!-- lw:anchors packages/cli/src/commands/batch.ts#formatStatusHuman packages/cli/src/commands/batch.ts#USAGE_INCOMPLETE_NOTE -->
 
-- **Source-comment guard on `--only`:** without an explicit `if (args.length === 0 && !opts.only)` check, `batch --only <target>` with no positional `runId` silently printed status and re-ran nothing (a bug that caused three "rehearsal" status reads in a row).
-- **Exit code path:** every terminal branch that reports a run's status finishes with `setExitCode(absRoot, status, json)`. The handler's `try` block wraps everything; the `catch` writes the error to stderr, sets `process.exitCode = 1`, and returns. The source comment explains why a bare `process.exit(1)` is avoided: it can crash libuv on Windows when async handles are still open.
-
-## Human output formatters
-
-<!-- lw:anchors packages/cli/src/commands/batch.ts#formatStatusHuman packages/cli/src/commands/batch.ts#formatResultHuman packages/cli/src/commands/batch.ts#formatListHuman packages/cli/src/commands/batch.ts#USAGE_INCOMPLETE_NOTE -->
-
-The four formatters below turn structured reports into the text shown when `--json` is absent. They share a "tokens first, USD second" layout and embed `USAGE_INCOMPLETE_NOTE` whenever totals are partial.
-
-### formatStatusHuman
+The `formatStatusHuman` function renders a full run report as a human-readable block. It exists because status reports contain rich data—tokens, costs, counts, and failures—that needs a readable, structured presentation.
 
 ```ts
-export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string
+export function formatStatusHuman(report: Awaited<ReturnType<typeof buildStatusReport>>): string {
 ```
 
-Takes a status report (same shape `buildStatusReport` returns) and returns a multi-line string. It prints a header with run id and status, start/finish timestamps, and an authoritative `tasks: <done>, <failed>` line drawn from `report.run.summary` — explicitly *not* from `report.byModule.length`, which is scoped to stage 4 and previously disagreed with the run's own end-of-run tally.
+It takes the report object and returns a formatted string. The output is token-first: input and output token counts are the primary metric, and USD is shown as a secondary "estimated" line only when pricing exists. It displays the run ID, status, start and finish times, and authoritative task counts from the summary. Degraded pages are surfaced as a count, not a failure.
 
-It then renders a "Tokens (primary metric)" block (total plus per-stage breakdown, plus `USAGE_INCOMPLETE_NOTE` when `usageIncomplete` is set), followed by a "USD (estimated)" block that is either omitted or marked `(no price)` when the model has no pricing entry. A "Per module (tokens)" block follows if any modules are present.
+The function then iterates over per-stage and per-module token data, and finally lists failures with their codes, messages, and retry commands. For stage-4 failures, it calls `appendStage4Diagnostics` to include per-attempt detail.
 
-For failures, it lists each entry as `[code] module: message`, and — for `f.stage === 4` — calls `appendStage4Diagnostics` to attach a compact per-attempt sequence under `    attempts:`. Each failure ends with a `retry: <command>` line.
-
-### formatResultHuman
-
-```ts
-export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string
-```
-
-Takes a run result (same shape `runBatch` returns) and returns a multi-line summary. It prints tokens (with `USAGE_INCOMPLETE_NOTE` when partial), an "estimated" USD line when pricing is available, and uses the authoritative `result.tasksDone` and `result.failures.length` counters instead of `byModule.length`.
-
-The formatter is also the place where several "never-silent" signals are surfaced: degraded pages under the relaxed contract (count, never a failure), a `circuit breaker: TRIGGERED` line, preserved human/mixed/unparseable flows hub and auxiliary/topics hub entries, deterministic pre-LLM flow-skipped candidates, stale generated pages removed by repartition cleanup, and an exhausted topic plan that is treated as optional/additive rather than as a batch failure. Each entry that needs operator action prints its own `retry:` line.
-
-### formatListHuman
-
-```ts
-function formatListHuman(runs: Awaited<ReturnType<typeof listRuns>>): string
-```
-
-Takes the array returned by `listRuns` and returns one summary line per run (id, status, started ISO, finished ISO or `(running)`). When the array is empty it returns the literal string `Batch runs:\n  (none)` instead of producing an empty header.
-
-### USAGE_INCOMPLETE_NOTE
+The shared constant `USAGE_INCOMPLETE_NOTE`, when usage data is incomplete, is emitted in both status and result output.
 
 ```ts
 export const USAGE_INCOMPLETE_NOTE =
   "Note: totals are incomplete — some attempts have unknown usage. Prefer proxy/provider billing for wire cost.";
 ```
 
-A shared string constant exported so both `formatStatusHuman` and `formatResultHuman` can paste the exact same disclaimer under their token totals whenever the report flags `usageIncomplete`.
+It is a constant string that informs the user that the displayed totals are not final, directing them to billing sources for exact wire cost.
 
-## Stage-4 diagnostic rendering
+## Human-Readable Result and List Output
+
+<!-- lw:anchors packages/cli/src/commands/batch.ts#formatResultHuman packages/cli/src/commands/batch.ts#formatListHuman -->
+
+The `formatResultHuman` and `formatListHuman` functions convert the results of a batch execution or a run listing into readable lines. They exist so that non-tech users can quickly see what happened and what remains.
+
+```ts
+export function formatResultHuman(result: Awaited<ReturnType<typeof runBatch>>): string {
+```
+
+It takes a batch execution result and returns a string. The output starts with the run ID and status, then token counts and an estimated USD line when available. It reports task done/failure counts, degraded pages, circuit-breaker status, and any skipped or preserved hubs. Stale page removals and skipped topic plans are also surfaced. Failures are listed with codes, messages, and retry commands.
+
+```ts
+function formatListHuman(runs: Awaited<ReturnType<typeof listRuns>>): string {
+```
+
+It takes an array of run summaries and returns a string. If there are no runs, it prints `(none)`. Otherwise, it lists each run's ID, status, start, and finish time (or `(running)`).
+
+## Exit Code Mapping
+
+<!-- lw:anchors packages/cli/src/commands/batch.ts#setExitCode -->
+
+The `setExitCode` function translates a batch run's status into the process exit code that shell scripts can rely on. It exists to make the CLI composable in automation.
+
+```ts
+function setExitCode(repoRoot: string, status: string, json: boolean): void {
+```
+
+It takes the repository root (currently unused), the status string, and a JSON flag. When `json` is true, it returns immediately, leaving the exit code at 0. Otherwise, it maps `completed` to 0, `completed_with_failures` to 1, and `aborted` to 2. Setting `process.exitCode` instead of calling `process.exit` lets Node drain pending async I/O.
+
+## Stage-4 Diagnostic Formatting
 
 <!-- lw:anchors packages/cli/src/commands/batch.ts#appendStage4Diagnostics packages/cli/src/commands/batch.ts#formatDiagnosticLine -->
 
-These two helpers implement the "B2" compact per-attempt sequence that appears in `batch status` output for failed stage-4 tasks. They mirror the format `repair_exhausted` uses inside `core/batch.ts`, so the CLI output and the persisted checkpoint `error.message` agree on shape.
+These two functions handle the per-attempt diagnostics for failed stage-4 tasks. They exist to give users a compact, actionable timeline of why an LLM refinement attempt failed.
 
-### formatDiagnosticLine
+```ts
+function appendStage4Diagnostics(
+  lines: string[],
+  report: Awaited<ReturnType<typeof buildStatusReport>>,
+  failureTaskId: number,
+): void {
+```
+
+It takes an array of output lines, the full status report, and a failing task ID. It finds the task in the report, and if its `diagnosticHistory` exists and is non-empty, it appends an `attempts:` block with one indented line per attempt, each formatted by `formatDiagnosticLine`. If the history is absent (pre-dating diagnostics) or empty (task never reached the LLM), it returns silently.
 
 ```ts
 function formatDiagnosticLine(d: {
@@ -122,52 +123,7 @@ function formatDiagnosticLine(d: {
   stopReason?: string;
   outcome: string;
   errors: Array<{ code: string }>;
-}): string
+}): string {
 ```
 
-Takes one diagnostic entry (an attempt number, an optional LLM `stopReason`, an `outcome` string, and a list of error objects each with a `code`) and returns a single string of the form:
-
-```
-attempt <n>: <stopReason> -> <outcome>[, code1, code2, ...]
-```
-
-Two details are worth knowing:
-
-- **`stopReason` fallback:** when the LLM did not provide one (e.g. `llm_error` outcomes), it is rendered as the literal `"-"` so the column stays aligned.
-- **Code deduplication:** `error.code` values are de-duplicated, but the *first-seen order* is preserved so a reader can match codes against the validator enumeration without surprises.
-
-The bracketed `[code1, code2, ...]` suffix is omitted entirely when the entry carries no errors.
-
-### appendStage4Diagnostics
-
-```ts
-function appendStage4Diagnostics(
-  lines: string[],
-  report: Awaited<ReturnType<typeof buildStatusReport>>,
-  failureTaskId: number,
-): void
-```
-
-Takes the line accumulator, the full status report, and the failing task's `taskId`, and mutates `lines` in place by pushing a header (`    attempts:`) and one `formatDiagnosticLine(d)` per entry in `task.diagnosticHistory`. It is intentionally silent — it returns without touching `lines` — when:
-
-- the report has no matching task, or
-- the task has no `diagnosticHistory`, or
-- `diagnosticHistory` is empty.
-
-Those silent-fallback cases cover the two real-world scenarios named in the source comment: checkpoints written before diagnostics existed (CONTRACT I5), and tasks that never reached the LLM (e.g. `refused_human_page`).
-
-## Exit-code mapping
-
-<!-- lw:anchors packages/cli/src/commands/batch.ts#setExitCode -->
-
-```ts
-function setExitCode(repoRoot: string, status: string, json: boolean): void
-```
-
-Takes the resolved repo root (currently unused inside the body but kept in the signature so callers don't have to thread a different value), the run's terminal `status` string, and the `json` flag, and sets `process.exitCode` to one of three values:
-
-- `0` when `status === "completed"`,
-- `1` when `status === "completed_with_failures"`,
-- `2` when `status === "aborted"`.
-
-The `json` flag short-circuits all three assignments — `--json` always exits 0 so structured pipelines can rely on the JSON payload, not the numeric code, for run state. The source comment notes that this is invoked as the *final* statement of each action handler; assigning `process.exitCode` instead of calling `process.exit` lets Node drain pending I/O before the process actually terminates, which is the same Windows-libuv hazard called out in the catch branch of `registerBatch`.
+It takes a diagnostic entry and returns a single line. The line shows the attempt number, the stop reason (or `-` when absent), the outcome, and a deduplicated, first-seen-order list of error codes when present. This mirrors the format persisted in checkpoint error messages, so log output is consistent across surfaces.

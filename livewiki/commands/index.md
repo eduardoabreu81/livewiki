@@ -26,11 +26,11 @@ None of the 11 documented files in this folder has a test file named after it.
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [From CLI command to LLM provider — the request path livewiki walks](../flows/cli-src-to-llm.md)
+- Flow: [Source Repository to LLM Pipeline](../flows/cli-src-to-llm.md)
 - Topic: [Testing](../topics/testing-f41eeea7.md)
 - [packages/mcp/src](../mcp-src/index.md) — used here
 - [packages/core/src](../core-src/index.md) — used here
 - [packages/cli/src](../cli-src/index.md) — used both ways
 
-> Coverage note: this folder's source (11 files, ~74k chars) is too large to read in full; this page documents its main entry points.
+> Coverage note: this folder's source (13 files, ~96k chars) is too large to read in full; this page documents its main entry points.
 <!-- livewiki:navigate:end -->

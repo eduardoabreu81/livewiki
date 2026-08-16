@@ -32,52 +32,58 @@ anchors:
   - packages/core/src/markdown-mask.ts#maskCodeSpansPreservingLength
   - packages/core/src/modules.ts#classifyModuleRole
   - packages/core/src/modules.ts#normalizeRepoPath
-updated: 2026-08-12
+updated: 2026-08-16
 ---
 
 # Testing
 
-You want to change livewiki's parsing, CLI output, or failure reporting and need to know which deterministic guarantees the test suites will hold you to.
+This page explains how five related modules coordinate automated testing across the livewiki repository, from CLI command registration to core data-contract validation.
 
 ## Purpose
 
-<!-- lw:anchors packages/core/src/frontmatter.ts#parseFrontmatter packages/core/src/hashes.ts#sha256 packages/core/src/markdown-mask.ts#maskCodeSpansPreservingLength packages/core/src/modules.ts#classifyModuleRole packages/core/src/modules.ts#normalizeRepoPath -->
+<!-- lw:anchors packages/core/src/frontmatter.ts#parseFrontmatter -->
 
-Livewiki's testing story rests on a small set of deterministic primitives whose exact behavior the suites pin down, because every higher-level guarantee (anchor validation, debt detection, hallucination rejection) is built on top of them. The frontmatter parser `packages/core/src/frontmatter.ts#parseFrontmatter` implements the deliberate YAML subset every wiki page is checked against — top-level keys, block string lists, and single-level flow-style lists — and its documented limitations (no nested maps, no multi-line strings) are themselves part of the tested contract. The content-hash helper `packages/core/src/hashes.ts#sha256` gives the indexer and the anchor ledger a stable identity for file bytes and symbol slices, including the EOL-insensitive normalization that keeps CRLF checkouts from producing phantom changes. The masking utility `packages/core/src/markdown-mask.ts#maskCodeSpansPreservingLength` lets validators scan prose while ignoring fenced code and inline spans, and its length-preserving variant keeps diagnostic offsets byte-for-byte equal to the original document — the property several regression suites assert with exact line numbers. Finally, the role classifier `packages/core/src/modules.ts#classifyModuleRole` decides whether an indexed path is product or auxiliary surface, and `packages/core/src/modules.ts#normalizeRepoPath` canonicalizes repo-relative paths so anchors and ledger entries stay stable across operating systems. Together these five functions define what "correct" means for everything the integration tests exercise above them.
+The livewiki project is a living documentation engine: it indexes source code, generates wiki pages, and validates that those pages stay anchored to the code they document. Testing spans two package roots — `packages/cli` (the command-line interface) and `packages/core` (the engine's data and pipeline logic) — plus the `packages/mcp` package that exposes the same tooling over the Model Context Protocol. The frontmatter parser `packages/core/src/frontmatter.ts#parseFrontmatter` sits at the boundary between raw file content and structured metadata: it converts the leading `---`-delimited YAML block of a wiki page into a typed `Frontmatter` object, returning `frontmatter: null` when a page deliberately omits it, and throwing a parse error when an opening delimiter exists without a closing one. This parser underpins anchor extraction and page validation, making it a core contract that tests must exercise both for well-formed and malformed inputs.
 
 ## When to use this page
 
 <!-- lw:anchors packages/core/src/db.ts#openIndex -->
 
-Read this page when a change touches any surface the suites pin exactly — a validator message, a CLI rendering, an exit code — or when a test failure suggests the contract moved rather than the test. It is also the right starting point before extending coverage into a new area, because the existing suites show the established patterns: unit tests for the primitives, end-to-end suites that run the CLI as a subprocess against stub LLM servers, and MCP tests that connect client and server over an in-memory transport. State for all of these flows begins at the index opener `packages/core/src/db.ts#openIndex`, which opens the derived SQLite cache and applies schema migrations idempotently; tests that exercise debt, ledger, or status behavior all pass through it, so its migration discipline (check columns before altering, never assume) is a recurring subject of the persistence tests.
+Use this page when you need to understand how the testing layers of `cli-src`, `commands`, `core-src`, `llm`, and `mcp-src` coordinate — for example, when adding a new CLI command, changing a core data contract, or extending the MCP server surface. The database opener `packages/core/src/db.ts#openIndex` is a useful entry point: it opens (or creates) the SQLite index at `dbPath`, runs idempotent migrations, and records `schema_version` in the `meta` table. Test suites in `core-src` call this function to verify that fresh databases receive the current schema version, that all expected tables exist, and that pending migrations apply correctly. This function intentionally does not create its parent directory — the caller must ensure `.livewiki/` exists so that a missing directory fails closed rather than being silently recreated.
 
 ## Behavioral contract
 
-<!-- lw:anchors packages/cli/src/cli.ts#createProgram packages/cli/src/cli.ts#readVersion packages/cli/src/cli.ts#resolveRepoRoot packages/cli/src/output.ts#emit packages/cli/src/output.ts#emitHuman packages/cli/src/output.ts#emitJson -->
+<!-- lw:anchors packages/core/src/hashes.ts#sha256 packages/core/src/markdown-mask.ts#maskCodeSpansPreservingLength packages/core/src/modules.ts#classifyModuleRole packages/core/src/modules.ts#normalizeRepoPath packages/cli/src/commands/batch.ts#setExitCode packages/cli/src/commands/index-cmd.ts#formatLedgerHuman packages/cli/src/commands/install.ts#formatDetectionHuman packages/cli/src/commands/install.ts#formatResultsHuman packages/cli/src/commands/view.ts#openBrowser packages/cli/src/cli.ts#readVersion packages/cli/src/cli.ts#resolveRepoRoot packages/cli/src/output.ts#emit packages/cli/src/output.ts#emitHuman packages/cli/src/output.ts#emitJson -->
 
-The CLI's observable behavior funnels through a deliberately small surface, and the suites treat that surface as the contract. Program construction in `packages/cli/src/cli.ts#createProgram` wires every command and the global flags, so command-registration tests catch a command that silently stops being exposed. Version reporting through `packages/cli/src/cli.ts#readVersion` resolves the version from the package's own manifest with a defined fallback, and repository rooting through `packages/cli/src/cli.ts#resolveRepoRoot` turns the `--repo` flag into the absolute root every command agrees on. All user-facing output passes through the dual-channel emitter: `packages/cli/src/output.ts#emit` selects machine or human rendering, while `packages/cli/src/output.ts#emitJson` and `packages/cli/src/output.ts#emitHuman` produce the two forms. Because tests assert both the JSON shape and the human wording, a change to one channel without the other shows up as a suite failure rather than drifting documentation.
+The behavioral contract for testing spans several layers:
+
+**Core data contracts.** The hashing function `packages/core/src/hashes.ts#sha256` computes a SHA-256 digest for any string or `Uint8Array`, used for content fingerprints. The markdown masker `packages/core/src/markdown-mask.ts#maskCodeSpansPreservingLength` replaces characters inside fenced code blocks and inline code spans with spaces while preserving the original string length and line terminators — so a position in the masked view maps to the same position in the original text. Module classification `packages/core/src/modules.ts#classifyModuleRole` assigns a role (product, docs, tooling, fixture, test) to a module by counting path roles and resolving ties with a fixed priority list (product first, test last), never by input order. Path normalization `packages/core/src/modules.ts#normalizeRepoPath` converts backslashes to forward slashes and strips a leading `./` to produce canonical repo-relative paths.
+
+**CLI output contracts.** The output helpers in `packages/cli/src/output.ts` define how commands communicate with callers. The `emit` dispatcher selects between `emitJson` and `emitHuman` based on the `json` flag, wiring structured or human-readable output through one path; `emitHuman` writes text to stdout, appending a newline only when missing; `emitJson` serializes a value with `JSON.stringify` followed by a newline. The CLI scaffolding `packages/cli/src/cli.ts#createProgram` registers thirteen subcommands (init, index, status, update, verify, serve, batch, export, view, pointer, install, config, baseline) plus global `--json` and `--repo` flags, and the version string comes from `readVersion`, which reads `@livewiki/cli`'s `package.json` synchronously and falls back to `"0.0.0"` when the file is unreadable or unparseable. Repo-root resolution `resolveRepoRoot` resolves the `--repo` option relative to the current working directory, defaulting to `.` when omitted — a relative-path-only resolution.
+
+**Human formatters.** Several command modules expose human-readable formatters for tests. The `formatLedgerHuman` helper (from `index-cmd`) renders the indexing ledger summary — pages processed, anchors upserted, debt counts, and moved pairs. Install detection and results formatters (`formatDetectionHuman`, `formatResultsHuman`) produce per-agent detection evidence and per-action outcomes such as written, skipped, or refused. Exit-code assignment `setExitCode` maps batch statuses: `completed` → 0, `completed_with_failures` → 1, `aborted` → 2, with an early return that forces exit code 0 whenever `--json` is active — structured output is always treated as success. The browser opener `openBrowser` is best-effort: it spawns the platform-appropriate opener detached with `shell: false`, returns `true` on spawn, and returns `false` on any throw, never failing the command since the path is already printed.
 
 ## Failure and recovery
 
-<!-- lw:anchors packages/cli/src/commands/batch.ts#formatListHuman packages/cli/src/commands/batch.ts#setExitCode packages/cli/src/commands/index-cmd.ts#formatLedgerHuman packages/cli/src/commands/install.ts#formatDetectionHuman packages/cli/src/commands/install.ts#formatResultsHuman -->
+<!-- lw:anchors packages/cli/src/commands/batch.ts#formatListHuman -->
 
-Failure presentation is pinned as strictly as success. The exit-code mapper `packages/cli/src/commands/batch.ts#setExitCode` translates batch outcomes into the documented 0/1/2 codes and assigns `process.exitCode` instead of calling `process.exit`, a discipline the suites protect because terminating early can corrupt pending asynchronous cleanup. Run listings come from `packages/cli/src/commands/batch.ts#formatListHuman`, the index and debt ledger rendering from `packages/cli/src/commands/index-cmd.ts#formatLedgerHuman`, and the installer's agent-detection and apply reports from `packages/cli/src/commands/install.ts#formatDetectionHuman` and `packages/cli/src/commands/install.ts#formatResultsHuman`. Each of these renderers has tests that assert exact wording on both the happy path and the failure paths, so error text is reviewed contract, not afterthought.
+The batch-run formatter `packages/cli/src/commands/batch.ts#formatListHuman` reveals how the CLI handles empty and partial state. When no batch runs exist, it prints `(none)`; when runs exist, each row shows the run ID, padded status, and ISO timestamps for start and finish, with `(running)` for unfinished runs. Tests exercise this function for both empty and populated run lists, and the shared incomplete-usage note is appended to status output when token totals are flagged `usageIncomplete` — covering LLM outcomes such as `llm_timeout` where the model did not return complete usage data. Recovery paths in the broader batch flow include retry commands printed per failed task (e.g. `livewiki batch --only <target> <runId>`) and silent fallback when pre-dated checkpoints lack diagnostics.
 
 ## Change map
 
-<!-- lw:anchors packages/cli/src/commands/view.ts#openBrowser -->
+<!-- lw:anchors packages/cli/src/cli.ts#createProgram -->
 
-When you change any symbol cited here, update its module page in the same change and expect the corresponding suite to fail until the new behavior is pinned. The viewer's browser launcher `packages/cli/src/commands/view.ts#openBrowser` illustrates the pattern: it opens the built site cross-platform through a shell-free spawn, and its tests pin that discipline per operating system, so a platform change lands in code, page, and test together.
+The `createProgram` function in `packages/cli/src/cli.ts` is the scaffolding gate for CLI evolution: any added or removed subcommand changes the registration list asserted by the smoke tests in `packages/cli/src/cli.test.ts`, which expects exactly thirteen commands including the versioned baseline lifecycle. Tests also verify the program name is `livewiki` and that `--json` and `--repo` appear among the global options. When a new command is added, update `createProgram`, the command's registration module in `packages/cli/src/commands/`, and the test's expected command-name array. See [cli-src](../cli-src/index.md) for the CLI source-root details and [commands](../commands/index.md) for the subcommand wiring.
 
 ## Related pages
 
-- [Topics hub](index.md)
-- [cli-src module](../cli-src/index.md)
-- [commands module](../commands/index.md)
-- [core-src module](../core-src/index.md)
-- [llm module](../llm/index.md)
-- [mcp-src module](../mcp-src/index.md)
-- [cli-src-to-llm flow](../flows/cli-src-to-llm.md)
-- [mcp-src-to-llm flow](../flows/mcp-src-to-llm.md)
-- [cli-src-to-llm diagram](../diagrams/flow-cli-src-to-llm.mmd)
-- [mcp-src-to-llm diagram](../diagrams/flow-mcp-src-to-llm.mmd)
+- [cli-src](../cli-src/index.md) — command-line package source root.
+- [commands](../commands/index.md) — subcommand adapters and workflows.
+- [core-src](../core-src/index.md) — core engine source root with data contracts.
+- [llm](../llm/index.md) — LLM client interface and provider adapters.
+- [mcp-src](../mcp-src/index.md) — MCP server source root.
+- [cli-src-to-llm](../flows/cli-src-to-llm.md) — end-to-end CLI pipeline to LLM.
+- [mcp-src-to-llm](../flows/mcp-src-to-llm.md) — MCP tool call to LLM path.
+- [flow-cli-src-to-llm](../diagrams/flow-cli-src-to-llm.mmd) — pipeline flow diagram.
+- [flow-mcp-src-to-llm](../diagrams/flow-mcp-src-to-llm.mmd) — MCP flow diagram.
+- [Topics hub](index.md) — overview of all topic pages.

@@ -1,5 +1,5 @@
 ---
-title: LLM client factory and error types
+title: LLM Client Factory and Error Types
 owner: generated
 anchors:
   - packages/core/src/llm/index.ts#LlmRequestError
@@ -9,22 +9,20 @@ anchors:
   - packages/core/src/llm/index.ts#createLlmClient
 ---
 
-# LLM client factory and error types
+# LLM Client Factory and Error Types
 
-This module owns the public surface for talking to large-language-model providers: it validates configuration, resolves which provider to call, reads the API key from the environment, and instantiates the right HTTP adapter, plus the two error types that callers handle when something goes wrong.
+This page explains how the LLM client is constructed and what error types it exposes.
 
 ## When to use this page
 
-- **Build an `LlmClient`** for a batch run by calling `createLlmClient` once the `LivewikiConfig` is loaded.
-- **Diagnose a missing API key** by catching `MissingApiKeyError` and surfacing the expected env var name.
-- **Handle an upstream provider failure** by catching `LlmRequestError` and inspecting its `status` and `errorBody`.
-- **Re-export shared types** like `GenerateRequest`, `GenerateResult`, `LlmUsage`, `StopReason`, and `LlmTimeoutError` for downstream modules.
+- Understand how `createLlmClient` turns a validated config into a concrete provider adapter.
+- Learn the credential resolution rules that decide which API key is used, and when a `MissingApiKeyError` is thrown.
+- Inspect the two LLM-specific error classes (`MissingApiKeyError` and `LlmRequestError`) to see what information they carry and what they deliberately omit.
+- Extend or debug the LLM client factory without reading the provider adapter implementations.
 
 ## How it fits
 
-`packages/core/src/llm/index.ts` is the entry seam between the batch runner (`batch.ts`) and the provider-specific HTTP adapters. The batch layer hands it a validated `LivewikiConfig` and receives back an `LlmClient` whose single `generate(req)` method is the only thing the batch code ever needs to know about. Configuration concerns — provider/model/timeout validation, preset expansion, and base-URL defaults — are delegated to `config.ts`; transport concerns — request signing, retries, timeout enforcement — live in the adapters (`AnthropicAdapter`, `OpenAiCompatAdapter`) and the shared `base.ts` that they extend. This module re-exports types and the timeout error from those siblings so that callers only need a single import path.
-
-The file also defines two domain-specific error classes. They are the only error types `createLlmClient` and the adapters throw that callers are expected to distinguish; missing-config failures surface as `MissingProviderConfigError` from `config.ts`, and upstream HTTP failures surface as `LlmRequestError`.
+`packages/core/src/llm/index.ts` is the public surface of the LLM subsystem. It exposes a thin factory that takes a validated repo config and returns an `LlmClient` — either an `AnthropicAdapter` or an `OpenAiCompatAdapter` (the latter also covering OpenRouter/LiteLLM/Ollama via a configurable base URL). It also defines the two error types that callers of the client may observe. The module imports validation helpers from `../config.js`, a credential resolver from `../credentials.js`, provider adapters from sibling files, and re-exports `LlmTimeoutError` and the LLM types from `./base.js` and `./types.js`. It does not itself perform HTTP requests — that responsibility lives in the adapters.
 
 ## Diagram
 
@@ -32,69 +30,34 @@ The file also defines two domain-specific error classes. They are the only error
 %% livewiki/diagrams/llm-index-ts.mmd
 ```
 
-## Provider resolution and client construction
+## Factory flow
 
 <!-- lw:anchors packages/core/src/llm/index.ts#createLlmClient -->
 
-The factory is the one place where configuration becomes a usable client, so the steps inside it have to happen in a strict order: validate first, resolve the provider record second, read the API key third, and only then pick an adapter. Skipping validation would let a malformed `LivewikiConfig` produce a client that misbehaves at request time; reading the key before validation would risk leaking the env-var name in a less helpful error message.
+`createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient` is the core factory of this module. It takes a repository root and a validated `LivewikiConfig`, and returns a ready-to-use `LlmClient`. Its job is to bridge configuration and credentials into a concrete HTTP-based provider adapter, without leaking secrets or assuming a default model.
 
-The signature below is the only thing callers ever need to invoke this code:
+The factory begins by calling `validateConfigForBatch(repoRoot, config)` from `../config.js`. This step is not optional: it ensures that a provider or preset and a model are present, and that `timeoutMs` is sane, even when the config was not loaded through the normal `loadConfig` path. If provider or model are missing, `validateConfigForBatch` throws `MissingProviderConfigError`.
 
-```ts
-export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient
-```
+Next, the factory resolves the provider shape through `resolveProviderFromConfig(config)`. This handles three cases, in priority order: a `config.preset` (newer configuration) expands into an adapter name, a default base URL, an environment-variable name, and pricing metadata; a legacy `config.provider` supplies an adapter with default base URL and environment-variable name; and if neither exists, the earlier validation already aborted. The resolved object also carries the exact environment-variable name that holds the credential.
 
-It takes the repository root (so config validation can resolve relative paths) and a `LivewikiConfig`, and returns an `LlmClient` whose `provider`, `model`, and `generate` method are the public contract.
+The model name is taken directly from `config.model`, and the base URL is chosen with a precedence that favors an explicit config value, then the preset's base URL, then a provider default. The factory then resolves credentials via `resolveCredentialSync(resolved.envVar).value`, which checks the process environment before the global credential store; keys are never read from `config.json`, `checkpoint_json`, logs, or error messages. If that resolution returns nothing and the provider does not mark the credential as optional, the factory throws `MissingApiKeyError`; for optional credentials it substitutes the locally scoped sentinel value `"livewiki-local"`.
 
-Concretely, `createLlmClient` runs four steps:
+Timeout handling is deliberate about preserving `timeoutMs: 0` as a disabled-timeout signal. The factory constructs a `timeoutOpts` object only when `config.timeoutMs` is explicitly defined, then spreads it into the adapter options, letting the underlying request logic apply its own default when absent.
 
-1. **Validate the config.** It calls `validateConfigForBatch(repoRoot, config)` from `config.ts`. That call is what enforces provider/model presence and `timeoutMs` shape, and is the source of `MissingProviderConfigError` when those are missing — `createLlmClient` does not reimplement those checks.
-2. **Resolve the provider record.** `resolveProviderFromConfig(config)` collapses either a preset (Phase 5 form, e.g. `"minimax"`) or a legacy `config.provider` into a single record carrying `adapter`, `baseUrl`, `envVar`, `thinkingDefault`, and `preferMaxCompletionTokens`. The `model` field is read straight off `config.model`, since validation already confirmed it is a string. A `baseUrl` is then picked with `resolved.baseUrl || resolveBaseUrl(config)` so an explicit config URL wins over a preset URL, which wins over the adapter default.
-3. **Read the API key from the environment.** `process.env[resolved.envVar]` is the only place the key is ever looked up. When the variable is unset, the factory throws `MissingApiKeyError` rather than returning a half-built client, so callers cannot accidentally make requests without authentication. Timeout options are then assembled with an explicit `undefined` check so that `timeoutMs: 0` (the documented "disable" sentinel) is preserved instead of being collapsed to a default.
-4. **Instantiate the adapter.** The `resolved.adapter` value picks between `AnthropicAdapter` and `OpenAiCompatAdapter`. The OpenAI-compatible branch additionally forwards `thinkingDefault` and `preferMaxCompletionTokens` from the preset, because those knobs are meaningless for the Anthropic wire format but matter for OpenAI-compatible providers that mimic OpenRouter/LiteLLM/Ollama behavior.
+Finally, the factory branches on the resolved adapter name. For `"anthropic"` it returns `new AnthropicAdapter({ apiKey, baseUrl, model, ...timeoutOpts })`; otherwise it returns `new OpenAiCompatAdapter` with the same base options plus preset-derived fields `thinkingDefault` and `preferMaxCompletionTokens`, which control thinking-mode behavior and the preferred token-field name for OpenAI-compatible endpoints. In both branches the caller receives an object whose `generate` method will make the actual HTTP call.
 
-The visible throw chain therefore is: missing provider/model/timeout → `MissingProviderConfigError` (from `validateConfigForBatch`); missing API key → `MissingApiKeyError` (from this file); upstream failure → `LlmRequestError` (from the adapters, surfaced through `generate`).
-
-## Missing API key error
+## Credential-missing error
 
 <!-- lw:anchors packages/core/src/llm/index.ts#MissingApiKeyError packages/core/src/llm/index.ts#MissingApiKeyError.constructor -->
 
-This error exists so that a missing credential is reported with the exact env var name the caller has to set, without ever echoing the credential itself (which, by construction, is absent). `createLlmClient` is the only direct thrower in this file; the adapters do not throw it.
+`MissingApiKeyError` is the error raised when a remote provider credential is unavailable at client-construction time. Its constructor `constructor(provider: LlmProvider, envVar: string)` takes the provider name and the environment-variable slot that should hold the key, and returns an error whose message names only that slot — never a credential value.
 
-```ts
-export class MissingApiKeyError extends Error {
-  constructor(provider: LlmProvider, envVar: string) {
-    super(
-      `Missing API key for provider "${provider}". ` +
-        `Set env var ${envVar} before running the batch. ` +
-        `Keys never live in config.json, checkpoint_json, logs, or error messages.`,
-    );
-    this.name = "MissingApiKeyError";
-    this.provider = provider;
-    this.envVar = envVar;
-  }
-}
-```
+The constructor builds its message with the provider and env-var name, sets `this.name` to `"MissingApiKeyError"`, and stores both inputs as public readonly fields so callers can inspect them programmatically. The message text explicitly instructs the user to run `livewiki config` or set the environment variable, and reminds them that keys never live in config files, logs, or error messages. This class is intentionally minimal because it exists only to make the missing-key condition diagnosable without ever exposing the secret.
 
-The constructor takes the resolved `provider` name and the `envVar` string that `resolveProviderFromConfig` decided on, and produces an `Error` whose message names both. The `provider` and `envVar` are stored as readonly fields so programmatic callers can branch on them without re-parsing the message. Because the value of the key is never read in the missing path, the error message cannot leak it — there is nothing to leak.
-
-## LLM request error
+## Request-failure error
 
 <!-- lw:anchors packages/core/src/llm/index.ts#LlmRequestError packages/core/src/llm/index.ts#LlmRequestError.constructor -->
 
-When the provider actually responds with a failure status, or a transport-level error surfaces, the adapters raise `LlmRequestError`. The class is defined here so that batch code and any other consumer can `instanceof`-check against a single, stable type from the public entry point.
+`LlmRequestError` is the error raised when a provider returns an error or an HTTP request fails. Its constructor `constructor(provider: LlmProvider, status: number, errorBody: string)` takes the provider name, the HTTP status code, and the raw error body from the provider, and returns an error that carries the body but never the request headers.
 
-```ts
-export class LlmRequestError extends Error {
-  constructor(provider: LlmProvider, status: number, errorBody: string) {
-    const truncated = errorBody.length > 500 ? errorBody.slice(0, 500) + "..." : errorBody;
-    super(`LLM ${provider} request failed (status ${status}): ${truncated}`);
-    this.name = "LlmRequestError";
-    this.status = status;
-    this.provider = provider;
-    this.errorBody = errorBody;
-  }
-}
-```
-
-The constructor takes the `provider` name, the HTTP `status` code, and the raw `errorBody` string returned (or assembled) by the adapter. Three things are worth noting from the visible source. First, the message truncates `errorBody` to 500 characters and appends `"..."`, so a huge provider payload does not blow up logs and stack traces — the visible check is a one-sided upper cap, not a guarantee about minimum body size. Second, `this.errorBody = errorBody` stores the **untruncated** body on the instance, so programmatic consumers (test assertions, structured logging) still see the full payload; only the human-facing `message` is clipped. Third, response headers are deliberately never put on the error, because headers are where API keys live — this is the invariant that the `key-leak.test.ts` companion (handled outside this page) exists to enforce.
+The constructor truncates the error body to 500 characters (appending an ellipsis) so that a large JSON response does not flood the error message. It then formats a message of the form `LLM <provider> request failed (status <status>): <truncated body>`, sets `this.name` to `"LlmRequestError"`, and exposes `status`, `provider`, and the full untruncated `errorBody` as public readonly fields. The deliberate exclusion of headers is a security invariant: headers can contain the API key, so they must never appear in any error message or logged output.

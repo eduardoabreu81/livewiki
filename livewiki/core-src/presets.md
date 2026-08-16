@@ -1,5 +1,5 @@
 ---
-title: Provider presets and config expansion
+title: Provider Presets and Resolution
 owner: generated
 anchors:
   - packages/core/src/presets.ts#AVAILABLE_PRESETS
@@ -11,20 +11,20 @@ anchors:
   - packages/core/src/presets.ts#resolveProviderConfig
 ---
 
-# Provider presets and config expansion
+# Provider Presets and Resolution
 
-This page documents the module responsible for the built-in catalogue of known LLM providers (the "presets") and the helper that merges a preset with user overrides into a final runtime configuration.
+This page documents the embedded preset table for known LLM providers and the functions that resolve provider configurations from user input, enabling the rest of livewiki to connect to different API endpoints without per-provider code.
 
 ## When to use this page
 
-- **Add a new built-in provider** by appending an entry to the preset table with no other code changes.
-- **Look up the adapter, base URL, env var, or default pricing** for a known provider such as Anthropic, OpenAI, OpenRouter, DeepSeek, Kimi, MiniMax, Gemini, NVIDIA NIM, Ollama, or LM Studio.
-- **Resolve a preset name plus config overrides** into a single `ResolvedProviderConfig` ready for the runtime.
-- **Diagnose `UnknownPresetError`** thrown when a config references a provider name that does not exist in the table.
+- Understand what provider presets exist and how they are defined.
+- Learn how to resolve a preset by name and what error is thrown for unknown names.
+- Discover how to merge preset defaults with user-supplied config overrides.
+- Check whether a given string is a known preset name without triggering exceptions.
 
 ## How it fits
 
-`packages/core/src/presets.ts` lives in `packages/core/src/` next to `config.ts` and `pricing.ts`. It is a pure data-and-helpers module: it does no I/O, reads no env vars, and never writes the resolved values back to disk. `config.ts` loads `.livewiki/config.json` and then calls `resolveProviderConfig` here to expand a `preset` reference plus any per-field overrides into the final `ResolvedProviderConfig` that the rest of the pipeline (pricing lookup, LLM client construction) consumes. Because the env-var field is a *name* and never a value, this module is the single place that knows which env var each provider expects — and that indirection is what keeps API keys out of checkpoints, logs, and error messages.
+`presets.ts` lives in the core package alongside `config.ts` and `pricing.ts`. It provides the authoritative list of supported LLM providers — from hosted APIs (Anthropic, OpenAI, OpenRouter, DeepSeek, Kimi, MiniMax, Gemini, NVIDIA NIM) to fully local engines (Ollama, LM Studio) — each with its adapter type, base URL, environment variable name, and best-effort default pricing. The rest of the codebase calls the resolver functions here to turn a `preset` or legacy `provider` field from `config.json` into a concrete runtime configuration, so adapters and clients never need to know provider-specific details themselves. The file is pure data plus small, pure resolution logic; it never touches disk or environment variables directly.
 
 ## Diagram
 
@@ -32,101 +32,56 @@ This page documents the module responsible for the built-in catalogue of known L
 %% livewiki/diagrams/core-src-presets.mmd
 ```
 
-## Preset data table
+## Preset Data Table
 
 <!-- lw:anchors packages/core/src/presets.ts#PRESET_TABLE packages/core/src/presets.ts#AVAILABLE_PRESETS -->
 
-The preset table is the single source of truth for every built-in provider the tool can run against. Each entry carries just enough information to make an outbound request without further configuration: which LLM client adapter to instantiate, the API base URL, the name of the env var that holds the API key, a best-effort default pricing table per model, and short operational notes that surface in `--help` and error messages. Optional fields capture provider-specific defaults — the default thinking/reasoning policy, whether to prefer `max_completion_tokens` over `max_tokens`, and a suggested max output token count for stage-4 batch documentation.
+This section covers the core data structures of the module — the embedded table of known providers and the ordered list of their names. These are the constants that everything else in the file (and most of the runtime configuration path) is built from.
 
-```ts
-export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
-```
+`PRESET_TABLE` is a `Record<PresetName, ProviderPreset>` that maps each supported provider name to a full configuration object. Each entry carries:
 
-This `Record<PresetName, ProviderPreset>` shape, paired with the literal-union `PresetName` type, gives IDE autocomplete for every supported provider name. Each entry is intentionally additive: adding a new provider means adding one more property here, with no new code path.
+- `adapter` — which `LlmClient` implementation to instantiate: `"anthropic"` or `"openai-compat"`. This maps one-to-one with the internal `LlmProvider` type.
+- `baseUrl` — the API base URL without a `/v1` suffix (adapters resolve the path themselves).
+- `envVar` — the name of the environment variable that holds the API key. **Never** the value itself; the key may be absent for local providers.
+- `pricing` — a best-effort table of default prices (USD per 1M tokens) per model, overridable via `config.pricing`.
+- `notes` — short operational text that surfaces in `--help` output or error messages, without secrets or billing URLs.
+- Optional fields: `credentialOptional` (for unauthenticated local endpoints), `thinkingDefault` (whether to send an explicit reasoning policy for batch documentation), `preferMaxCompletionTokens` (prefer `max_completion_tokens` over `max_tokens`), and `defaultMaxOutputTokens` (the suggested stage-4 token cap).
 
-```ts
-export const AVAILABLE_PRESETS: readonly PresetName[] = [
-  "anthropic",
-  "openai",
-  "openrouter",
-  "deepseek",
-  "kimi",
-  "minimax",
-  "gemini",
-  "nvidia",
-  "ollama",
-  "lmstudio",
-];
-```
+The table covers ten providers. Hosted APIs such as Anthropic, OpenAI, OpenRouter, DeepSeek, and Gemini use their standard endpoints and environment variable names. MiniMax is notable: because it offers an Anthropic-compatible endpoint, its preset uses the `"anthropic"` adapter to take advantage of optimized prompt caching. Ollama and LM Studio are local and mark `credentialOptional: true` so the resolution path knows a key is not required.
 
-`AVAILABLE_PRESETS` is a parallel ordered list of the same keys, used purely for human-facing messages — error strings, `--help` output, and the `available` field on `UnknownPresetError`. Keeping it as a separate array means the order in help text stays stable even if `Object.keys(PRESET_TABLE)` ever returned keys in a different order, and it lets the error message list supported names without re-iterating the table.
+`AVAILABLE_PRESETS` is a `readonly PresetName[]` listing every key of `PRESET_TABLE` in a fixed order. This list exists to provide consistent, human-readable output for error messages and `--help` text, ensuring users always see the exact set of accepted preset names.
 
-Two contract points worth flagging for new entries: `envVar` is the *name* of the environment variable, never its value (so this file is safe to import from anywhere without leaking credentials); and default prices are best-effort, anchored to `PRICING_REFERENCE_DATE` in `pricing.ts`, and may be overridden per model via `config.pricing.<model>`.
+## Preset Resolution
 
-For the 2026-08-13 release snapshot, the Anthropic preset names Claude Opus 4.5, Sonnet 5, and Haiku 4.5, while the OpenAI preset prices GPT-4o at $2.50 input / $10 output and GPT-4o mini at $0.15 / $0.60 per million tokens. Sonnet 5's $2 / $10 entry is explicitly the introductory rate ending 2026-08-31; callers that need later billing accuracy should override it until the next table review.
+<!-- lw:anchors packages/core/src/presets.ts#resolvePreset packages/core/src/presets.ts#UnknownPresetError packages/core/src/presets.ts#UnknownPresetError.constructor packages/core/src/presets.ts#isKnownPreset -->
 
-## Preset lookup and type narrowing
+This section covers the functions that look up presets and validate names. Their role is to turn a user-supplied string into a concrete `ProviderPreset` object (or a clear failure), and to let config validation check names without side effects.
 
-<!-- lw:anchors packages/core/src/presets.ts#isKnownPreset packages/core/src/presets.ts#resolvePreset packages/core/src/presets.ts#UnknownPresetError packages/core/src/presets.ts#UnknownPresetError.constructor -->
+`resolvePreset(name: string): ProviderPreset` is the primary lookup. It reads `PRESET_TABLE` using the input string as a key; if the key exists, it returns the corresponding preset. If the key does not exist, it throws an error — described below — that lists the valid names. This function is intentionally strict: it fails loudly on unknown names rather than returning a partial object.
 
-Lookup is split into a non-throwing predicate and a throwing resolver, so call sites can choose between "report a friendly error" and "fail fast".
-
-```ts
-export function isKnownPreset(name: string): name is PresetName {
-  return Object.prototype.hasOwnProperty.call(PRESET_TABLE, name);
-}
-```
-
-`isKnownPreset` is a TypeScript type predicate: when it returns `true`, the input `string` is narrowed to the `PresetName` literal union in the surrounding code. Config validation paths use this to check membership without raising — they can produce their own error messages tailored to the validation context.
-
-```ts
-export function resolvePreset(name: string): ProviderPreset {
-  const preset = PRESET_TABLE[name as PresetName];
-  if (!preset) {
-    throw new UnknownPresetError(name, AVAILABLE_PRESETS);
-  }
-  return preset;
-}
-```
-
-`resolvePreset` performs the same membership check via a `Record` lookup and throws `UnknownPresetError` when the key is missing. The `name as PresetName` cast is safe in the success branch because `PRESET_TABLE` is fully keyed by `PresetName`; the `if (!preset)` guard catches any string that does not map to a real entry. Because `resolvePreset` is the canonical place where unknown names are converted into exceptions, downstream code can trust that a returned `ProviderPreset` is always well-formed.
+`UnknownPresetError` is a custom `Error` subclass used for exactly that failure mode. Its constructor takes the offending `name` and the `available` list of preset names:
 
 ```ts
 constructor(name: string, available: readonly string[]) {
-  super(
-    `Unknown provider preset "${name}". Available: ${available.join(", ")}. ` +
-      `Configure via .livewiki/config.json or pass --provider.`,
-  );
-  this.name = "UnknownPresetError";
-  this.presetName = name;
-  this.available = available;
-}
 ```
 
-`UnknownPresetError` extends `Error` and carries two structured fields on top of the message: `presetName`, the offending input, and `available`, the list of valid names. The constructor builds a single-line message that names the bad input, lists every supported preset, and points the user at `.livewiki/config.json` or the `--provider` flag. Callers that need machine-readable detail (for example, to render a config-validation report) can read `presetName` and `available` directly; the visible evidence here covers the normal throw path and the structured fields, while the catch side lives in `config.ts` and is not visible in this file.
+It builds a message that states the unknown name and joins the `available` list into a comma-separated suggestion, then sets `this.name` to `"UnknownPresetError"` and stores both inputs as public fields (`presetName` and `available`). The prose in the error also points the user to `.livewiki/config.json` or the `--provider` flag.
 
-## Merging preset with config overrides
+`isKnownPreset(name: string): name is PresetName` is a non-throwing check. It uses `Object.prototype.hasOwnProperty` on `PRESET_TABLE` to test whether the given string is a valid preset key. Because its return type is a type predicate (`name is PresetName`), callers that pass the result to code expecting a `PresetName` get improved TypeScript narrowing. It exists so config validation can report friendly errors instead of relying on `resolvePreset`'s throw path.
+
+## Provider Config Merging
 
 <!-- lw:anchors packages/core/src/presets.ts#resolveProviderConfig -->
 
-`resolveProviderConfig` is the only function in this file that combines data from two sources. It accepts an `args` object with optional `preset`, `provider`, `baseUrl`, and `pricing` fields and returns a fully populated `ResolvedProviderConfig`.
+This section covers the function that expands a preset (or a legacy provider field) together with user config overrides into the final runtime configuration object. It is the bridge between the static preset table and the dynamic configuration a user provides.
 
-```ts
-export function resolveProviderConfig(args: {
-  preset?: string;
-  provider?: string;
-  baseUrl?: string;
-  pricing?: Record<string, ModelPrice>;
-}): ResolvedProviderConfig {
-```
+`resolveProviderConfig(args: { preset?: string; provider?: string; baseUrl?: string; pricing?: Record<string, ModelPrice> }): ResolvedProviderConfig` is a pure function — it does not read disk or environment variables. It takes an object with optional `preset`, `provider`, `baseUrl`, and `pricing` fields, and returns a `ResolvedProviderConfig` with all fields fully resolved. The resolution order is: preset first; then provider as a backward-compatibility fallback; then overrides from `baseUrl` and `pricing`.
 
-This signature takes an `args` object describing the preset name, a back-compat adapter hint, an optional base URL override, and an optional per-model pricing override map, and it returns a single `ResolvedProviderConfig` whose fields are the final values the runtime will use.
+The function has three paths. The first path triggers when `args.preset` is set: it calls `resolvePreset` to get the preset, uses it as the base, and then applies overrides — a `provider` field can override the preset's adapter (an escape hatch), `baseUrl` overrides the preset's base URL, and `pricing` merges over the preset's pricing per model (config wins). It also fills defaults for optional fields: `credentialOptional` defaults to `false`, `thinkingDefault` to `"omit"`, `preferMaxCompletionTokens` to `false`, and `defaultMaxOutputTokens` to `8192`.
 
-The merge runs in two distinct paths. **Path 1 — `args.preset` is set**: the preset is resolved via `resolvePreset` to act as the base. The `provider` field, if present, overrides the adapter as an explicit escape hatch; `baseUrl`, when supplied, overrides the preset's `baseUrl`; and `pricing` is merged into the preset's pricing by spreading the preset first and the override second (`{ ...p.pricing, ...(args.pricing ?? {}) }`), so user-supplied prices win on a per-model basis. The preset's optional fields fall back to safe defaults if absent: `thinkingDefault` becomes `"omit"`, `preferMaxCompletionTokens` becomes `false`, and `defaultMaxOutputTokens` becomes `8192`. The preset's `envVar` and `notes` are always taken from the preset and never overridden by config.
+The second path triggers when `args.preset` is absent but `args.provider` is set (backward compatibility). It only accepts `"anthropic"` or `"openai-compat"`; any other value throws `UnknownPresetError`. Without a preset, it returns defaults from `config.ts` — an empty base URL (the caller resolves it later), the appropriate environment variable name for the adapter, empty pricing, and a note that this is the legacy path. It also sets `preferMaxCompletionTokens` only for `openai-compat`.
 
-**Path 2 — back-compat, only `args.provider` is set**: if `provider` is neither `"anthropic"` nor `"openai-compat"`, the function throws `UnknownPresetError`; otherwise it returns a config with `presetName: null`, an empty `baseUrl` (the caller resolves it via `resolveBaseUrl`), an env var inferred from the adapter (`"ANTHROPIC_API_KEY"` or `"OPENAI_API_KEY"`), an empty pricing table unless the caller supplied one, and a `"no preset"` note. This path exists only so older configs that used the `provider` field directly keep working alongside the newer `preset` field.
-
-If neither `preset` nor `provider` is present, the function throws a plain `Error` stating that `resolveProviderConfig` requires at least one of them, with a comment pointing at `validateConfigForBatch` as the upstream gate that should have caught the empty case.
+The third path triggers when neither `preset` nor `provider` is set. It throws an `Error` stating that one of them is required, noting that `validateConfigForBatch` normally catches this condition earlier. This ensures the function never silently returns a meaningless configuration.
 
 ## Tests
 

@@ -1,5 +1,5 @@
 ---
-title: livewiki core config — repository-scoped `.livewiki/config.json` lifecycle
+title: Repo-local LLM configuration management
 owner: generated
 anchors:
   - packages/core/src/config.ts#CONFIG_DEFAULTS
@@ -19,19 +19,19 @@ anchors:
   - packages/core/src/config.ts#validateConfigShape
 ---
 
-# livewiki core config — repository-scoped `.livewiki/config.json` lifecycle
+# Repo-local LLM configuration management
 
-This page documents the module that loads, validates, defaults, and persists the per-repository configuration file used by every livewiki stage.
+This page describes how the livewiki repository loads, validates, and persists its repo-local LLM configuration.
 
 ## When to use this page
 
-- **Load or persist `.livewiki/config.json`** when you need to read a repository's livewiki configuration from disk or write a new one back.
-- **Validate a config object** before handing it to the batch pipeline, or shape-check raw JSON before trusting it as a `LivewikiConfig`.
-- **Resolve provider, base URL, or extra ignore patterns** from a loaded config so downstream stages receive consistent inputs.
+- Understand how `.livewiki/config.json` is read, validated, and written.
+- Learn how provider, model, and preset settings are resolved before an LLM batch starts.
+- Discover where runtime defaults are applied and how malformed configuration fails.
 
 ## How it fits
 
-`packages/core/src/config.ts` lives in the `packages/core` workspace of `livewiki`, alongside the LLM client factory, the preset table, the safe I/O allowlist, and the pricing helpers it imports. It owns the canonical file path `.livewiki/config.json` and is the single source of truth for what a valid livewiki config looks like. CLI commands (`init`, `index`, `batch`, and `init --batch`), the batch orchestrator, and any programmatic callers all funnel through `loadConfig` → `applyDefaults` → `validateConfigForBatch` before they touch the LLM client, the walker, or the stage pipeline. The module deliberately keeps API keys out of scope — credentials stay in `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` environment variables so this file can be committed without leaking secrets.
+The `config.ts` module is the single source of truth for per-repository settings that control LLM batches, document generation, and related pipeline behavior. It lives in the core package alongside modules that perform safe file I/O (`safe-io.ts`), resolve provider presets (`presets.ts`), and define pricing and module/flow signal types. The module never stores API keys — those come from the environment or a global credential store — keeping the repo-local config safe to version. It is used by CLI commands like `livewiki init`, `livewiki batch`, and `livewiki config`, as well as by programmatic callers that need a loaded or validated configuration.
 
 ## Diagram
 
@@ -39,165 +39,49 @@ This page documents the module that loads, validates, defaults, and persists the
 %% livewiki/diagrams/core-src-config.mmd
 ```
 
-## Path constants and defaults
+## Loading and Saving Configuration
 
-The module fixes the on-disk location and the runtime default values so every caller resolves the same file and applies the same defaults.
+<!-- lw:anchors packages/core/src/config.ts#loadConfig packages/core/src/config.ts#saveConfig packages/core/src/config.ts#CONFIG_PATH packages/core/src/config.ts#CONFIG_FILENAME -->
 
-<!-- lw:anchors packages/core/src/config.ts#CONFIG_PATH packages/core/src/config.ts#CONFIG_FILENAME packages/core/src/config.ts#CONFIG_DEFAULTS packages/core/src/config.ts#MAX_TIMEOUT_MS -->
+The module's central responsibility is the read/write lifecycle of the repo-local configuration file. `loadConfig` and `saveConfig` handle the disk I/O, while `CONFIG_PATH` and `CONFIG_FILENAME` expose the canonical location for callers that need it.
 
-The relative path is held in the module-private `CONFIG_REL_PATH` (`.livewiki/config.json`). `CONFIG_PATH` re-exports that string so external callers can refer to the canonical location without copying the literal, and `CONFIG_FILENAME` derives the bare file name through `nodePath.basename(CONFIG_REL_PATH)` so path joins in downstream tooling stay portable. The safe-I/O allowlist routes any read or write through its allowlisted `.livewiki` scope.
+`loadConfig(repoRoot)` returns a `Promise<LivewikiConfig>`. It takes a repository root path (as a string) and returns a promise that resolves to the parsed configuration object. `loadConfig` first checks whether `.livewiki/config.json` exists using `safeIo.exists`; if it does not exist, it returns an empty object `{}`, deliberately without defaults. If the file exists but is empty (after trimming whitespace), it also returns `{}`. Otherwise, it reads the raw text with `safeIo.readText`, parses it as JSON, and passes the parsed `unknown` value to `validateConfigShape`. If parsing or shape validation fails, it wraps the error in a new `Error` with the message `Failed to parse .livewiki/config.json: <original message>. Fix the file or delete it to start fresh.` — failing closed on malformed input rather than silently using defaults.
 
-```ts
-export const CONFIG_PATH = CONFIG_REL_PATH;
-export const CONFIG_FILENAME = nodePath.basename(CONFIG_REL_PATH);
-```
+`saveConfig(repoRoot, config)` returns a `Promise<void>`. It takes a repository root path and a fully formed `LivewikiConfig`, and returns a promise that resolves once the write completes. The function serializes the config to JSON with two-space indentation and a trailing newline, then writes it through `safeIo.writeText`, which enforces the module's allowlist rules for file paths. This is the only sanctioned way to persist configuration; callers should never write the file directly.
 
-The first line exposes the path string (here the literal `.livewiki/config.json`); the second returns just the file portion so other modules can compose paths without re-parsing.
+`CONFIG_PATH` is a constant export that holds the relative path `.livewiki/config.json`, and `CONFIG_FILENAME` is derived from it via `nodePath.basename`, yielding `config.json`. These exports exist so other modules can reference the location without duplicating the string literal.
 
-Runtime defaults live in a single frozen-style object so `applyDefaults` can spread them deterministically:
+## Validation and Runtime Defaults
 
-```ts
-export const CONFIG_DEFAULTS = {
-  language: "en",
-  languages: ["ts", "tsx", "js", "jsx", "py"],
-  baseUrls: { anthropic: "https://api.anthropic.com", "openai-compat": "https://api.openai.com" },
-  maxRepairAttempts: 2,
-  maxIncompleteRetries: 2,
-  stage4MaxOutputTokens: 32_768,
-  outputTokenStrategy: "dynamic",
-  // ...split thresholds, flow/topic/diagram budgets, repair & risk knobs, etc.
-  batchConcurrency: 1,
-} as const;
-```
+<!-- lw:anchors packages/core/src/config.ts#validateConfigShape packages/core/src/config.ts#applyDefaults packages/core/src/config.ts#CONFIG_DEFAULTS packages/core/src/config.ts#MAX_TIMEOUT_MS packages/core/src/config.ts#assertValidTimeoutMs -->
 
-This object returns a frozen-typed map from default keys to their resolved values, including `language: "en"` as the only field with an explicit user-facing default. The split thresholds (`maxModuleFiles: 12`, `maxModuleSymbols: 80`, `fileSplitSourceBytes: 60_000`) drive stage-4 module decomposition; the flow/topic/diagram budgets (`maxFlows`, `maxTopics`, `flowMaxDiagramNodes`, `moduleMaxDiagramNodes`, …) cap stage-5 synthesis; the boolean recovery-tier knobs (`surgicalRepair`, `relaxedRound`) and risk knobs (`riskAnalysis`, `riskChurnCommits`) tune behavior in `status` / `update` / repair. Defaults are applied at use time, never written into the on-disk file, which preserves the principle that an absent field means "user did not set this".
+Before a config is used, it must pass through a two-stage validation: a shallow shape check during load, and a targeted batch-readiness check before an LLM run. `validateConfigShape` protects against unknown keys and wrong types, while `applyDefaults` fills in the runtime values that are not persisted to disk.
 
-The timeout ceiling is exported separately because the safe upper bound is a Node-platform constant rather than a project decision:
+`validateConfigShape(parsed)` is an unexported function that takes an `unknown` value and returns a `LivewikiConfig`. It first rejects anything that is not a plain object (`null`, arrays, or primitives) with the error `config must be a JSON object`. For each recognized key, it performs a type-specific check and copies the value into a fresh output object. String fields like `provider`, `model`, `language`, and `baseUrl` are copied when they are strings. The `provider` field is further restricted to the two literal values `"anthropic"` or `"openai-compat"`; anything else throws. The `preset` field must pass `isKnownPreset` from `presets.ts`; otherwise it throws. Arrays for `languages` and `ignores` are filtered to keep only string elements. The `pricing` object is validated field-by-field: each model key must map to an object whose `input` and `output` are both numbers, and invalid entries are silently dropped rather than rejected. All numeric knobs enforce strict integer or range bounds — for example, `maxRepairAttempts` must be a non-negative integer, `flowMaxOverlap` must be a finite number between 0 and 1 inclusive, and `batchConcurrency` must be an integer from 1 to 16. Boolean flags must be actual booleans. The `pathRoles` and `flowSignals` objects are checked against their allowed key sets (`testPatterns`, `fixturePatterns`, `toolingPatterns`, `docsPatterns` for the former; `entryPatterns`, `persistencePatterns`, `persistenceImportPatterns` for the latter) and require each supplied array to contain only strings. Unknown keys in these sub-objects throw rather than being ignored.
 
-```ts
-export const MAX_TIMEOUT_MS = 2_147_483_647;
-```
+`applyDefaults(config)` returns a new `LivewikiConfig` without mutating the input. It takes a `LivewikiConfig` and returns another `LivewikiConfig` that is the input merged over the complete runtime defaults. The function builds a fresh object starting from `CONFIG_DEFAULTS` — copying the `languages` array by spreading it so mutation of the default is impossible — then spreads the user-provided `config` on top. Because the spread comes last, any user value overrides the default for that key. This is how the module enforces the "no hard-coded default model" design: `provider`, `model`, and `preset` have no defaults in `CONFIG_DEFAULTS`, so they remain undefined unless the user sets them.
 
-This constant returns the maximum millisecond value that Node's `setTimeout` accepts safely (the signed 32-bit maximum), used both as the upper bound for `timeoutMs` and as the message text in the validator's error.
+`CONFIG_DEFAULTS` is a `const` object with `as const` that acts as the single source of truth for runtime fallbacks. It sets `language: "en"`, the default `languages` list of `["ts", "tsx", "js", "jsx", "py"]`, per-provider `baseUrls`, and a long list of numeric and boolean knobs that govern stages 4 and 5 (for example, `maxRepairAttempts: 2`, `maxFlows: 4`, `stage4MaxOutputTokens: 32768`, `batchConcurrency: 1`). These defaults are intentionally not written into the config file on disk — they apply only at runtime via `applyDefaults`.
 
-## Timeout validation
+`MAX_TIMEOUT_MS` is a numeric constant set to `2_147_483_647`, which is the maximum safe value for Node's `setTimeout` (a signed 32-bit millisecond value). It defines the upper bound for the `timeoutMs` config field.
 
-Programmatic callers may bypass `loadConfig` and supply a config object directly, so the timeout check is exported as a reusable assertion.
+`assertValidTimeoutMs(v)` is a function that takes an `unknown` value and asserts (via a TypeScript assertion signature) that it is a number. It returns nothing; instead, it throws if the value is not an integer, is negative, or exceeds `MAX_TIMEOUT_MS`. On failure it throws `invalid timeoutMs: must be an integer 0..2147483647 (0 disables timeout; upper bound is Node setTimeout safe max), got <value>`. This is used both during shape validation for the `timeoutMs` field and by programmatic callers that skip `loadConfig` but still need the constraint enforced.
 
-<!-- lw:anchors packages/core/src/config.ts#assertValidTimeoutMs -->
+## Batch-Readiness and Provider Resolution
 
-```ts
-export function assertValidTimeoutMs(v: unknown): asserts v is number {
-```
+<!-- lw:anchors packages/core/src/config.ts#validateConfigForBatch packages/core/src/config.ts#MissingProviderConfigError packages/core/src/config.ts#MissingProviderConfigError.constructor packages/core/src/config.ts#resolveProviderFromConfig packages/core/src/config.ts#resolveBaseUrl packages/core/src/config.ts#resolveExtraIgnores -->
 
-This function takes an unknown value and returns nothing on success, narrowing `v` to `number` for TypeScript callers; on failure it throws an `Error`. The implementation rejects anything that is not a `number`, is not an integer (`Number.isInteger`), or lies outside `[0, MAX_TIMEOUT_MS]`. The visible check enforces **both** the lower bound (`v < 0`) and the upper bound (`v > MAX_TIMEOUT_MS`), so the constant functions as a true two-sided range — `0` disables the client abort and the upper bound is the Node safe maximum.
+Once a config is loaded and defaults are applied, the module provides the checks and helpers that turn the raw config into an actionable provider setup for an LLM run. The key invariant is that livewiki never chooses a provider or model silently — it forces the user to be explicit.
 
-The error message explicitly distinguishes `0` (disable timeout) from positive integers so users can tell at a glance which boundary they crossed. Floats, `NaN`, strings, and negatives all fall into the same rejection branch.
+`validateConfigForBatch(repoRoot, config)` returns `void`. It takes a repository root string and a `LivewikiConfig`, and throws a `MissingProviderConfigError` if either the provider or the model is absent. For the provider requirement, a `preset` reference counts as satisfying it (because the preset expands downstream to an adapter and base URL). If `provider` is absent and `preset` is absent, the field `"provider"` is pushed to the missing list; if `model` is absent, `"model"` is pushed. If the missing list is non-empty, it constructs and throws `MissingProviderConfigError(repoRoot, missing)`. Additionally, when `config.timeoutMs` is defined, it calls `assertValidTimeoutMs` on it, so programmatic callers that skip `loadConfig` still reject invalid timeout values.
 
-## Loading and saving the on-disk config
+`MissingProviderConfigError` is a class extending `Error`. Its constructor takes `repoRoot: string` and `missingFields: Array<"provider" | "model">` and returns nothing (it constructs the instance). The constructor builds a descriptive message telling the user which fields are missing, points to the repo path, and routes them to `livewiki config` for interactive setup or to set `preset` and `model` headlessly along with the appropriate credential environment variable (for example, `ANTHROPIC_API_KEY`). It sets the error name to `MissingProviderConfigError` and stores `repoRoot` as a public readonly property so callers can inspect which repository failed.
 
-Two thin wrappers around the safe-I/O helpers translate JSON text to and from the typed `LivewikiConfig` shape.
+`resolveProviderFromConfig(config)` returns the resolved provider config object. It takes a `LivewikiConfig` and returns the same shape as `resolveProviderConfig` from `presets.ts`. The function constructs a new object containing only the fields that are explicitly set on the input — `preset`, `provider`, `baseUrl`, and `pricing` — and forwards it to `resolveProviderConfig`. By omitting undefined fields, it lets the preset table supply defaults while allowing any explicitly provided field to override them. Note that this helper deliberately does not validate for a missing `model`; that check belongs to `validateConfigForBatch`.
 
-<!-- lw:anchors packages/core/src/config.ts#loadConfig packages/core/src/config.ts#saveConfig -->
+`resolveBaseUrl(config)` returns a string. It takes a `LivewikiConfig` and returns the final base URL to use. The priority is: an explicitly set `config.baseUrl` wins; otherwise, if `preset` is set, it returns the preset's `baseUrl` from `resolvePreset`; otherwise it falls back to the `CONFIG_DEFAULTS.baseUrls` entry for the provider. The final branch casts `config.provider` to `LlmProvider` on the assumption that the caller has already run `validateConfigForBatch` to guarantee the provider is present.
 
-```ts
-export async function loadConfig(repoRoot: string): Promise<LivewikiConfig> {
-```
-
-This function takes a repository root directory and returns a promise that resolves to a validated `LivewikiConfig`. The flow is: probe the file with `safeIo.exists` (the `.catch(() => false)` swallow handles a probe failure as "not present"); return `{}` when absent or empty; otherwise `safeIo.readText` the file, `JSON.parse` it, and hand the parsed value to `validateConfigShape`. The visible failure branch throws a wrapped `Error` whose message includes the relative path and the underlying parser message — corrupted JSON fails closed rather than silently returning defaults. The empty-file fast path means a zero-byte file is treated identically to a missing one.
-
-```ts
-export async function saveConfig(
-  repoRoot: string,
-  config: LivewikiConfig,
-): Promise<void> {
-```
-
-This function takes the repository root and a `LivewikiConfig`, then returns a promise that resolves once the file is written; it has no return value. It serializes the config with `JSON.stringify(config, null, 2)` plus a trailing newline (consistent diff formatting) and writes through `safeIo.writeText` so the write is restricted to the allowlisted `.livewiki` scope. There is no separate validation step inside `saveConfig` — the shape check happens upstream — so callers are expected to have already passed `validateConfigShape` and, where relevant, `validateConfigForBatch`.
-
-## Shape validation
-
-A deep, opt-in validator turns arbitrary JSON into a `LivewikiConfig`, rejecting values that cannot be coerced rather than silently substituting defaults.
-
-<!-- lw:anchors packages/core/src/config.ts#validateConfigShape -->
-
-```ts
-function validateConfigShape(parsed: unknown): LivewikiConfig {
-```
-
-This function takes an unknown parsed value and returns a coerced `LivewikiConfig`; the function is module-private so external callers reach it transitively through `loadConfig`. The flow has three layers:
-
-1. **Container check.** A `null`, non-object, or array value throws immediately with `"config must be a JSON object"` — there is no attempt to coerce an array into a single-key object.
-2. **Enum and literal validation.** `provider` must be the string `"anthropic"` or `"openai-compat"`; anything else throws listing both legacy values and the modern preset alternative. `preset` must pass `isKnownPreset(p)` from `presets.ts`; otherwise the error points at `PRESET_TABLE` in that file. `outputTokenStrategy` is restricted to `"dynamic" | "fixed"`; `thinking` to `"disabled" | "adaptive" | "omit"`. These three branches throw on any value not in the literal union — they do not fall back to a default.
-3. **Range and type validation for numeric fields.** Each integer field has an explicit inclusive range that is enforced on **both** sides:
-   - `stage4MaxOutputTokens` and `topicMaxOutputTokens`: integer in `256..32_768`.
-   - `maxTopics`: integer in `0..8`.
-   - `topicMaxAnchors`: integer in `5..32`.
-   - `topicMaxSourceChars` and `rationaleMaxChars`: integer in `1..200_000` and `0..200_000` respectively.
-   - `riskChurnCommits`: integer in `0..10_000` (`0` disables the git spawn).
-   - `flowMaxOverlap`: finite number in `0..1` (`1` disables the cap).
-   - `batchConcurrency`: integer in `1..16`.
-   - All other integer counters (`maxRepairAttempts`, `maxIncompleteRetries`, `maxModuleFiles`, `maxModuleSymbols`, `fileSplitSourceBytes`, `maxFlows`, `flowMaxAnchors`, diagram node/edge caps): non-negative integer (or `>= 1` where `0` would be meaningless).
-
-   Booleans (`riskAnalysis`, `surgicalRepair`, `relaxedRound`, `moduleDiagrams`, `deepHierarchy`, `concernTopics`, `understandingSynthesis`, `communityDetection`) reject any non-boolean value. Strings, arrays of strings (`languages`, `ignores`), and the nested `pricing` map are filtered for shape and copied through. `timeoutMs` is funneled through `assertValidTimeoutMs`. The visible behavior is: any value outside the range throws with a message that includes the bad value via `JSON.stringify` — there is no silent fallback to `CONFIG_DEFAULTS` for corrupted fields.
-
-`pathRoles` and `flowSignals` accept only the documented category keys (`testPatterns`/`fixturePatterns`/`toolingPatterns`/`docsPatterns` and `entryPatterns`/`persistencePatterns`/`persistenceImportPatterns` respectively), each category must be an array of strings, and supplying a category fully replaces the built-in patterns (an empty array disables it). Unknown keys throw with the literal offending key.
-
-## Applying defaults
-
-Once a config is loaded and shape-validated, missing fields are filled in from `CONFIG_DEFAULTS` to produce the runtime view the rest of the pipeline consumes.
-
-<!-- lw:anchors packages/core/src/config.ts#applyDefaults packages/core/src/config.ts#resolveExtraIgnores packages/core/src/config.ts#resolveBaseUrl packages/core/src/config.ts#resolveProviderFromConfig -->
-
-```ts
-export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
-```
-
-This function takes a `LivewikiConfig` and returns a fresh `LivewikiConfig` with defaults applied; it does not mutate the input. The implementation is a plain object literal that lists every default key first, then spreads `...config`, so a user-supplied field always wins. Arrays like `languages` are explicitly cloned (`[...CONFIG_DEFAULTS.languages]`) so later mutations by callers cannot leak back into the defaults table.
-
-```ts
-export function resolveExtraIgnores(config: LivewikiConfig): readonly string[] {
-```
-
-This function takes a `LivewikiConfig` and returns a read-only view of the user-level `ignores` array (an empty array when the field is absent). The returned list is the configured user-level overrides only — the walker layers its own built-in defaults (`.git`, `.livewiki`, `node_modules`, `dist`, `coverage`) and the repository's `.gitignore` on top of this. The docstring explicitly lists which entry points actually rescan (`init`, `index`, `init --batch`, `batch`) and which do not (`batch resume`, `--only`), so an ignored path cannot re-enter the run via resume.
-
-```ts
-export function resolveBaseUrl(config: LivewikiConfig): string {
-```
-
-This function takes a `LivewikiConfig` and returns the effective base URL string. The resolution order is: explicit `config.baseUrl` wins first; otherwise, if a `preset` is set, the preset table's `baseUrl` is used (via `resolvePreset`); only as a last resort does it fall through to `CONFIG_DEFAULTS.baseUrls[provider]`. The third branch is reachable only when the caller has already established that `provider` is set — `validateConfigForBatch` is the gate that guarantees this — and the implementation uses a type assertion (`config.provider as LlmProvider`) at that point.
-
-```ts
-export function resolveProviderFromConfig(
-  config: LivewikiConfig,
-): ReturnType<typeof resolveProviderConfig> {
-```
-
-This function takes a `LivewikiConfig` and returns the resolved provider config object (the `ReturnType` of `resolveProviderConfig` from `presets.ts`). It performs a conditional spread of `preset`, `provider`, `baseUrl`, and `pricing` (each only included when defined) and forwards the merged view to `resolveProviderConfig`, which expands a preset into the full provider tuple and applies any field-level overrides. The function deliberately does not validate "model missing" — that responsibility belongs to `validateConfigForBatch`.
-
-## Batch-time validation
-
-The single gate the orchestrator calls before it is allowed to build an LLM client.
-
-<!-- lw:anchors packages/core/src/config.ts#validateConfigForBatch packages/core/src/config.ts#MissingProviderConfigError packages/core/src/config.ts#MissingProviderConfigError.constructor -->
-
-```ts
-export function validateConfigForBatch(repoRoot: string, config: LivewikiConfig): void {
-```
-
-This function takes the repository root and a config, and returns nothing; on failure it throws `MissingProviderConfigError`. The flow is:
-
-1. Build the `missing` list. A preset reference satisfies the provider requirement — `!config.provider && !config.preset` is the only condition that pushes `"provider"`. `!config.model` independently pushes `"model"`. This is the one path where the visible source deliberately treats `preset` as equivalent to `provider`.
-2. If anything is missing, throw `MissingProviderConfigError(repoRoot, missing)` and stop — there is no silent model substitution.
-3. Otherwise, if `config.timeoutMs` is defined, route it through `assertValidTimeoutMs`. Programmatic callers that skip `loadConfig` still get the same two-sided `[0, MAX_TIMEOUT_MS]` enforcement.
-
-```ts
-export class MissingProviderConfigError extends Error {
-  public readonly repoRoot: string;
-  constructor(repoRoot: string, missingFields: Array<"provider" | "model">) {
-```
-
-The constructor takes the repo root and the list of missing literal fields (`"provider"` and/or `"model"`), then returns an initialized `MissingProviderConfigError` instance. The class extends the built-in `Error`; the constructor builds an example block (`{ "provider": "anthropic", "model": "claude-sonnet-5" }`, with a comment that the model is an example only and the user must pick what they want) and prepends it to the message. `this.name` is set to `"MissingProviderConfigError"` so it survives `JSON.stringify(err)` / stack-trace formatting, and `this.repoRoot` is exposed as a public field so callers can branch on the failing repository without re-parsing the message. The model name in the example is **explicitly framed as an example, not a default** — `livewiki` will never substitute a model on the user's behalf.
+`resolveExtraIgnores(config)` returns a `readonly string[]`. It takes a `LivewikiConfig` and returns the user-configured `ignores` patterns, or an empty array if the field is absent. This list is the single source of truth for configured overrides; callers forward it to the repository walker via `extraIgnores`. The walker additionally applies its own built-in defaults (`.git`, `.livewiki`, `node_modules`, `dist`, `coverage`) and the repo's `.gitignore`. Crucially, resume paths (`livewiki batch resume`) and `--only` do not rescan the repo, so a configured ignore cannot re-enter via those entry points — it was already excluded when the original stage-1 indexer walked the repository.
 
 ## Tests
 

@@ -6,7 +6,7 @@ livewiki is an agent-first living documentation tool that keeps a Markdown wiki 
 
 *(Synthesized from the verified wiki pages — see `livewiki/understanding.md`.)*
 
-The repository README also states: livewiki is an agent-first living documentation tool: a Markdown wiki that lives inside your repository, is written by an LLM, and is kept honest by deterministic machinery that never calls a model — code pages anchor to real symbols (synthesis pages like `understanding.md` are anchor-free by contract), staleness is computed from tree-sitter hashes with zero tokens, and `verify` re-reads every page from disk and rejects any anchor or internal link that does not resolve.
+The repository README also states: livewiki keeps technical documentation next to the code it describes. It builds a Markdown wiki, detects what changed, and checks that references to code and other pages still resolve. An LLM writes the prose; livewiki plans the work, tracks documentation debt, preserves human edits, and validates the result.
 
 *(Purpose excerpt from the repository README: `README.md` — one evidence input, not the authority.)*
 
@@ -45,8 +45,8 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 - **Change product behavior:** start with [Tasks](tasks.md).
 - **Follow end-to-end behavior:**
-  - [From CLI command to LLM provider — the request path livewiki walks](flows/cli-src-to-llm.md)
-  - [MCP server source entry to LLM client sink](flows/mcp-src-to-llm.md)
+  - [Source Repository to LLM Pipeline](flows/cli-src-to-llm.md)
+  - [Serving livewiki documentation to an LLM agent over MCP](flows/mcp-src-to-llm.md)
   - Browse the complete [How it works](flows/index.md) index.
 - **Inspect implementation relationships:** open the [Architecture overview](architecture/overview.md).
 - **Maintain tests, fixtures, tooling, benchmarks, or repository documentation:** open the [Auxiliary areas](auxiliary/index.md) inventory.
@@ -71,6 +71,6 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 ## Repository facts
 
-- **220 files** documented
+- **237 files** documented
 - **30 folders** covered
-- **1252 code symbols** indexed
+- **1436 code symbols** indexed

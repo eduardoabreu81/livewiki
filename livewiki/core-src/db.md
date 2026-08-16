@@ -1,34 +1,35 @@
 ---
-title: SQLite schema and migrations for the livewiki index
+title: SQLite Schema and Index Migration
 owner: generated
 anchors:
-  - packages/core/src/db.ts#CURRENT_SCHEMA_VERSION
-  - packages/core/src/db.ts#SCHEMA_VERSION_KEY
-  - packages/core/src/db.ts#SCHEMA_SQL
-  - packages/core/src/db.ts#MIGRATION_SQL_V3
-  - packages/core/src/db.ts#migrateV3ToV4
-  - packages/core/src/db.ts#migrateV4ToV5
-  - packages/core/src/db.ts#migrateV5ToV6
-  - packages/core/src/db.ts#migrateV6ToV7
-  - packages/core/src/db.ts#migrateV7ToV8
-  - packages/core/src/db.ts#migrationsFor
-  - packages/core/src/db.ts#postV3Migrations
-  - packages/core/src/db.ts#openIndex
+- packages/core/src/db.ts#CURRENT_SCHEMA_VERSION
+- packages/core/src/db.ts#MIGRATION_SQL_V3
+- packages/core/src/db.ts#SCHEMA_SQL
+- packages/core/src/db.ts#SCHEMA_VERSION_KEY
+- packages/core/src/db.ts#migrateV3ToV4
+- packages/core/src/db.ts#migrateV4ToV5
+- packages/core/src/db.ts#migrateV5ToV6
+- packages/core/src/db.ts#migrateV6ToV7
+- packages/core/src/db.ts#migrateV7ToV8
+- packages/core/src/db.ts#migrateV8ToV9
+- packages/core/src/db.ts#migrationsFor
+- packages/core/src/db.ts#openIndex
+- packages/core/src/db.ts#postV3Migrations
 ---
 
-# SQLite schema and migrations for the livewiki index
+# SQLite Schema and Index Migration
 
-This page documents the module that owns the livewiki SQLite index: its schema, versioned migrations, and the entry point that opens or creates the database.
+This page details the SQLite database schema, its creation, and the versioned migration path that keeps an existing index compatible with new features.
 
 ## When to use this page
 
-- **Open or rebuild the index DB** when wiring up the indexer, by understanding what `openIndex` guarantees and what it does not validate.
-- **Add a new table or column** to the index by following the schema + migration conventions already established (idempotent SQL in `SCHEMA_SQL`, JS function migration for column adds).
-- **Trace how an existing DB upgrades** from an older schema_version to the current one, by reading the migration chain and dispatch logic.
+- Understand the tables and indexes that make up the livewiki index database and what each one stores.
+- Learn how the database is opened, initialized, and upgraded from an older schema version.
+- Modify or extend the schema by adding a new table, column, or index and the corresponding migration function.
 
 ## How it fits
 
-The file `packages/core/src/db.ts` lives under `packages/core/src/`, the core package of livewiki. The DB itself is treated as a derived cache (rule #3 of the SPEC): the source of truth is the repository's markdown, and deleting `.livewiki/` forces a rebuild via `reindex`. The DB is stored at `<repoRoot>/.livewiki/index.db`; the path arrives at `openIndex` already validated by the safe-io helpers used in `indexer.ts`. Inside the package, this module is consumed by the indexer pipeline (file/symbol/call/rationale ingestion, batch bookkeeping) and by the read paths that issue `SELECT`s against the tables defined here. The schema covers Phase 1 tables (`files`, `symbols`, `meta`) up through Phase 3 additions (`calls`, `rationales`, batch run/task tables, debt ledger columns), so later phases get their tables created empty rather than waiting for a feature to land.
+`packages/core/src/db.ts` is the single owner of the SQLite index database (`<repoRoot>/.livewiki/index.db`). It declares the full schema as SQL, a set of versioned migration functions, and the routine that opens a database and applies the necessary migrations. This database is a derived cache: all data can be rebuilt by reindexing the repository, and the source of truth is the markdown in the repository. The module is consumed by indexers and other core components that need to read or write the index.
 
 ## Diagram
 
@@ -36,120 +37,124 @@ The file `packages/core/src/db.ts` lives under `packages/core/src/`, the core pa
 %% livewiki/diagrams/core-src-db.mmd
 ```
 
-## Schema constants and current version
+## Schema Definition and Versioning
 
 <!-- lw:anchors packages/core/src/db.ts#CURRENT_SCHEMA_VERSION packages/core/src/db.ts#SCHEMA_VERSION_KEY packages/core/src/db.ts#SCHEMA_SQL -->
 
-The module exposes the canonical "what version of the index am I targeting" constants and the idempotent SQL that creates every table the indexer relies on.
+The module's purpose is to define the durable, reproducible shape of the index. It does this by declaring the current schema version, the key used to track that version, and the SQL that creates the complete database from scratch.
 
-```ts
-export const CURRENT_SCHEMA_VERSION = 8;
-```
+`CURRENT_SCHEMA_VERSION` is a constant set to `9`, representing the latest schema revision the code understands. `SCHEMA_VERSION_KEY` is the string `"schema_version"`, used as the primary key in the `meta` table to store the database's current version. These two constants allow `openIndex` to detect when a database on disk is older than the code expects and to trigger the upgrade path.
 
-`CURRENT_SCHEMA_VERSION` is the integer version the rest of the file is written against; `openIndex` compares the stored `meta.schema_version` to this number and runs migrations when they differ.
+`SCHEMA_SQL` is a large SQL string that creates every table and index with `IF NOT EXISTS` guards, making it idempotent — it runs safely on a brand-new database or an existing one. The schema covers the core indexing tables (`files`, `symbols`, `meta`), documentation work tracking (`anchors`, `debt`, `undocumented`), batch execution state (`batch_runs`, `batch_tasks`), generated documentation pages (`doc_pages`, `manual_blocks`), the symbol call graph (`calls`), and intent evidence (`rationales`). Each table is designed for a specific data lifecycle: `symbols` uses a partial unique index so that soft-deleted rows (status `'deleted'`) do not block re-inserting the same key; `debt` uses a partial index on unresolved rows to efficiently find open documentation work. The schema is the canonical definition, and migration functions reuse the same statements where possible so a migrated database converges to the same shape as a fresh one.
 
-```ts
-export const SCHEMA_VERSION_KEY = "schema_version";
-```
-
-`SCHEMA_VERSION_KEY` is the row key in the `meta` table that records the stored version, so `openIndex` and `migrationsFor` agree on a single well-known string.
-
-```ts
-export const SCHEMA_SQL = `
-...`;
-```
-
-`SCHEMA_SQL` is the idempotent CREATE-statement bundle for every table (`files`, `symbols`, `meta`, `anchors`, `debt`, `undocumented`, `batch_runs`, `batch_tasks`, `doc_pages`, `manual_blocks`, `calls`, `rationales`) plus their indexes; every statement uses `IF NOT EXISTS`, so it is safe to execute on a fresh DB and on an existing DB. Two design choices matter here: a partial unique index `idx_symbols_active_key ON symbols(key) WHERE status = 'active'` lets `symbols` rows with `status = 'deleted'` coexist with a reinserted active row of the same key, and `calls.confidence` defaults to `'inferred'` so pre-v7 edges stay conservative.
-
-## Lightweight v2 → v3 migration
+## Legacy Migration SQL (v2 → v3)
 
 <!-- lw:anchors packages/core/src/db.ts#MIGRATION_SQL_V3 -->
 
-One of the migrations is plain SQL, because the work is structural (column add + table rebuild) and SQLite handles it cleanly.
+This section covers the first migration, which is expressed as a plain SQL string because it handles structural table changes that are difficult to express as idempotent JavaScript.
 
-```ts
-export const MIGRATION_SQL_V3 = `
-...`;
-```
+`MIGRATION_SQL_V3` upgrades a database from version 2 to version 3. It adds a `symbol_key` column to the `debt` table, which survives anchor removal and helps resolve orphaned debt rows. It also rebuilds the `symbols` table without the inline `UNIQUE` constraint on `key` (which the original schema declared as part of the table definition, not a separate index, so it cannot be dropped) and replaces it with a partial unique index that only applies to active rows. Finally, it recreates the `idx_debt_open` partial index that keys open documentation work by symbol, page, and event. The `INSERT INTO symbols_new ... SELECT FROM symbols` pattern preserves all existing rows during the table reconstruction.
 
-`MIGRATION_SQL_V3` adds `debt.symbol_key` (so debt survives anchor removal), rebuilds the `symbols` table to drop the inline `UNIQUE(key)` in favor of a partial unique index that respects `status = 'deleted'`, and creates `idx_debt_open` for fast open-debt deduplication by `(anchor_id, event)`. It is included in `migrationsFor` because it is a self-contained SQL string that `db.exec` can run as-is.
+## Post-V3 Migration Functions
 
-## Post-v3 JS migrations
+### v3 → v4: Batch Run Audit
 
-<!-- lw:anchors packages/core/src/db.ts#migrateV3ToV4 packages/core/src/db.ts#migrateV4ToV5 packages/core/src/db.ts#migrateV5ToV6 packages/core/src/db.ts#migrateV6ToV7 packages/core/src/db.ts#migrateV7ToV8 -->
+<!-- lw:anchors packages/core/src/db.ts#migrateV3ToV4 -->
 
-From v4 onward, migrations are JS functions instead of SQL strings. The reason is idempotence: `SCHEMA_SQL` always runs the current shape, so a from-scratch DB already has the new columns — a SQL migration would fail re-running, but a JS function can check `PRAGMA table_info` and only `ALTER TABLE ADD COLUMN` when the column is missing (SQLite has no `ADD COLUMN IF NOT EXISTS`). Each function below is therefore safe to re-invoke on any DB whose version is at least its target.
+This migration extends the `batch_runs` table with audit fields needed for the Phase 3 token accounting and resilient batch execution.
 
-### Adding run audit columns to `batch_runs`
+`export function migrateV3ToV4(db: Database.Database): void`
+This function takes a database handle and returns nothing, adding columns to the `batch_runs` table to capture more information about each batch run.
 
-```ts
-export function migrateV3ToV4(db: Database.Database): void {
-```
-The function takes an open SQLite `Database` and returns nothing; it mutates the DB in place. `migrateV3ToV4` introspects `batch_runs` via `PRAGMA table_info`, adds `finished_at`, `started_by` (default `'cli'`), and `summary_json` only when missing, then ensures the supporting indexes (`idx_batch_runs_status`, `idx_batch_tasks_run_id`, `idx_batch_tasks_status`) exist. This is the audit/hand-off work described in Phase 3 of the SPEC: a `batch status <run>` query stays O(1) even with many historical runs.
+The function checks the existing columns of `batch_runs` using `PRAGMA table_info` and only adds the missing ones (`finished_at`, `started_by`, `summary_json`) via `ALTER TABLE` because SQLite has no `ADD COLUMN IF NOT EXISTS`. It also creates the indexes on `batch_runs.status` and `batch_tasks(run_id, status)` with `IF NOT EXISTS` so that status queries on old runs remain fast. The `started_by` column records whether a CLI or an agent initiated the run, while `summary_json` stores an aggregate snapshot for reporting without reprocessing tasks.
 
-### Adding the call-graph table
+### v4 → v5: Call Graph Table
 
-```ts
-export function migrateV4ToV5(db: Database.Database): void {
-```
-The function takes an open SQLite `Database` and returns nothing. `migrateV4ToV5` creates the `calls` table plus its three indexes (`idx_calls_file_id`, `idx_calls_caller_key`, `idx_calls_resolved_callee_key`) using `IF NOT EXISTS`, so it is idempotent and converges on the same shape as `SCHEMA_SQL`.
+<!-- lw:anchors packages/core/src/db.ts#migrateV4ToV5 -->
 
-### Adding the rationales (intent-evidence) table
+This migration introduces the `calls` table, which stores raw call sites between symbols to support blast-radius analysis.
 
-```ts
-export function migrateV5ToV6(db: Database.Database): void {
-```
-The function takes an open SQLite `Database` and returns nothing. `migrateV5ToV6` creates the `rationales` table for tagged-comment/docstring intent evidence and its `file_id`/`symbol_key` indexes, again with `IF NOT EXISTS` so the from-scratch and migrated shapes match.
+`export function migrateV4ToV5(db: Database.Database): void`
+This function takes a database handle and returns nothing, creating the `calls` table and its indexes if they do not already exist.
 
-### Tagging call edges with confidence
+The function reuses the same `CREATE TABLE IF NOT EXISTS calls` and `CREATE INDEX IF NOT EXISTS` statements present in `SCHEMA_SQL` rather than duplicating them. An edge has no identity worth preserving across a re-parse, so call rows are recomputed wholesale when a file is reindexed. The `resolved_callee_key` column is populated later by a separate resolution pass and stays `NULL` for callees that could not be confidently mapped to a single symbol.
 
-```ts
-export function migrateV6ToV7(db: Database.Database): void {
-```
-The function takes an open SQLite `Database` and returns nothing. `migrateV6ToV7` checks `PRAGMA table_info(calls)` and adds `confidence TEXT NOT NULL DEFAULT 'inferred'` only if it is missing. The conservative default ensures pre-v7 edges — which have no recorded extraction shape — are treated as name guesses; a future resolution pass can only downgrade, not upgrade.
+### v5 → v6: Rationale Evidence Table
 
-### Adding `debt.doc_page_id` and backfilling
+<!-- lw:anchors packages/core/src/db.ts#migrateV5ToV6 -->
 
-```ts
-export function migrateV7ToV8(db: Database.Database): void {
-```
-The function takes an open SQLite `Database` and returns nothing. `migrateV7ToV8` adds `debt.doc_page_id INTEGER` when missing, then runs an `UPDATE` that backfills the column from the matching `anchors.doc_page_id` for rows whose `anchor_id` still resolves. Like `debt.symbol_key`, this column is the durable page reference for a debt row: it survives anchor removal, so the LEFT JOIN in the debt report surfaces NULLs (unactionable rows) rather than dropping the debt silently.
+This migration adds the `rationales` table, which stores intent evidence extracted from tagged comments and docstrings.
 
-## Migration dispatch
+`export function migrateV5ToV6(db: Database.Database): void`
+This function takes a database handle and returns nothing, creating the `rationales` table and its indexes if they are not already present.
+
+The function reuses the `CREATE TABLE IF NOT EXISTS rationales` and `CREATE INDEX IF NOT EXISTS` statements from `SCHEMA_SQL`, so a from-scratch database and a migrated one converge to the same structure. A `symbol_key` of `NULL` is allowed for file-level rationales that positional attribution could not attach to one symbol, and `content_hash` holds the SHA-256 of the normalized text for a future "rationale changed" signal.
+
+### v6 → v7: Call Confidence Column
+
+<!-- lw:anchors packages/core/src/db.ts#migrateV6ToV7 -->
+
+This migration adds a `confidence` column to the `calls` table to tag each call edge as either extracted or inferred.
+
+`export function migrateV6ToV7(db: Database.Database): void`
+This function takes a database handle and returns nothing, adding a `confidence` column to `calls` if it is missing.
+
+Because `SCHEMA_SQL` already includes the column, a fresh database must not re-add it; the function checks the actual columns of `calls` via `PRAGMA table_info` and only runs `ALTER TABLE calls ADD COLUMN confidence TEXT NOT NULL DEFAULT 'inferred'` when the column is absent. Existing rows keep the default `'inferred'`, which is conservative because a pre-v7 edge has no recorded extraction shape and is therefore treated as a name guess.
+
+### v7 → v8: Durable Debt Page Reference
+
+<!-- lw:anchors packages/core/src/db.ts#migrateV7ToV8 -->
+
+This migration adds `debt.doc_page_id`, a durable page reference for debt rows, so that a debt item remains actionable even if its anchor row is later removed.
+
+`export function migrateV7ToV8(db: Database.Database): void`
+This function takes a database handle and returns nothing, adding a `doc_page_id` column to the `debt` table and backfilling it from existing anchor rows.
+
+The function first checks whether `debt` already has the column, adding it via `ALTER TABLE` if not. It then runs an `UPDATE` that backfills `doc_page_id` from the `anchors` table for any debt rows that have an `anchor_id` but no `doc_page_id`, leaving rows with a dangling anchor reference untouched so that CLI and MCP debt surfaces do not show unactionable rows.
+
+### v8 → v9: Deduplicate Open Debt
+
+<!-- lw:anchors packages/core/src/db.ts#migrateV8ToV9 -->
+
+This migration cleans up the `debt` table so that each open documentation work unit is keyed uniquely by symbol, page, and event.
+
+`export function migrateV8ToV9(db: Database.Database): void`
+This function takes a database handle and returns nothing, running a transaction that removes duplicate open debt rows and invalidates stale `'deleted'` rows.
+
+The function drops the old `idx_debt_open` index, then deletes duplicate open rows that share the same `symbol_key`, `doc_page_id`, and `event` (keeping only the lowest `id`). It also deletes open `event = 'deleted'` rows whose symbol is now `'active'`, because those debt items are no longer valid. Finally, it recreates `idx_debt_open` with the current definition. The whole operation runs inside `db.transaction()` so that a failure leaves the database unchanged. Resolved rows are never touched because they are historical payment records.
+
+## Selecting and Applying Migrations
 
 <!-- lw:anchors packages/core/src/db.ts#migrationsFor packages/core/src/db.ts#postV3Migrations -->
 
-Two helpers split the migration list by execution shape: one returns SQL strings, the other returns JS functions. `openIndex` discriminates by `typeof migration === "function"` when iterating.
+This section covers the two functions that decide which migrations to run for a database at a given version. The first handles the single legacy SQL migration, while the second returns the ordered list of post-V3 JavaScript functions.
 
-```ts
-export function migrationsFor(
+`export function migrationsFor(
   fromVersion: number,
   toVersion: number,
-): Array<string | ((db: Database.Database) => void)> {
-```
+): Array<string | ((db: Database.Database) => void)>`
+This function takes the current database version and the target version, and returns an array of migration steps (either SQL strings or functions) needed to move from the first to the second. It currently only pushes `MIGRATION_SQL_V3` when `fromVersion < 3` and `toVersion >= 3`, because that is the only migration that must be applied as raw SQL.
 
-`migrationsFor` takes a stored version and a target version (both numbers) and returns the list of pending migrations as either SQL strings or `(db) => void` functions; it currently emits `MIGRATION_SQL_V3` when `fromVersion < 3 && toVersion >= 3`, and otherwise returns an empty array.
-
-```ts
-export function postV3Migrations(
+`export function postV3Migrations(
   fromVersion: number,
   toVersion: number,
-): Array<(db: Database.Database) => void)> {
-```
+): Array<(db: Database.Database) => void>`
+This function takes the current database version and the target version, and returns an array of migration functions that must run after the legacy SQL migration. It pushes a migration function for each version boundary crossed, in order: `migrateV3ToV4`, `migrateV4ToV5`, `migrateV5ToV6`, `migrateV6ToV7`, `migrateV7ToV8`, and `migrateV8ToV9`. These functions are separated so that deterministic tests can control which migrations run, and because the caller executes SQL strings and JavaScript functions differently.
 
-`postV3Migrations` takes the same version pair and returns only the post-v3 JS migration functions in order — `migrateV3ToV4` through `migrateV7ToV8` — guarded by the corresponding `fromVersion < N && toVersion >= N` bounds. Splitting the dispatch lets `migrationsFor` stay deterministic (used in tests) while letting `openIndex` call functions with the live `db` handle.
-
-## Opening and upgrading the index
+## Database Opening and Initialization
 
 <!-- lw:anchors packages/core/src/db.ts#openIndex -->
 
-`openIndex` is the entry point the indexer calls to obtain a usable `Database`. It does not validate the path — the caller (e.g. `indexer.ts`) is expected to have routed it through the safe-io helpers.
+This section explains the core routine that opens (or creates) the index database, applies any pending migrations, and records the schema version.
 
-```ts
-export function openIndex(dbPath: string): Database.Database {
-```
+`export function openIndex(dbPath: string): Database.Database`
+This function takes the filesystem path to the database file and returns an open, migrated, write-enabled SQLite database handle.
 
-The function takes the absolute path to `index.db` (a string) and returns an open `better-sqlite3` `Database`. It opens the file directly (it does not `mkdir` — the `.livewiki/` directory is created by the caller, so a missing directory fails closed), enables `journal_mode = WAL`, `foreign_keys = ON`, and `synchronous = NORMAL`, then runs `SCHEMA_SQL` to converge on the current shape. If `meta.schema_version` is absent it writes `CURRENT_SCHEMA_VERSION`; if a different version is stored it iterates `migrationsFor(stored, CURRENT_SCHEMA_VERSION)` (running strings via `db.exec` and functions with the live `db`), then iterates `postV3Migrations(stored, CURRENT_SCHEMA_VERSION)`, then updates the stored version. The result is a DB whose `meta.schema_version` matches `CURRENT_SCHEMA_VERSION` and whose tables/indexes match `SCHEMA_SQL`, regardless of whether the file was just created or carried over from a prior version.
+The function first derives the directory from `dbPath` and creates a `better-sqlite3` `Database` instance without recursive `mkdir`, so it fails closed if the `.livewiki/` directory disappears between setup and open. It then sets pragmatic pragmas: WAL journal mode for concurrent access, `foreign_keys = ON` for referential integrity, and `synchronous = NORMAL` for a good durability/performance trade-off.
+
+Because `SCHEMA_SQL` references the v9 `idx_debt_open` index expression (which needs `symbol_key` and `doc_page_id` columns that pre-v8 databases lack), the function first checks whether a `debt` table exists and, if so, whether it is missing either column. In that case it creates a temporary legacy index on `(anchor_id, event)` using the same name, so that the subsequent `CREATE INDEX IF NOT EXISTS` in `SCHEMA_SQL` is safe until the migrations add the columns.
+
+After running `SCHEMA_SQL`, the function reads the `schema_version` value from the `meta` table. If there is no version row, it inserts the current `CURRENT_SCHEMA_VERSION`. Otherwise, it parses the stored version and, when it differs from `CURRENT_SCHEMA_VERSION`, applies the migrations from `migrationsFor(stored, CURRENT_SCHEMA_VERSION)` (running each entry either as `db.exec` on a string or by invoking it as a function) and then runs every function from `postV3Migrations(stored, CURRENT_SCHEMA_VERSION)` in order. Finally, it updates the `meta` table to the current version and returns the ready-to-use database handle. The function deliberately does not validate the path because the caller has already passed it through safe-io.
 
 ## Tests
 

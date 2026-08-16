@@ -1,45 +1,20 @@
-flowchart LR
-  classDef src fill:#eef,stroke:#446,stroke-width:1px;
-  classDef core fill:#efe,stroke:#464,stroke-width:1px;
-  classDef fs fill:#fee,stroke:#644,stroke-width:1px;
-
-  server["server.ts<br/>(createServer + tools)"]:::src
-  watcher["startWatcher<br/>(fs.watch + debounce)"]:::src
-  debounce["schedule / syncBatch"]:::src
-  filter["isWatchDenied"]:::src
-  teardown["stop"]:::src
-
-  safeio["@livewiki/core/safe-io"]:::core
-  status["@livewiki/core/status"]:::core
-  verify["@livewiki/core/verify"]:::core
-  indexer["@livewiki/core/indexer"]:::core
-  ledger["@livewiki/core/anchor-ledger"]:::core
-  blast["@livewiki/core/blast-radius"]:::core
-  impact["@livewiki/core/change-impact"]:::core
-  metrics["@livewiki/core/update-metrics"]:::core
-  db["@livewiki/core/db"]:::core
-
-  search["search.ts<br/>(SearchIndex)"]:::src
-  sqlite["SQLite FTS5<br/>(search.db)"]:::fs
-  repo["working tree<br/>(fs.watch root)"]:::fs
-
-  server --> safeio
-  server --> status
-  server --> verify
-  server --> blast
-  server --> impact
-  server --> metrics
-  server --> db
-  server --> search
-
-  watcher --> repo
-  watcher --> filter
-  watcher --> debounce
-  debounce --> indexer
-  debounce --> ledger
-  debounce --> search
-  search --> sqlite
-  server --> watcher
-  server -. close override .-> teardown
-  teardown --> debounce
-  teardown --> search
+graph TD
+    A[createServer] --> B[McpServer SDK]
+    A --> C[openAndIndex]
+    A --> D[startWatcher]
+    D --> E[syncBatch]
+    E --> F[runIndexer]
+    E --> G[runLedger]
+    E --> H[reindexAllPages]
+    D --> I[schedule]
+    D --> J[isWatchDenied]
+    D --> K[fs.watch callback]
+    K --> I
+    I --> E
+    D --> L[stop]
+    A --> M[server.close override]
+    M --> L
+    M --> N[closeSearch]
+    B --> O[livewiki_write_doc tool]
+    B --> P[livewiki_resolve_debt tool]
+    A --> Q[searchIdx]

@@ -1,11 +1,30 @@
-graph TD
-  caller["bin entry point"] --> run["run(argv)"]
-  run --> createProgram["createProgram()"]
-  createProgram --> readVersion["readVersion()"]
-  createProgram --> commander["commander Command"]
-  commander --> regs["registerInit, registerIndex, registerStatus, registerUpdate, registerVerify, registerServe, registerBatch, registerExport, registerView, registerPointer, registerInstall"]
-  regs --> handlers["command handlers in packages/cli/src/commands/*.ts"]
-  resolveRepoRoot["resolveRepoRoot(repoOpt)"]
-  handlers --> resolveRepoRoot
-  resolveRepoRoot --> cwd["process.cwd() + nodePath.resolve"]
-  readVersion --> pkg["../package.json (via file: URL)"]
+flowchart TD
+    A[run: parse argv] --> B[createProgram]
+    B --> C[readVersion]
+    B --> D[registerInit]
+    B --> E[registerIndex]
+    B --> F[registerStatus]
+    B --> G[registerUpdate]
+    B --> H[registerVerify]
+    B --> I[registerServe]
+    B --> J[registerBatch]
+    B --> K[registerExport]
+    B --> L[registerView]
+    B --> M[registerPointer]
+    B --> N[registerInstall]
+    B --> O[registerConfig]
+    B --> P[registerBaseline]
+    D --> Q[resolveRepoRoot]
+    E --> Q
+    F --> Q
+    G --> Q
+    H --> Q
+    I --> Q
+    J --> Q
+    K --> Q
+    L --> Q
+    M --> Q
+    N --> Q
+    O --> Q
+    P --> Q
+    Q --> R[nodePath.resolve with cwd]

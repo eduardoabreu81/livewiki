@@ -95,11 +95,11 @@ This directory holds automated tests with no co-located product code.
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [From CLI command to LLM provider — the request path livewiki walks](../flows/cli-src-to-llm.md)
+- Flow: [Source Repository to LLM Pipeline](../flows/cli-src-to-llm.md)
 - Topic: [Testing](../topics/testing-f41eeea7.md)
 - [packages/cli/src/commands](../commands/index.md) — depends on this folder
 - [packages/mcp/src](../mcp-src/index.md) — depends on this folder
 - [packages/core/src/llm](../llm/index.md) — used both ways
 
-> Coverage note: this folder's source (132 files, ~3258k chars) is too large to read in full; this page documents its main entry points.
+> Coverage note: this folder's source (142 files, ~3500k chars) is too large to read in full; this page documents its main entry points.
 <!-- livewiki:navigate:end -->

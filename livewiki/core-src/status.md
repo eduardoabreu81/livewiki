@@ -1,34 +1,36 @@
 ---
-title: "core: status — wiki + index health report"
+title: Wiki Status Report & Index Summary
 owner: generated
 anchors:
-  - packages/core/src/status.ts#anchoredLangs
-  - packages/core/src/status.ts#run
-  - packages/core/src/status.ts#collect
-  - packages/core/src/status.ts#applyRiskRanking
-  - packages/core/src/status.ts#applyFreshness
-  - packages/core/src/status.ts#collectDegradedPages
-  - packages/core/src/status.ts#formatSnapshotAge
-  - packages/core/src/status.ts#formatLocalTimestamp
-  - packages/core/src/status.ts#formatActivityEvent
-  - packages/core/src/status.ts#formatDuration
-  - packages/core/src/status.ts#formatHuman
+- packages/core/src/status.ts#anchoredLangs
+- packages/core/src/status.ts#applyFreshness
+- packages/core/src/status.ts#applyRiskRanking
+- packages/core/src/status.ts#applyVersionedBaseline
+- packages/core/src/status.ts#collect
+- packages/core/src/status.ts#collectDegradedPages
+- packages/core/src/status.ts#compareText
+- packages/core/src/status.ts#formatActivityEvent
+- packages/core/src/status.ts#formatDuration
+- packages/core/src/status.ts#formatHuman
+- packages/core/src/status.ts#formatLocalTimestamp
+- packages/core/src/status.ts#formatSnapshotAge
+- packages/core/src/status.ts#run
 ---
 
-# core: status — wiki + index health report
+# Wiki Status Report & Index Summary
 
-`packages/core/src/status.ts` builds the `StatusReport` snapshot that tells a developer (or an agent) where the wiki and the index stand right now.
+This page produces a comprehensive snapshot of the wiki's state — indexed files, extracted symbols, documentation debt, freshness, and recovery-tier pages — as a structured `StatusReport` object, and formats that report as human-readable text.
 
 ## When to use this page
 
-- **Run the status command** to inspect what `livewiki status` reports — files indexed, open debt, degraded pages, freshness, activity ledger.
-- **Add a new section to the report** by extending `StatusReport` and threading the new field through `collect`, `applyFreshness`, `applyRiskRanking`, and `collectDegradedPages`.
-- **Tune the human renderer** (`formatHuman`) when you need a new line, column, or block in the CLI text output without breaking the JSON shape.
-- **Reason about the freshness rule** (`applyFreshness`) when a `stale: true`/`false` decision looks surprising — the rule is bounded by the index, not a repo walk.
+- Understand how a CLI or MCP subprocess assembles a complete status report from the SQLite index, baseline files, and disk state.
+- Learn the rules that determine index staleness and how `stale` is computed without a full repository walk.
+- See how open documentation debt is ranked by risk and how the report is rendered for human consumption.
+- Trace how degraded pages, activity metrics, and baseline gaps are collected and merged into the final report.
 
 ## How it fits
 
-This module sits on the read path of the livewiki CLI and MCP server. The orchestrator of the pipeline is `run`, which opens the SQLite index at `.livewiki/index.db`, calls `collect` to gather everything the database can answer in one shot, and then layers in four follow-up passes that need the repo on disk: `applyFreshness` (stat indexed files), `applyRiskRanking` (only when open debt exists — keeps clean repos cheap), `snapshotMetrics` for the activity ledger (wrapped in a try/catch so metrics failure never fails status), and `collectDegradedPages` (a fresh `livewiki/` walk for the recovery tier). The final shape is `StatusReport`, which `formatHuman` renders as multi-line text; JSON mode serializes the same object for agents. Adjacent collaborators it pulls in include the index layer (`./db.js`), the walker (`EXTENSION_LANG`), the import graph (`./imports.js`), the risk scorer (`./risk.js`), and the metrics ledger (`./update-metrics.js`).
+`status.ts` is the core implementation behind the `status` command. It opens the local SQLite index (`index.db`), reads configuration and baseline files, and walks disk directories only where needed (degraded pages, file mtimes, and git churn). It depends on several sibling modules — `db`, `walker`, `config`, `risk`, `baseline`, `imports`, `import-resolution`, `modules`, `update-metrics`, `frontmatter`, and `safe-io` — to gather each part of the report. The file exports two public functions: the async orchestrator `run` and the pure formatter `formatHuman`. All other functions are internal helpers that build a single section of the report. No other module calls into this file; it is the terminal producer of status information.
 
 ## Diagram
 
@@ -36,30 +38,72 @@ This module sits on the read path of the livewiki CLI and MCP server. The orches
 %% livewiki/diagrams/core-src-status.mmd
 ```
 
-## Report orchestration
+## Orchestration: building the full report
 
-<!-- lw:anchors packages/core/src/status.ts#run packages/core/src/status.ts#collect packages/core/src/status.ts#anchoredLangs -->
+<!-- lw:anchors packages/core/src/status.ts#run -->
 
-`run` is the public entry point. It resolves the repo root, locates the SQLite index inside it, opens it, and ensures `db.close()` runs in a `finally` block so a failure mid-pipeline never leaks the connection. The actual snapshot assembly is split so each pass owns one concern:
+The main entry point is `run(repoRoot, opts)`, which resolves the repository root, opens the index database, and assembles the final `StatusReport`.
 
-```ts
+```typescript
 export async function run(
   repoRoot: string,
   opts: StatusOptions = {},
 ): Promise<StatusReport>
 ```
 
-`run(repoRoot, opts)` opens the on-disk index, builds a `StatusReport`, applies freshness and risk in sequence, and returns the populated object — closing the index in `finally` regardless of how the pipeline ends.
+`run` takes the repository path and optional display options (defaulting `topN` to 10) and returns the complete report object. It first resolves the root to an absolute path, validates the index database path, and opens the SQLite connection. It then loads the configuration defensively — if `.livewiki/config.json` is missing or unreadable, it falls back to defaults without throwing.
 
-The first pass is `collect(db, topN)`, which is the pure-database phase: it reads active files and symbols, builds the per-language and per-kind counts, computes the top-N files by symbol count, and walks the open debt plus undocumented tables. `collect` also derives the `tiers` map by asking `anchoredLangs()` whether each language is in the walker's `EXTENSION_LANG` projection — that projection is intentionally import-light so this CLI subprocess never drags `web-tree-sitter` into the bundle just to label tiers. Debt identity uses durable columns (`symbol_key`/`wiki_path`) first-classed alongside anchor joins, so rows stay actionable even when the joined anchor is gone. The function leaves `metrics` and `degraded` as stubs (`null` and `{ total: 0, pages: [] }`) for the later passes to overwrite.
+The pipeline proceeds in stages: it calls `collect` to read the index and build the core report, then `applyVersionedBaseline` to attach repository-level debt, then `applyFreshness` to compute staleness. If any open debt items exist, it calls `applyRiskRanking` to order them by risk. It also best-effort snapshots incremental activity metrics, and finally walks the disk to collect degraded pages. The database is always closed in a `finally` block so even a failure mid-pipeline does not leak the connection. The order matters — risk ranking only runs when there is something to rank, and metrics/degraded collection can fail without breaking the report.
 
-## Index freshness
+## Collecting the index-backed inventory
 
-<!-- lw:anchors packages/core/src/status.ts#applyFreshness packages/core/src/status.ts#formatSnapshotAge -->
+<!-- lw:anchors packages/core/src/status.ts#collect packages/core/src/status.ts#anchoredLangs -->
 
-`applyFreshness` answers one question: is the on-disk world still what the index thinks it is? It computes `snapshotAgeMs` (lower bound `0` — clamped only on the lower side, since a negative age would be nonsense) and then stats every active indexed file once:
+The first stage reads active files and symbols from the database and builds the static portions of the report.
 
-```ts
+```typescript
+function collect(
+  db: import("better-sqlite3").Database,
+  topN: number,
+  config: LivewikiConfig,
+): StatusReport
+```
+
+`collect` takes the open database, the top-N limit, and the configuration, and returns a report populated with file, symbol, debt, undocumented, and metadata fields (metrics and degraded pages are filled later by `run`). It queries all active rows from `files` and `symbols`, aggregates counts by language and by symbol kind, and calculates per-language coverage tiers. The tier is "anchored" when a tree-sitter grammar exists for that language, otherwise "prose".
+
+The language-tier map is supplied by `anchoredLangs()`, which returns the set of language identifiers that have a tree-sitter grammar. This helper derives that set from the walker's extension-to-language map, kept import-light so `status` does not load web-tree-sitter just to label tiers.
+
+For the top-N list, `collect` counts symbols per file, sorts descending by count, and keeps the first `topN`. It then queries open debt rows (unresolved) with a `LEFT JOIN` on anchors and doc pages. The join uses `COALESCE` so that `symbol_key` and `wiki_path` survive anchor deletion — identity comes from the durable debt columns rather than the join alone. Events and assignees are counted into buckets, and each row becomes a `DebtItem`.
+
+Undocumented symbols are read from the `undocumented` table (where `dismissed = 0`), and each is classified by file-path role using the configuration's path roles. Only the first 20 samples per role are kept. Finally, metadata such as schema version, last indexed time, and last ledger time are read from the `meta` table, defaulting to 0 or `null` when absent.
+
+## Evaluating the versioned baseline
+
+<!-- lw:anchors packages/core/src/status.ts#applyVersionedBaseline packages/core/src/status.ts#compareText -->
+
+The second stage attaches repository-portable debt authority by comparing the on-disk baseline against the current index.
+
+```typescript
+async function applyVersionedBaseline(
+  db: import("better-sqlite3").Database,
+  absRoot: string,
+  report: StatusReport,
+): Promise<void>
+```
+
+`applyVersionedBaseline` takes the database, the absolute repository root, and the partial report, and mutates the report's `debt` section in place. It loads the baseline file; if the baseline is `unavailable` or `incompatible`, it records that state (and any issues) and returns early. Otherwise it reads all active symbols, collects the baseline documentation inventory, and evaluates the baseline. The evaluation yields a health object with entries, moves, and removed anchors.
+
+A set of removed identities prevents an anchor that vanished from being double-reported as a changed/deleted item — each such entry surfaces only under `removedAnchors`. Accepted entries whose state is `changed` become `changed` debt items; entries state `deleted` become `deleted` items unless they also appear as a move. Moves become their own items with a `detail` JSON describing the old-to-new key transition. The item list is sorted deterministically by wiki path, then symbol key, then event using `compareText`.
+
+`compareText(left, right)` performs a simple lexicographic comparison and returns -1, 0, or 1. It takes two strings and returns their sort order, used solely to make the debt-item ordering stable and reproducible. The report's `repository` section then records totals, the `clean` count, and grouped gap lists for unbaselined, inferred, and removed-anchor entries.
+
+## Computing index freshness
+
+<!-- lw:anchors packages/core/src/status.ts#applyFreshness -->
+
+The third stage determines whether the index snapshot is stale without walking the whole repository.
+
+```typescript
 async function applyFreshness(
   db: import("better-sqlite3").Database,
   absRoot: string,
@@ -67,81 +111,58 @@ async function applyFreshness(
 ): Promise<void>
 ```
 
-`applyFreshness(db, absRoot, report)` reads `report.meta.lastIndexedAt`, sets `snapshotAgeMs` (clamped at `0`), then stats the active indexed files — counting one for every file whose `mtimeMs` exceeds `lastIndexedAt` or that no longer exists on disk. The rule deliberately compares against `last_indexed_at` rather than the per-row indexed mtime so a touch-then-rehash cycle does not get stuck stale. Files created after indexing are out of reach by design (a full walk would be needed and the watcher covers them); when `lastIndexedAt` is `null`, freshness is reported as `stale: false` with `staleChangedFiles: 0`.
+`applyFreshness` takes the database, the absolute repository root, and the partial report, and mutates `report.meta` with a `snapshotAgeMs`, `stale`, and `staleChangedFiles`. If the index was never created (`lastIndexedAt` is `null`), the snapshot age is `null`, staleness is `false`, and the changed-file count is 0. Otherwise it computes `snapshotAgeMs` as the (non-negative) difference between now and the last indexed timestamp.
 
-`formatSnapshotAge` is the small formatter the human renderer reaches for on the stale line. It rounds milliseconds into the coarsest unit that still reads naturally and only ever widens (seconds → minutes → hours → days), with hours switching to days past the 48-hour boundary:
+To detect staleness, it reads every active file path from the index and stats each one on disk. A file counts as changed when the stat fails (file missing) or when its mtime is newer than `lastIndexedAt`. The comparison deliberately uses `lastIndexedAt` rather than the per-row indexed mtime, because the indexer skips hash-unchanged files and does not refresh their row mtimes — a touch-then-reindex cycle would otherwise stay permanently stale. A file created but never indexed is out of scope by design; detecting those would require a full walk. If any changed file is found, the index is marked stale and the count is recorded.
 
-```ts
-function formatSnapshotAge(ms: number): string
-```
-
-`formatSnapshotAge(ms)` takes a positive millisecond duration and returns a compact label like `"12s"`, `"5m"`, `"3h"`, or `"4d"`. Note that the input is assumed non-negative — `applyFreshness` clamps the upper side at `0` before calling it.
-
-## Risk-ranked debt ordering
+## Ranking debt by risk
 
 <!-- lw:anchors packages/core/src/status.ts#applyRiskRanking -->
 
-When `report.debt.items.length > 0`, `run` defers to `applyRiskRanking` to attach an additive `risk` field and reorder the items by score. Identity and dedup are untouched — this is presentation order plus metadata. The function is defensive on every external dependency so a repo with no config, no git, or no Go/Rust module manifest still gets a result:
+The optional fourth stage orders open debt by a deterministic risk score and attaches additive metadata.
 
-```ts
+```typescript
 async function applyRiskRanking(
   db: import("better-sqlite3").Database,
   absRoot: string,
   report: StatusReport,
+  config: LivewikiConfig,
 ): Promise<void>
 ```
 
-`applyRiskRanking(db, absRoot, report)` loads the repo config with a fallback to defaults, bails out when `riskAnalysis === false`, recomputes the import graph for anchored-language files only (prose-tier files have no grammar and would yield no edges), pulls git churn over the configured window (degrading to `null` when git or a repo is unavailable), scores each debt item, and sorts the items via `compareByRisk`. Tier is keyed off `anchoredLangs()` so prose and anchored files get different signals.
+`applyRiskRanking` takes the database, the absolute repository root, the partial report, and the configuration, and reorders `report.debt.items` in place while adding a `risk` field to each item. It returns early when risk analysis is disabled in the config. Otherwise it reads active files, labels each by tier, and recomputes imports on demand for anchored paths only — prose-tier files have no grammar and would yield no edges, so they are skipped. Test coverage and fan-in are computed for the known file set, and git churn is collected only when the configured churn window is positive (otherwise it degrades to `null`).
 
-## Recovery tier — degraded pages
+For each debt item, the symbol key is mapped back to a path; when no path is derivable, tier and coverage are `null`, fan-in defaults to 0, and churn is `null`. The risk score is computed via `scoreDebtItem`, and the item list is sorted via `compareByRisk`. The debted identity and deduplication are untouched — only the presentation order and the additive `risk` field change.
+
+## Collecting degraded pages from disk
 
 <!-- lw:anchors packages/core/src/status.ts#collectDegradedPages -->
 
-The degraded-pages block is the only section that does not trust the index. `collectDegradedPages` walks `livewiki/` fresh from disk every call (verify-style) and treats the frontmatter flag `quality: degraded` as the single source of truth:
+The recovery tier walks the `livewiki/` tree fresh from disk to find pages flagged `quality: degraded` in their frontmatter.
 
-```ts
+```typescript
 async function collectDegradedPages(
   absRoot: string,
-): Promise<{ total: number; pages: string[] }
+): Promise<{ total: number; pages: string[] }>
 ```
 
-`collectDegradedPages(absRoot)` walks the `livewiki/` tree under the repo root, descends into non-dotfile directories only, reads every Markdown page including dotfile-named ones, and collects those whose frontmatter declares `quality: degraded`. An unreadable file or unparseable frontmatter is silently skipped so a single broken page never breaks status; results are sorted before return and stored under `report.degraded` with repo-relative forward-slash paths.
+`collectDegradedPages` takes the absolute repository root and returns an object with the total count and sorted list of relative page paths. It traverses the `livewiki/` directory iteratively. Hidden directories (names starting with a dot) are never descended, but dot-prefixed pages are legitimate artifacts and are read normally. A page is considered degraded only when its frontmatter parses and its `quality` field equals `degraded`. An unreadable file or unparseable frontmatter simply does not count — `status` never fails because of a single broken page. Paths are normalized to forward slashes and sorted before being returned.
 
-## Human renderer and activity formatters
+## Formatting the report for humans
 
-<!-- lw:anchors packages/core/src/status.ts#formatHuman packages/core/src/status.ts#formatLocalTimestamp packages/core/src/status.ts#formatActivityEvent packages/core/src/status.ts#formatDuration -->
+<!-- lw:anchors packages/core/src/status.ts#formatHuman packages/core/src/status.ts#formatSnapshotAge packages/core/src/status.ts#formatLocalTimestamp packages/core/src/status.ts#formatActivityEvent packages/core/src/status.ts#formatDuration -->
 
-`formatHuman` is the CLI text mode. It builds a multi-line string with a header, per-language counts annotated by tier, per-kind symbol counts, the top-N files, debt grouped by event and assignee, undocumented symbols, the degraded block, and — when the ledger is non-empty — an Activity block plus a stale line and a metadata footer:
+The public formatter renders the structured report as multi-line text for terminal consumption.
 
-```ts
+```typescript
 export function formatHuman(report: StatusReport): string
 ```
 
-`formatHuman(report)` renders a `StatusReport` into a stable multi-line text block consumed by the livewiki CLI; JSON consumers ignore this and read the structured `StatusReport` object directly.
+`formatHuman` takes the full `StatusReport` and returns a single string of newline-joined lines. It prints an "Indexed files" section with per-language counts and coverage tiers, then an "Extracted symbols" section grouped by kind, then the top-N files by symbol count (only when non-empty). The documentation baseline is printed as a single line, with any baseline issues and the repository-level debt breakdown when available (coverage gaps for unbaselined, inferred, and removed anchors). Local projected debt is shown with event and assignee buckets, and each open debt item gets a line with event, assignee, target, and an optional `[risk N]` marker.
 
-The Activity block is composed from three small formatters. `formatLocalTimestamp` turns an epoch millisecond into a zero-padded local-time `YYYY-MM-DD HH:mm`:
+Undocumented counts and a sample of symbols follow. If any degraded pages exist, they are listed under a "Degraded pages (relaxed contract)" header. Activity metrics are printed only when the ledger is non-empty and there is recent activity — the block is completely omitted otherwise, since JSON consumers read `metrics` separately. The final line reports the schema version and the last indexed/ledger timestamps.
 
-```ts
-function formatLocalTimestamp(ts: number): string
-```
-
-`formatLocalTimestamp(ts)` takes an epoch-millisecond timestamp and returns a zero-padded local-time string in the form `YYYY-MM-DD HH:mm`.
-
-`formatActivityEvent` renders a single ledger entry (`UpdateMetric`) as one line, switching on `kind`:
-
-```ts
-function formatActivityEvent(e: UpdateMetric): string
-```
-
-`formatActivityEvent(e)` takes a single `UpdateMetric` ledger entry and returns a one-line summary like `package_emitted ~42 tokens, 1 debt items` or `batch_run #7 ok, 1200 in / 300 out, 45s`. The four covered kinds are `package_emitted`, `write_received`, `debt_resolved`, and `batch_run`.
-
-`formatDuration` is the wall-clock formatter the batch-run line leans on:
-
-```ts
-function formatDuration(ms: number): string
-```
-
-`formatDuration(ms)` takes a non-negative millisecond duration and returns a compact label — `45s` under a minute, `30m` under an hour, `1h12m` (zero-padded minutes) past an hour, and `2h` when minutes are zero.
+Several small helpers support the text rendering. `formatSnapshotAge(ms)` takes a millisecond age and returns a compact label like `12s`, `5m`, `3h`, or `4d`. `formatLocalTimestamp(ts)` takes an epoch timestamp and returns a zero-padded local-time string in `YYYY-MM-DD HH:mm` form. `formatActivityEvent(e)` takes a single update metric event and produces a one-line summary describing package emission, write receipt, debt resolution, or batch-run status (the batch case uses `formatDuration`). `formatDuration(ms)` takes a millisecond wall-clock duration and renders it as `45s`, `30m`, or `1h12m` — the only compact form used for the activity block.
 
 ## Tests
 

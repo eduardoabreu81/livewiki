@@ -5,7 +5,7 @@ owner: generated
 
 # Architecture overview
 
-This repository has **220 files** documented and **1252 code symbols** indexed, organized into **30 folders** with **7 documented dependencies** between them.
+This repository has **237 files** documented and **1436 code symbols** indexed, organized into **30 folders** with **8 documented dependencies** between them.
 
 The diagrams below are rebuilt by `livewiki init`; the folder pages they link to are written by `livewiki init --batch` or by hand.
 
@@ -25,13 +25,13 @@ End-to-end behavior across the codebase: [How it works](../flows/index.md)
 
 ### packages/cli/src/commands
 
-**11** files, **38** documented code symbols
+**13** files, **52** documented code symbols
 
 Representative paths:
 
+- `packages/cli/src/commands/baseline.ts`
 - `packages/cli/src/commands/batch.ts`
-- `packages/cli/src/commands/export.ts`
-- `packages/cli/src/commands/index-cmd.ts`
+- `packages/cli/src/commands/config.ts`
 
 Pages: [folder page](../commands/index.md)
 
@@ -43,13 +43,13 @@ Used by: [packages/cli/src](../cli-src/index.md)
 
 ### packages/mcp/src
 
-**7** files, **36** documented code symbols
+**8** files, **45** documented code symbols
 
 Representative paths:
 
+- `packages/mcp/src/agent-bootstrap-e2e.test.ts`
 - `packages/mcp/src/index.ts`
 - `packages/mcp/src/phase5-e2e.test.ts`
-- `packages/mcp/src/search.test.ts`
 
 Pages: [folder page](../mcp-src/index.md)
 
@@ -61,7 +61,7 @@ Used by: [packages/cli/src/commands](../commands/index.md)
 
 ### packages/core/src/llm
 
-**7** files, **24** documented code symbols
+**8** files, **26** documented code symbols
 
 Representative paths:
 

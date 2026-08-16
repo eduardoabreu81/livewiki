@@ -1,7 +1,50 @@
 {
-  "version": 1,
+  "version": 2,
   "lastDocumentedCommit": null,
-  "snapshotHash": "53985c6215395817b2ab8643582ed0cceb4b4af1d0fa168f322dc6afd0eed7b3",
-  "updatedAt": "2026-08-13T02:28:08.750Z",
-  "pendingBatch": null
+  "snapshotHash": "5851fc8c9b9aca4bdaffa519210e8a5ac2a2d46793f8d634341a61ed0e6577d9",
+  "updatedAt": "2026-08-16T02:52:35.754Z",
+  "pendingBatch": null,
+  "artifactReceipts": [
+    {
+      "taskId": "flow:cli-src-to-llm",
+      "evidenceHash": "5beed0a383245fd095d5a930836d9687f411692056297f440ae2622474caf7c5",
+      "contract": "flow-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/diagrams/flow-cli-src-to-llm.mmd",
+          "hash": "5524d6387538edd427011f75eeef846392e013d386be6d3997f42f20a1edc63f"
+        },
+        {
+          "path": "livewiki/flows/cli-src-to-llm.md",
+          "hash": "577cf95530bba4c143ea964992589cd67b570765a9c1d72b24fbcc099c29b493"
+        }
+      ]
+    },
+    {
+      "taskId": "flow:mcp-src-to-llm",
+      "evidenceHash": "f0789f368bc989d6def9e766a26491d5404b5677331745442728e6720c4b8e34",
+      "contract": "flow-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/diagrams/flow-mcp-src-to-llm.mmd",
+          "hash": "7dc54b394a9fde9f3b18d92f9a59f0c89ee00af0bd1a14c7e9624b2a08ce628d"
+        },
+        {
+          "path": "livewiki/flows/mcp-src-to-llm.md",
+          "hash": "4749bf9bcab6b562e1bf73d4e37fe3980bb642246143ee52bfe25a17081749cf"
+        }
+      ]
+    },
+    {
+      "taskId": "topic:f41eeea78a0d",
+      "evidenceHash": "5b805fe87504782c86d2fe68f23d660938c2f910248d4ad3d161a5b9f869b2fe",
+      "contract": "topic-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/topics/testing-f41eeea7.md",
+          "hash": "6f5921e3d633ea1afac3c0aa67b3ba67761f1e8976ae4c815bc0eb2f28b856c4"
+        }
+      ]
+    }
+  ]
 }

@@ -1,32 +1,31 @@
 ---
-title: livewiki install command
+title: LiveWiki Install Command Orchestration
 owner: generated
 anchors:
-  - packages/cli/src/commands/install.ts#formatDetectionHuman
-  - packages/cli/src/commands/install.ts#formatPlanHuman
-  - packages/cli/src/commands/install.ts#formatResultJson
-  - packages/cli/src/commands/install.ts#formatResultsHuman
-  - packages/cli/src/commands/install.ts#promptYesNo
-  - packages/cli/src/commands/install.ts#readSources
-  - packages/cli/src/commands/install.ts#registerInstall
+- packages/cli/src/commands/install.ts#formatDetectionHuman
+- packages/cli/src/commands/install.ts#formatPlanHuman
+- packages/cli/src/commands/install.ts#formatResultJson
+- packages/cli/src/commands/install.ts#formatResultsHuman
+- packages/cli/src/commands/install.ts#promptYesNo
+- packages/cli/src/commands/install.ts#readSources
+- packages/cli/src/commands/install.ts#registerInstall
 ---
 
-# livewiki install command
+# LiveWiki Install Command Orchestration
 
-This page documents the `livewiki install` CLI command, which detects supported coding agents on the user's machine and configures the livewiki MCP (Model Context Protocol — a host-managed tool/plugin channel) entry, the existing hook templates, the shared skill, and an opt-in pointer document.
+This page explains how the `livewiki install` CLI command detects installed coding agents and safely configures the livewiki MCP server entry, hook templates, shared skills, and optional pointer files.
 
 ## When to use this page
 
-- **Register the command** in the CLI program by calling `registerInstall(program)` from a Commander setup step.
-- **Review the safety model** (dry-run, TTY confirmation, pointer opt-in, exit codes) before changing interactive behavior.
-- **Locate the asset loader** that ships the bundled templates and the shared `document-as-you-go` skill.
-- **Understand the human/JSON output formatters** when adding a new `InstallAction` kind or status.
+- Understand the full user flow of the `install` command, from option parsing to applying changes.
+- Trace how the command validates user input and enforces safety checks before any file is written.
+- Learn how the command formats its output for both human-readable terminal display and JSON consumption.
 
 ## How it fits
 
-The install command lives in `packages/cli/src/commands/install.ts` inside the `packages/cli` workspace and is registered on a Commander `Command` instance supplied by the CLI entry point (`packages/cli/src/cli.ts`). All agent-aware logic — registry lookup, detection, plan construction, and application — is delegated to `@livewiki/core/install`, while this file owns the CLI surface: option parsing, confirmation, output formatting, and exit-code handling. Shared output helpers come from `../output.js` (the `emit` and `emitHuman` helpers that multiplex JSON and human-friendly output). Asset bytes (the post-commit hook template, the Claude Code settings template, and the `document-as-you-go` skill) are read directly from disk inside the CLI package and passed to the core planner via `InstallSources`.
+This module is the command-layer implementation for the `livewiki` CLI, responsible for coordinating the core `@livewiki/core/install` package. It handles user-facing concerns like option parsing, interactive prompting, and output formatting, then delegates the actual detection, planning, and application of changes to the core package's functions. The file is part of the CLI's command set, alongside other commands registered on the same `commander` program, and relies on shared helpers for emitting output and resolving the repository root.
 
-The command is intentionally conservative: it never writes outside the working repository unless the user confirms, and the pointer write is a second-stage opt-in that even `--yes` does not unlock.
+The command's central policy is safety: it shows the user every intended action before writing anything, supports a full dry-run via `--print`, and refuses to write in non-interactive mode unless explicitly told to with `--yes`. It also implements an opt-in rule for writing pointer files, requiring a dedicated flag or an additional interactive confirmation.
 
 ## Diagram
 
@@ -34,99 +33,94 @@ The command is intentionally conservative: it never writes outside the working r
 %% livewiki/diagrams/commands-install.mmd
 ```
 
-## Command registration and option surface
+## Option Validation and Command Registration
 
 <!-- lw:anchors packages/cli/src/commands/install.ts#registerInstall -->
 
-`registerInstall` is the single export that the CLI program calls to mount the `install` subcommand. It attaches the `install` command to a Commander `Command` instance, declares its options, and wires up the async action handler that orchestrates the whole flow.
+This section is the entry point for the entire command. `registerInstall` exists to wire the `install` subcommand into the CLI's `commander` program, defining its options and the action that runs when the user invokes it. The function takes the program object and returns nothing; it registers the command, its description, all its flags, and the async callback that implements the command's behavior.
 
-```ts
+```typescript
 export function registerInstall(program: Command): void {
 ```
 
-This function takes the parent Commander `program` and returns nothing; the side effect is that `program` now has an `install` subcommand wired up. Four flags shape the run:
+This function takes a `Command` instance and returns nothing, registering the `install` command with its options and action handler on that program.
 
-- `--agents <csv>` — restricts detection to an explicit subset of agent ids.
-- `--yes` — skips interactive confirmation (intended for scripting).
-- `--print` — full dry-run; prints the detection table and the plan, performs zero writes.
-- `--write-pointer` — also writes the `AGENTS.md`/`CLAUDE.md` pointer block (otherwise a separate interactive prompt is required).
+The command defines several options that shape its behavior: `--agents <csv>` restricts the run to a comma-separated subset of agent IDs; `--yes` skips interactive confirmation for scripting; `--print` performs a full dry-run showing the plan with zero writes; `--write-pointer` opts into writing the AGENTS.md/CLAUDE.md pointer file (rule #2). When the action runs, it first resolves the repository root from `opts.repo` and the home directory, honoring the `LIVEWIKI_HOME` environment variable as a seam for tests.
 
-The action handler resolves `LIVEWIKI_HOME` (with `os.homedir()` as the documented fallback for tests and smoke runs), validates `--agents` against `AGENT_REGISTRY`, and exits with code `2` on invalid input — both as a JSON envelope via `emit` and as a plain message on stderr when not in JSON mode.
+The action then validates any `--agents` value against a known registry of agent IDs. If the value is empty or contains any unknown ID, the command emits an error (JSON if requested, otherwise to standard error), sets exit code 2, and returns immediately. This early validation prevents any work from proceeding with a malformed selection.
 
-## Detection, sources, and plan construction
+## Source Loading and Interactive Prompting
 
-<!-- lw:anchors packages/cli/src/commands/install.ts#readSources -->
+<!-- lw:anchors packages/cli/src/commands/install.ts#readSources packages/cli/src/commands/install.ts#promptYesNo -->
 
-After option validation, the handler drives the core pipeline. `detectAgents` produces a `Record<AgentId, AgentDetection>` keyed by agent id; the handler then derives `toInstall` as either the explicit `--agents` list or the subset of registered agents whose detection returned `detected: true`. `readSources` is called next to load the three on-disk assets the core planner needs.
+These two helpers supply the command's inputs and interactive confirmation mechanism. `readSources` exists to load the shipped template and skill files from the CLI package's root directory, which is two levels up from both the source and compiled command directories. It reads the git post-commit hook template, the Claude Code settings template, and two skill definition files in parallel, returning them as a structured `InstallSources` object that the core planner consumes.
 
-```ts
+```typescript
 async function readSources(): Promise<InstallSources> {
 ```
 
-This function takes no arguments and returns a promise resolving to `InstallSources`. It walks up two levels from the current file URL — the comment in source explains that `templates/` and `skills/` ship at the CLI package root, both for `src/commands/` and the compiled `dist/commands/` — and reads `templates/git/post-commit`, `templates/claude-code/settings.local.json`, and `skills/document-as-you-go/SKILL.md` concurrently with `Promise.all`. The bytes are returned as a single object the core planner consumes verbatim; the CLI file does not mutate or template them.
+This async function takes no arguments and returns a promise resolving to an `InstallSources` object containing the loaded template and skill content.
 
-With detections and sources in hand, the handler builds the plan via a small closure (`buildPlan`) that always passes the current `writePointer` flag, so the plan can be rebuilt after the pointer opt-in flip without re-running detection.
+`promptYesNo` exists to ask the user a yes/no question interactively during the confirmation phase. It writes the question to standard output, then reads from standard input until a newline or end-of-stream, resolving to `true` only for a "y" or "yes" answer.
 
-## Dry-run, confirmation, and apply
-
-The action handler is structured as three guarded stages:
-
-1. **Dry-run.** When `--print` is set, the handler emits the JSON/human view of detections plus plan and returns before any write happens.
-2. **Confirmation.** Without `--yes` and when at least one action has `status === "write"`, a non-TTY stdin fails closed with exit code `1`. On a TTY the handler prints the detection table and plan, optionally asks the pointer question, then asks a final proceed prompt. Cancelling emits a JSON envelope (or the word `cancelled` in human mode) and returns without applying.
-3. **Apply.** `applyInstall` runs the plan; the handler then computes `failed` actions (refusals or writes that did not apply) and emits the final JSON/human output. If any refusal or failure is present, `process.exitCode` is set to `1`.
-
-The pointer opt-in is intentionally a separate gate: setting `--writePointer` flips it on up-front; otherwise the handler asks an additional `promptYesNo` only when the plan contains a `pointer` action in `requires-opt-in` state, then rebuilds the plan before the final confirmation.
-
-## Interactive confirmation helper
-
-<!-- lw:anchors packages/cli/src/commands/install.ts#promptYesNo -->
-
-The confirmation gate reuses one small helper for all yes/no prompts so behavior stays consistent.
-
-```ts
+```typescript
 async function promptYesNo(question: string): Promise<boolean> {
 ```
 
-This function takes a `question` string and returns a promise resolving to `true` only when the trimmed, lowercased answer is `y` or `yes`; any other input resolves to `false`. It writes the question to stdout, accumulates `stdin` chunks until it sees a newline (or stdin ends), pauses stdin, and removes its listeners. The handler only invokes this helper on a TTY (after the non-TTY closed-fail check), so the `promptYesNo` path itself does not have to defend against a missing terminal.
+This async function takes a question string and returns a promise resolving to a boolean indicating whether the user answered yes.
 
-## Human output formatters
+The function attaches data and end listeners to standard input, accumulating the response, and cleans up its listeners once it has a complete answer. It treats a lowercased, trimmed input of "y" or "yes" as affirmative; any other input, including an empty line, is treated as no.
+
+## Human-Readable Output Formatting
 
 <!-- lw:anchors packages/cli/src/commands/install.ts#formatDetectionHuman packages/cli/src/commands/install.ts#formatPlanHuman packages/cli/src/commands/install.ts#formatResultsHuman -->
 
-Three pure functions render the user-facing text. They never throw and never call back into core; they take only the data they need to format.
+These three functions exist to present the command's output as readable terminal text. They are used for both the interactive review before confirmation and the final human-facing result after applying changes. `formatDetectionHuman` builds a table of each registered agent and whether it was detected, optionally listing evidence lines for each.
 
-```ts
+```typescript
 function formatDetectionHuman(
   detections: Record<AgentId, AgentDetection>,
   home: string,
 ): string {
 ```
 
-This function takes a record of detections plus the resolved `home` directory and returns a string. The first line is `Agent detection (home: <home>):`, followed by one block per agent in `AGENT_REGISTRY` order showing `agentId (displayName): detected | not detected` and any `evidence` lines indented beneath.
+This function takes a record of agent detections and the home directory path, returning a formatted string describing each agent's detection status and evidence.
 
-```ts
+`formatPlanHuman` renders the planned installation actions. It starts with a header naming the selected agents, then summarizes the counts of each action status (write, skip, refuse, requires-opt-in), and finally lists each action in detail.
+
+```typescript
 function formatPlanHuman(plan: readonly InstallAction[], toInstall: readonly AgentId[]): string {
 ```
 
-This function takes the plan plus the selected agent list and returns a string. It prints `Plan for: ...` (or a `nothing to do` line when `toInstall` is empty), then a summary count of statuses (`write`, `skip`, `refuse`, `requires-opt-in`), then one indented line per action showing `[status] kind [agentId] targetPath`. For `write` actions whose content is non-null, it additionally prints the full content between `--- content ---` and `--- end ---` markers so the user sees exactly what would be written.
+This function takes an array of planned install actions and the list of agent IDs to install, returning a formatted string of the complete plan.
 
-```ts
+For each action it prints the status, kind, target agent (if any), and target path. It shows the reason for any non-write status, and for write actions it includes the full content block, redacting it if flagged as sensitive. This detailed display is what lets the user review exactly what the command intends to do before approving it.
+
+`formatResultsHuman` presents the outcome of applying the plan. It reuses the detection table and then lists each action with its final result.
+
+```typescript
 function formatResultsHuman(
   detections: Record<AgentId, AgentDetection>,
   home: string,
   plan: readonly InstallAction[],
-  results: readonly { action: InstallAction; applied: boolean; detail?: string }),
+  results: readonly { action: InstallAction; applied: boolean; detail?: string }[],
 ): string {
 ```
 
-This function takes detections, the resolved home, the original plan, and the apply results and returns a string. It reuses `formatDetectionHuman` as the header, then prints one line per result where a `write` action becomes `written` (on success) or `FAILED` (when `applied` is false), and any `detail` or `reason` is indented beneath. When no plan action was a `write`, it appends a final `(nothing to write ...)` line so the user is not left wondering why nothing happened.
+This function takes the detection record, home directory, the original plan, and the array of results, returning a human-readable results summary.
 
-## JSON result formatter
+For each result it determines the outcome: non-write actions show their status, write actions show "written" on success or "FAILED" otherwise. It includes any detail or reason for each action, and adds a final note when there was nothing to write because every action was skipped, already up to date, or refused.
+
+## JSON Result Formatting
 
 <!-- lw:anchors packages/cli/src/commands/install.ts#formatResultJson -->
 
-```ts
+This function exists to convert a single installation result into a structured JSON object for the `--json` output mode. It provides a clean, machine-readable representation of each action's outcome, separate from the human-readable formatters.
+
+```typescript
 function formatResultJson(r: { action: InstallAction; applied: boolean; detail?: string }) {
 ```
 
-This function takes one apply result (action + applied flag + optional detail) and returns a plain object suitable for JSON serialization. It exposes `kind`, `agentId` (normalized to `null` when absent), `targetPath`, `status`, `applied`, and `detail` (falling back to `action.reason` when no result-level detail was provided, and to `null` when neither is present). The action handler maps every result through `formatResultJson` before emitting the JSON envelope so consumers see a stable shape regardless of the underlying `InstallAction` status.
+This function takes a result object containing the action, whether it was applied, and an optional detail string, returning a plain object with normalized fields for output.
+
+It extracts the action's kind, agent ID (or null), target path, and status, then adds the `applied` boolean and a `detail` field that prefers the explicit detail string, falling back to the action's reason, or null if neither exists. This normalized shape is what the command embeds in its JSON response for each result.

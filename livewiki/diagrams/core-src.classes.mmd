@@ -76,34 +76,43 @@ classDiagram
   class class_24["MissingProviderConfigError"] {
     +constructor()
   }
-  class class_25["ExportError"] {
+  class class_25["CredentialStoreError"] {
     +constructor()
   }
-  class class_26["FrontmatterParseError"] {
+  class class_26["ExportError"] {
     +constructor()
   }
-  class class_27["FullMockLlm"] {
+  class class_27["FrontmatterParseError"] {
+    +constructor()
+  }
+  class class_28["FullMockLlm"] {
     +generate()
   }
-  class class_28["DuplicateModuleIdError"] {
+  class class_29["DuplicateModuleIdError"] {
     +constructor()
   }
-  class class_29["ExactPartitionError"] {
+  class class_30["ExactPartitionError"] {
     +constructor()
   }
-  class class_30["UnknownPresetError"] {
+  class class_31["UnknownPresetError"] {
     +constructor()
   }
-  class class_31["ReadmeExportError"] {
+  class class_32["ReadmeExportError"] {
     +constructor()
   }
-  class class_32["InvalidRelativePathError"] {
+  class class_33["CompareAndSwapConflictError"] {
     +constructor()
   }
-  class class_33["PathOutsideAllowlistError"] {
+  class class_34["InvalidRelativePathError"] {
     +constructor()
   }
-  class class_34["ViewError"] {
+  class class_35["PathOutsideAllowlistError"] {
+    +constructor()
+  }
+  class class_36["WriteLockBusyError"] {
+    +constructor()
+  }
+  class class_37["ViewError"] {
     +constructor()
   }
   class_1 -- class_2
@@ -139,3 +148,6 @@ classDiagram
   class_31 -- class_32
   class_32 -- class_33
   class_33 -- class_34
+  class_34 -- class_35
+  class_35 -- class_36
+  class_36 -- class_37

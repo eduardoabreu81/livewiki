@@ -1,33 +1,33 @@
 ---
-title: From CLI command to LLM provider — the request path livewiki walks
+title: Source Repository to LLM Pipeline
 owner: generated
 anchors:
   - packages/cli/src/cli.ts#createProgram
   - packages/cli/src/cli.ts#readVersion
   - packages/cli/src/cli.ts#resolveRepoRoot
-  - packages/cli/src/cli.ts#run
-  - packages/cli/src/commands/batch.ts#registerBatch
-  - packages/cli/src/commands/export.ts#registerExport
-  - packages/cli/src/commands/index-cmd.ts#registerIndex
-  - packages/cli/src/output.ts#emit
-  - packages/cli/src/output.ts#emitHuman
-  - packages/cli/src/output.ts#emitJson
-  - packages/core/src/batch-status.ts#buildStatusReport
-  - packages/core/src/batch-status.ts#listRuns
-  - packages/core/src/batch.ts#resumeBatch
-  - packages/core/src/db.ts#CURRENT_SCHEMA_VERSION
-  - packages/core/src/llm/base.ts#DEFAULT_LLM_TIMEOUT_MS
-  - packages/core/src/llm/index.ts#createLlmClient
-  - packages/mcp/src/search.ts#close
-  - packages/mcp/src/search.ts#collectMarkdownFiles
   - packages/mcp/src/server.ts#createServer
   - packages/mcp/src/server.ts#isWatchDenied
   - packages/mcp/src/server.ts#schedule
   - packages/mcp/src/server.ts#startWatcher
   - packages/mcp/src/server.ts#stop
   - packages/mcp/src/server.ts#syncBatch
+  - packages/cli/src/output.ts#emitHuman
+  - packages/cli/src/commands/baseline.ts#registerBaseline
   - packages/mcp/src/stdio.ts#startMcpStdioServer
-updated: 2026-08-12
+  - packages/core/src/agent-bootstrap.ts#nextAgentBootstrapTask
+  - packages/cli/src/output.ts#emitJson
+  - packages/cli/src/commands/batch.ts#registerBatch
+  - packages/mcp/src/search.ts#close
+  - packages/core/src/agent-bootstrap.ts#submitAgentBootstrapTask
+  - packages/cli/src/output.ts#emit
+  - packages/cli/src/commands/config.ts#registerConfig
+  - packages/mcp/src/search.ts#collectMarkdownFiles
+  - packages/core/src/baseline-operations.ts#acceptBaseline
+  - packages/core/src/db.ts#CURRENT_SCHEMA_VERSION
+  - packages/core/src/llm/index.ts#createLlmClient
+  - packages/core/src/llm/base.ts#DEFAULT_LLM_TIMEOUT_MS
+  - packages/cli/src/cli.ts#run
+updated: 2026-08-16
 modules:
   - cli-src
   - commands
@@ -36,139 +36,43 @@ modules:
   - llm
 ---
 
-# From CLI command to LLM provider — the request path livewiki walks
+# Turning a Repository into Documented Knowledge: The CLI-to-LLM Pipeline
 
-A user types `livewiki …` (or an MCP-aware agent speaks to `livewiki serve`) and the request ends up exercising livewiki's LLM provider adapter; this page explains that end-to-end path, from argv parsing through the shared timeout wrapper around every provider call.
+This page explains the end-to-end journey that starts when a user runs a `livewiki` command and culminates in curated, validated documentation in the wiki, with LLM calls made through a single uniform client interface.
 
 ## Purpose
-<!-- lw:anchors packages/cli/src/cli.ts#createProgram packages/cli/src/cli.ts#readVersion packages/cli/src/cli.ts#resolveRepoRoot packages/cli/src/cli.ts#run packages/mcp/src/server.ts#createServer packages/mcp/src/server.ts#isWatchDenied packages/mcp/src/server.ts#schedule packages/mcp/src/server.ts#startWatcher packages/mcp/src/server.ts#stop packages/mcp/src/server.ts#syncBatch -->
 
-Livewiki is a wiki generator for a target repository. A developer wants to point it at a codebase and have it index the sources, generate documentation pages, and (when asked) call a large-language-model provider to write the prose. There are two ways to drive that pipeline: the `livewiki` command-line program (registered through Commander, with verbs like `index`, `batch`, `status`, `export`, `serve`) and the Model Context Protocol server the same codebase ships for agents such as Claude Code. Both entry points must converge on the same engine in `@livewiki/core`, and that engine must, in turn, reach the LLM through the uniform seam in `packages/core/src/llm/`.
+<!-- lw:anchors packages/cli/src/cli.ts#createProgram packages/cli/src/cli.ts#readVersion packages/cli/src/cli.ts#resolveRepoRoot packages/mcp/src/server.ts#createServer packages/cli/src/cli.ts#run packages/mcp/src/server.ts#isWatchDenied packages/mcp/src/server.ts#schedule packages/mcp/src/server.ts#startWatcher packages/mcp/src/server.ts#stop packages/mcp/src/server.ts#syncBatch -->
 
-The CLI scaffold begins in `packages/cli/src/cli.ts`, where `createProgram` assembles the root Commander program and wires each subcommand from `packages/cli/src/commands/`. The signature is:
+A person's goal here is simple: they have a repository of source code and they want a living wiki that documents its modules, symbols, and cross-module flows, maintained as the code changes. The flow starts when the user invokes the `livewiki` CLI binary, and it produces either (a) a one-shot documentation update on disk, or (b) a long-running Model Context Protocol (MCP) server that serves documentation queries to an LLM client like Claude Code. No matter which path, the terminal destination is the LLM seam: a single `LlmClient` interface through which every external model call flows.
 
-```ts
-export function createProgram(): Command {
-```
+The CLI's front door is a Commander program assembled by `createProgram`. Because the package must work from any working directory, it computes its own version string via `readVersion` and resolves where the target repository lives via `resolveRepoRoot`. The async entry `run` parses the raw argument vector and dispatches to a registered subcommand. From there the flow branches: operational commands like `batch`, `baseline`, and `config` write documentation or configuration directly; the `serve` command instead hands control to the MCP server constructed by `createServer`.
 
-That is, it takes no arguments and returns a configured `Command` ready to accept argv. The version string the program prints comes from `readVersion`, defined alongside it:
-
-```ts
-function readVersion(): string {
-```
-
-So `readVersion` takes nothing and returns the version text that `--version` and the help banner show. Once a verb has been selected, `run` is what actually dispatches it; it owns the top-level process lifecycle:
-
-```ts
-export async function run(argv: readonly string[]): Promise<void> {
-```
-
-`run` is the async entry point: it takes the argv list and resolves to `void` once the chosen subcommand completes (or fails). Before any verb touches the filesystem, every command asks `resolveRepoRoot` to canonicalize the repo it should operate on (the explicit `--repo` option, or the current working directory as a default):
-
-```ts
-export function resolveRepoRoot(repoOpt: string | undefined): string {
-```
-
-`resolveRepoRoot` takes the user-supplied `--repo` value (or `undefined`) and returns the absolute path that the rest of the pipeline will treat as the repository root.
-
-The other entry surface is `@livewiki/mcp`. `packages/mcp/src/server.ts` exposes `createServer`, which assembles the MCP server object that tools like `livewiki_search`, `livewiki_read`, and `livewiki_write_doc` are attached to:
-
-```ts
-export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
-```
-
-So `createServer` takes an optional options bag and returns a promise that resolves to a fully wired MCP server. Once running, the server needs to notice when the repository changes so its search index and debt views stay current. That is the job of `startWatcher` (which actually attaches the filesystem watcher) and `schedule` (which debounces and re-runs the sync after a quiet period):
-
-```ts
-function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
-```
-
-```ts
-function schedule(): void {
-```
-
-`startWatcher` takes the repo root and the search index and returns a handle that can later be torn down; `schedule` takes nothing and returns `void` — it just notes that a sync is pending and resets the debounce timer. The deny-list for filenames the watcher must ignore (build artifacts, editor scratch files, generated caches) lives in `isWatchDenied`, which decides whether a single changed filename should trigger a re-sync:
-
-```ts
-function isWatchDenied(filename: string): boolean {
-```
-
-`isWatchDenied` takes a filename and returns `true` when that change should be ignored. The actual re-indexing pass is `syncBatch`, which the schedule timer eventually invokes:
-
-```ts
-async function syncBatch(): Promise<void> {
-```
-
-`syncBatch` takes nothing and returns a promise that resolves once the incremental re-index is finished. When the MCP server is shutting down (agent disconnects, `livewiki serve` receives SIGINT, etc.), `stop` is the orderly teardown that detaches the watcher and closes the search index:
-
-```ts
-async function stop(): Promise<void> {
-```
-
-`stop` takes nothing and returns a promise that resolves once cleanup has completed.
+The MCP server lives in the `@livewiki/mcp` package. It exposes the wiki to external agents over stdio and keeps its full-text search index fresh. `createServer` wires the tool surface; `startWatcher` watches the repository for changes; `isWatchDenied` filters out files that should not trigger a rebuild; `schedule` coalesces bursts of file events; `syncBatch` applies pending index updates; and `stop` tears the watcher down cleanly when the server exits.
 
 ## Ordered flow
-<!-- lw:anchors packages/cli/src/output.ts#emitHuman packages/cli/src/commands/batch.ts#registerBatch packages/mcp/src/stdio.ts#startMcpStdioServer packages/core/src/batch-status.ts#buildStatusReport packages/cli/src/output.ts#emitJson packages/cli/src/commands/export.ts#registerExport packages/mcp/src/search.ts#close packages/core/src/batch-status.ts#listRuns packages/cli/src/output.ts#emit packages/cli/src/commands/index-cmd.ts#registerIndex packages/mcp/src/search.ts#collectMarkdownFiles packages/core/src/batch.ts#resumeBatch -->
 
-1. The user invokes `livewiki <verb> --repo <path> [--json] …`. The Node entry script in `packages/cli/src/index.ts` hands the argv to `run` (in `packages/cli/src/cli.ts`), which calls `createProgram` to obtain the configured Commander `Command`. `createProgram` calls `readVersion` to stamp the help banner, then registers every subcommand by invoking the matching `register*` function from `packages/cli/src/commands/`.
-2. `registerIndex` (in `packages/cli/src/commands/index-cmd.ts`) attaches the `livewiki index` verb. It uses `resolveRepoRoot` to canonicalize the repo, then delegates to `@livewiki/core/indexer`'s `run`, which walks the repo, parses files, and writes the SQLite index. Its human formatter ends up reaching `emitHuman` in `packages/cli/src/output.ts` to print a readable summary:
+<!-- lw:anchors packages/cli/src/commands/baseline.ts#registerBaseline packages/cli/src/commands/batch.ts#registerBatch packages/cli/src/commands/config.ts#registerConfig packages/cli/src/output.ts#emit packages/cli/src/output.ts#emitHuman packages/cli/src/output.ts#emitJson packages/mcp/src/stdio.ts#startMcpStdioServer packages/mcp/src/search.ts#close packages/mcp/src/search.ts#collectMarkdownFiles packages/core/src/agent-bootstrap.ts#nextAgentBootstrapTask packages/core/src/agent-bootstrap.ts#submitAgentBootstrapTask packages/core/src/baseline-operations.ts#acceptBaseline -->
 
-   ```ts
-   export function emitHuman(text: string): void {
-   ```
+1. The user runs `livewiki <subcommand>` from the terminal. `createProgram` builds a Commander `Command` object and registers every verb — `init`, `index`, `batch`, `baseline`, `config`, `serve`, `status`, `verify`, and others — each through a dedicated register function such as `registerBaseline`, `registerBatch`, or `registerConfig`.
 
-   `emitHuman` takes a multi-line text block and writes it to stdout.
-3. `registerBatch` (in `packages/cli/src/commands/batch.ts`) attaches the `livewiki batch` verb — the resumable pipeline that walks the repo, builds module pages, and, when configured, calls the LLM to author prose. It also exposes `livewiki batch status`, which delegates to `buildStatusReport` in `packages/core/src/batch-status.ts` to aggregate checkpoint JSON into a report:
+2. `run(argv)` receives the raw argument vector. It resolves the repository root via `resolveRepoRoot`, which either uses the `--repo` flag or falls back to the current working directory, and then invokes whichever subcommand the user named.
 
-   ```ts
-   export async function buildStatusReport(
-   ```
+3. For operational commands, the subcommand delegates to the corresponding module in `@livewiki/core`. For instance, the batch command walks the repository, indexes symbols into SQLite, partitions the code into modules, and — where the plan requires an LLM — calls `createLlmClient` to obtain a provider adapter.
 
-   `buildStatusReport` takes the inputs needed to read a run's checkpoints and returns an aggregated status payload that the CLI can render. When the user asks for `livewiki batch list`, the same module's `listRuns` enumerates every run recorded in the database:
+4. Every output the CLI produces — whether a human-readable progress report, a JSON status object, or a file write — passes through the `emit` family. `emitHuman(text)` formats plain multiline text for terminal users, while `emitJson(data)` serializes a single JSON line with a trailing newline so downstream tooling can `JSON.parse` line-by-line. Both converge on `emit`, the single output gate.
 
-   ```ts
-   export async function listRuns(repoRoot: string): Promise<Array<{
-   ```
+5. When the user runs `livewiki serve` (or launches the standalone `livewiki-mcp` binary), both go through `startMcpStdioServer`. That entry constructs the MCP server and binds it to standard input/output. The server then serves tools such as `livewiki_quickstart`, `livewiki_read`, and `livewiki_search` to the connected agent.
 
-   `listRuns` takes the repo root and returns the array of known runs. The batch verb can also `resume` an interrupted run; that path goes through `resumeBatch` in `packages/core/src/batch.ts`:
+6. The search tool reads from a dedicated SQLite database at `.livewiki/search.db`. On startup (or when the index is stale), the server calls `collectMarkdownFiles(dir)` to walk the wiki directory and gather every `.md` path that should be searchable, then populates the FTS5 tables.
 
-   ```ts
-   export async function resumeBatch(opts: BatchOptions): Promise<BatchRunResult> {
-   ```
+7. Behind the search index sits a file watcher. `startWatcher` registers filesystem listeners; `isWatchDenied` rejects files that live outside `livewiki/` or `.livewiki/` or that otherwise should not trigger a reindex; `schedule` debounces rapid successive events into a single pending work item; and `syncBatch` drains that queue by reindexing the changed files.
 
-   `resumeBatch` takes the resume options (run id, repo root, etc.) and returns the final `BatchRunResult` once the pipeline has caught up to the last checkpoint.
-4. `registerExport` (in `packages/cli/src/commands/export.ts`) attaches the `livewiki export` verb, which turns the curated `livewiki/` wiki into deliverable artifacts under `.livewiki/export/<target>/`. The verb shares the same output channel as the rest of the CLI: every command funnels its result through `emit` in `packages/cli/src/output.ts`, which routes to either `emitHuman` or `emitJson` based on the `--json` flag:
+8. For documentation tasks that involve external agents writing prose, the MCP server exposes a bootstrap queue. `nextAgentBootstrapTask(repoRoot)` returns the next deterministic task in the queue — ordering and metadata live in the server, not in the agent. The agent writes Markdown and calls back through `submitAgentBootstrapTask`, which validates the submission, records checkpoints, and commits the page transactionally.
 
-   ```ts
-   export function emit(
-   ```
+9. When an agent (or the CLI's `baseline` command) declares a page complete and acceptable, `acceptBaseline` advances the baseline contract. A page that is accepted becomes the authoritative documented state for its symbols.
 
-   ```ts
-   export function emitJson(data: unknown): void {
-   ```
-
-   `emit` takes the structured command result plus a flag set and chooses the writer; `emitJson` takes any JSON-serializable value and writes it as a single newline-terminated line (so downstream tools can parse it line-by-line). When the export command has nothing to do because the wiki is empty, the human branch returns gracefully through `emitHuman` rather than emitting a stack trace.
-5. When the user types `livewiki serve` (or invokes the `livewiki-mcp` bin), the `serve` command in `packages/cli/src/commands/serve.ts` forwards to `startMcpStdioServer` in `packages/mcp/src/stdio.ts`:
-
-   ```ts
-   export async function startMcpStdioServer(opts: {
-   ```
-
-   `startMcpStdioServer` takes the stdio-server options (repo root, transport, signal handling) and returns once the server has stopped. Inside, it calls `createServer` from `packages/mcp/src/server.ts` and then attaches the SDK's `StdioServerTransport`. The freshly created server holds a `SearchIndex` over `.livewiki/search.db`; that index is fed by `collectMarkdownFiles` in `packages/mcp/src/search.ts`:
-
-   ```ts
-   async function collectMarkdownFiles(dir: string): Promise<string[]> {
-   ```
-
-   `collectMarkdownFiles` takes a directory and returns the markdown file paths inside it that should be indexed. When the MCP server shuts down — typically when the connected agent process exits — the index handle is released by `close` in the same module:
-
-   ```ts
-   export function close(idx: SearchIndex): void {
-   ```
-
-   `close` takes a search index and tears it down.
-6. Whether the request arrived through `livewiki batch` (CLI) or `livewiki_write_doc` (MCP), the engine in `@livewiki/core` ends up at the LLM seam: every provider call goes through `createLlmClient` in `packages/core/src/llm/index.ts`. That factory validates the configured provider, reads API credentials from the environment only, and returns a concrete `LlmClient` (Anthropic, an OpenAI-compatible HTTP endpoint, etc.). The shared fetch/retry/timeout wrapper that every adapter inherits from lives in `packages/core/src/llm/base.ts`, parameterized by `DEFAULT_LLM_TIMEOUT_MS`.
-7. Output from any verb — JSON or human — is shaped by `output.ts` so callers see consistent formatting whether they piped the result into `jq` or read it in a terminal.
+10. On graceful shutdown (the CLI exits or the MCP client disconnects), the server calls `stop`, which stops the watcher and closes the search index via `close`, then `collectMarkdownFiles`'s work product is persisted to disk for the next session.
 
 ## Diagram
 
@@ -178,54 +82,38 @@ async function stop(): Promise<void> {
 
 ## Invariants
 
-- Every verb the CLI exposes is registered through a `register*` function in `packages/cli/src/commands/`; removing one without updating the smoke test in `packages/cli/src/cli.test.ts` fails CI. The CLI therefore has a single, exhaustive wiring table between user input and engine call.
-- Every command funnels its structured result through `emit` (in `packages/cli/src/output.ts`) so `--json` and human output never diverge on the data they describe — only on the rendering.
-- `resolveRepoRoot` is the boundary at which relative paths become absolute; downstream code in `@livewiki/core` is allowed to assume an absolute repo root.
-- The MCP server and the CLI share exactly one engine entry: the `livewiki serve` command is a thin wrapper around `startMcpStdioServer`, which is the same entry the `livewiki-mcp` bin uses. Any new MCP tool therefore reaches the same core code path as the equivalent CLI verb.
-- The search index that backs `livewiki_search` lives in its own SQLite file (`.livewiki/search.db`), separate from the code index. The watcher must release that index through `close` on shutdown; leaked handles will keep the database locked.
-- Every LLM adapter constructed by `createLlmClient` inherits the same fetch/retry/timeout wrapper, so request behavior — including the per-request upper bound — is uniform across providers.
-- The CLI never embeds provider API keys; it reads them from the environment at the moment `createLlmClient` resolves a provider. The `key-leak` test in `packages/core/src/key-leak.test.ts` is the regression net that enforces this.
+Each stage of the flow maintains a specific contract. At the CLI stage, the Commander program must register exactly the documented set of subcommands — no command may be silently dropped. `resolveRepoRoot` must always return an absolute path that points inside the user's intended repository; a missing `--repo` flag must not cause the tool to traverse into an unrelated directory.
+
+At the output stage, every CLI command that writes results must route through the `emit` family. JSON output is always exactly one line with a trailing newline; human output is plain multiline text. No output may bypass this gate, because downstream tooling and tests rely on both shapes.
+
+At the MCP stage, the server's tool surface must remain exactly the documented set — six tools in the core contract, later extended — and every tool must respond over stdio without the server dying. The search index and the file watcher must stay consistent: any file that `collectMarkdownFiles` would gather must be present in the index, and any change that passes `isWatchDenied` must eventually reach `syncBatch`.
+
+At the bootstrap stage, the server owns all ordering and validation. The agent supplies only Markdown; it never decides task ordering or whether an artifact is acceptable. `acceptBaseline` is the only path by which a page becomes authoritative.
 
 ## Failure and recovery
+
 <!-- lw:anchors packages/core/src/db.ts#CURRENT_SCHEMA_VERSION packages/core/src/llm/index.ts#createLlmClient packages/core/src/llm/base.ts#DEFAULT_LLM_TIMEOUT_MS -->
 
-The flow has three deliberate recovery points, all visible in the cited source.
+The flow has an explicit schema-version guard at its persistence layer. The SQLite index is versioned by the constant `CURRENT_SCHEMA_VERSION`, currently `9`. When the CLI or MCP server opens an existing database whose recorded schema version differs from `CURRENT_SCHEMA_VERSION`, the code runs a migration path (`migrateV8ToV9` and similar) rather than blindly reading a mismatched schema. If a migration is not available for the gap, the database is treated as foreign and the flow refuses to proceed rather than risk corrupting the index.
 
-When the engine opens the SQLite index, it stamps the schema with `CURRENT_SCHEMA_VERSION` declared in `packages/core/src/db.ts`:
-
-```ts
-export const CURRENT_SCHEMA_VERSION = 8;
-```
-
-That constant is the only place the schema number lives; if a checkpoint file or pre-existing `.livewiki/index.db` was written by an older livewiki, the open path fails closed rather than silently re-running migrations against an unexpected shape. The supplied excerpt does not show the specific branch that handles a version mismatch, so beyond the constant's existence and its role as the schema source-of-truth, the exact recovery branch is not documented here.
-
-The LLM seam handles provider failures in one place: every adapter is wrapped by the shared helper in `packages/core/src/llm/base.ts`, which is parameterized by `DEFAULT_LLM_TIMEOUT_MS`:
-
-```ts
-export const DEFAULT_LLM_TIMEOUT_MS = 300_000;
-```
-
-That constant is the upper bound (5 minutes) applied to every provider request; it is the per-call ceiling, not a window for retry aggregation. The wrapper applies retry on top of the same timeout — see `packages/core/src/llm/base.ts` for the exact retry policy. Because the wrapper is shared, any provider-specific failure mode (network error, HTTP 429, HTTP 5xx) is funnelled through the same retry logic before the call surfaces to the caller.
-
-The provider itself is selected by `createLlmClient` in `packages/core/src/llm/index.ts`:
+On the LLM side, `createLlmClient` is the fail-closed gate to external providers.
 
 ```ts
 export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient {
 ```
 
-`createLlmClient` takes the repo root and the parsed `LivewikiConfig` and returns the configured `LlmClient` (or throws if the configured provider is unknown or the required credentials are missing). The factory does not swallow errors: a missing API key, an unknown preset, or a malformed base URL surfaces to the calling verb, which `emit`s a structured failure through the CLI output layer. The supplied excerpt does not show the specific throw branches inside `createLlmClient`, so the prose above is limited to the visible surface: factory takes config, returns a client or fails the call.
+This function takes the resolved repository root and the loaded `.livewiki/config.json`, and returns an `LlmClient` instance. It validates the provider configuration against the built-in preset table; if the provider is unknown or the credentials are missing, it throws rather than falling back to a silently different model. The visible evidence here is the validation gate — there is no automatic fallback to a default provider when configuration is invalid.
 
-The batch pipeline is itself resumable: when an `livewiki batch` run is interrupted, the same checkpoint table that `buildStatusReport` reads lets the next invocation start from the last completed task rather than redoing paid LLM work. The CLI exposes that resume as a separate verb option that funnels into `resumeBatch`.
-
-Beyond these three points, the supplied source does not show additional recovery branches specific to this flow, so the prose above is scoped to the visible evidence.
+Every actual network call to the chosen provider runs through the shared wrapper in `base.ts`, which applies a fixed timeout via `DEFAULT_LLM_TIMEOUT_MS` (currently `300_000` milliseconds, i.e., five minutes). The wrapper performs the fetch, applies retry logic on transient failures, and enforces that timeout. A call that exceeds the timeout is aborted and reported as a failure to the caller; the batch orchestrator then decides whether the task is retryable within its bounded attempt count or must be marked degraded. The key point is that these are the normal, visible recovery paths in the source: schema migration for the database, and validated configuration plus timeout/retry handling for LLM calls. No mechanism beyond those is described in the examined source.
 
 ## Related pages
-[cli-src](../cli-src/index.md)
-[commands](../commands/index.md)
-[mcp-src](../mcp-src/index.md)
-[core-src](../core-src/index.md)
-[llm](../llm/index.md)
-[How it works](index.md)
+
+- [cli-src](../cli-src/index.md)
+- [commands](../commands/index.md)
+- [mcp-src](../mcp-src/index.md)
+- [core-src](../core-src/index.md)
+- [llm](../llm/index.md)
+- [How it works](index.md)
 
 <!-- livewiki:topics:start -->
 ## Concept topics

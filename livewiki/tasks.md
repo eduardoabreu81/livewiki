@@ -13,9 +13,9 @@ Choose an end-to-end behavior or a product area. Tests, fixtures, tooling, and d
 
 ## End-to-end behavior
 
-### [From CLI command to LLM provider — the request path livewiki walks](flows/cli-src-to-llm.md)
+### [Source Repository to LLM Pipeline](flows/cli-src-to-llm.md)
 
-### [MCP server source entry to LLM client sink](flows/mcp-src-to-llm.md)
+### [Serving livewiki documentation to an LLM agent over MCP](flows/mcp-src-to-llm.md)
 
 ## Implementation reference
 
