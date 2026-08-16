@@ -405,6 +405,12 @@ interface OrchestrateOpts extends BatchOptions {
 
 async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
   const absRoot = nodePath.resolve(opts.repoRoot);
+  // Wall time of THIS invocation (run/resume/--only). The batch_runs row keeps
+  // its original `started_at` for the status history; the activity ledger's
+  // `durationMs` must reflect the current invocation, not the run's age — a
+  // `--only` debt-payment round days after the original run is minutes, not
+  // days.
+  const invocationStartedAt = Date.now();
   await safeIo.mkdir(absRoot, ".livewiki");
   const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
   const db = openIndex(dbPath);
@@ -1962,6 +1968,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         tasksDone: cb.done,
         tasksFailed: cb.fails,
         degradedPages,
+        invocationStartedAt,
       });
       await drainPendingMetrics();
       return withDegraded(buildResult(runId, "aborted", stageUsageTotals, moduleUsage, failures, breakerTriggered, cb.done, cb.fails));
@@ -2715,6 +2722,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksDone: cb.done,
           tasksFailed: cb.fails,
           degradedPages,
+          invocationStartedAt,
         });
         await drainPendingMetrics();
         const abortedByBreaker = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, true, cb.done, cb.fails));
@@ -2740,6 +2748,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksDone: cb.done,
           tasksFailed: cb.fails,
           degradedPages,
+          invocationStartedAt,
         });
         await drainPendingMetrics();
         const abortedByRollback = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, false, cb.done, cb.fails));
@@ -2838,6 +2847,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksDone: cb.done,
           tasksFailed: cb.fails,
           degradedPages,
+          invocationStartedAt,
         });
         await drainPendingMetrics();
         const aborted = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, combinedCircuitBreaker, cb.done, cb.fails));
@@ -2899,6 +2909,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
           tasksDone: cb.done,
           tasksFailed: cb.fails,
           degradedPages,
+          invocationStartedAt,
         });
         await drainPendingMetrics();
         const aborted = withDegraded(buildResult(runId, "aborted", aggregateTotals(stageUsageTotals, stage5UsageTotals), moduleUsage, failures, false, cb.done, cb.fails));
@@ -2981,6 +2992,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       tasksDone: cb.done,
       tasksFailed: cb.fails,
       degradedPages,
+      invocationStartedAt,
     });
     await drainPendingMetrics();
 
@@ -6296,6 +6308,8 @@ function finalizeRun(
     modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }>;
     tasksDone: number;
     tasksFailed: number;
+    /** Wall-clock start of the current invocation (for the activity ledger). */
+    invocationStartedAt: number;
     /** Recovery tier (Component 2): persisted only when non-empty. */
     degradedPages?: string[];
   },
@@ -6324,9 +6338,6 @@ function finalizeRun(
   // totals into the append-only activity ledger. Fire-and-forget — the
   // accounting write must NEVER affect the run's outcome or exit code.
   try {
-    const startedRow = db
-      .prepare("SELECT started_at FROM batch_runs WHERE id = ?")
-      .get(runId) as { started_at: number } | undefined;
     const write = recordUpdateMetric(absRoot, {
       kind: "batch_run",
       timestamp: finishedAt,
@@ -6335,7 +6346,7 @@ function finalizeRun(
       inputTokens: opts.totals.inputTokens,
       outputTokens: opts.totals.outputTokens,
       costUsd: opts.totals.costUsd,
-      durationMs: startedRow ? Math.max(0, finishedAt - startedRow.started_at) : 0,
+      durationMs: Math.max(0, finishedAt - opts.invocationStartedAt),
       tasksDone: opts.tasksDone,
       tasksFailed: opts.tasksFailed,
     });

@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
-import { runBatch } from "./batch.js";
+import { runBatch, runOnly } from "./batch.js";
 import { snapshotMetrics } from "./update-metrics.js";
 import type { LlmClient } from "./llm/index.js";
 import type { GenerateRequest, GenerateResult } from "./llm/types.js";
@@ -414,5 +414,45 @@ describe("batchConcurrency — stage-4 worker pool (roadmap item 7)", () => {
     expect(entry.tasksDone).toBe(result.tasksDone);
     expect(entry.tasksFailed).toBe(0);
     expect(entry.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("records the --only invocation wall time, not the run's age, in the ledger", async () => {
+    const repo = await makeRepo(MODULE_IDS.slice(0, 3));
+    const llm = new ValidMockLlm(0);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const first = await runBatch({
+        repoRoot: repo,
+        llmClient: llm,
+        noRefine: true,
+        skipManifestWrite: true,
+        concurrency: 1,
+      });
+      expect(first.status).toBe("completed");
+
+      // A debt-payment round days later reuses the same run. Its ledger entry
+      // must record THIS invocation's wall time, not the run's age — the bug
+      // under test reported the original run's ~days of elapsed time.
+      vi.setSystemTime(new Date("2026-01-08T00:00:00Z"));
+      const only = await runOnly({
+        repoRoot: repo,
+        llmClient: llm,
+        noRefine: true,
+        skipManifestWrite: true,
+        onlyTarget: "m1/index-ts",
+      });
+      expect(only.status).toBe("completed");
+
+      const snap = await snapshotMetrics(repo);
+      const batchRuns = snap.recent.filter((e) => e.kind === "batch_run");
+      expect(batchRuns.length).toBeGreaterThanOrEqual(2);
+      const last = batchRuns[batchRuns.length - 1];
+      if (!last || last.kind !== "batch_run") throw new Error("expected a batch_run entry");
+      expect(last.durationMs).toBeLessThan(60_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
