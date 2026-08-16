@@ -13,17 +13,21 @@ Choose an end-to-end behavior or a product area. Tests, fixtures, tooling, and d
 
 ## End-to-end behavior
 
-### [Source Repository to LLM Pipeline](flows/cli-src-to-llm.md)
+### [From the livewiki CLI to the LLM pipeline](flows/cli-src-to-llm.md)
 
-### [Serving livewiki documentation to an LLM agent over MCP](flows/mcp-src-to-llm.md)
+### [MCP source search to LLM agent documentation](flows/mcp-src-to-llm.md)
 
 ## Implementation reference
+
+### [packages/core/src/llm](llm/index.md)
 
 ### [packages/cli/src/commands](commands/index.md)
 
 ### [packages/mcp/src](mcp-src/index.md)
 
-### [packages/core/src/llm](llm/index.md)
+### Bootstrap wiki folder
+
+Page not written yet — run `livewiki batch` to generate it.
 
 ### [packages/cli/templates/claude-code](claude-code/index.md)
 

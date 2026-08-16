@@ -27,9 +27,9 @@ The repository README also states: livewiki keeps technical documentation next t
 
 ## What you'll find in this wiki
 
+- **[packages/core/src/llm](llm/index.md)** — The `packages/core/src/llm/` directory is the engine's seam to external large-language-model providers: it defines the `LlmClient` interface and shared `GenerateResult` types, supplies a single fetch/retry/timeout wrapper used by every…
 - **[packages/cli/src/commands](commands/index.md)** — This directory holds every `livewiki` subcommand registered on the root Commander program in the `@livewiki/cli` package.
 - **[packages/mcp/src](mcp-src/index.md)** — This directory is the source root of the `@livewiki/mcp` package, the Model Context Protocol (MCP) server that exposes livewiki's documentation tooling to LLM clients such as Claude Code over stdio.
-- **[packages/core/src/llm](llm/index.md)** — The `packages/core/src/llm/` directory is the engine's seam to external large-language-model providers: it defines the `LlmClient` interface and shared `GenerateResult` types, supplies a single fetch/retry/timeout wrapper used by every…
 - **[packages/cli/templates/claude-code](claude-code/index.md)** — This directory holds a Claude Code template shipped by the CLI: a single `settings.local.json` scaffold that consumers receive when scaffolding a Claude Code–style project from the CLI.
 - **[packages/cli](cli/index.md)** — The `packages/cli` directory hosts the command-line interface package for the project, bundling its manifest (`package.json`), documentation (`README.md`), TypeScript configuration (`tsconfig.json`), and Vitest test runner setup…
 - **[packages/core](core/index.md)** — The `packages/core` directory is the package that holds the shared engine of the livewiki project: the TypeScript sources, configuration, and test harness that other packages depend on.
@@ -45,8 +45,8 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 - **Change product behavior:** start with [Tasks](tasks.md).
 - **Follow end-to-end behavior:**
-  - [Source Repository to LLM Pipeline](flows/cli-src-to-llm.md)
-  - [Serving livewiki documentation to an LLM agent over MCP](flows/mcp-src-to-llm.md)
+  - [From the livewiki CLI to the LLM pipeline](flows/cli-src-to-llm.md)
+  - [MCP source search to LLM agent documentation](flows/mcp-src-to-llm.md)
   - Browse the complete [How it works](flows/index.md) index.
 - **Inspect implementation relationships:** open the [Architecture overview](architecture/overview.md).
 - **Maintain tests, fixtures, tooling, benchmarks, or repository documentation:** open the [Auxiliary areas](auxiliary/index.md) inventory.
@@ -71,6 +71,6 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 ## Repository facts
 
-- **237 files** documented
-- **30 folders** covered
-- **1436 code symbols** indexed
+- **240 files** documented
+- **31 folders** covered
+- **1442 code symbols** indexed

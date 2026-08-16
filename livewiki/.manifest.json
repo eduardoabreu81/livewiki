@@ -1,13 +1,13 @@
 {
   "version": 2,
   "lastDocumentedCommit": null,
-  "snapshotHash": "5851fc8c9b9aca4bdaffa519210e8a5ac2a2d46793f8d634341a61ed0e6577d9",
-  "updatedAt": "2026-08-16T02:52:35.754Z",
+  "snapshotHash": "85f601e5585b422d0d649d358052e6f90531faf6ffc8935eff706ad503932bf5",
+  "updatedAt": "2026-08-16T14:23:45.562Z",
   "pendingBatch": null,
   "artifactReceipts": [
     {
       "taskId": "flow:cli-src-to-llm",
-      "evidenceHash": "5beed0a383245fd095d5a930836d9687f411692056297f440ae2622474caf7c5",
+      "evidenceHash": "1658acae7a8b295f3b13f205da4d51895123edda84dd90b93b03da9f9ba02226",
       "contract": "flow-v1",
       "artifacts": [
         {
@@ -16,13 +16,13 @@
         },
         {
           "path": "livewiki/flows/cli-src-to-llm.md",
-          "hash": "577cf95530bba4c143ea964992589cd67b570765a9c1d72b24fbcc099c29b493"
+          "hash": "761597491cd291beb7770c7b77d09420e0125f608064532cfddf21960b4266f1"
         }
       ]
     },
     {
       "taskId": "flow:mcp-src-to-llm",
-      "evidenceHash": "f0789f368bc989d6def9e766a26491d5404b5677331745442728e6720c4b8e34",
+      "evidenceHash": "3af6088798671f7858d468abb9308317b2d5ab21116be9c1fd1b9631414b7f3d",
       "contract": "flow-v1",
       "artifacts": [
         {
@@ -31,7 +31,7 @@
         },
         {
           "path": "livewiki/flows/mcp-src-to-llm.md",
-          "hash": "4749bf9bcab6b562e1bf73d4e37fe3980bb642246143ee52bfe25a17081749cf"
+          "hash": "bba7bc01cebd9156ea8ee21b7e7e4d3d3775d2804ccbd52c16ecc5b37d24fd6f"
         }
       ]
     },

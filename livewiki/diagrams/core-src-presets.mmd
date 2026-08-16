@@ -1,10 +1,14 @@
 graph LR
     A[presets.ts] --> B[PRESET_TABLE]
     A --> C[AVAILABLE_PRESETS]
-    A --> D[UnknownPresetError]
-    A --> E[resolvePreset]
-    A --> F[resolveProviderConfig]
-    A --> G[isKnownPreset]
-    E --> B
-    F --> E
-    G --> B
+    A --> D[resolvePreset]
+    A --> E[resolveProviderConfig]
+    A --> F[isKnownPreset]
+    A --> G[UnknownPresetError]
+    D --> B
+    D --> C
+    D --> G
+    E --> D
+    E --> C
+    E --> G
+    F --> B

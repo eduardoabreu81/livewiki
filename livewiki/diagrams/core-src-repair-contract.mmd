@@ -1,23 +1,10 @@
-flowchart TD
-  prompts["prompts.ts<br/>ArtifactValidationCode union<br/>ArtifactValidationError shape"]
-  repairContract["repair-contract.ts<br/>PAGE_KINDS · ALL_ARTIFACT_VALIDATION_CODES"]
-  supported["SUPPORTED_FIXES<br/>module / flow / topic"]
-  unclassified["UNCLASSIFIED<br/>module / flow / topic"]
-  renderDir["renderActionDirective"]
-  collectU["collectUnclassified"]
-  reportBlock["renderReportOnlyBlock"]
-  unrepSet["isUnrepairableErrorSet"]
-  unrepMsg["formatUnrepairableMessage"]
-  artifactRepair["artifact-repair.ts<br/>MECHANICAL_STAGE4_CODES<br/>MECHANICAL_UPPER_BOUND_CODES"]
-  exhaust["repair-contract.test.ts<br/>exhaustiveness"]
-
-  prompts --> repairContract
-  artifactRepair --> repairContract
-  repairContract --> supported
-  repairContract --> unclassified
-  supported --> renderDir
-  unclassified --> collectU
-  collectU --> reportBlock
-  collectU --> unrepSet
-  collectU --> unrepMsg
-  repairContract --> exhaust
+graph TD
+    A[repair-contract.ts] --> B[ALL_ARTIFACT_VALIDATION_CODES]
+    A --> C[PAGE_KINDS]
+    A --> D[SUPPORTED_FIXES]
+    A --> E[UNCLASSIFIED]
+    D --> F[renderActionDirective]
+    E --> G[collectUnclassified]
+    G --> H[isUnrepairableErrorSet]
+    G --> I[renderReportOnlyBlock]
+    G --> J[formatUnrepairableMessage]

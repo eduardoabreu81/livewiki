@@ -33,10 +33,10 @@ This directory holds automated tests with no co-located product code.
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [Source Repository to LLM Pipeline](../flows/cli-src-to-llm.md)
+- Flow: [From the livewiki CLI to the LLM pipeline](../flows/cli-src-to-llm.md)
 - Topic: [Testing](../topics/testing-f41eeea7.md)
 - [packages/cli/src/commands](../commands/index.md) — used both ways
 - [packages/core/src](../core-src/index.md) — used here
 
-> Coverage note: this folder's source (18 files, ~242k chars) is too large to read in full; this page documents its main entry points.
+> Coverage note: this folder's source (18 files, ~246k chars) is too large to read in full; this page documents its main entry points.
 <!-- livewiki:navigate:end -->

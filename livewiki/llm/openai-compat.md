@@ -2,29 +2,29 @@
 title: OpenAI-compatible LLM adapter
 owner: generated
 anchors:
-  - packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter
-  - packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter.constructor
-  - packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter.generate
-  - packages/core/src/llm/openai-compat.ts#normalizeFinishReason
-  - packages/core/src/llm/openai-compat.ts#resolveThinkingMode
+- packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter
+- packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter.constructor
+- packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter.generate
+- packages/core/src/llm/openai-compat.ts#normalizeFinishReason
+- packages/core/src/llm/openai-compat.ts#resolveThinkingMode
 ---
 
 # OpenAI-compatible LLM adapter
 
-This page documents the module that lets the rest of the system talk to any HTTP service that speaks the OpenAI Chat Completions wire format (OpenAI itself, OpenRouter, LiteLLM, MiniMax chat, Ollama cloud, and similar).
+This page documents the adapter that lets livewiki talk to any OpenAI Chat Completions–compatible API.
 
 ## When to use this page
 
-- **Wire a new OpenAI-shaped provider** into the LLM client interface by configuring `OpenAiCompatAdapter` with its `baseUrl` and `apiKey`.
-- **Tune per-request generation behavior** such as output-token caps, temperature, or thinking-mode override via the `GenerateRequest` passed to `generate`.
-- **Diagnose a misbehaving provider response** by checking how raw `finish_reason` strings are normalized into the project's `StopReason` vocabulary.
-- **Decide whether thinking is sent at all** for a given request, especially for MiniMax-M3 chat where the API silently enables thinking when omitted.
+- Understand how livewiki sends prompts to OpenAI, OpenRouter, LiteLLM, MiniMax, or Ollama cloud.
+- Learn how the adapter decides between `max_tokens` and `max_completion_tokens` for a request.
+- See how thinking mode (disabled, adaptive, or omitted) is resolved per request and per model.
+- Trace how raw `finish_reason` values from these APIs become livewiki's normalized stop reasons.
 
 ## How it fits
 
-`packages/core/src/llm/openai-compat.ts` lives inside the `packages/core/src/llm/` directory alongside the `LlmClient` interface (`./index.js`), the shared request/result types (`./types.js`), and the shared HTTP plumbing in `./base.js` (retry, timeout, fetch injection). It exists because many model servers already emulate OpenAI's `/v1/chat/completions` endpoint, so a single adapter covers a long tail of providers instead of one bespoke class per vendor. The adapter implements `LlmClient`, which is the seam the rest of the system uses to obtain a chat completion — callers hand it a `GenerateRequest` and receive a `GenerateResult` without caring which provider answered.
+`OpenAiCompatAdapter` is one of the `LlmClient` implementations in `packages/core/src/llm/`. It translates livewiki's internal `GenerateRequest` into an HTTP POST to a provider's `/chat/completions` endpoint, then converts the provider's JSON response back into a `GenerateResult`. The adapter shares retry and timeout machinery with other LLM clients via `requestWithRetry` and `withTimeoutMs` from `./base.js`.
 
-Internally, `OpenAiCompatAdapter.generate` is the orchestration entry point: it builds the URL, assembles the JSON body, decides whether to send `max_tokens` or `max_completion_tokens`, consults `resolveThinkingMode` to decide whether to attach a `thinking` block, hands the request to `requestWithRetry`, and finally maps the response back into the project's shape (using `normalizeFinishReason` to translate the provider's free-form `finish_reason` string into a small `StopReason` enum). The two helper functions at the bottom of the file are intentionally pure so the request-building logic and the response-parsing logic can each be reasoned about on their own.
+The file also exports `resolveThinkingMode`, a helper that other parts of the codebase can reuse to decide the effective thinking behavior before calling the adapter.
 
 ## Diagram
 
@@ -32,73 +32,40 @@ Internally, `OpenAiCompatAdapter.generate` is the orchestration entry point: it 
 %% livewiki/diagrams/llm-openai-compat.mmd
 ```
 
-## Construction and configuration
+## Constructor and configuration
+
 <!-- lw:anchors packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter.constructor -->
 
-The adapter is intentionally a thin shell: it stores the caller-supplied configuration and forwards it to the shared HTTP plumbing on every request. There is no connection setup here — providers are contacted lazily on the first `generate` call, which means an instance can be constructed even when the network is unavailable.
+The constructor takes an options object and stores everything the adapter needs for later requests. It copies the API key, base URL, and model name into private fields, then computes a default thinking mode: if the caller did not provide `thinkingDefault`, it falls back to `"omit"`. It also records whether the adapter should prefer `max_completion_tokens` over the older `max_tokens` field.
 
-The constructor signature is:
+It then builds an internal `AdapterConfig` that carries the same API key, base URL, and model, plus optional `fetchImpl`, timeout, retry count, and retry delay. The timeout handling uses `withTimeoutMs` so that a timeout of `0` disables the timeout entirely instead of being treated as an instant failure.
 
-```ts
-constructor(opts: OpenAiCompatAdapterOpts) {
-```
+## Request flow
 
-It accepts `opts` — an `OpenAiCompatAdapterOpts` record carrying the API key, base URL, model name, optional fetch override, optional timeout, retry/retry-delay settings, a thinking-mode default, and a flag choosing between the legacy `max_tokens` and the newer `max_completion_tokens` field. It stores `apiKey`, `baseUrl`, and `model` directly, normalizes `thinkingDefault` to `"omit"` when unset, defaults `preferMaxCompletionTokens` to `false`, and assembles an `AdapterConfig` passed straight through to `requestWithRetry` later. The spread on `withTimeoutMs(opts.timeoutMs)` preserves a literal `0` (which means "disable timeout") and is not collapsed by a truthiness check; `maxRetries` and `retryDelayMs` are only included when explicitly provided.
-
-## Request assembly and execution
 <!-- lw:anchors packages/core/src/llm/openai-compat.ts#OpenAiCompatAdapter.generate -->
 
-`generate` is the only public method that crosses the network boundary. It owns the full "build request → send → translate response" pipeline and is the only place where provider-specific quirks get encoded.
+The `generate` method orchestrates the whole request lifecycle. It first normalizes the base URL by stripping any trailing slash, then appends `/chat/completions` if the base already ends with `/v1`, or `/v1/chat/completions` otherwise. This lets the same adapter work with providers that include the version prefix in their base URL and those that do not.
 
-The signature is:
+Next it builds the request body. The system and user messages come straight from the `GenerateRequest`, and the temperature is included only when the caller set it. The maximum output token count defaults to 4096, and the adapter picks `max_completion_tokens` or `max_tokens` based on whether the request (or the adapter's default) prefers the newer field.
 
-```ts
-async generate(req: GenerateRequest): Promise<GenerateResult> {
-```
+It then calls `resolveThinkingMode` to decide whether to send a `thinking` block in the body. If the resolved mode is `"disabled"`, it sends `{ type: "disabled" }`; if it is `"adaptive"`, it sends `{ type: "adaptive" }`. When the mode resolves to `"omit"`, no thinking field is sent at all.
 
-It takes a `GenerateRequest` (system prompt, user prompt, optional `maxTokens`, optional `temperature`, optional `thinking`, optional `preferMaxCompletionTokens`) and returns a `GenerateResult` containing the model's text, usage stats, normalized `stopReason`, and an optional `rawStopReason` echo.
+The request is dispatched through `requestWithRetry` with the provider name, the constructed URL, headers carrying the bearer token, and the stored `AdapterConfig`. After the response arrives, the method extracts the first choice's message content and the usage counters. It reports input tokens from `prompt_tokens`, output tokens from `completion_tokens`, the model name from the response, and reasoning tokens when the provider supplies them. Finally, it normalizes the raw `finish_reason` via `normalizeFinishReason` and preserves the raw value in `rawStopReason` when present.
 
-The flow has several deliberate steps:
+## Thinking mode resolution
 
-1. **URL composition.** It strips a trailing `/` from `baseUrl` and then appends `/chat/completions` — but only after deciding whether `/v1` is already present in the path, so both `https://api.openai.com/v1` and `https://litellm.example.com` style bases produce a correct endpoint.
-2. **Body skeleton.** It always includes `model` plus a two-message chat (`system` then `user`), and conditionally adds `temperature` only when the caller supplied one, avoiding the `undefined` JSON artifact that some providers dislike.
-3. **Token-cap field selection.** It picks `max_completion_tokens` when either the per-request or the adapter-level flag asks for it, otherwise the legacy `max_tokens`. The default output budget when the caller does not specify one is `4096`.
-4. **Thinking-mode resolution.** It delegates to `resolveThinkingMode` (see below) and, only if the resolved mode is `disabled` or `adaptive`, attaches the matching `thinking: { type: ... }` object to the body. The `"omit"` case deliberately produces no `thinking` key at all — this matters because some providers enable thinking by default when the field is absent.
-5. **Transport.** It calls `requestWithRetry(this.provider, url, requestInit, this.config)`, which handles timeouts (including `0` = disabled), retries, and any caller-provided `fetchImpl`. The bearer token and JSON content type are set here.
-6. **Response translation.** It parses the JSON as an `OpenAiCompatResponse`, defaults the text content to `""` when missing, fills in zeroed token counts if `usage` is absent, maps `finish_reason` through `normalizeFinishReason`, and echoes the raw `finish_reason` string back as `rawStopReason` only when it is non-null — so consumers that want the original provider wording can still inspect it without paying the cost on every request.
-
-The normal path described above is what callers see in steady state; the helper functions in the next sections govern the two decision points (thinking mode and stop-reason mapping) that the rest of the pipeline depends on.
-
-## Thinking-mode resolution
 <!-- lw:anchors packages/core/src/llm/openai-compat.ts#resolveThinkingMode -->
 
-This helper exists because the OpenAI Chat Completions wire format does not define a uniform "thinking" field, and at least one important provider (MiniMax-M3 chat) treats the absence of the field as an implicit "on". To keep caller code provider-agnostic, the adapter centralizes the policy here.
+The `resolveThinkingMode` function decides the effective thinking behavior for a request. It runs before the adapter builds the request body, and its result determines whether a `thinking` block is included.
 
-The signature is:
+The function first checks the request's own thinking field. If the caller explicitly set a mode other than `"omit"`, that mode wins immediately. If the caller explicitly set `"omit"`, the function returns `"omit"` — the thinking field is simply left out. Only when the request did not specify a mode does the function consult the adapter default and the model name.
 
-```ts
-export function resolveThinkingMode(
-  requestThinking: ThinkingMode | undefined,
-  adapterDefault: ThinkingMode | "n/a",
-  model: string,
-): ThinkingMode | "omit" {
-```
+For the fallback path, it converts `"n/a"` into `"omit"` and otherwise uses the adapter's configured default. If that default is `"disabled"` or `"adaptive"`, it is returned as-is. Otherwise, the function applies a heuristic for MiniMax-M3 chat models: when the model name matches `minimax-m3` (case-insensitive), it returns `"disabled"` to prevent the API from enabling thinking by default. Any other unrecognized model gets `"omit"`.
 
-It accepts the per-request thinking override (if any), the adapter-level default (where `"n/a"` is treated as "no policy"), and the model name; it returns the effective mode to encode in the request body, or the special `"omit"` sentinel meaning "do not emit a `thinking` key at all".
+## Stop reason normalization
 
-The decision order is: an explicit per-request mode (anything other than `"omit"`) wins; an explicit per-request `"omit"` is honored literally; otherwise the adapter default is consulted, with `"n/a"` collapsing to `"omit"`; if the resolved default is still neither `"disabled"` nor `"adaptive"`, the function falls back to a heuristic that returns `"disabled"` for any model whose name matches `minimax-m3` (case-insensitive, either as a substring or as the bare string) and `"omit"` for everything else. The visible source covers only these branches — it does not, for example, treat other model families specially.
-
-## Finish-reason normalization
 <!-- lw:anchors packages/core/src/llm/openai-compat.ts#normalizeFinishReason -->
 
-Different OpenAI-compatible providers use slightly different strings for `finish_reason`, and downstream code wants a small, stable vocabulary. This helper is the single mapping point.
+The `normalizeFinishReason` function maps a raw OpenAI-compatible `finish_reason` string into livewiki's internal `StopReason` type. Different providers use slightly different values, and this function keeps the rest of the codebase insulated from those differences.
 
-The signature is:
-
-```ts
-function normalizeFinishReason(finishReason: string | null | undefined): StopReason {
-```
-
-It takes the raw `finish_reason` value from the provider (which may be a string, `null`, or `undefined`) and returns one of the project's `StopReason` values.
-
-The visible mapping is narrow on purpose: `"length"` becomes `"length"` (the model hit a token cap), `"stop"` becomes `"complete"` (the model produced a natural end-of-turn), a missing value (`null` or `undefined`) becomes `"unknown"`, and every other string — including provider-specific tokens not enumerated here — becomes `"incomplete"`. The function is pure and has no fallback path beyond these branches, so an unrecognized string is treated as an incomplete stop rather than as an error.
+The mapping is exact: `"length"` becomes `"length"`, `"stop"` becomes `"complete"`, and a null or undefined value becomes `"unknown"`. Any other string — for example `"content_filter"` or `"tool_calls"` — is treated as `"incomplete"`, meaning the model stopped before finishing its answer.

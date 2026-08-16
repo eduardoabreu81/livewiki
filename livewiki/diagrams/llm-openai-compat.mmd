@@ -1,22 +1,8 @@
 flowchart LR
-  caller["Caller (LlmClient consumer)"]
-  adapter["OpenAiCompatAdapter\n(class)"]
-  ctor["constructor"]
-  generate["generate"]
-  resolveThinking["resolveThinkingMode\n(pure helper)"]
-  normalize["normalizeFinishReason\n(pure helper)"]
-  base["llm/base.ts\nrequestWithRetry + AdapterConfig"]
-  http["HTTP /v1/chat/completions"]
-  provider["OpenAI-compatible provider"]
-
-  caller --> generate
-  adapter --> ctor
-  adapter --> generate
-  generate --> resolveThinking
-  generate --> normalize
-  generate --> base
-  base --> http
-  http --> provider
-  provider --> http
-  http --> base
-  base --> generate
+    A[Caller code] --> B[OpenAiCompatAdapter.generate]
+    B --> C[resolveThinkingMode]
+    B --> D[requestWithRetry]
+    D --> E[HTTP /chat/completions endpoint]
+    E --> F[normalizeFinishReason]
+    F --> B
+    B --> G[GenerateResult]

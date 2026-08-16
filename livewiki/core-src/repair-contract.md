@@ -1,34 +1,31 @@
 ---
-title: Repair contract — dispositions, directives, and early-abort helpers
+title: Closed Repair Contract for Artifact Validation Codes
 owner: generated
 anchors:
-  - packages/core/src/repair-contract.ts#ALL_ARTIFACT_VALIDATION_CODES
-  - packages/core/src/repair-contract.ts#PAGE_KINDS
-  - packages/core/src/repair-contract.ts#SUPPORTED_FIXES
-  - packages/core/src/repair-contract.ts#UNCLASSIFIED
-  - packages/core/src/repair-contract.ts#collectUnclassified
-  - packages/core/src/repair-contract.ts#formatUnrepairableMessage
-  - packages/core/src/repair-contract.ts#isUnrepairableErrorSet
-  - packages/core/src/repair-contract.ts#renderActionDirective
-  - packages/core/src/repair-contract.ts#renderReportOnlyBlock
+- packages/core/src/repair-contract.ts#ALL_ARTIFACT_VALIDATION_CODES
+- packages/core/src/repair-contract.ts#PAGE_KINDS
+- packages/core/src/repair-contract.ts#SUPPORTED_FIXES
+- packages/core/src/repair-contract.ts#UNCLASSIFIED
+- packages/core/src/repair-contract.ts#collectUnclassified
+- packages/core/src/repair-contract.ts#formatUnrepairableMessage
+- packages/core/src/repair-contract.ts#isUnrepairableErrorSet
+- packages/core/src/repair-contract.ts#renderActionDirective
+- packages/core/src/repair-contract.ts#renderReportOnlyBlock
 ---
 
-# Repair contract — disposition map for every validation code
+# Closed Repair Contract for Artifact Validation Codes
 
-This page owns the single source of truth that tells the repair prompt builder, for a given `ArtifactValidationCode` on a given page kind, whether to emit a directive the model can act on or to leave the code report-only.
+This module is the single source of truth that maps every artifact validation code to a repair directive or a report-only classification.
 
 ## When to use this page
 
-- **Look up** which disposition a given validation code carries on module, flow, or topic pages.
-- **Distinguish** a supported repair from a report-only code when triaging an error set.
-- **Decide** whether the orchestrator should spend a repair call or fail-fast with `unrepairable`.
-- **Extend** the contract when a new `ArtifactValidationCode` is added to the validator union.
+- Understand how the system decides whether a validation failure can be repaired by the model or must be reported for human review.
+- Trace how a specific validation code translates into the exact ACTION text presented to the repair prompt.
+- Learn why certain codes (such as human-authored manual blocks) are never repaired automatically.
 
 ## How it fits
 
-`repair-contract.ts` lives in `packages/core/src/` next to `prompts.ts` (which defines the `ArtifactValidationCode` union and `ArtifactValidationError` shape) and `artifact-repair.ts` (which owns the mechanical repair code sets). The validators across the page kinds emit one or more `ArtifactValidationError` instances; the repair prompt builder calls into this file to decide for each error whether to render an ACTION line, drop to a bare error line, or list the code in a report-only block. The orchestrator separately calls `isUnrepairableErrorSet` and `formatUnrepairableMessage` to honor the early-abort rule that preserves repair budget for sets with no actionable code.
-
-The mechanical repair code sets (`MECHANICAL_STAGE4_CODES`, `MECHANICAL_UPPER_BOUND_CODES`) are re-exported here so the exhaustiveness test can assert them against the directive maps without taking a second import.
+This file lives in `packages/core/src/` and defines the contract between the validation layer and the repair orchestration. It imports the mechanical repair code sets from `artifact-repair.ts` to avoid drift, and it exports the directive maps and helper functions that the three repair-prompt builders (for module, flow, and topic pages) and the orchestrator consume. The file also exposes the runtime mirror of the `ArtifactValidationCode` union so the exhaustiveness test can verify that every code receives exactly one disposition.
 
 ## Diagram
 
@@ -36,21 +33,25 @@ The mechanical repair code sets (`MECHANICAL_STAGE4_CODES`, `MECHANICAL_UPPER_BO
 %% livewiki/diagrams/core-src-repair-contract.mmd
 ```
 
-## Page kinds and the runtime code mirror
+## Validation Code Enumeration
 
-<!-- lw:anchors packages/core/src/repair-contract.ts#PAGE_KINDS packages/core/src/repair-contract.ts#ALL_ARTIFACT_VALIDATION_CODES -->
+<!-- lw:anchors packages/core/src/repair-contract.ts#ALL_ARTIFACT_VALIDATION_CODES packages/core/src/repair-contract.ts#PAGE_KINDS -->
 
-The file declares `PageKind` as the union `"module" | "flow" | "topic"` and exposes the runtime tuple `PAGE_KINDS` (`export const PAGE_KINDS = ["module", "flow", "topic"] as const satisfies readonly PageKind[]`) so map keys, lookups, and exhaustiveness checks all share one ordered list. `ALL_ARTIFACT_VALIDATION_CODES` (`export const ALL_ARTIFACT_VALIDATION_CODES = [ ... ] as const satisfies readonly ArtifactValidationCode[]`) is the runtime mirror of the `ArtifactValidationCode` union. The `satisfies` clause plus the `AssertExact` helper below it force a missing or extra entry to fail at COMPILE time; the exhaustiveness test then walks the list at runtime.
+This section defines the complete set of validation codes and the page kinds for which those codes are evaluated.
 
-## Disposition maps: SUPPORTED_FIXES and UNCLASSIFIED
+`ALL_ARTIFACT_VALIDATION_CODES` is a runtime list of every `ArtifactValidationCode` value, including the five verify issue codes (`broken_anchor`, `broken_internal_link`, `invalid_mermaid_diagram`, `manual_block_altered`, and `missing_wiki_path`). The list uses a `satisfies` clause to ensure every entry is a valid code, and the `AssertExact` type below it forces the list and the union to be identical at compile time. A missing or extra entry fails the build, and the exhaustiveness test walks this list at runtime to confirm each code has exactly one disposition.
 
-<!-- lw:anchors packages/core/src/repair-contract.ts#SUPPORTED_FIXES packages/core/src/repair-contract.ts#UNCLASSIFIED -->
+`PAGE_KINDS` is a constant array of the three page kinds — `module`, `flow`, and `topic` — declared with `as const satisfies readonly PageKind[]` so the union type and the runtime list stay in sync. The page kind determines which directive map and which unclassified map apply to a given error.
 
-Every code is bound to EXACTLY ONE of two per-page-kind maps. A SUPPORTED_FIX directive (`SUPPORTED_FIXES: Record<PageKind, Partial<Record<ArtifactValidationCode, FixDirective>>>`) carries a `FixDirective` that closes over the error context and returns the verbatim ACTION text the prompt renders. An UNCLASSIFIED entry (`UNCLASSIFIED: Record<PageKind, Readonly<Partial<Record<ArtifactValidationCode, string>>>`) carries a one-line reason naming why no supported repair exists (for example `manual_block_altered` is human content under rule #6, and `llm_error` is handled out-of-band by the orchestrator). Codes absent from both maps for a kind are tolerated at runtime by `collectUnclassified` (treated as unclassified with a generic reason), so a legacy checkpoint code can never crash the loop — but the exhaustiveness test still asserts every code appears in exactly one of the two maps for every kind.
+## Supported Fix Directives
 
-## Per-error rendering
+<!-- lw:anchors packages/core/src/repair-contract.ts#SUPPORTED_FIXES packages/core/src/repair-contract.ts#renderActionDirective -->
 
-<!-- lw:anchors packages/core/src/repair-contract.ts#renderActionDirective -->
+This section describes how the system selects and renders the exact repair instruction for a validation error that has a known fix.
+
+`SUPPORTED_FIXES` is a two-level record: the outer key is the page kind, and the inner key is the validation code. Each value is a `FixDirective` — a function that takes the error context and returns the ACTION text to include in the repair prompt, or an empty string when the directive does not apply to this exact instance (for example, a directive that names the offending key renders nothing when the error carries none). The maps are populated from the historical if-chains in `prompts.ts`, so the prompt text is ported verbatim.
+
+`renderActionDirective` is the function that reads the directive for a given error:
 
 ```ts
 export function renderActionDirective(
@@ -64,28 +65,41 @@ export function renderActionDirective(
 ): string
 ```
 
-`renderActionDirective` takes a page kind, one `ArtifactValidationError`, and a context bundle whose `messageSafe`/`offendingSafe` fields MUST already be neutralized by the caller. It looks up the directive in `SUPPORTED_FIXES[kind][error.code]`; when no directive is registered it returns `""` so the caller emits the bare error line as before. When a directive does apply, it forwards the neutralized offending text, location, section slug, message detail, and (topic-only) the caller-supplied `assignedSectionLabel` resolver so the directive can render a deterministic section label.
+It takes a page kind, an error, and a context holding the neutralized message and optional offending text, and it returns the directive text or an empty string. The function looks up `SUPPORTED_FIXES[kind][error.code]`; if no directive exists, it returns `""`. Otherwise, it builds a `FixContext` from the error's location, section slug, and the caller-supplied safe values, then invokes the directive. The caller must already have neutralized `messageSafe` and `offendingSafe`, because the directive text embeds those values directly into the prompt.
 
-## Reporting, triage, and the early-abort path
+## Unclassified Report-Only Codes
 
-<!-- lw:anchors packages/core/src/repair-contract.ts#collectUnclassified packages/core/src/repair-contract.ts#renderReportOnlyBlock packages/core/src/repair-contract.ts#isUnrepairableErrorSet packages/core/src/repair-contract.ts#formatUnrepairableMessage -->
+<!-- lw:anchors packages/core/src/repair-contract.ts#UNCLASSIFIED packages/core/src/repair-contract.ts#collectUnclassified packages/core/src/repair-contract.ts#renderReportOnlyBlock packages/core/src/repair-contract.ts#formatUnrepairableMessage -->
+
+This section covers the codes that have no supported repair and how the system surfaces them to the operator or the repair prompt.
+
+`UNCLASSIFIED` is a two-level record mapping each page kind to a map of codes that are report-only, with a one-line reason for each. These codes must never be repaired by guessing — for example, `manual_block_altered` refers to human content protected by rule #6, and `missing_wiki_path` is repository state rather than page prose. The map also records codes that belong to a different page kind's contract (for instance, a topic-only code appearing on a module page), with a note that the module validator never emits it.
+
+`collectUnclassified` is the function that extracts the distinct unclassified codes from a set of errors:
 
 ```ts
 export function collectUnclassified(
   kind: PageKind,
   errors: readonly ArtifactValidationError[],
 ): UnclassifiedRepairError[]
+```
 
+It takes a page kind and an error list, and it returns an array of `UnclassifiedRepairError` objects — each holding a code and its reason — in first-seen order. The function skips any error whose code already appeared, and it skips codes that have a supported directive. A code absent from both maps is treated as unclassified with a generic reason, so a legacy checkpoint code can never crash the loop.
+
+`renderReportOnlyBlock` formats the unclassified entries into a prompt block for a mixed error set:
+
+```ts
 export function renderReportOnlyBlock(
   kind: PageKind,
   errors: readonly ArtifactValidationError[],
 ): string[]
+```
 
-export function isUnrepairableErrorSet(
-  kind: PageKind,
-  errors: readonly ArtifactValidationError[],
-): boolean
+It takes a page kind and an error list, and it returns an array of prompt lines. When every error has a directive, it returns an empty array. Otherwise, it returns a heading line instructing the model NOT to guess a fix, followed by one bullet per unclassified code with its reason.
 
+`formatUnrepairableMessage` builds a failure message for a task that cannot be repaired:
+
+```ts
 export function formatUnrepairableMessage(
   kind: PageKind,
   target: string,
@@ -93,7 +107,24 @@ export function formatUnrepairableMessage(
 ): string
 ```
 
-`collectUnclassified` walks the error set in first-seen order and returns the distinct codes that have no `SUPPORTED_FIXES` entry for the kind, each paired with the per-kind reason from `UNCLASSIFIED` (or a generic fallback when the code is absent from both maps). `renderReportOnlyBlock` turns that list into the prompt's `# Errors with NO supported repair` section, instructing the model not to guess a fix; the function returns an empty array when every error has a directive. `isUnrepairableErrorSet` is the orchestrator's early-abort gate: a non-empty error set where every distinct code is unclassified has no supported repair, so the orchestrator must not burn a paid repair call on it. `formatUnrepairableMessage` renders the matching `unrepairable` task-failure message that names the target and lists every unclassified code with its reason — the message rendered by `batch status` (human and JSON) and distinct from `repair_exhausted`.
+It takes a page kind, a target name, and an error list, and it returns a single string naming the target, stating that every reported error is unrepairable, and listing each unclassified code with its reason. This message is used by `batch status` (both human and JSON output) as the failure reason, distinct from `repair_exhausted`.
+
+## Early Abort Detection
+
+<!-- lw:anchors packages/core/src/repair-contract.ts#isUnrepairableErrorSet -->
+
+This section explains how the orchestrator avoids spending a paid repair call on a task that no repair can fix.
+
+`isUnrepairableErrorSet` is the early-abort check:
+
+```ts
+export function isUnrepairableErrorSet(
+  kind: PageKind,
+  errors: readonly ArtifactValidationError[],
+): boolean
+```
+
+It takes a page kind and an error list, and it returns `true` when the set is non-empty and every distinct error code is unclassified, otherwise `false`. The function compares the number of distinct unclassified codes from `collectUnclassified` with the total number of distinct codes in the error set; when they are equal, every error is report-only. In that situation the orchestrator aborts the task before burning a repair attempt, because no directive exists that could change the outcome.
 
 ## Tests
 

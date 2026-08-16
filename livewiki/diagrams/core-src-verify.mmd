@@ -1,35 +1,10 @@
-graph LR
-  run["run (verify entry)"]
-  collectWikiPages["collectWikiPages"]
-  collectWikiArtifactPaths["collectWikiArtifactPaths"]
-  collectSectionSlugs["collectSectionSlugs"]
-  resolveWikiLink["resolveWikiLink"]
-  isInsideWiki["isInsideWiki"]
-  formatHuman["formatHuman"]
-  db["openIndex (./db.js)"]
-  anchors["extractAnchors / slugify (./anchors.js)"]
-  hashes["sha256 (./hashes.js)"]
-  mask["maskCodeSpans (./markdown-mask.js)"]
-  mermaid["validateMermaidSyntax (./mermaid-validator.js)"]
-  safeIo["./safe-io.js"]
-  viewer["Phase 7 viewer (view.ts)"]
-
-  run --> db
-  run --> collectWikiPages
-  run --> collectWikiArtifactPaths
-  run --> collectSectionSlugs
-  run --> resolveWikiLink
-  run --> isInsideWiki
-  run --> anchors
-  run --> hashes
-  run --> mask
-  run --> mermaid
-  run --> formatHuman
-  run --> safeIo
-  collectWikiPages --> safeIo
-  collectWikiArtifactPaths --> safeIo
-  collectSectionSlugs --> safeIo
-  collectSectionSlugs --> anchors
-  viewer --> resolveWikiLink
-  viewer --> isInsideWiki
-  viewer --> collectWikiArtifactPaths
+graph TD
+    A[run] --> B[collectWikiPages]
+    A --> C[collectWikiArtifactPaths]
+    A --> D[collectSectionSlugs]
+    A --> E[resolveWikiLink]
+    A --> F[isInsideWiki]
+    A --> G[formatHuman]
+    B --> D
+    C --> A
+    E --> F

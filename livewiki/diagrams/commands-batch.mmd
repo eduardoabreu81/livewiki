@@ -1,15 +1,17 @@
-graph TD
-    A[registerBatch] --> B[buildStatusReport]
-    A --> C[listRuns]
-    A --> D[resumeBatch]
-    A --> E[runOnly]
-    B --> F[formatStatusHuman]
-    C --> G[formatListHuman]
-    D --> H[formatResultHuman]
+flowchart TD
+    A[registerBatch] --> B{batch subcommand?}
+    B -->|no args / status| C[buildStatusReport]
+    B -->|list| D[listRuns]
+    B -->|resume| E[resumeBatch]
+    B -->|--only| F[runOnly]
+    C --> G[formatStatusHuman]
+    C --> H[setExitCode]
+    E --> I[formatResultHuman]
     E --> H
-    F --> I[setExitCode]
-    H --> I
-    F --> J[appendStage4Diagnostics]
-    J --> K[formatDiagnosticLine]
-    H --> L[USAGE_INCOMPLETE_NOTE]
-    F --> L
+    F --> I
+    F --> H
+    D --> J[formatListHuman]
+    G --> K[appendStage4Diagnostics]
+    K --> L[formatDiagnosticLine]
+    I --> M[USAGE_INCOMPLETE_NOTE]
+    C --> M

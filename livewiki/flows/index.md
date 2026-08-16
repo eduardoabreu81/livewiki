@@ -7,6 +7,6 @@ owner: generated
 
 Each page below explains one principal end-to-end flow across the codebase, with its companion diagram.
 
-### [Source Repository to LLM Pipeline](cli-src-to-llm.md)
+### [From the livewiki CLI to the LLM pipeline](cli-src-to-llm.md)
 
-### [Serving livewiki documentation to an LLM agent over MCP](mcp-src-to-llm.md)
+### [MCP source search to LLM agent documentation](mcp-src-to-llm.md)

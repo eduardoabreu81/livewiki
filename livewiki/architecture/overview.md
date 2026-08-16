@@ -5,7 +5,7 @@ owner: generated
 
 # Architecture overview
 
-This repository has **237 files** documented and **1436 code symbols** indexed, organized into **30 folders** with **8 documented dependencies** between them.
+This repository has **240 files** documented and **1442 code symbols** indexed, organized into **31 folders** with **9 documented dependencies** between them.
 
 The diagrams below are rebuilt by `livewiki init`; the folder pages they link to are written by `livewiki init --batch` or by hand.
 
@@ -21,6 +21,24 @@ End-to-end behavior across the codebase: [How it works](../flows/index.md)
 
 ## Product folders
 
+<a id="llm"></a>
+
+### packages/core/src/llm
+
+**10** files, **30** documented code symbols
+
+Representative paths:
+
+- `packages/core/src/llm/adapters.test.ts`
+- `packages/core/src/llm/anthropic.ts`
+- `packages/core/src/llm/base.ts`
+
+Pages: [folder page](../llm/index.md) · [class diagram](../diagrams/llm.classes.mmd)
+
+Depends on: [packages/core/src](../core-src/index.md)
+
+Used by: [packages/cli/src/commands](../commands/index.md), [packages/core/src](../core-src/index.md)
+
 <a id="commands"></a>
 
 ### packages/cli/src/commands
@@ -35,7 +53,7 @@ Representative paths:
 
 Pages: [folder page](../commands/index.md)
 
-Depends on: [packages/mcp/src](../mcp-src/index.md), [packages/core/src](../core-src/index.md), [packages/cli/src](../cli-src/index.md)
+Depends on: [packages/core/src/llm](../llm/index.md), [packages/mcp/src](../mcp-src/index.md), [packages/core/src](../core-src/index.md), [packages/cli/src](../cli-src/index.md)
 
 Used by: [packages/cli/src](../cli-src/index.md)
 
@@ -57,23 +75,19 @@ Depends on: [packages/core/src](../core-src/index.md)
 
 Used by: [packages/cli/src/commands](../commands/index.md)
 
-<a id="llm"></a>
+<a id="bootstrap-wiki"></a>
 
-### packages/core/src/llm
+### Bootstrap wiki folder
 
-**8** files, **26** documented code symbols
+**1** file, **0** documented code symbols
 
 Representative paths:
 
-- `packages/core/src/llm/adapters.test.ts`
-- `packages/core/src/llm/anthropic.ts`
-- `packages/core/src/llm/base.ts`
+- `packages/cli/skills/bootstrap-wiki/SKILL.md`
 
-Pages: [folder page](../llm/index.md) · [class diagram](../diagrams/llm.classes.mmd)
+Depends on: none
 
-Depends on: [packages/core/src](../core-src/index.md)
-
-Used by: [packages/core/src](../core-src/index.md)
+Used by: none
 
 <a id="claude-code"></a>
 
