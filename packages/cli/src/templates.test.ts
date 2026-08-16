@@ -407,8 +407,9 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js status --json/);
     expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js verify --json/);
     expect(dogfood).toMatch(/fetch-depth:\s*0/);
-    // E roda em report mode na primeira janela (nunca falha).
-    expect(dogfood).toMatch(/LIVEWIKI_DEBT_MODE:\s*report/);
+    // Baseline dogfood commitado: o gate roda em enforce (fica vermelho
+    // enquanto as 35 entradas inferred não forem pagas).
+    expect(dogfood).toMatch(/LIVEWIKI_DEBT_MODE:\s*enforce/);
     expect(extractDocsDebtReporter(dogfood)).toBe(extractDocsDebtReporter(content));
   });
 });

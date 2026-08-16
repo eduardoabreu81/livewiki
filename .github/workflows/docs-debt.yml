@@ -1,7 +1,9 @@
 # Dogfood instance of packages/cli/templates/github-actions/docs-debt.yml.
 # It builds the CLI from the checkout and reports four independent signals:
 # baseline availability, detected debt, verify issues, and undocumented symbols.
-# This stays in report mode until the dogfood wiki commits its first baseline.
+# This repository committed its first baseline (livewiki/.baseline.json), so
+# the gate runs in enforce mode. It stays red while the 35 inferred entries
+# (the known open documentation debt) remain unpaid.
 # Indexing and verification are deterministic and spend zero LLM tokens.
 
 name: livewiki docs debt (dogfood)
@@ -15,7 +17,7 @@ permissions:
   contents: read
 
 env:
-  LIVEWIKI_DEBT_MODE: report
+  LIVEWIKI_DEBT_MODE: enforce
 
 jobs:
   docs-debt:
