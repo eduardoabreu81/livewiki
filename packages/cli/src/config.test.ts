@@ -550,3 +550,40 @@ describe("livewiki config — connectivity probe gate", () => {
     await expect(nodeFs.access(repoConfigPath())).rejects.toThrow();
   });
 });
+
+describe("livewiki config — model suggestions from the preset", () => {
+  let home: string;
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    home = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-cli-models-home-"));
+    repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-cli-models-repo-"));
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(home, { recursive: true, force: true });
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("lists known models for presets with a pricing table, skips empty ones", async () => {
+    const output: string[] = [];
+    const answers = ["anthropic", "claude-sonnet-5", "en"];
+    const io: ConfigWizardIo = {
+      isTTY: true,
+      promptText: async () => answers.shift() ?? "",
+      promptSecret: async () => "models-test-key",
+      promptYesNo: async () => true,
+      write: (text: string) => output.push(text),
+    };
+    const result = await runConfigWizard({
+      repoRoot,
+      home,
+      io,
+      env: {},
+      probe: async () => ({ ok: true, thinkingLeak: false, modelEcho: "m", reasoningTokens: 0, error: null }),
+    });
+    expect(result.ok).toBe(true);
+    expect(output.join("\n")).toContain("Known anthropic models:");
+    expect(output.join("\n")).not.toContain("Known anthropic models: \n");
+  });
+});

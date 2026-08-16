@@ -10,24 +10,31 @@ import {
 } from "./presets.js";
 
 describe("PRESET_TABLE — dados", () => {
-  it("tem 10 presets conforme SPEC §Stack", () => {
-    expect(Object.keys(PRESET_TABLE)).toHaveLength(10);
+  it("tem 17 presets conforme SPEC §Stack", () => {
+    expect(Object.keys(PRESET_TABLE)).toHaveLength(17);
     expect(Object.keys(PRESET_TABLE).sort()).toEqual([
+      "alibaba",
       "anthropic",
       "deepseek",
+      "fireworks",
       "gemini",
+      "gmi",
+      "huggingface",
       "kimi",
       "lmstudio",
       "minimax",
+      "novita",
       "nvidia",
       "ollama",
       "openai",
       "openrouter",
+      "stepfun",
+      "xai",
     ]);
   });
 
-  it("AVAILABLE_PRESETS lista os 10 (mesma ordem que SPEC)", () => {
-    expect(AVAILABLE_PRESETS).toHaveLength(10);
+  it("AVAILABLE_PRESETS lista os 17 (mesma ordem que SPEC)", () => {
+    expect(AVAILABLE_PRESETS).toHaveLength(17);
     expect(AVAILABLE_PRESETS).toContain("anthropic");
     expect(AVAILABLE_PRESETS).toContain("minimax");
     expect(AVAILABLE_PRESETS).toContain("ollama");
@@ -116,6 +123,26 @@ describe("preset.openrouter / deepseek / kimi / gemini / nvidia", () => {
       envVars.add(v);
     }
   });
+  it("todos os presets têm envVar única e baseUrl preenchida", () => {
+    const envVars = new Set<string>();
+    for (const name of AVAILABLE_PRESETS) {
+      const preset = PRESET_TABLE[name];
+      expect(preset.baseUrl.length, `${name}.baseUrl`).toBeGreaterThan(0);
+      expect(envVars.has(preset.envVar), `envVar duplicada: ${preset.envVar}`).toBe(false);
+      envVars.add(preset.envVar);
+    }
+  });
+
+  it("presets adicionados em 2026-08-16 (base hermes-agent, MIT)", () => {
+    expect(PRESET_TABLE.fireworks.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
+    expect(PRESET_TABLE.novita.envVar).toBe("NOVITA_API_KEY");
+    expect(PRESET_TABLE.gmi.envVar).toBe("GMI_API_KEY");
+    expect(PRESET_TABLE.stepfun.baseUrl).toBe("https://api.stepfun.com/v1");
+    expect(PRESET_TABLE.huggingface.envVar).toBe("HF_TOKEN");
+    expect(PRESET_TABLE.xai.envVar).toBe("XAI_API_KEY");
+    expect(PRESET_TABLE.alibaba.envVar).toBe("DASHSCOPE_API_KEY");
+  });
+
   it("envVars esperadas", () => {
     expect(PRESET_TABLE.openrouter.envVar).toBe("OPENROUTER_API_KEY");
     expect(PRESET_TABLE.deepseek.envVar).toBe("DEEPSEEK_API_KEY");

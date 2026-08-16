@@ -79,7 +79,9 @@
   logs, or errors — with a test guaranteeing it.
   **Provider presets** (data, not code): built-in table of known providers —
   anthropic, openai, openrouter, deepseek, kimi, minimax, gemini, nvidia (NIM),
-  ollama, and lmstudio (local) — with baseUrl, adapter, env var name, and default
+  ollama, and lmstudio (local), plus fireworks, novita, gmi, stepfun, huggingface,
+  xai, and alibaba/DashScope (2026-08-16, cross-checked against the MIT-licensed
+  hermes-agent provider docs) — with baseUrl, adapter, env var name, and default
   pricing filled in. `config.json` references the preset and can override any
   field. **Adapter rule**: when a provider offers an Anthropic-compatible endpoint
   (e.g. minimax), the preset uses the Anthropic adapter — optimized cache reads

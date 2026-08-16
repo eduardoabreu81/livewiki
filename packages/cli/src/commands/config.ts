@@ -122,9 +122,15 @@ export async function runConfigWizard(opts: {
   }
 
   const preset = await promptForPreset(io, existing.preset);
+  const presetConfig = resolvePreset(preset);
+  // Hermes-style assist: surface the models we know for the preset (from its
+  // pricing table) as suggestions — free text still wins, models change weekly.
+  const knownModels = Object.keys(presetConfig.pricing);
+  if (knownModels.length > 0) {
+    io.write(`Known ${preset} models: ${knownModels.join(", ")}\n`);
+  }
   const model = await promptRequired(io, "Model", existing.model);
   const language = await promptRequired(io, "Language", existing.language ?? "en");
-  const presetConfig = resolvePreset(preset);
   const existingBaseUrl = existing.preset === preset ? existing.baseUrl : undefined;
   const baseUrlAnswer = (
     await io.promptText(

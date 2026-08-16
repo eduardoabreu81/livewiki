@@ -95,7 +95,14 @@ export type PresetName =
   | "gemini"
   | "nvidia"
   | "ollama"
-  | "lmstudio";
+  | "lmstudio"
+  | "fireworks"
+  | "novita"
+  | "gmi"
+  | "stepfun"
+  | "huggingface"
+  | "xai"
+  | "alibaba";
 
 /** Erro lançado quando nome do preset é desconhecido. */
 export class UnknownPresetError extends Error {
@@ -285,6 +292,90 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
     preferMaxCompletionTokens: false,
     defaultMaxOutputTokens: 8192,
   },
+  // 2026-08-16: entries below use base URLs / env var names cross-checked
+  // against the hermes-agent provider documentation (MIT-licensed,
+  // github.com/NousResearch/hermes-agent). Pricing left empty where we have
+  // no verified table — USD is omitted, tokens stay the primary metric.
+  // thinkingDefault stays "omit": the config wizard probe and the batch
+  // preflight catch reasoning leaks live, so unknown provider defaults fail
+  // loud instead of silently burning budget.
+  fireworks: {
+    name: "fireworks",
+    adapter: "openai-compat",
+    baseUrl: "https://api.fireworks.ai/inference/v1",
+    envVar: "FIREWORKS_API_KEY",
+    pricing: {},
+    notes: "Fireworks AI (openai-compat). Model ids use the slash form: accounts/fireworks/models/<name>.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
+  },
+  novita: {
+    name: "novita",
+    adapter: "openai-compat",
+    baseUrl: "https://api.novita.ai/openai/v1",
+    envVar: "NOVITA_API_KEY",
+    pricing: {},
+    notes: "NovitaAI (openai-compat). 200+ models; ids like moonshotai/kimi-k2.5.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
+  },
+  gmi: {
+    name: "gmi",
+    adapter: "openai-compat",
+    baseUrl: "https://api.gmi-serving.com/v1",
+    envVar: "GMI_API_KEY",
+    pricing: {},
+    notes: "GMI Cloud (openai-compat). Use the exact model id from their /v1/models endpoint.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
+  },
+  stepfun: {
+    name: "stepfun",
+    adapter: "openai-compat",
+    baseUrl: "https://api.stepfun.com/v1",
+    envVar: "STEPFUN_API_KEY",
+    pricing: {},
+    notes: "StepFun (openai-compat). Step-series models, e.g. step-3.5-flash.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
+  },
+  huggingface: {
+    name: "huggingface",
+    adapter: "openai-compat",
+    baseUrl: "https://router.huggingface.co/v1",
+    envVar: "HF_TOKEN",
+    pricing: {},
+    notes: "Hugging Face Inference Providers (openai-compat router). Routes to Groq/Together/etc.; suffix :fastest/:cheapest/:provider supported.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
+  },
+  xai: {
+    name: "xai",
+    adapter: "openai-compat",
+    baseUrl: "https://api.x.ai/v1",
+    envVar: "XAI_API_KEY",
+    pricing: {},
+    notes: "xAI Grok (openai-compat chat completions). Grok 4 reasons by default server-side — the wizard probe verifies what the account returns.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
+  },
+  alibaba: {
+    name: "alibaba",
+    adapter: "openai-compat",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    envVar: "DASHSCOPE_API_KEY",
+    pricing: {},
+    notes: "Alibaba Qwen Cloud / DashScope (openai-compat). The Coding Plan SKU uses a different endpoint — override baseUrl for it.",
+    thinkingDefault: "omit",
+    preferMaxCompletionTokens: false,
+    defaultMaxOutputTokens: 8192,
+  },
 };
 
 /** Lista ordenada dos presets disponíveis (pra mensagens de erro / --help). */
@@ -299,6 +390,13 @@ export const AVAILABLE_PRESETS: readonly PresetName[] = [
   "nvidia",
   "ollama",
   "lmstudio",
+  "fireworks",
+  "novita",
+  "gmi",
+  "stepfun",
+  "huggingface",
+  "xai",
+  "alibaba",
 ];
 
 /**
