@@ -85,19 +85,18 @@ Inspect the effective settings and credential origin without printing the key:
 livewiki config show
 ```
 
-Environment variables take precedence over the credentials file and remain
-the supported path for CI, containers, and other headless automation. For
-example:
+For CI, containers, and other headless automation, set the API key through an
+environment variable instead of the wizard. Each preset reads its own
+variable, named after the provider — `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, and so on:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export DEEPSEEK_API_KEY=sk-...   # use the variable for your preset
 ```
 
-Or in PowerShell:
-
-```powershell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
-```
+(PowerShell: `$env:DEEPSEEK_API_KEY = "sk-..."`.) Environment variables take
+precedence over the credentials file. `livewiki config show` prints the
+variable name your chosen preset expects, without ever printing the value.
 
 Available presets are `anthropic`, `openai`, `openrouter`, `deepseek`, `kimi`,
 `minimax`, `gemini`, `nvidia`, `ollama`, `lmstudio`, `fireworks`, `novita`,
