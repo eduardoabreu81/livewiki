@@ -23,7 +23,7 @@ This directory is the source root of the `@livewiki/mcp` package, the Model Cont
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [From the livewiki CLI to the LLM pipeline](../flows/cli-src-to-llm.md)
+- Flow: [Turning a CLI command into an LLM call](../flows/cli-src-to-llm.md)
 - Topic: [Testing](../topics/testing-f41eeea7.md)
 - [packages/cli/src/commands](../commands/index.md) — depends on this folder
 - [packages/core/src](../core-src/index.md) — used here

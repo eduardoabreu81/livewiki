@@ -1,13 +1,13 @@
 {
   "version": 2,
   "lastDocumentedCommit": null,
-  "snapshotHash": "0e98bb1fb99495af15c1019221a8d547fcf1cfa1ae5cb15b306f24ab7a94107a",
-  "updatedAt": "2026-08-16T18:29:14.840Z",
+  "snapshotHash": "f47af76d076948b6bcfdf975b5005b3caa3b68a12d10d466575cc5f3d9cfbbdc",
+  "updatedAt": "2026-08-16T19:11:14.777Z",
   "pendingBatch": null,
   "artifactReceipts": [
     {
       "taskId": "flow:cli-src-to-llm",
-      "evidenceHash": "1658acae7a8b295f3b13f205da4d51895123edda84dd90b93b03da9f9ba02226",
+      "evidenceHash": "2ed7fde7aeb77a43d253cbaaee69ca4fef1cedcfe88f593f664bb5c052d832c6",
       "contract": "flow-v1",
       "artifacts": [
         {
@@ -16,7 +16,7 @@
         },
         {
           "path": "livewiki/flows/cli-src-to-llm.md",
-          "hash": "761597491cd291beb7770c7b77d09420e0125f608064532cfddf21960b4266f1"
+          "hash": "67f6b396fdb70609a6d7764c3c42bc1acbfbe721ebf68cd857d00ab1de22414c"
         }
       ]
     },
@@ -42,7 +42,7 @@
       "artifacts": [
         {
           "path": "livewiki/topics/testing-f41eeea7.md",
-          "hash": "6f5921e3d633ea1afac3c0aa67b3ba67761f1e8976ae4c815bc0eb2f28b856c4"
+          "hash": "baee76401d668228438ff3423448f3ae794dbccf052529f64bee5cc9178a3d12"
         }
       ]
     }

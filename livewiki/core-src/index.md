@@ -95,7 +95,7 @@ This directory holds automated tests with no co-located product code.
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [From the livewiki CLI to the LLM pipeline](../flows/cli-src-to-llm.md)
+- Flow: [Turning a CLI command into an LLM call](../flows/cli-src-to-llm.md)
 - Topic: [Testing](../topics/testing-f41eeea7.md)
 - [packages/core/src/llm](../llm/index.md) — used both ways
 - [packages/cli/src/commands](../commands/index.md) — depends on this folder

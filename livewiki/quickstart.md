@@ -45,7 +45,7 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 - **Change product behavior:** start with [Tasks](tasks.md).
 - **Follow end-to-end behavior:**
-  - [From the livewiki CLI to the LLM pipeline](flows/cli-src-to-llm.md)
+  - [Turning a CLI command into an LLM call](flows/cli-src-to-llm.md)
   - [MCP source search to LLM agent documentation](flows/mcp-src-to-llm.md)
   - Browse the complete [How it works](flows/index.md) index.
 - **Inspect implementation relationships:** open the [Architecture overview](architecture/overview.md).
@@ -73,4 +73,4 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 - **240 files** documented
 - **31 folders** covered
-- **1443 code symbols** indexed
+- **1447 code symbols** indexed

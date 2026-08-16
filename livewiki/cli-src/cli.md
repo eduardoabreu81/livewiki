@@ -1,5 +1,5 @@
 ---
-title: Livewiki CLI Program Assembly and Context Resolution
+title: livewiki CLI entry: program assembly and invocation
 owner: generated
 anchors:
 - packages/cli/src/cli.ts#createProgram
@@ -8,20 +8,20 @@ anchors:
 - packages/cli/src/cli.ts#run
 ---
 
-# Livewiki CLI Program Assembly and Context Resolution
+# livewiki CLI entry: program assembly and invocation
 
-This page documents how the `livewiki` command-line interface builds its command tree and resolves the repository root that downstream commands rely on.
+This page documents the `cli.ts` module's role as the CLI process's assembly and dispatch point, where the `commander` program is built, configured, and executed.
 
 ## When to use this page
 
-- Trace how the CLI turns a raw argument vector into a parsed, registered `commander` program.
-- Learn where the CLI version string comes from and why it is read synchronously.
-- Understand how `--repo` is turned into an absolute repository path for command contexts.
-- See the full set of subcommands that the scaffold registers so `--help` shows the complete surface.
+- **Trace how the `livewiki` command starts** — from `run(argv)` down through program parsing and dispatch.
+- **Understand how global flags (`--json`, `--repo`) are wired** and how the bare-invocation onboarding flow decides between help, hint, or config wizard.
+- **See how the version string is resolved** from the package manifest and how `repoRoot` is derived from the `--repo` option.
+- **Learn which subcommands exist** and how they are registered into the program surface.
 
 ## How it fits
 
-The `cli.ts` file is the top-level launcher of the `@livewiki/cli` package. It does not implement any domain logic itself; instead it constructs a `commander` program, attaches global options and a version, and delegates to per-command register functions living in `./commands/`. The same file also provides the small helpers that `run()` and the command registers use to read the package version and compute the repository root. Downstream command files import `resolveRepoRoot` to build the `CommandContext` they operate on.
+This module is the top-level entry for the `livewiki` CLI package. It imports all command registration functions from sibling `commands/*` modules, sets up global options, and defines the behavior for a bare invocation (no subcommand). It also exports two small helpers — `readVersion()` and `resolveRepoRoot()` — that other parts of the CLI use for version reporting and repository path resolution. The module's `run` function is the actual process entry point that the package's bin script calls.
 
 ## Diagram
 
@@ -29,53 +29,25 @@ The `cli.ts` file is the top-level launcher of the `@livewiki/cli` package. It d
 %% livewiki/diagrams/cli-src-cli.mmd
 ```
 
-## Version retrieval
-
-<!-- lw:anchors packages/cli/src/cli.ts#readVersion -->
-
-The CLI needs to report its own version in `--version` output and inside help text. Because the version is baked into the package manifest at build time and does not change during a process's lifetime, reading it synchronously avoids needless async plumbing in a path that is already asynchronous elsewhere.
-
-```ts
-function readVersion(): string {
-```
-
-The function takes no arguments and returns the version string. It constructs a `URL` from the current module's `import.meta.url`, then resolves `../package.json` relative to it — a path that works both in `src/` and in `dist/` because both directories sit at the same depth inside the package. It reads the file with `readFileSync`, parses it as JSON, and returns the `version` field. If the file is missing or the JSON is malformed, the `catch` branch returns the fallback `"0.0.0"`; the same fallback applies when the parsed object has no `version` property. This fail-open behavior ensures the CLI still starts even if the manifest is unavailable, though the reported version will not be meaningful.
-
 ## Program assembly
 
-<!-- lw:anchors packages/cli/src/cli.ts#createProgram -->
+<!-- lw:anchors packages/cli/src/cli.ts#createProgram packages/cli/src/cli.ts#readVersion packages/cli/src/cli.ts#resolveRepoRoot -->
 
-The heart of this file is the factory that builds the entire `livewiki` command surface. Its purpose is twofold: expose a stable, discoverable interface and make `--help` reflect every command that the tooling supports, including stubs that later phases will flesh out.
+`createProgram()` constructs the full `commander` `Command` object that defines the `livewiki` CLI surface. It sets the program name to `livewiki`, attaches a human-readable description pointing readers to the project's VISION.md and SPEC.md, and calls `version(readVersion())` so that `--version` prints the package version from the manifest.
 
-```ts
-export function createProgram(): Command {
-```
+`readVersion()` is a synchronous helper that reads `@livewiki/cli`'s `package.json` relative to the current module's URL, parses it as JSON, and returns the `version` field — or falls back to the string `"0.0.0"` if the file is missing, unparseable, or lacks the field. The fallback is a fail-open branch: any `readFileSync` or `JSON.parse` error returns the default version instead of throwing. The function computes the manifest path via `new URL("../package.json", import.meta.url)`, which stays correct for both source (`src/cli.ts`) and built (`dist/cli.js`) layouts because both sit at the same depth inside the package.
 
-The function takes no arguments and returns a configured `commander.Command`. It starts by creating a new `Command`, names it `livewiki`, provides a human-readable description, and attaches the version obtained from `readVersion()`. It then defines two global options shared by every subcommand: `--json` for parseable output and `--repo <path>` for pointing at the target repository, defaulting to `"."`. After that, it calls `registerInit`, `registerIndex`, `registerStatus`, `registerUpdate`, `registerVerify`, `registerServe`, `registerBatch`, `registerExport`, `registerView`, `registerPointer`, `registerInstall`, `registerConfig`, and `registerBaseline` in order — each of those functions attaches one subcommand to the program. Once all registers have run, the fully built program is returned.
+After configuring global flags — `--json` for parseable output and `--repo <path>` for the target repository, defaulting to `.` — the function registers every subcommand by calling each `register*` function from the `commands` directory: `init`, `index`, `status`, `update`, `verify`, `serve`, `batch`, `export`, `view`, `pointer`, `install`, `config`, and `baseline`. This registration makes all commands visible in `--help` output even when their implementations are still stubs.
 
-## Program execution
+Finally, `createProgram()` attaches an action handler for a bare invocation (no subcommand). That handler reads the global options, resolves the repository root via `resolveRepoRoot()`, checks whether the repo is configured via `isConfigured()`, and then calls `decideBareInvocation()` to pick one of three outcomes: display help, print a one-line hint (when there's no TTY or `--json` is active), or run the interactive config wizard via `runConfigFlow()`. The wizard path also resolves the livewiki home directory from the environment using `resolveLivewikiHome(process.env)`.
+
+`resolveRepoRoot(repoOpt)` is a small pure helper: it takes the `--repo` option value (or `undefined` when the default `.` was applied at the commander level) and returns an absolute path by resolving it against `process.cwd()` using `node:path.resolve`. This gives all commands a canonical absolute repository root for building the `CommandContext`.
+
+## Invocation flow
 
 <!-- lw:anchors packages/cli/src/cli.ts#run -->
 
-The `run` function is the entry point that the package's binary invokes with the arguments passed on the command line. Its job is to turn that raw vector into an executed command, handling option parsing, subcommand dispatch, and any asynchronous work inside the selected command.
-
-```ts
-export async function run(argv: readonly string[]): Promise<void> {
-```
-
-The function takes a read-only array of strings (the arguments) and returns a promise that resolves once parsing and command execution finish. It builds a fresh program via `createProgram()` so each invocation starts from a clean state, then calls `parseAsync()` on it. Using the async variant matters because several registered commands perform file-system or network operations that return promises. When parsing succeeds, any errors thrown by a command propagate out of this function to the caller, which is responsible for reporting them.
-
-## Repository root resolution
-
-<!-- lw:anchors packages/cli/src/cli.ts#resolveRepoRoot -->
-
-Commands that operate on a repository need a single, absolute path to that repository, regardless of whether the user supplied `--repo` or accepted the default. This helper normalizes that input so downstream code never has to reason about relative paths.
-
-```ts
-export function resolveRepoRoot(repoOpt: string | undefined): string {
-```
-
-The function takes an optional string (the value of the `--repo` option, if given) and returns the absolute repository path as a string. It calls `nodePath.resolve()` with the current working directory and the option value, defaulting to `"."` when `repoOpt` is undefined. This means the result is always an absolute path: a relative `--repo` value is anchored to the process's working directory, and the default resolves to that working directory itself. There is no validation of whether the resolved path exists or is a directory — that check is left to the commands that consume this value when they construct their `CommandContext`.
+`run(argv)` is the exported async entry point that the CLI binary calls with the process arguments. It creates the program via `createProgram()`, then awaits `program.parseAsync(argv as string[])` to parse the arguments and dispatch to the matching subcommand or the bare-invocation action. Because `parseAsync` is async, any registered command handlers that return promises are awaited before `run` resolves, ensuring the process exits only after command work completes. The function casts the `argv` array to the type `commander` expects; the cast is purely for TypeScript type-compatibility with `commander`'s signature and does not alter the array contents.
 
 ## Tests
 

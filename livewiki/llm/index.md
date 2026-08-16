@@ -25,7 +25,7 @@ None of the 4 documented files in this folder has a test file named after it.
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [From the livewiki CLI to the LLM pipeline](../flows/cli-src-to-llm.md)
+- Flow: [Turning a CLI command into an LLM call](../flows/cli-src-to-llm.md)
 - Topic: [Testing](../topics/testing-f41eeea7.md)
 - [packages/cli/src/commands](../commands/index.md) — depends on this folder
 - [packages/core/src](../core-src/index.md) — used both ways

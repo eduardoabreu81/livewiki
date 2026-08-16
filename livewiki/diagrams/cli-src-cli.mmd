@@ -1,5 +1,5 @@
 flowchart TD
-    A[run: parse argv] --> B[createProgram]
+    A[run argv] --> B[createProgram]
     B --> C[readVersion]
     B --> D[registerInit]
     B --> E[registerIndex]
@@ -14,17 +14,10 @@ flowchart TD
     B --> N[registerInstall]
     B --> O[registerConfig]
     B --> P[registerBaseline]
-    D --> Q[resolveRepoRoot]
-    E --> Q
-    F --> Q
-    G --> Q
-    H --> Q
-    I --> Q
-    J --> Q
-    K --> Q
-    L --> Q
-    M --> Q
-    N --> Q
-    O --> Q
-    P --> Q
-    Q --> R[nodePath.resolve with cwd]
+    B --> Q[barenvocation action]
+    Q --> R[resolveRepoRoot]
+    Q --> S[isConfigured]
+    Q --> T[decideBareInvocation]
+    T -- help --> U[program.help]
+    T -- hint --> V[write hint]
+    T -- wizard --> W[runConfigFlow]

@@ -13,7 +13,7 @@ Choose an end-to-end behavior or a product area. Tests, fixtures, tooling, and d
 
 ## End-to-end behavior
 
-### [From the livewiki CLI to the LLM pipeline](flows/cli-src-to-llm.md)
+### [Turning a CLI command into an LLM call](flows/cli-src-to-llm.md)
 
 ### [MCP source search to LLM agent documentation](flows/mcp-src-to-llm.md)
 

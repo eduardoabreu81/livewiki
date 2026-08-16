@@ -5,7 +5,7 @@ owner: generated
 
 # Architecture overview
 
-This repository has **240 files** documented and **1443 code symbols** indexed, organized into **31 folders** with **9 documented dependencies** between them.
+This repository has **240 files** documented and **1447 code symbols** indexed, organized into **31 folders** with **9 documented dependencies** between them.
 
 The diagrams below are rebuilt by `livewiki init`; the folder pages they link to are written by `livewiki init --batch` or by hand.
 
@@ -43,7 +43,7 @@ Used by: [packages/cli/src/commands](../commands/index.md), [packages/core/src](
 
 ### packages/cli/src/commands
 
-**13** files, **52** documented code symbols
+**13** files, **56** documented code symbols
 
 Representative paths:
 
