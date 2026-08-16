@@ -373,7 +373,10 @@ describe("batchConcurrency — stage-4 worker pool (roadmap item 7)", () => {
       skipManifestWrite: true,
     });
 
-    expect(result.status).toBe("completed");
+    expect(
+      result.status,
+      `failures: ${result.failures.map((f) => `${f.module}:${f.error.code}:${f.error.message}`).join(" || ")}`,
+    ).toBe("completed");
     expect(llm.maxInFlight).toBeGreaterThan(1);
     expect(llm.maxInFlight).toBeLessThanOrEqual(2);
   });
