@@ -253,30 +253,50 @@ export async function resolveAndValidate(
   }
   const absDeclared = validateDeclared(absRoot, relPath, opts);
 
-  const [ancestor, suffix] = findDeepestExisting(absDeclared, absRoot);
+  // The find-existing → realpath step is a TOCTOU window. Under the stage-4
+  // worker pool, concurrent tasks create and delete `.livewiki/*.lock` and
+  // `.livewiki/*.tmp-*` files mid-resolve. On Windows, realpath on a file
+  // deleted in between resolves to an NTFS tombstone
+  // (C:\$Extend\$Deleted\... — outside the allowlist) instead of throwing; on
+  // POSIX it throws ENOENT. Both are transient: retry a bounded number of
+  // times and only fail closed when the path is stably unresolvable (a real
+  // symlink escape is re-detected on every attempt and still fails).
+  const attempts = 5;
+  for (let attempt = 0; ; attempt++) {
+    const [ancestor, suffix] = findDeepestExisting(absDeclared, absRoot);
 
-  // Realpath do ancestral existente. Se ancestor === absRoot e nada existe,
-  // realpath do root é ele mesmo.
-  let realAncestor: string;
-  try {
-    realAncestor = await nodeFs.realpath(ancestor);
-  } catch {
-    // ancestor não existe (race) ou outro erro — falhamos fechado
-    throw new PathOutsideAllowlistError(
-      absRoot,
-      ancestor,
-      allowlistFor(opts),
-    );
+    let realAncestor: string;
+    try {
+      realAncestor = await nodeFs.realpath(ancestor);
+    } catch {
+      if (attempt >= attempts - 1) {
+        throw new PathOutsideAllowlistError(absRoot, ancestor, allowlistFor(opts));
+      }
+      await yieldResolveRetry(attempt);
+      continue;
+    }
+
+    // Reconstruir path final
+    const finalAbs = suffix ? nodePath.join(realAncestor, suffix) : realAncestor;
+
+    // Revalidar: se um symlink no ancestral redireciona para fora, isso cai aqui.
+    if (isInsideAllowlist(absRoot, finalAbs, opts)) {
+      return finalAbs;
+    }
+
+    // finalAbs escaped the allowlist: either a real symlink escape or a
+    // Windows tombstone from a file deleted mid-resolve. Retry while it could
+    // still be transient, then fail closed.
+    if (attempt >= attempts - 1) {
+      throw new PathOutsideAllowlistError(absRoot, finalAbs, allowlistFor(opts));
+    }
+    await yieldResolveRetry(attempt);
   }
+}
 
-  // Reconstruir path final
-  const finalAbs = suffix ? nodePath.join(realAncestor, suffix) : realAncestor;
-
-  // Revalidar: se um symlink no ancestral redireciona para fora, isso cai aqui.
-  if (!isInsideAllowlist(absRoot, finalAbs, opts)) {
-    throw new PathOutsideAllowlistError(absRoot, finalAbs, allowlistFor(opts));
-  }
-  return finalAbs;
+/** Tiny backoff so a live concurrent deleter is not raced in a tight loop. */
+function yieldResolveRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.min(2 ** attempt, 8)));
 }
 
 // ── Operações de I/O ────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
@@ -19,12 +19,31 @@ import {
   WriteLockBusyError,
 } from "./safe-io.js";
 
+// `resolveAndValidate` must retry a realpath that races a concurrent delete
+// (Windows NTFS tombstone / POSIX ENOENT). Mock only `realpath`; everything
+// else on node:fs/promises stays real. beforeEach resets the spy to delegate
+// to the real realpath; tests inject transient failures via mockImplementationOnce.
+const realpathHolder = vi.hoisted(() => ({
+  impl: null as null | typeof import("node:fs/promises")["realpath"],
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  realpathHolder.impl = actual.realpath;
+  return {
+    ...actual,
+    realpath: vi.fn(),
+  };
+});
+
 let repoRoot: string;
 let cwdSnapshot: string;
 
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-safeio-"));
   cwdSnapshot = process.cwd();
+  vi.mocked(nodeFs.realpath).mockReset();
+  vi.mocked(nodeFs.realpath).mockImplementation((p) => realpathHolder.impl!(p));
 });
 
 afterEach(async () => {
@@ -190,6 +209,48 @@ describe("resolveAndValidate (declared path, sem symlinks)", () => {
       expect((err as PathOutsideAllowlistError).allowlist).toContain("livewiki");
       expect((err as PathOutsideAllowlistError).allowlist).toContain(".livewiki");
     }
+  });
+
+  it("retries a transient realpath failure (concurrent-delete race) instead of failing closed", async () => {
+    // The stage-4 worker pool creates+deletes `.livewiki/*.lock` files during
+    // concurrent durable commits. `findDeepestExisting` can see a lock file,
+    // then the realpath runs after another worker already unlinked it: on
+    // Windows realpath returns an NTFS tombstone (outside the allowlist) and
+    // on POSIX it throws ENOENT. Both must be retried, not surfaced as a
+    // path-outside-allowlist failure.
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    let ancestorAttempts = 0;
+    vi.mocked(nodeFs.realpath).mockImplementation((p) => {
+      const target = String(p);
+      // Fail the first ancestor realpath (.livewiki/) once, like a lock
+      // unlinked between existsSync and realpath on POSIX. The repoRoot
+      // realpath (absRoot) and all later calls delegate normally.
+      if (target.endsWith(".livewiki") && ancestorAttempts === 0) {
+        ancestorAttempts++;
+        const err = new Error("ENOENT: no such file or directory");
+        (err as NodeJS.ErrnoException).code = "ENOENT";
+        throw err;
+      }
+      return realpathHolder.impl!(p);
+    });
+    const abs = await resolveAndValidate(repoRoot, ".livewiki/index.db");
+    expect(abs).toBe(
+      nodePath.join(await realpathHolder.impl!(repoRoot), ".livewiki", "index.db"),
+    );
+    expect(ancestorAttempts).toBe(1);
+  });
+
+  it("fails closed when realpath resolves outside the allowlist and stays that way", async () => {
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    const tombstone = nodePath.join(nodeOs.tmpdir(), "$Extend", "$Deleted", "ghost");
+    vi.mocked(nodeFs.realpath).mockImplementation((p) => {
+      const target = String(p);
+      if (target.endsWith(".livewiki")) return Promise.resolve(tombstone);
+      return realpathHolder.impl!(p);
+    });
+    await expect(resolveAndValidate(repoRoot, ".livewiki/index.db")).rejects.toBeInstanceOf(
+      PathOutsideAllowlistError,
+    );
   });
 });
 
