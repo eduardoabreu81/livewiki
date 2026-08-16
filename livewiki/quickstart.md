@@ -73,4 +73,4 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 - **240 files** documented
 - **31 folders** covered
-- **1442 code symbols** indexed
+- **1443 code symbols** indexed

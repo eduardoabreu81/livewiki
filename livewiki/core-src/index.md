@@ -101,5 +101,5 @@ This directory holds automated tests with no co-located product code.
 - [packages/cli/src/commands](../commands/index.md) — depends on this folder
 - [packages/mcp/src](../mcp-src/index.md) — depends on this folder
 
-> Coverage note: this folder's source (142 files, ~3512k chars) is too large to read in full; this page documents its main entry points.
+> Coverage note: this folder's source (142 files, ~3516k chars) is too large to read in full; this page documents its main entry points.
 <!-- livewiki:navigate:end -->

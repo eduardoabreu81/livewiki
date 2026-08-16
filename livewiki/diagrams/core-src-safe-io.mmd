@@ -1,37 +1,23 @@
-graph TD
-  config["SafeIoOptions<br/>(allowPointer, allowReadme)"]
-  allowed["ALLOWED_DIRS<br/>(livewiki, .livewiki)"]
-  allowlistFor["allowlistFor(opts)"]
-  allowedAbs["allowedAbs(root, dir)"]
-  isInside["isInsideAllowlist(root, target, opts)"]
-  validate["validateDeclared(root, rel, opts)"]
-  findExisting["findDeepestExisting(from, stopAt)"]
-  resolve["resolveAndValidate(root, rel, opts)"]
-  writeText["writeText"]
-  readText["readText"]
-  exists["exists"]
-  mkdir["mkdir"]
-  remove["remove"]
-  fsAsync["node:fs/promises"]
-  fsSync["node:fs (existsSync)"]
-
-  config --> allowlistFor
-  allowed --> allowlistFor
-  allowlistFor --> isInside
-  allowed --> isInside
-  allowedAbs --> isInside
-  isInside --> validate
-  validate --> resolve
-  findExisting --> resolve
-  fsSync --> findExisting
-  fsAsync --> resolve
-  resolve --> writeText
-  resolve --> readText
-  resolve --> exists
-  resolve --> mkdir
-  resolve --> remove
-  fsAsync --> writeText
-  fsAsync --> readText
-  fsAsync --> exists
-  fsAsync --> mkdir
-  fsAsync --> remove
+flowchart LR
+    A[Caller modules] --> B[resolveAndValidate]
+    B --> C[validateDeclared]
+    B --> D[findDeepestExisting]
+    B --> E[isInsideAllowlist]
+    B --> F[allowedAbs]
+    B --> G[allowlistFor]
+    C --> E
+    D --> H[ALLOWED_DIRS]
+    E --> F
+    G --> H
+    B --> I[writeText]
+    B --> J[writeTextAtomic]
+    I --> B
+    J --> K[acquireWriteLock]
+    J --> L[renameAtomicTemp]
+    J --> M[CompareAndSwapConflictError]
+    K --> N[removeStaleWriteLock]
+    L --> O[WriteLockBusyError]
+    B --> P[readText]
+    B --> Q[exists]
+    B --> R[mkdir]
+    B --> S[remove]
