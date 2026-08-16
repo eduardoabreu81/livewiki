@@ -66,46 +66,32 @@ validation, rollback, checkpoints, and final `verify` pass. If the MCP session
 stops, the next `livewiki_next_task` call resumes the same run.
 
 For unattended automation, the same bootstrap can instead run through a
-configured LLM API. Run the interactive configuration wizard:
+configured LLM API. Run the wizard — it lists the available providers, asks
+for your API key (typed without echo), and saves it:
 
 ```bash
 livewiki config
 ```
 
-It asks for a preset, model, language, an optional base URL, and the API key,
-which is typed without echo. Provider settings are saved in
-`.livewiki/config.json`; the key is kept separately in
-`~/.livewiki/credentials.json`. On POSIX the credentials file is written with
-mode `0600`. On Windows it inherits the user profile's ACL; there is no direct
-`chmod` equivalent.
+Bare `livewiki` on a repository that isn't configured yet starts the same
+wizard. Provider settings go in `.livewiki/config.json`; the key is stored
+separately in `~/.livewiki/credentials.json` (mode `0600` on POSIX).
 
-Inspect the effective settings and credential origin without printing the key:
+Inspect what's configured without printing the key:
 
 ```bash
 livewiki config show
 ```
 
-For CI, containers, and other headless automation, set the API key through an
-environment variable instead of the wizard. Each preset reads its own
-variable, named after the provider — `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, and so on:
-
-```bash
-export DEEPSEEK_API_KEY=sk-...   # use the variable for your preset
-```
-
-(PowerShell: `$env:DEEPSEEK_API_KEY = "sk-..."`.) Environment variables take
-precedence over the credentials file. `livewiki config show` prints the
-variable name your chosen preset expects, without ever printing the value.
+For CI and other headless automation, set the API key through an environment
+variable instead of the wizard — one per provider (for example
+`DEEPSEEK_API_KEY`). Environment variables take precedence over the saved key;
+`livewiki config show` prints the variable name your preset expects.
 
 Available presets are `anthropic`, `openai`, `openrouter`, `deepseek`, `kimi`,
 `minimax`, `gemini`, `nvidia`, `ollama`, `lmstudio`, `fireworks`, `novita`,
-`gmi`, `stepfun`, `huggingface`, `xai`, and `alibaba`.
-
-For `ollama` and `lmstudio` the credential is optional. Leave it empty to reach
-a local server that needs no authentication, or supply a key — together with a
-custom base URL, which the wizard also asks for — to reach an authenticated
-remote endpoint such as Ollama Cloud or a LiteLLM proxy.
+`gmi`, `stepfun`, `huggingface`, `xai`, and `alibaba`. For `ollama` and
+`lmstudio` the credential is optional — leave it empty for a local server.
 
 Then run the unattended bootstrap:
 

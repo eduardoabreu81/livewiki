@@ -9,6 +9,9 @@ import {
   readLineInput,
   readSecretInput,
   runConfigWizard,
+  isConfigured,
+  decideBareInvocation,
+  BARE_CONFIG_HINT,
   type ConfigWizardIo,
 } from "./commands/config.js";
 
@@ -585,5 +588,40 @@ describe("livewiki config — model suggestions from the preset", () => {
     expect(result.ok).toBe(true);
     expect(output.join("\n")).toContain("Known anthropic models:");
     expect(output.join("\n")).not.toContain("Known anthropic models: \n");
+  });
+});
+
+describe("livewiki — bare-command onboarding routing", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-cli-onboard-repo-"));
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("isConfigured is false for an empty repo and true once a preset is saved", async () => {
+    expect(await isConfigured(repoRoot)).toBe(false);
+    await saveConfig(repoRoot, { preset: "anthropic", model: "claude-sonnet-5" });
+    expect(await isConfigured(repoRoot)).toBe(true);
+  });
+
+  it("isConfigured stays true for a legacy provider override", async () => {
+    await saveConfig(repoRoot, { provider: "anthropic", model: "claude-sonnet-5" });
+    expect(await isConfigured(repoRoot)).toBe(true);
+  });
+
+  it("decideBareInvocation routes help / hint / wizard deterministically", () => {
+    expect(decideBareInvocation(true, true, false)).toBe("help");
+    expect(decideBareInvocation(false, true, false)).toBe("wizard");
+    expect(decideBareInvocation(false, false, false)).toBe("hint");
+    expect(decideBareInvocation(false, true, true)).toBe("hint");
+  });
+
+  it("the hint points at the wizard and never prints a credential variable name", () => {
+    expect(BARE_CONFIG_HINT).toContain("livewiki config");
+    expect(BARE_CONFIG_HINT).not.toMatch(/API_KEY/);
   });
 });

@@ -454,11 +454,78 @@ async function showConfig(
   };
 }
 
-function emitError(json: boolean, error: unknown): void {
+function emitError(json: boolean, error: unknown, label = "config"): void {
   const message = (error as Error).message;
   if (json) emit(true, { ok: false, error: message }, "");
-  else process.stderr.write(`livewiki config: error — ${message}\n`);
+  else process.stderr.write(`livewiki${label ? ` ${label}` : ""}: error — ${message}\n`);
   process.exitCode = 1;
+}
+
+/**
+ * Whether the repo already has a provider configured (preset or legacy
+ * provider). Drives the bare-`livewiki` onboarding: an unconfigured repo gets
+ * the wizard; a configured one falls back to `--help`.
+ */
+export async function isConfigured(repoRoot: string): Promise<boolean> {
+  try {
+    const config = await loadConfig(repoRoot);
+    return config.preset !== undefined || config.provider !== undefined;
+  } catch {
+    // Malformed config surfaces through the wizard's own loadConfig error.
+    return false;
+  }
+}
+
+export type BareInvocationAction = "help" | "hint" | "wizard";
+
+/** Pure routing for the bare-`livewiki` onboarding, kept free of stdio/fs. */
+export function decideBareInvocation(
+  configured: boolean,
+  isTTY: boolean,
+  json: boolean,
+): BareInvocationAction {
+  if (configured) return "help";
+  if (!isTTY || json) return "hint";
+  return "wizard";
+}
+
+export const BARE_CONFIG_HINT =
+  "livewiki is not configured for LLM-backed documentation yet. " +
+  "Run `livewiki config` to pick a provider and API key, or set " +
+  "`preset`/`model` in `.livewiki/config.json` for headless use.";
+
+/**
+ * Runs the interactive config wizard and emits its result. Shared by the
+ * `livewiki config` command and the bare-`livewiki` onboarding.
+ */
+export async function runConfigFlow(options: {
+  json: boolean;
+  repoRoot: string;
+  home: string;
+  errorLabel?: string;
+}): Promise<void> {
+  const { json, repoRoot, home, errorLabel = "config" } = options;
+  try {
+    const result = await runConfigWizard({
+      repoRoot,
+      home,
+      io: processIo(json),
+      env: process.env,
+    });
+    if (!result.ok && result.error) {
+      emitError(json, new Error(result.error), errorLabel);
+      return;
+    }
+    emit(
+      json,
+      result,
+      result.cancelled
+        ? "Configuration cancelled; no files were written."
+        : `Configuration saved for ${result.preset}/${result.model}.`,
+    );
+  } catch (error) {
+    emitError(json, error, errorLabel);
+  }
 }
 
 export function registerConfig(program: Command): void {
@@ -470,27 +537,7 @@ export function registerConfig(program: Command): void {
       const json = Boolean(options.json);
       const repoRoot = nodePath.resolve(process.cwd(), resolveRepoRoot(options.repo));
       const home = resolveLivewikiHome(process.env);
-      try {
-        const result = await runConfigWizard({
-          repoRoot,
-          home,
-          io: processIo(json),
-          env: process.env,
-        });
-        if (!result.ok && result.error) {
-          emitError(json, new Error(result.error));
-          return;
-        }
-        emit(
-          json,
-          result,
-          result.cancelled
-            ? "Configuration cancelled; no files were written."
-            : `Configuration saved for ${result.preset}/${result.model}.`,
-        );
-      } catch (error) {
-        emitError(json, error);
-      }
+      await runConfigFlow({ json, repoRoot, home });
     });
 
   config

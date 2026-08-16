@@ -12,8 +12,16 @@ import { registerExport } from "./commands/export.js";
 import { registerView } from "./commands/view.js";
 import { registerPointer } from "./commands/pointer.js";
 import { registerInstall } from "./commands/install.js";
-import { registerConfig } from "./commands/config.js";
+import {
+  registerConfig,
+  isConfigured,
+  runConfigFlow,
+  decideBareInvocation,
+  BARE_CONFIG_HINT,
+} from "./commands/config.js";
 import { registerBaseline } from "./commands/baseline.js";
+import { resolveLivewikiHome } from "@livewiki/core/credentials";
+import { emit } from "./output.js";
 
 /**
  * Version read from @livewiki/cli's package.json. Synchronous — the file is
@@ -66,6 +74,40 @@ export function createProgram(): Command {
   registerInstall(program);
   registerConfig(program);
   registerBaseline(program);
+
+  // Bare `livewiki` (no subcommand) is the onboarding entry point. An
+  // unconfigured repo runs the config wizard interactively — or, without a
+  // TTY (or under --json), prints a one-line hint instead of hanging. A
+  // configured repo falls back to the usual help screen.
+  program.action(async (_options, command: Command) => {
+    const options = command.optsWithGlobals<{ json?: boolean; repo?: string }>();
+    const json = Boolean(options.json);
+    const repoRoot = resolveRepoRoot(options.repo);
+    const configured = await isConfigured(repoRoot);
+    const decision = decideBareInvocation(configured, Boolean(process.stdin.isTTY), json);
+
+    if (decision === "help") {
+      program.help();
+      return;
+    }
+    if (decision === "hint") {
+      if (json) {
+        emit(true, { ok: false, configured: false, hint: BARE_CONFIG_HINT }, "");
+      } else {
+        process.stdout.write(BARE_CONFIG_HINT + "\n");
+      }
+      return;
+    }
+    process.stdout.write(
+      "This repository isn't configured for LLM-backed documentation yet. Let's set that up.\n\n",
+    );
+    await runConfigFlow({
+      json,
+      repoRoot,
+      home: resolveLivewikiHome(process.env),
+      errorLabel: "",
+    });
+  });
 
   return program;
 }
