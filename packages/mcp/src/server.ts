@@ -104,6 +104,7 @@ import { recordUpdateMetric } from "@livewiki/core/update-metrics";
 import { CHARS_PER_TOKEN } from "@livewiki/core/update";
 import { run as runIndexer } from "@livewiki/core/indexer";
 import { run as runLedger } from "@livewiki/core/anchor-ledger";
+import { acceptBaseline } from "@livewiki/core/baseline-operations";
 import {
   nextAgentBootstrapTask,
   submitAgentBootstrapTask,
@@ -636,68 +637,57 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   );
 
   // ─── livewiki_resolve_debt ─────────────────────────────────────────────
-  // Marca dívida como paga. Recebe IDs e atualiza resolved_at no DB.
-  // Validação: IDs devem existir e debt deve estar aberta.
+  // Accepts the current code/document alignment into the portable baseline.
+  // Local SQLite debt IDs are projections only and are never durable proof.
   server.tool(
     "livewiki_resolve_debt",
-    "Marks documentation debt items as paid (sets resolved_at). Each ID must reference an open debt row. Returns the count of resolved items and any IDs that didn't match.",
+    "Explicitly accepts the current code/document alignment into the versioned baseline. Choose one wiki page and either specific anchored symbol keys or every anchor on that page. Local SQLite debt IDs are not accepted because they are disposable projections.",
     {
-      debtIds: z
-        .array(z.number().int().positive())
-        .min(1)
-        .describe("Debt row IDs to resolve (get them from livewiki_debt)"),
-      /** Vinculado a um write — referência opcional pra audit trail */
-      writeRef: z
+      page: z
         .string()
+        .min(1)
+        .describe("Wiki page whose current anchored symbols are being accepted"),
+      symbols: z
+        .array(z.string().min(1))
+        .min(1)
         .optional()
-        .describe("Optional write path (e.g. 'livewiki/auth.md') for audit trail"),
+        .describe("Exact anchored symbol keys to accept; mutually exclusive with all=true"),
+      all: z
+        .boolean()
+        .optional()
+        .describe("Accept every current anchor on the page; mutually exclusive with symbols"),
     },
-    async ({ debtIds, writeRef }) => {
+    async ({ page, symbols, all }) => {
       try {
-        const dbPath = await safeIo.resolveAndValidate(repoRoot, ".livewiki/index.db");
-        const db = openIndex(dbPath);
-        try {
-          const stmt = db.prepare(
-            "UPDATE debt SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL",
-          );
-          const ts = Date.now();
-          const resolved: number[] = [];
-          const notFound: number[] = [];
-          const tx = db.transaction(() => {
-            for (const id of debtIds) {
-              const r = stmt.run(ts, id);
-              if (r.changes > 0) resolved.push(id);
-              else notFound.push(id);
-            }
-          });
-          tx();
-          // Roadmap item 14: record the resolution in the activity ledger
-          // (only when at least one row was resolved; best-effort, the
-          // recorder swallows its own errors).
-          if (resolved.length > 0) {
-            await recordUpdateMetric(repoRoot, {
-              kind: "debt_resolved",
-              timestamp: ts,
-              count: resolved.length,
-              source: "mcp",
-            });
-          }
-          return textResult(
-            JSON.stringify(
-              {
-                resolved,
-                notFound,
-                ...(writeRef !== undefined ? { writeRef } : {}),
-                timestamp: ts,
-                _hints: TOOL_HINTS.livewiki_resolve_debt,
-              },
-              null,
-              2,
-            ),
-          );
-        } finally {
-          db.close();
+        if (Boolean(all) === Boolean(symbols?.length)) {
+          throw new Error("choose either symbols or all=true");
         }
+        const accepted = await acceptBaseline(repoRoot, {
+          page,
+          ...(symbols !== undefined ? { symbols } : {}),
+          ...(all !== undefined ? { all } : {}),
+        });
+        await runLedger(repoRoot, { quiet: true });
+        const ts = Date.now();
+        await recordUpdateMetric(repoRoot, {
+          kind: "debt_resolved",
+          timestamp: ts,
+          count: accepted.accepted.length,
+          source: "mcp",
+        });
+        return textResult(
+          JSON.stringify(
+            {
+              page: accepted.page,
+              accepted: accepted.accepted,
+              written: accepted.written,
+              timestamp: ts,
+              _hints: TOOL_HINTS.livewiki_resolve_debt,
+            },
+            null,
+            2,
+          ),
+        );
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : "resolve_debt failed");
       }

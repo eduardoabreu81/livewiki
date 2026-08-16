@@ -10,7 +10,8 @@ import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { regenerateArchitectureOverview, runInit } from "./init.js";
 import { run as runVerify } from "./verify.js";
-import { computeSnapshotHash, readManifest } from "./manifest.js";
+import { computeSnapshotHash, readManifest, recordArtifactReceipt } from "./manifest.js";
+import { sha256 } from "./hashes.js";
 
 describe("overview.md — class-diagram link only when the file exists", () => {
   let repoRoot: string;
@@ -594,5 +595,56 @@ describe("planning inventory — active files with zero extracted symbols", () =
     //    holds when zero-symbol files are present.
     expect(overview).toMatch(/\*\*3\*\* files, \*\*\d+\*\* documented code symbols/);
     expect(overview.match(/src\/index\.ts/g)?.length).toBe(1);
+  });
+});
+
+describe("runInit receipt refresh", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await nodeFs.mkdtemp(
+      nodePath.join(nodeOs.tmpdir(), "livewiki-init-receipt-"),
+    );
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("refreshes the receipt of a folder page rewritten by plain init", async () => {
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/hello.ts"),
+      "export function hello() { return 1; }\n",
+      "utf8",
+    );
+    await runInit({ repoRoot, quiet: true });
+
+    // A generated folder page without a Navigate block: the next init
+    // appends one, rewriting the page.
+    const before = "---\ntitle: src\nowner: generated\n---\n\n# src\n";
+    await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki/src"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "livewiki/src/index.md"),
+      before,
+      "utf8",
+    );
+    await recordArtifactReceipt(repoRoot, {
+      taskId: "folder:livewiki/src/index.md",
+      evidenceHash: "e".repeat(64),
+      contract: "folder-page-v1",
+      artifacts: [{ path: "livewiki/src/index.md", hash: sha256(before) }],
+    });
+
+    await runInit({ repoRoot, quiet: true });
+
+    const after = await nodeFs.readFile(
+      nodePath.join(repoRoot, "livewiki/src/index.md"),
+      "utf8",
+    );
+    expect(after).not.toBe(before);
+    const receipt = (await readManifest(repoRoot))?.artifactReceipts
+      .find((item) => item.taskId === "folder:livewiki/src/index.md");
+    expect(receipt?.artifacts[0]?.hash).toBe(sha256(after));
   });
 });

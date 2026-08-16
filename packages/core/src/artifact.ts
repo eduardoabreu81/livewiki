@@ -250,6 +250,21 @@ function extractDegradedTitle(yamlBlock: string, body: string): string {
 }
 
 /**
+ * True when the page was completed under the relaxed completion round —
+ * frontmatter `quality: degraded`, written by `markDegradedArtifact`.
+ * Recovery re-validates such pages under the same relaxed contract they
+ * were accepted with; an unparseable page is simply not degraded.
+ */
+export function isDegradedArtifact(content: string): boolean {
+  try {
+    const { frontmatter } = parseFrontmatter(content.replace(/\r\n/g, "\n"));
+    return frontmatter?.["quality"] === "degraded";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Recovery tier (Component 2): mark an artifact as degraded — the
  * frontmatter gains the additive `quality: degraded` line (the validator
  * never rejects unknown keys) and the per-page degraded notice

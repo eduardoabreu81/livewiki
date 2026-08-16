@@ -462,6 +462,7 @@ describe("batch stage 5c — repository understanding", () => {
     });
     expect(first.status).toBe("completed");
     expect(llm.understandingCallCount).toBe(1);
+    const callsAfterFirstRun = llm.callCount;
 
     const resumed = await resumeBatch({
       repoRoot,
@@ -470,10 +471,9 @@ describe("batch stage 5c — repository understanding", () => {
       skipManifestWrite: true,
     });
     expect(resumed.status).toBe("completed");
-    // File/folder/flow tasks re-ran (resume regenerates), but the
-    // understanding task found its done checkpoint for the SAME evidence
-    // hash and skipped.
-    expect(llm.callCount).toBeGreaterThan(6);
+    // Every contract-bound task is recovered from repository evidence;
+    // unchanged resume performs no new model call.
+    expect(llm.callCount).toBe(callsAfterFirstRun);
     expect(llm.understandingCallCount).toBe(1);
   });
 

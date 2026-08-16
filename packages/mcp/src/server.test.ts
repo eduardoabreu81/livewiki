@@ -467,18 +467,32 @@ Conteudo.
     }
   });
 
-  it("livewiki_resolve_debt fecha dívidas e reporta IDs inválidos", async () => {
+  it("livewiki_resolve_debt accepts anchored symbols into the durable baseline", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "livewiki/login.md"),
+      "---\ntitle: login\nowner: generated\nanchors:\n  - src/auth/login.ts#login\n---\n\n# login\n\nDocs.\n",
+    );
     const c = await connect();
     try {
-      // Sem dívidas abertas inicialmente → tentar resolver ID 9999 = notFound
       const r = await c.client.callTool({
         name: "livewiki_resolve_debt",
-        arguments: { debtIds: [9999] },
+        arguments: { page: "livewiki/login.md", all: true },
       });
-      const text = extractText(r);
-      const parsed = JSON.parse(text);
-      expect(parsed.resolved).toEqual([]);
-      expect(parsed.notFound).toEqual([9999]);
+      const parsed = JSON.parse(extractText(r));
+      expect(parsed.page).toBe("livewiki/login.md");
+      expect(parsed.accepted).toEqual(["src/auth/login.ts#login"]);
+
+      const { readBaseline } = await import("@livewiki/core/baseline");
+      const baseline = await readBaseline(repoRoot);
+      expect(baseline.state).toBe("available");
+      if (baseline.state !== "available") throw new Error("expected available baseline");
+      expect(baseline.baseline.entries).toEqual([
+        expect.objectContaining({
+          wikiPath: "livewiki/login.md",
+          symbolKey: "src/auth/login.ts#login",
+          provenance: "accepted",
+        }),
+      ]);
     } finally {
       await teardown(c);
     }
@@ -549,7 +563,7 @@ Content here.
   });
 
   it("livewiki_resolve_debt records debt_resolved with the resolved count", async () => {
-    // Create one open debt row: anchored page + source change + ledger runs.
+    // Establish a portable baseline, then change the source to create debt.
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".gitignore"),
       ".livewiki/\n",
@@ -560,8 +574,9 @@ Content here.
     );
     const { run: runIndexer } = await import("@livewiki/core/indexer");
     const { run: runLedger } = await import("@livewiki/core/anchor-ledger");
+    const { acceptBaseline } = await import("@livewiki/core/baseline-operations");
     await runIndexer(repoRoot, { quiet: true });
-    await runLedger(repoRoot, { quiet: true });
+    await acceptBaseline(repoRoot, { page: "livewiki/login.md", all: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "src/auth/login.ts"),
       "export function login() { return 'changed'; }\n",
@@ -573,22 +588,29 @@ Content here.
     try {
       const debtReport = JSON.parse(
         extractText(await c.client.callTool({ name: "livewiki_debt", arguments: {} })),
-      ) as { debt: { items: Array<{ id: number }> } };
-      expect(debtReport.debt.items.length).toBe(1);
-      const debtId = debtReport.debt.items[0]!.id;
+      ) as { debt: { repository: { items: Array<{ event: string; symbol_key: string }> } } };
+      expect(debtReport.debt.repository.items).toEqual([
+        expect.objectContaining({ event: "changed", symbol_key: "src/auth/login.ts#login" }),
+      ]);
 
-      // A no-match resolve records NOTHING (count would be 0).
+      // A rejected acceptance records nothing.
       const miss = await c.client.callTool({
         name: "livewiki_resolve_debt",
-        arguments: { debtIds: [9999] },
+        arguments: {
+          page: "livewiki/login.md",
+          symbols: ["src/auth/login.ts#missing"],
+        },
       });
-      expect(JSON.parse(extractText(miss)).resolved).toEqual([]);
+      expect(miss.isError).toBe(true);
 
       const hit = await c.client.callTool({
         name: "livewiki_resolve_debt",
-        arguments: { debtIds: [debtId] },
+        arguments: {
+          page: "livewiki/login.md",
+          symbols: ["src/auth/login.ts#login"],
+        },
       });
-      expect(JSON.parse(extractText(hit)).resolved).toEqual([debtId]);
+      expect(JSON.parse(extractText(hit)).accepted).toEqual(["src/auth/login.ts#login"]);
 
       const snap = await pollSnapshot((s) => s.debtResolvedTotal === 1);
       expect(snap.debtResolvedTotal).toBe(1);
@@ -703,11 +725,15 @@ Notes.
   });
 
   it("livewiki_resolve_debt suggests debt", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "livewiki/login.md"),
+      "---\ntitle: login\nowner: generated\nanchors:\n  - src/auth/login.ts#login\n---\n\n# login\n\nDocs.\n",
+    );
     const c = await connect();
     try {
       const r = await c.client.callTool({
         name: "livewiki_resolve_debt",
-        arguments: { debtIds: [9999] },
+        arguments: { page: "livewiki/login.md", all: true },
       });
       expect(hintTools(r)).toEqual(["livewiki_debt"]);
       assertWellFormedHints(r);
@@ -756,12 +782,12 @@ describe("MCP server — watcher (backlog #3)", () => {
   it("picks up working-tree edits: ledger debt + search rebuild within the debounce window", async () => {
     // Arrange: a wiki page anchoring src/auth/login.ts#login, so a symbol
     // edit becomes `changed` debt on the next ledger run.
-    const { run: runLedger } = await import("@livewiki/core/anchor-ledger");
+    const { acceptBaseline } = await import("@livewiki/core/baseline-operations");
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "livewiki/login.md"),
       "---\ntitle: login\nowner: generated\nanchors:\n  - src/auth/login.ts#login\n---\n\n# login\n\nDocs.\n",
     );
-    await runLedger(repoRoot, { quiet: true });
+    await acceptBaseline(repoRoot, { page: "livewiki/login.md", all: true });
 
     const c = await connect();
     try {

@@ -48,6 +48,14 @@ import { openIndex, type FileRow, type SymbolRow } from "./db.js";
 import { extractAnchors, type Owner } from "./anchors.js";
 import { maskCodeSpansPreservingLength } from "./markdown-mask.js";
 import { sha256 } from "./hashes.js";
+import {
+  collectBaselineDocumentationInventory,
+  evaluateBaseline,
+  readBaseline,
+  type DocumentationBaseline,
+  type BaselineMoveCandidate,
+  type EvaluatedBaselineEntry,
+} from "./baseline.js";
 
 export type DebtEvent = "changed" | "moved" | "deleted";
 export type Assignee = "agent" | "human";
@@ -106,6 +114,15 @@ async function orchestrate(
     undocumentedSymbols: 0,
     movedPairs: [],
   };
+
+  const baselineLoad = await readBaseline(absRoot);
+  // Once a baseline file exists, even an incompatible one, `index` is
+  // detection-only for documentation identity. Falling back to the legacy
+  // rewrite path on malformed future evidence would fail open.
+  const portableBaselineMode = baselineLoad.state !== "unavailable";
+  const repositoryBaseline = baselineLoad.state === "available"
+    ? baselineLoad.baseline
+    : null;
 
   // 1. Coleta wiki pages (.md em livewiki/)
   const wikiPages = await collectWikiPages(absRoot);
@@ -285,7 +302,9 @@ async function orchestrate(
   //    up an active symbol with the same content_hash in a different
   //    file. On match, record the (oldKey, newKey) pair.
   const movedMap = new Map<string, string>(); // oldKey -> newKey
-  detectMoves(deletedSymbols, existingSymbols, movedMap, result);
+  if (!portableBaselineMode) {
+    detectMoves(deletedSymbols, existingSymbols, movedMap, result);
+  }
 
   // 4a. Build the pre-move set of expected identities per page from
   //     currentAnchors (still using the original symbol keys parsed
@@ -513,6 +532,7 @@ async function orchestrate(
     const assignee = assigneeFor(ca.owner, ca.inManualBlock);
 
     if (!sym) {
+      if (portableBaselineMode) continue;
       // symbol sumiu do código (não está no índice)
       // Se for o resultado de um moved, sym exists com novo nome — mas ca.symbolKey já foi atualizado
       const anchorId = prev?.id ?? null;
@@ -531,18 +551,20 @@ async function orchestrate(
 
     // A prior deletion stopped being true when the symbol reappeared. Remove
     // the stale row instead of resolving it: no documentation work paid it.
-    deleteOpenDebt(db, ca.symbolKey, ca.docPageId, "deleted");
+    if (!portableBaselineMode) {
+      deleteOpenDebt(db, ca.symbolKey, ca.docPageId, "deleted");
+    }
 
     // Ownership promotion is independent of hash divergence so databases
     // that persisted the pre-fix agent assignment self-correct on the next
     // ledger run. Promotion is monotonic: agent occurrences never demote an
     // existing human-owned work unit.
-    if (assignee === "human") {
+    if (!portableBaselineMode && assignee === "human") {
       promoteOpenDebtToHuman(db, ca.symbolKey, ca.docPageId, "changed");
     }
 
     // symbol existe — checa hash
-    if (prev && prev.symbol_hash_at_doc !== sym.content_hash) {
+    if (!portableBaselineMode && prev && prev.symbol_hash_at_doc !== sym.content_hash) {
       if (!hasOpenDebt(db, ca.symbolKey, ca.docPageId, "changed")) {
         createDebt(db, prev.id, "changed", assignee, null, ca.symbolKey, ca.docPageId);
         result.debtCreated++;
@@ -609,6 +631,10 @@ async function orchestrate(
   //    symbols.
   upsertUndocumented(db, existingSymbols, currentAnchors, result);
 
+  if (repositoryBaseline !== null) {
+    await syncBaselineDebt(db, absRoot, repositoryBaseline, existingSymbols, result);
+  }
+
   // 9. Expunge dead symbol rows that have an active replacement
   //    (supersession noise from file edits). Truly deleted symbols
   //    (no replacement) stay — they are useful for audit and for
@@ -633,6 +659,143 @@ async function orchestrate(
   ).run(String(Date.now()));
 
   return result;
+}
+
+async function syncBaselineDebt(
+  db: import("better-sqlite3").Database,
+  absRoot: string,
+  baseline: DocumentationBaseline,
+  activeSymbols: Map<string, SymbolRow>,
+  result: LedgerResult,
+): Promise<void> {
+  const inventory = await collectBaselineDocumentationInventory(absRoot);
+  const health = evaluateBaseline(baseline, [...activeSymbols.values()], inventory);
+  const desired = new Map<string, {
+    event: DebtEvent;
+    wikiPath: string;
+    symbolKey: string;
+    assignee: Assignee;
+    detail: string | null;
+  }>();
+
+  for (const entry of health.entries) {
+    if (entry.provenance !== "accepted") continue;
+    if (entry.state === "changed") {
+      addDesiredBaselineDebt(desired, entry, "changed", null);
+    } else if (entry.state === "deleted" &&
+               !health.moves.some((move) =>
+                 move.wikiPath === entry.wikiPath && move.oldKey === entry.symbolKey)) {
+      addDesiredBaselineDebt(desired, entry, "deleted", null);
+    }
+  }
+  for (const move of health.moves) {
+    addDesiredMoveDebt(desired, move);
+  }
+
+  const pageRows = db.prepare("SELECT id, wiki_path FROM doc_pages").all() as Array<{
+    id: number;
+    wiki_path: string;
+  }>;
+  const pageIdByPath = new Map(pageRows.map((row) => [row.wiki_path, row.id]));
+  const openRows = db.prepare(
+    "SELECT id, symbol_key, doc_page_id, event, assignee FROM debt WHERE resolved_at IS NULL",
+  ).all() as Array<{
+    id: number;
+    symbol_key: string | null;
+    doc_page_id: number | null;
+    event: string;
+    assignee: string;
+  }>;
+  const pathByPageId = new Map(pageRows.map((row) => [row.id, row.wiki_path]));
+  const existing = new Map<string, typeof openRows[number]>();
+  for (const row of openRows) {
+    const wikiPath = row.doc_page_id === null ? null : pathByPageId.get(row.doc_page_id) ?? null;
+    if (wikiPath === null || row.symbol_key === null) {
+      db.prepare("DELETE FROM debt WHERE id = ?").run(row.id);
+      continue;
+    }
+    const identity = baselineDebtIdentity(wikiPath, row.symbol_key, row.event);
+    if (!desired.has(identity)) {
+      db.prepare("DELETE FROM debt WHERE id = ?").run(row.id);
+      continue;
+    }
+    existing.set(identity, row);
+  }
+
+  const findAnchor = db.prepare(
+    "SELECT a.id FROM anchors a JOIN doc_pages dp ON dp.id = a.doc_page_id " +
+      "WHERE dp.wiki_path = ? AND a.symbol_key = ? ORDER BY a.id LIMIT 1",
+  );
+  for (const [identity, item] of desired) {
+    const current = existing.get(identity);
+    if (current) {
+      if (current.assignee === "agent" && item.assignee === "human") {
+        db.prepare("UPDATE debt SET assignee = 'human' WHERE id = ?").run(current.id);
+      }
+      continue;
+    }
+    const pageId = pageIdByPath.get(item.wikiPath) ?? null;
+    const anchor = findAnchor.get(item.wikiPath, item.event === "moved"
+      ? JSON.parse(item.detail ?? "{}").from ?? item.symbolKey
+      : item.symbolKey) as { id: number } | undefined;
+    createDebt(
+      db,
+      anchor?.id ?? null,
+      item.event,
+      item.assignee,
+      item.detail,
+      item.symbolKey,
+      pageId,
+    );
+    result.debtCreated++;
+    result.debtByEvent[item.event]++;
+  }
+  result.movedPairs = health.moves.map((move) => ({ from: move.oldKey, to: move.newKey }));
+}
+
+function addDesiredBaselineDebt(
+  desired: Map<string, {
+    event: DebtEvent;
+    wikiPath: string;
+    symbolKey: string;
+    assignee: Assignee;
+    detail: string | null;
+  }>,
+  entry: EvaluatedBaselineEntry,
+  event: "changed" | "deleted",
+  detail: string | null,
+): void {
+  desired.set(baselineDebtIdentity(entry.wikiPath, entry.symbolKey, event), {
+    event,
+    wikiPath: entry.wikiPath,
+    symbolKey: entry.symbolKey,
+    assignee: entry.assignee,
+    detail,
+  });
+}
+
+function addDesiredMoveDebt(
+  desired: Map<string, {
+    event: DebtEvent;
+    wikiPath: string;
+    symbolKey: string;
+    assignee: Assignee;
+    detail: string | null;
+  }>,
+  move: BaselineMoveCandidate,
+): void {
+  const detail = JSON.stringify({ from: move.oldKey, to: move.newKey });
+  desired.set(baselineDebtIdentity(move.wikiPath, move.newKey, "moved"), {
+    event: "moved",
+    wikiPath: move.wikiPath,
+    symbolKey: move.newKey,
+    assignee: move.assignee,
+    detail,
+  });
+}
+
+function baselineDebtIdentity(wikiPath: string, symbolKey: string, event: string): string {
+  return `${wikiPath}\0${symbolKey}\0${event}`;
 }
 
 function hashContent(content: string): string {

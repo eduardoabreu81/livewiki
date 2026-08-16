@@ -8,12 +8,15 @@ import {
   isInsideAllowlist,
   resolveAndValidate,
   writeText,
+  writeTextAtomic,
   readText,
   exists,
   mkdir,
   remove,
   PathOutsideAllowlistError,
   InvalidRelativePathError,
+  CompareAndSwapConflictError,
+  WriteLockBusyError,
 } from "./safe-io.js";
 
 let repoRoot: string;
@@ -476,4 +479,62 @@ describe("integração com cwd (não vaza fora do repoRoot passado)", () => {
 // Sanity check final: confirma que existSync está disponível (usado internamente).
 it("smoke: existSync importável via node:fs", () => {
   expect(typeof nodeFsSync.existsSync).toBe("function");
+});
+
+describe("writeTextAtomic", () => {
+  it("replaces an allowlisted file and removes its derived lock", async () => {
+    await writeText(repoRoot, "livewiki/state.json", "old");
+    await writeTextAtomic(repoRoot, "livewiki/state.json", "new", {
+      expected: "old",
+      lockRelPath: ".livewiki/state.lock",
+    });
+    expect(await readText(repoRoot, "livewiki/state.json")).toBe("new");
+    expect(await exists(repoRoot, ".livewiki/state.lock")).toBe(false);
+  });
+
+  it("fails compare-and-swap without changing the file", async () => {
+    await writeText(repoRoot, "livewiki/state.json", "current");
+    await expect(writeTextAtomic(repoRoot, "livewiki/state.json", "new", {
+      expected: "stale",
+      lockRelPath: ".livewiki/state.lock",
+    })).rejects.toBeInstanceOf(CompareAndSwapConflictError);
+    expect(await readText(repoRoot, "livewiki/state.json")).toBe("current");
+    expect(await exists(repoRoot, ".livewiki/state.lock")).toBe(false);
+  });
+});
+
+describe("writeTextAtomic lock recovery", () => {
+  it("reclaims a stale lock left behind by a killed process", async () => {
+    await writeText(repoRoot, "livewiki/state.json", "old");
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    const lockAbs = nodePath.join(repoRoot, ".livewiki", "state.lock");
+    await nodeFs.writeFile(lockAbs, "", "utf8");
+    const stale = new Date(Date.now() - 120_000);
+    await nodeFs.utimes(lockAbs, stale, stale);
+
+    await writeTextAtomic(repoRoot, "livewiki/state.json", "new", {
+      expected: "old",
+      lockRelPath: ".livewiki/state.lock",
+    });
+
+    expect(await readText(repoRoot, "livewiki/state.json")).toBe("new");
+    expect(await exists(repoRoot, ".livewiki/state.lock")).toBe(false);
+  });
+
+  it("refuses a fresh lock and names the remedy", async () => {
+    await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
+    await nodeFs.writeFile(nodePath.join(repoRoot, ".livewiki", "state.lock"), "", "utf8");
+
+    await expect(writeTextAtomic(repoRoot, "livewiki/state.json", "new", {
+      lockRelPath: ".livewiki/state.lock",
+    })).rejects.toThrow(WriteLockBusyError);
+    await expect(writeTextAtomic(repoRoot, "livewiki/state.json", "new", {
+      lockRelPath: ".livewiki/state.lock",
+    })).rejects.toThrow(
+      "write lock is busy: .livewiki/state.lock. If no livewiki process is running, " +
+      "delete the lock file .livewiki/state.lock and retry.",
+    );
+    // A fresh lock is never reclaimed silently.
+    expect(await exists(repoRoot, ".livewiki/state.lock")).toBe(true);
+  });
 });

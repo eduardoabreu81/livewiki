@@ -8,6 +8,8 @@ import { run as runStatus } from "./status.js";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
 import { openIndex } from "./db.js";
+import { emptyBaseline, writeBaseline } from "./baseline.js";
+import { acceptBaseline } from "./baseline-operations.js";
 
 describe("status.formatHuman", () => {
   it("formats empty report", () => {
@@ -30,7 +32,7 @@ describe("status.formatHuman", () => {
     expect(out).toContain("livewiki status");
     expect(out).toContain("Indexed files: 0");
     expect(out).toContain("Extracted symbols (active): 0");
-    expect(out).toContain("Open debt: 0");
+    expect(out).toContain("Local projected debt: 0");
     expect(out).toContain("Undocumented: 0");
     expect(out).toContain("last_indexed_at: never");
   });
@@ -112,7 +114,7 @@ describe("status.formatHuman", () => {
     expect(out).toContain("Top 2 files");
     expect(out).toContain("42");
     expect(out).toContain("src/big.ts");
-    expect(out).toContain("Open debt: 3");
+    expect(out).toContain("Local projected debt: 3");
     expect(out).toContain("changed=2");
     expect(out).toContain("[changed] agent src/foo.ts#bar");
     expect(out).toContain("[moved] agent");
@@ -298,15 +300,6 @@ describe("status debt baseline", () => {
     await rm(repoRoot, { recursive: true, force: true });
   });
 
-  function deleteLedgerRuns(): void {
-    const db = openIndex(join(repoRoot, ".livewiki", "index.db"));
-    try {
-      db.prepare("DELETE FROM meta WHERE key = 'ledger_runs'").run();
-    } finally {
-      db.close();
-    }
-  }
-
   it("reports unavailable after the first ledger run and preserves existing debt fields", async () => {
     await runLedger(repoRoot, { quiet: true });
 
@@ -320,25 +313,66 @@ describe("status debt baseline", () => {
     });
   });
 
-  it("reports available after the second ledger run", async () => {
+  it("stays unavailable after repeated local ledger runs without a versioned baseline", async () => {
     await runLedger(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    expect((await runStatus(repoRoot)).debt.baseline).toBe("available");
+    expect((await runStatus(repoRoot)).debt.baseline).toBe("unavailable");
   });
 
-  it("treats a pre-existing database without ledger_runs as mature and keeps it mature", async () => {
-    await runLedger(repoRoot, { quiet: true });
-    deleteLedgerRuns();
-
-    expect((await runStatus(repoRoot)).debt.baseline).toBe("available");
-
-    await runLedger(repoRoot, { quiet: true });
-    expect((await runStatus(repoRoot)).debt.baseline).toBe("available");
+  it("reports available only from a valid versioned baseline", async () => {
+    await writeBaseline(repoRoot, emptyBaseline());
+    const report = await runStatus(repoRoot);
+    expect(report.debt.baseline).toBe("available");
+    expect(report.debt.repository).toMatchObject({
+      total: 0,
+      clean: 0,
+      unbaselined: { total: 0 },
+      inferred: { total: 0 },
+      removedAnchors: { total: 0 },
+    });
   });
 
   it("reports unavailable when neither ledger_runs nor last_ledger_at exists", async () => {
     expect((await runStatus(repoRoot)).debt.baseline).toBe("unavailable");
+  });
+
+  it("surfaces a removed anchor once, not as a changed item, when the symbol also drifted", async () => {
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(
+      join(repoRoot, "src/service.ts"),
+      "export function run() { return 1; }\n",
+    );
+    await mkdir(join(repoRoot, "livewiki"), { recursive: true });
+    await writeFile(
+      join(repoRoot, "livewiki/service.md"),
+      "---\ntitle: Service\nowner: generated\nanchors:\n  - src/service.ts#run\n---\n\n# Service\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await writeBaseline(repoRoot, emptyBaseline());
+    await acceptBaseline(repoRoot, { page: "livewiki/service.md", all: true });
+
+    // Drift the symbol AND remove the anchor from the page.
+    await writeFile(
+      join(repoRoot, "src/service.ts"),
+      "export function run() { return 2; }\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await writeFile(
+      join(repoRoot, "livewiki/service.md"),
+      "---\ntitle: Service\nowner: generated\n---\n\n# Service\n",
+    );
+    await runLedger(repoRoot, { quiet: true });
+
+    const repository = (await runStatus(repoRoot)).debt.repository;
+    expect(repository?.removedAnchors.total).toBe(1);
+    expect(repository?.removedAnchors.items).toEqual([
+      { symbol_key: "src/service.ts#run", wiki_path: "livewiki/service.md" },
+    ]);
+    expect(
+      repository?.items.filter((item) => item.symbol_key === "src/service.ts#run"),
+    ).toEqual([]);
+    expect(repository?.byEvent).toEqual({ changed: 0, moved: 0, deleted: 0 });
   });
 });
 

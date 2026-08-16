@@ -69,6 +69,32 @@ export class InvalidRelativePathError extends Error {
   }
 }
 
+/** Raised when an authoritative file changed after its caller read it. */
+export class CompareAndSwapConflictError extends Error {
+  constructor(relPath: string) {
+    super(`concurrent write detected for ${relPath}`);
+    this.name = "CompareAndSwapConflictError";
+  }
+}
+
+/** Raised when another process is already updating repository authority. */
+export class WriteLockBusyError extends Error {
+  constructor(relPath: string) {
+    super(
+      `write lock is busy: ${relPath}. If no livewiki process is running, ` +
+      `delete the lock file ${relPath} and retry.`,
+    );
+    this.name = "WriteLockBusyError";
+  }
+}
+
+let atomicTempSequence = 0;
+const ATOMIC_RENAME_ATTEMPTS = 20;
+const ATOMIC_RENAME_RETRY_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
+// Writes under the lock are sub-second; a lock older than this is a SIGKILL
+// leftover, not a live writer, and is reclaimed once.
+const WRITE_LOCK_STALE_MS = 60_000;
+
 function allowlistFor(opts: SafeIoOptions): readonly string[] {
   const extras: string[] = [];
   if (opts.allowPointer) extras.push("AGENTS.md", "CLAUDE.md");
@@ -265,6 +291,100 @@ export async function writeText(
   const abs = await resolveAndValidate(repoRoot, relPath, opts);
   await nodeFs.mkdir(nodePath.dirname(abs), { recursive: true });
   await nodeFs.writeFile(abs, content, "utf8");
+}
+
+/**
+ * Atomically replace an allowlisted text file, optionally guarded by an exact
+ * compare-and-swap. The short-lived lock belongs in `.livewiki/`, so a crash
+ * cannot leave uncommitted lock state in the versioned wiki.
+ */
+export async function writeTextAtomic(
+  repoRoot: string,
+  relPath: string,
+  content: string,
+  opts: SafeIoOptions & { expected?: string | null; lockRelPath?: string } = {},
+): Promise<void> {
+  const { expected, lockRelPath = ".livewiki/write.lock", ...safeOpts } = opts;
+  const abs = await resolveAndValidate(repoRoot, relPath, safeOpts);
+  const lockAbs = await resolveAndValidate(repoRoot, lockRelPath);
+  await nodeFs.mkdir(nodePath.dirname(abs), { recursive: true });
+  await nodeFs.mkdir(nodePath.dirname(lockAbs), { recursive: true });
+
+  const lock = await acquireWriteLock(lockAbs, lockRelPath);
+
+  const tempRelPath =
+    `${relPath}.tmp-${process.pid}-${Date.now()}-${atomicTempSequence++}`;
+  const tempAbs = await resolveAndValidate(repoRoot, tempRelPath, safeOpts);
+  try {
+    if (Object.prototype.hasOwnProperty.call(opts, "expected")) {
+      let current: string | null;
+      try {
+        current = await nodeFs.readFile(abs, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        current = null;
+      }
+      if (current !== expected) throw new CompareAndSwapConflictError(relPath);
+    }
+    await nodeFs.writeFile(tempAbs, content, "utf8");
+    await renameAtomicTemp(tempAbs, abs);
+  } finally {
+    await nodeFs.rm(tempAbs, { force: true }).catch(() => undefined);
+    await lock.close().catch(() => undefined);
+    await nodeFs.rm(lockAbs, { force: true }).catch(() => undefined);
+  }
+}
+
+async function acquireWriteLock(
+  lockAbs: string,
+  lockRelPath: string,
+): Promise<nodeFs.FileHandle> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await nodeFs.open(lockAbs, "wx");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (attempt > 0 || !await removeStaleWriteLock(lockAbs)) {
+        throw new WriteLockBusyError(lockRelPath);
+      }
+    }
+  }
+  throw new WriteLockBusyError(lockRelPath);
+}
+
+/** Unlink a lock only when it is older than any plausible live write. */
+async function removeStaleWriteLock(lockAbs: string): Promise<boolean> {
+  try {
+    const stat = await nodeFs.stat(lockAbs);
+    if (Date.now() - stat.mtimeMs < WRITE_LOCK_STALE_MS) return false;
+    await nodeFs.rm(lockAbs, { force: true });
+  } catch (error) {
+    // The holder finished between open and stat; retry the acquisition.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return true;
+}
+
+async function renameAtomicTemp(tempAbs: string, targetAbs: string): Promise<void> {
+  for (let attempt = 0; attempt < ATOMIC_RENAME_ATTEMPTS; attempt++) {
+    try {
+      await nodeFs.rename(tempAbs, targetAbs);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        !code ||
+        !ATOMIC_RENAME_RETRY_CODES.has(code) ||
+        attempt === ATOMIC_RENAME_ATTEMPTS - 1
+      ) {
+        throw error;
+      }
+      // Windows virus scanners and concurrent readers can hold a just-read
+      // destination briefly. Keep the lock and retry the same prepared temp
+      // file so compare-and-swap remains atomic from the caller's perspective.
+      await new Promise((resolve) => setTimeout(resolve, Math.min(2 ** attempt, 25)));
+    }
+  }
 }
 
 export async function readText(

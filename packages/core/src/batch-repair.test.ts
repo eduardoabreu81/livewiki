@@ -32,6 +32,7 @@ import {
 import { buildStatusReport } from "./batch-status.js";
 import { DEGRADED_NOTICE_PREFIX } from "./artifact.js";
 import * as safeIo from "./safe-io.js";
+import { emptyBaseline, writeBaseline } from "./baseline.js";
 import type { LlmClient } from "./llm/index.js";
 import { LlmTimeoutError } from "./llm/index.js";
 import type { GenerateResult } from "./llm/types.js";
@@ -234,6 +235,7 @@ beforeEach(async () => {
     JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
     "utf8",
   );
+  await writeBaseline(repoRoot, emptyBaseline());
 });
 
 afterEach(async () => {

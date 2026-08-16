@@ -2,13 +2,23 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
+import { sha256 } from "./hashes.js";
 import {
+  BASELINE_AUDIT_FILENAME,
   MANIFEST_REL_PATH,
   computeSnapshotHash,
   readManifest,
   writeManifestIfChanged,
   buildManifest,
+  recordArtifactReceipt,
+  refreshArtifactReceiptHashes,
+  removeArtifactReceiptsForPaths,
+  upsertArtifactReceipt,
+  writeManifestState,
 } from "./manifest.js";
+
+const HASH_A = "a".repeat(64);
+const HASH_B = "b".repeat(64);
 
 let repoRoot: string;
 
@@ -64,6 +74,13 @@ describe("manifest.computeSnapshotHash", () => {
     expect(h1).toBe(h2);
   });
 
+  it("excludes .baseline.json audit state from the rendered snapshot", async () => {
+    await writeLivewikiFile("livewiki/auth.md", "auth");
+    const h1 = await computeSnapshotHash(repoRoot);
+    await writeLivewikiFile(`livewiki/${BASELINE_AUDIT_FILENAME}`, "baseline-v1");
+    expect(await computeSnapshotHash(repoRoot)).toBe(h1);
+  });
+
   it("ordem de walk é determinística (sort alfabético)", async () => {
     // Cria em ordem não-alfabética
     await writeLivewikiFile("livewiki/zzz.md", "z");
@@ -113,6 +130,42 @@ describe("manifest.readManifest", () => {
     const m = await readManifest(repoRoot);
     expect(m?.version).toBe(1);
     expect(m?.pendingBatch?.runId).toBe(1);
+    expect(m?.artifactReceipts).toEqual([]);
+  });
+
+  it("reads and canonically sorts manifest v2 receipts", async () => {
+    await writeLivewikiFile(
+      MANIFEST_REL_PATH,
+      JSON.stringify({
+        version: 2,
+        lastDocumentedCommit: null,
+        snapshotHash: "h",
+        updatedAt: "2026-08-15T00:00:00Z",
+        pendingBatch: null,
+        artifactReceipts: [
+          {
+            taskId: "topic:z",
+            evidenceHash: HASH_B,
+            contract: "topic-v1",
+            artifacts: [
+              { path: "livewiki/topics/z.md", hash: HASH_B },
+              { path: "livewiki/topics/a.md", hash: HASH_A },
+            ],
+          },
+          {
+            taskId: "folder:a",
+            evidenceHash: HASH_A,
+            contract: "folder-v1",
+            artifacts: [{ path: "livewiki/a/index.md", hash: HASH_A }],
+          },
+        ],
+      }),
+    );
+    const manifest = await readManifest(repoRoot);
+    expect(manifest?.artifactReceipts.map((receipt) => receipt.taskId))
+      .toEqual(["folder:a", "topic:z"]);
+    expect(manifest?.artifactReceipts[1]?.artifacts.map((artifact) => artifact.path))
+      .toEqual(["livewiki/topics/a.md", "livewiki/topics/z.md"]);
   });
 
   it("retorna null pra manifest corrompido (tolerância)", async () => {
@@ -183,6 +236,190 @@ describe("manifest.writeManifestIfChanged", () => {
       buildManifest({ lastDocumentedCommit: "def", snapshotHash: "h", pendingBatch: null }),
     );
     expect(wrote).toBe(true);
+  });
+
+  it("rewrites when artifact receipts change and ignores input ordering", async () => {
+    const first = {
+      taskId: "understanding:a",
+      evidenceHash: HASH_A,
+      contract: "understanding-v1",
+      artifacts: [{ path: "livewiki/understanding.md", hash: HASH_A }],
+    };
+    await writeManifestIfChanged(
+      repoRoot,
+      buildManifest({
+        lastDocumentedCommit: null,
+        snapshotHash: "h",
+        pendingBatch: null,
+        artifactReceipts: [first],
+      }),
+    );
+    const unchanged = await writeManifestIfChanged(
+      repoRoot,
+      buildManifest({
+        lastDocumentedCommit: null,
+        snapshotHash: "h",
+        pendingBatch: null,
+        artifactReceipts: [first],
+      }),
+    );
+    expect(unchanged).toBe(false);
+
+    const changed = await writeManifestIfChanged(
+      repoRoot,
+      buildManifest({
+        lastDocumentedCommit: null,
+        snapshotHash: "h",
+        pendingBatch: null,
+        artifactReceipts: [{ ...first, evidenceHash: HASH_B }],
+      }),
+    );
+    expect(changed).toBe(true);
+  });
+});
+
+describe("manifest artifact receipts", () => {
+  it("upserts by taskId and keeps deterministic order", () => {
+    const receipts = upsertArtifactReceipt(
+      [{
+        taskId: "topic:z",
+        evidenceHash: HASH_A,
+        contract: "topic-v1",
+        artifacts: [{ path: "livewiki/topics/z.md", hash: HASH_A }],
+      }],
+      {
+        taskId: "folder:a",
+        evidenceHash: HASH_B,
+        contract: "folder-v1",
+        artifacts: [{ path: "livewiki/a/index.md", hash: HASH_B }],
+      },
+    );
+    expect(receipts.map((receipt) => receipt.taskId)).toEqual(["folder:a", "topic:z"]);
+  });
+
+  it("replaces an existing task receipt instead of duplicating it", () => {
+    const existing = [{
+      taskId: "topic:z",
+      evidenceHash: HASH_A,
+      contract: "topic-v1",
+      artifacts: [{ path: "livewiki/topics/z.md", hash: HASH_A }],
+    }];
+    const receipts = upsertArtifactReceipt(existing, {
+      ...existing[0]!,
+      evidenceHash: HASH_B,
+    });
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]?.evidenceHash).toBe(HASH_B);
+  });
+
+  it("preserves receipts while operational state changes", async () => {
+    await writeLivewikiFile("livewiki/topics/a.md", "topic");
+    await recordArtifactReceipt(repoRoot, {
+      taskId: "topic:a",
+      evidenceHash: HASH_A,
+      contract: "topic-v1",
+      artifacts: [{ path: "livewiki/topics/a.md", hash: HASH_A }],
+    });
+
+    await writeManifestState(repoRoot, {
+      lastDocumentedCommit: "abc123",
+      snapshotHash: await computeSnapshotHash(repoRoot),
+      pendingBatch: { runId: 7, stage: 5, done: 1, total: 2 },
+    });
+
+    const manifest = await readManifest(repoRoot);
+    expect(manifest?.lastDocumentedCommit).toBe("abc123");
+    expect(manifest?.pendingBatch?.runId).toBe(7);
+    expect(manifest?.artifactReceipts.map((receipt) => receipt.taskId)).toEqual(["topic:a"]);
+  });
+
+  it("merges concurrent receipt writers without losing either task", async () => {
+    await writeLivewikiFile("livewiki/topics/a.md", "a");
+    await writeLivewikiFile("livewiki/topics/b.md", "b");
+    await Promise.all([
+      recordArtifactReceipt(repoRoot, {
+        taskId: "topic:a",
+        evidenceHash: HASH_A,
+        contract: "topic-v1",
+        artifacts: [{ path: "livewiki/topics/a.md", hash: HASH_A }],
+      }),
+      recordArtifactReceipt(repoRoot, {
+        taskId: "topic:b",
+        evidenceHash: HASH_B,
+        contract: "topic-v1",
+        artifacts: [{ path: "livewiki/topics/b.md", hash: HASH_B }],
+      }),
+    ]);
+
+    expect((await readManifest(repoRoot))?.artifactReceipts.map((receipt) => receipt.taskId))
+      .toEqual(["topic:a", "topic:b"]);
+  });
+
+  it("retires every receipt that owns a removed output", async () => {
+    await writeManifestIfChanged(repoRoot, buildManifest({
+      lastDocumentedCommit: null,
+      snapshotHash: "h",
+      pendingBatch: null,
+      artifactReceipts: [
+        {
+          taskId: "flow:a",
+          evidenceHash: HASH_A,
+          contract: "flow-v1",
+          artifacts: [
+            { path: "livewiki/flows/a.md", hash: HASH_A },
+            { path: "livewiki/diagrams/flow-a.mmd", hash: HASH_B },
+          ],
+        },
+        {
+          taskId: "topic:b",
+          evidenceHash: HASH_B,
+          contract: "topic-v1",
+          artifacts: [{ path: "livewiki/topics/b.md", hash: HASH_B }],
+        },
+      ],
+    }));
+
+    expect(await removeArtifactReceiptsForPaths(
+      repoRoot,
+      ["livewiki/diagrams/flow-a.mmd"],
+    )).toBe(true);
+    expect((await readManifest(repoRoot))?.artifactReceipts.map((receipt) => receipt.taskId))
+      .toEqual(["topic:b"]);
+  });
+
+  it("refreshes only receipts for trusted deterministic rewrites", async () => {
+    await writeLivewikiFile("livewiki/folder/index.md", "before");
+    await writeLivewikiFile("livewiki/topics/a.md", "topic");
+    await writeManifestIfChanged(repoRoot, buildManifest({
+      lastDocumentedCommit: null,
+      snapshotHash: await computeSnapshotHash(repoRoot),
+      pendingBatch: null,
+      artifactReceipts: [
+        {
+          taskId: "folder:a",
+          evidenceHash: HASH_A,
+          contract: "folder-page-v1",
+          artifacts: [{ path: "livewiki/folder/index.md", hash: sha256("before") }],
+        },
+        {
+          taskId: "topic:a",
+          evidenceHash: HASH_B,
+          contract: "topic-v1",
+          artifacts: [{ path: "livewiki/topics/a.md", hash: sha256("topic") }],
+        },
+      ],
+    }));
+    await writeLivewikiFile("livewiki/folder/index.md", "after");
+
+    expect(await refreshArtifactReceiptHashes(
+      repoRoot,
+      ["livewiki/folder/index.md"],
+    )).toBe(true);
+    const receipts = (await readManifest(repoRoot))!.artifactReceipts;
+    expect(receipts.find((receipt) => receipt.taskId === "folder:a")?.artifacts[0]?.hash)
+      .toBe(sha256("after"));
+    expect(receipts.find((receipt) => receipt.taskId === "topic:a")?.artifacts[0]?.hash)
+      .toBe(sha256("topic"));
   });
 });
 

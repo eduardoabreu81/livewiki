@@ -60,8 +60,8 @@ import {
 } from "./diagrams.js";
 import {
   computeSnapshotHash,
-  writeManifestIfChanged,
-  buildManifest,
+  refreshArtifactReceiptHashes,
+  writeManifestState,
   readManifest,
 } from "./manifest.js";
 import {
@@ -84,6 +84,11 @@ import {
 } from "./navigation.js";
 import { extractRepoOrientation } from "./orientation.js";
 import { loadUnderstandingSynthesis } from "./understanding.js";
+import {
+  emptyBaseline,
+  readBaseline,
+  writeBaselineCompareAndSwap,
+} from "./baseline.js";
 
 export interface InitOptions {
   repoRoot: string;
@@ -163,6 +168,8 @@ export interface InitResult {
  */
 export async function runInit(opts: InitOptions): Promise<InitResult> {
   const absRoot = nodePath.resolve(opts.repoRoot);
+  const wikiExistedBeforeInit = await nodeFs.stat(nodePath.join(absRoot, "livewiki"))
+    .then((stat) => stat.isDirectory(), () => false);
 
   // Garante .livewiki/ e livewiki/ existem (safe-io)
   await safeIo.mkdir(absRoot, ".livewiki");
@@ -215,6 +222,10 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
 
   // 4. Gera layout determinístico
   const filesWritten: string[] = [];
+  if (!wikiExistedBeforeInit && (await readBaseline(absRoot)).state === "unavailable") {
+    await writeBaselineCompareAndSwap(absRoot, null, emptyBaseline());
+    filesWritten.push("livewiki/.baseline.json");
+  }
   let skippedFlowsHub: InitResult["skippedFlowsHub"];
   let skippedAuxiliaryHub: InitResult["skippedAuxiliaryHub"];
   let skippedTopicsHub: InitResult["skippedTopicsHub"];
@@ -321,20 +332,25 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   filesWritten.push(...navigationPages);
-  filesWritten.push(...await updateFlowTopicLinks(absRoot, topicPresentations));
+  const changedFlowPages = await updateFlowTopicLinks(absRoot, topicPresentations);
+  filesWritten.push(...changedFlowPages);
+  await refreshArtifactReceiptHashes(absRoot, [
+    ...navigationPages,
+    ...changedFlowPages,
+  ]);
 
   // manifest.json (snapshotHash + pendingBatch=null pra init sem batch)
   const snapshotHash = await computeSnapshotHash(absRoot);
   // FIX M (rev2): só listar manifest em filesWritten se ele foi REALMENTE
   // regravado. `writeManifestIfChanged` é idempotente (anti-loop CI) —
   // se nada mudou, retorna false e não devemos fingir que escreveu.
-  const wroteManifest = await writeManifestIfChanged(
+  const wroteManifest = await writeManifestState(
     absRoot,
-    buildManifest({
+    {
       lastDocumentedCommit: null,
       snapshotHash,
       pendingBatch: null,
-    }),
+    },
   );
   if (wroteManifest) filesWritten.push("livewiki/.manifest.json");
 
@@ -381,23 +397,23 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     // Atualiza manifest com pendingBatch se houve falhas (handoff)
     if (result.status === "completed_with_failures" || result.status === "aborted") {
       const totalsDone = result.byModule.reduce((a, m) => a + (m.costUsd !== null ? 1 : 0), 0);
-      await writeManifestIfChanged(
+      await writeManifestState(
         absRoot,
-        buildManifest({
+        {
           lastDocumentedCommit: null,
           snapshotHash: await computeSnapshotHash(absRoot),
           pendingBatch: { runId: result.runId, stage: 4, done: totalsDone, total: ordered.length },
-        }),
+        },
       );
     } else {
       // Run completou sem falhas — limpa pendingBatch do manifest
-      await writeManifestIfChanged(
+      await writeManifestState(
         absRoot,
-        buildManifest({
+        {
           lastDocumentedCommit: null,
           snapshotHash: await computeSnapshotHash(absRoot),
           pendingBatch: null,
-        }),
+        },
       );
     }
   }
@@ -833,7 +849,7 @@ export async function regenerateArchitectureOverview(
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
   await safeIo.writeText(absRoot, "livewiki/architecture/overview.md", overview);
-  await updateModuleNavigateBlocks({
+  const changedModulePages = await updateModuleNavigateBlocks({
     repoRoot: absRoot,
     modules,
     ordered,
@@ -842,17 +858,21 @@ export async function regenerateArchitectureOverview(
     topicPresentations,
     ...(pathRoleConfig !== undefined ? { pathRoleConfig } : {}),
   });
-  await updateFlowTopicLinks(absRoot, topicPresentations);
+  const changedFlowPages = await updateFlowTopicLinks(absRoot, topicPresentations);
+  await refreshArtifactReceiptHashes(absRoot, [
+    ...changedModulePages,
+    ...changedFlowPages,
+  ]);
 
   // Direct `batch` writes its manifest before this regeneration hook. Refresh
   // the snapshot after navigation changes while retaining batch handoff state.
   const manifest = await readManifest(absRoot);
   if (manifest) {
-    await writeManifestIfChanged(absRoot, buildManifest({
+    await writeManifestState(absRoot, {
       lastDocumentedCommit: manifest.lastDocumentedCommit,
       snapshotHash: await computeSnapshotHash(absRoot),
       pendingBatch: manifest.pendingBatch,
-    }));
+    });
   }
   return { flowsHub, topicsHub, auxiliaryHub };
 }

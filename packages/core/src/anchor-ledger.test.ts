@@ -20,6 +20,7 @@ import { run as runLedger } from "./anchor-ledger.js";
 import { sha256 } from "./hashes.js";
 import { parseSource } from "./parser.js";
 import { extractSymbols } from "./symbols.js";
+import { writeBaseline } from "./baseline.js";
 
 let repoRoot: string;
 
@@ -367,6 +368,82 @@ anchors:
     // Detectado como moved por content_hash? Vamos ver.
     // Como o source literal é igual, content_hash É igual, vai dar match.
     expect(r.debtByEvent.moved + r.debtByEvent.deleted).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("anchor-ledger — versioned baseline authority", () => {
+  it("detects a move without rewriting Markdown and keeps one projected debt", async () => {
+    const source = "export function run() { return 1; }\n";
+    await writeCode("src/old.ts", source);
+    await writeWiki(
+      "livewiki/auth.md",
+      "---\ntitle: Auth\nowner: generated\nanchors:\n  - src/old.ts#run\n---\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    const tree = await parseSource(".ts", source);
+    const hash = extractSymbols(tree, "src/old.ts", source)[0]!.content_hash;
+    await writeBaseline(repoRoot, {
+      schemaVersion: 1,
+      entries: [{
+        wikiPath: "livewiki/auth.md",
+        symbolKey: "src/old.ts#run",
+        hash,
+        extraction: "ts-v1",
+        provenance: "accepted",
+      }],
+    });
+    await runLedger(repoRoot, { quiet: true });
+
+    await nodeFs.rm(nodePath.join(repoRoot, "src/old.ts"));
+    await writeCode("src/new.ts", source);
+    await runIndexer(repoRoot, { quiet: true });
+    const first = await runLedger(repoRoot, { quiet: true });
+    const second = await runLedger(repoRoot, { quiet: true });
+
+    expect(first.movedPairs).toEqual([{ from: "src/old.ts#run", to: "src/new.ts#run" }]);
+    expect(second.debtByEvent.moved).toBe(0);
+    expect(await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth.md"), "utf8"))
+      .toContain("src/old.ts#run");
+    expect(nodeSqliteQuery(
+      repoRoot,
+      "SELECT event, symbol_key, detail FROM debt WHERE resolved_at IS NULL",
+    )).toEqual([{
+      event: "moved",
+      symbol_key: "src/new.ts#run",
+      detail: JSON.stringify({ from: "src/old.ts#run", to: "src/new.ts#run" }),
+    }]);
+  });
+
+  it("projects changed from the versioned hash instead of the mutable anchor hash", async () => {
+    const original = "export function run() { return 1; }\n";
+    await writeCode("src/a.ts", original);
+    await writeWiki(
+      "livewiki/a.md",
+      "---\ntitle: A\nowner: generated\nanchors:\n  - src/a.ts#run\n---\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    const tree = await parseSource(".ts", original);
+    const hash = extractSymbols(tree, "src/a.ts", original)[0]!.content_hash;
+    await writeBaseline(repoRoot, {
+      schemaVersion: 1,
+      entries: [{
+        wikiPath: "livewiki/a.md",
+        symbolKey: "src/a.ts#run",
+        hash,
+        extraction: "ts-v1",
+        provenance: "accepted",
+      }],
+    });
+    await runLedger(repoRoot, { quiet: true });
+
+    await writeCode("src/a.ts", "export function run() { return 2; }\n");
+    await runIndexer(repoRoot, { quiet: true });
+    expect((await runLedger(repoRoot, { quiet: true })).debtByEvent.changed).toBe(1);
+    expect((await runLedger(repoRoot, { quiet: true })).debtByEvent.changed).toBe(0);
+    expect(nodeSqliteQuery(
+      repoRoot,
+      "SELECT event, symbol_key FROM debt WHERE resolved_at IS NULL",
+    )).toEqual([{ event: "changed", symbol_key: "src/a.ts#run" }]);
   });
 });
 

@@ -146,22 +146,18 @@ summary: baseline availability, detected debt, verify issues, and
 undocumented symbols. No secrets, no GitHub App, `contents: read` only,
 and zero tokens of LLM usage.
 
-A fresh CI checkout has no prior ledger state, so changed content debt is
-not measurable there. The report says so explicitly; it never turns an
-unavailable baseline into a false zero.
+The versioned baseline makes documentation health measurable on a fresh CI
+checkout. Existing wikis must run `livewiki baseline bootstrap`, review the
+inferred evidence, and explicitly accept it before enabling enforcement.
 
 **Two modes** (env `LIVEWIKI_DEBT_MODE` at the top of the file):
 
 | Mode | Behavior |
 |---|---|
-| `report` (default) | never fails — the step summary is the signal |
-| `enforce` | fails when the baseline is unavailable or `verify` finds issues |
+| `enforce` (default) | fails on unavailable/incompatible baseline evidence, repository debt, unbaselined or inferred entries, removed anchors, or `verify` issues |
+| `report` | never fails — the same step summary is the signal |
 
-Debt and undocumented totals are report-only in both modes.
-
-Today `enforce` fails on every CI run: a fresh checkout never has a
-baseline. It becomes useful once livewiki records baselines in the
-repository itself.
+Undocumented product-symbol totals remain report-only in both modes.
 
 **v1 never calls an LLM and never writes anywhere.** The paid v2 sketch
 (provider pays the debt, then opens a draft PR with the merge author as

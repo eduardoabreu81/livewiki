@@ -113,6 +113,7 @@ import {
   normalizeStage4Artifact,
   validateStage4Artifact,
   markDegradedArtifact,
+  isDegradedArtifact,
   extractInlineModuleDiagram,
   countFlowDiagramElements,
   FLOW_DIAGRAM_SOURCE_MAX_CHARS,
@@ -158,7 +159,19 @@ import {
   resolveImportEdges,
 } from "./import-resolution.js";
 import { validateMermaidSyntax } from "./mermaid-validator.js";
-import { computeSnapshotHash, writeManifestIfChanged, buildManifest } from "./manifest.js";
+import { computeSnapshotHash, writeManifestState } from "./manifest.js";
+import {
+  commitDocumentationTask,
+  recoverDocumentationReceipt,
+  retireDocumentationArtifacts,
+} from "./documentation-commit.js";
+import { hasCurrentContractBaseline } from "./baseline-operations.js";
+import {
+  collectBaselineDocumentationInventory,
+  emptyBaseline,
+  readBaseline,
+  writeBaselineCompareAndSwap,
+} from "./baseline.js";
 import { sha256 } from "./hashes.js";
 import { recordUpdateMetric } from "./update-metrics.js";
 import { regenerateArchitectureOverview, syncClassDiagrams, syncStaleFlowArtifacts, syncStaleModulePages, syncStaleTopicArtifacts } from "./init.js";
@@ -559,6 +572,20 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       await runLedger(absRoot, { quiet: true });
     }
 
+    const baselineState = await readBaseline(absRoot);
+    if (baselineState.state === "unavailable") {
+      const inventory = await collectBaselineDocumentationInventory(absRoot);
+      if (inventory.obligations.length > 0) {
+        throw new Error(
+          "documentation baseline is unavailable for an existing anchored wiki; " +
+            "run `livewiki baseline bootstrap` and explicitly accept its evidence first",
+        );
+      }
+      await writeBaselineCompareAndSwap(absRoot, null, emptyBaseline());
+    } else if (baselineState.state === "incompatible") {
+      throw new Error("documentation baseline is incompatible; automatic batch advancement is disabled");
+    }
+
     // Load active symbols + file paths (cache)
     const symbols = db
       .prepare("SELECT * FROM symbols WHERE status = 'active'")
@@ -942,6 +969,25 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       // `unparseable` refuse for safety.
       const existing = await safeIo.readText(absRoot, wikiPath).catch(() => null);
       const preOwner = readOwnerFromFrontmatter(existing);
+      const recoveredArtifacts = opts.mode !== "only" &&
+          (preOwner === "generated" || preOwner === "mixed")
+        ? await recoverStage4TaskArtifacts({
+            absRoot,
+            module,
+            wikiPath,
+            ...(folderUnit !== undefined ? { folderUnit } : {}),
+            ...(fileUnit !== undefined ? { fileUnit } : {}),
+            existing,
+            ...(resolvedConfig.pathRoles !== undefined
+              ? { pathRoleConfig: resolvedConfig.pathRoles }
+              : {}),
+            moduleDiagrams: moduleDiagramsEnabled,
+            moduleMaxDiagramNodes:
+              moduleDiagramBudgets?.maxNodes ?? CONFIG_DEFAULTS.moduleMaxDiagramNodes,
+            moduleMaxDiagramEdges:
+              moduleDiagramBudgets?.maxEdges ?? CONFIG_DEFAULTS.moduleMaxDiagramEdges,
+          })
+        : null;
       if (preOwner === "human") {
         taskError = {
           code: "refused_human_page",
@@ -963,6 +1009,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             `module "${module.id}" is on a page whose frontmatter did not parse (LF/CRLF/BOM-safe check). ` +
             `Refusing to rewrite untrusted content (rule #6 — operator must repair the page manually).`,
         };
+      } else if (recoveredArtifacts !== null) {
+        artifacts = recoveredArtifacts;
       } else if (folderUnit !== undefined) {
         // #29 folder page: deterministic skeleton + ONE bounded LLM purpose
         // paragraph (product folders). Non-product folders are fully
@@ -1797,6 +1845,29 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         }
       }
 
+      if (!taskError && artifacts) {
+        try {
+          const closedKeys = (await collectBaselineDocumentationInventory(absRoot)).obligations
+            .filter((obligation) => obligation.wikiPath === wikiPath)
+            .map((obligation) => obligation.symbolKey);
+          await commitDocumentationTask({
+            repoRoot: absRoot,
+            taskId: folderUnit ? `folder:${wikiPath}` : `file:${wikiPath}`,
+            kind: folderUnit ? "folder-page" : "file-page",
+            page: wikiPath,
+            symbolKeys: closedKeys,
+            evidence: folderUnit ?? fileUnit ?? module,
+            artifacts,
+          });
+        } catch (error) {
+          taskError = {
+            code: "durable_commit_failed",
+            message: `verified artifact was not committed to repository authority: ${(error as Error).message}`,
+            failedAt: 4,
+          };
+        }
+      }
+
       // Persist checkpoint and update counters
       if (taskError) {
         const failCheckpoint: TaskCheckpoint = {
@@ -2109,6 +2180,17 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       // (manual blocks preserved byte-for-byte); unparseable refuses.
       const existing = await safeIo.readText(absRoot, flowPagePath).catch(() => null);
       const preOwner = readOwnerFromFrontmatter(existing);
+      const recoveredArtifacts = opts.mode !== "only" &&
+          (preOwner === "generated" || preOwner === "mixed")
+        ? await recoverDocumentationReceipt({
+            repoRoot: absRoot,
+            taskId: flowTarget,
+            kind: "flow",
+            evidence: candidate,
+            page: flowPagePath,
+            diagram: flowDiagramPath,
+          })
+        : null;
       if (preOwner === "human") {
         taskError = {
           code: "refused_human_page",
@@ -2130,6 +2212,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             `flow "${candidate.slug}" is on a page whose frontmatter did not parse (LF/CRLF/BOM-safe check). ` +
             `Refusing to rewrite untrusted content (rule #6 — operator must repair the page manually).`,
         };
+      } else if (recoveredArtifacts !== null) {
+        artifacts = recoveredArtifacts;
       } else {
         // Bounded slots identical to stage 4: 1 + maxRepairAttempts
         // consuming slots + maxIncompleteRetries non-consuming retries.
@@ -2531,6 +2615,26 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         }
       }
 
+      if (!taskError && artifacts) {
+        try {
+          await commitDocumentationTask({
+            repoRoot: absRoot,
+            taskId: flowTarget,
+            kind: "flow",
+            page: flowPagePath,
+            symbolKeys: candidate.seedKeys,
+            evidence: candidate,
+            artifacts,
+          });
+        } catch (error) {
+          taskError = {
+            code: "durable_commit_failed",
+            message: `verified artifact was not committed to repository authority: ${(error as Error).message}`,
+            failedAt: 5,
+          };
+        }
+      }
+
       // Persist checkpoint and update counters (identical to stage 4).
       if (taskError) {
         const failCheckpoint: TaskCheckpoint = {
@@ -2797,10 +2901,12 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
     // preserved. Skipped when stage 5 is disabled (maxFlows 0) or the run
     // aborted before finishing stage 5.
     if (stage5GateOpen && !runAbortedByRollback) {
-      await syncStaleFlowArtifacts(absRoot, stage5Candidates);
+      const staleFlows = await syncStaleFlowArtifacts(absRoot, stage5Candidates);
+      await retireDocumentationArtifacts(absRoot, staleFlows.removed);
     }
     if (topicStageGateOpen && topicCandidates.length > 0 && !runAbortedByRollback) {
-      await syncStaleTopicArtifacts(absRoot, topicCandidates);
+      const staleTopics = await syncStaleTopicArtifacts(absRoot, topicCandidates);
+      await retireDocumentationArtifacts(absRoot, staleTopics);
     }
 
     // #29 (D4): generated unit pages whose unit disappeared from the
@@ -2816,6 +2922,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       const staleModulePages = await syncStaleModulePages(absRoot, keepPagePaths);
       if (staleModulePages.removed.length > 0) {
         removedStalePages = staleModulePages.removed;
+        await retireDocumentationArtifacts(absRoot, staleModulePages.removed);
         // Re-run the ledger so the removed pages' doc_pages/anchors drop
         // NOW (ledger step 7) — otherwise verify reports missing_wiki_path
         // for them until the next index.
@@ -2872,13 +2979,13 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
             ? { runId, stage: 5, done: stage5Done, total: stage5TaskCount }
             : { runId, stage: 4, done: moduleTasksDone, total: ordered.length }
           : null;
-      await writeManifestIfChanged(
+      await writeManifestState(
         absRoot,
-        buildManifest({
+        {
           lastDocumentedCommit: null,
           snapshotHash,
           pendingBatch,
-        }),
+        },
       );
     }
 
@@ -2941,6 +3048,67 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
 }
 
 // === Helpers ===
+
+async function recoverStage4TaskArtifacts(opts: {
+  absRoot: string;
+  module: Module;
+  wikiPath: string;
+  folderUnit?: FolderUnit;
+  fileUnit?: FileUnit;
+  existing: string | null;
+  pathRoleConfig?: import("./modules.js").PathRoleConfig;
+  moduleDiagrams: boolean;
+  moduleMaxDiagramNodes: number;
+  moduleMaxDiagramEdges: number;
+}): Promise<TaskCheckpoint["artifacts"] | null> {
+  if (opts.existing === null) return null;
+  if (opts.folderUnit !== undefined) {
+    return recoverDocumentationReceipt({
+      repoRoot: opts.absRoot,
+      taskId: `folder:${opts.wikiPath}`,
+      kind: "folder-page",
+      evidence: opts.folderUnit,
+      page: opts.wikiPath,
+    });
+  }
+  if (opts.fileUnit === undefined) return null;
+
+  const closedKeys = (await getModuleSymbolRows(opts.absRoot, opts.module))
+    .map((symbol) => symbol.key)
+    .sort();
+  if (!await hasCurrentContractBaseline(opts.absRoot, opts.wikiPath, closedKeys)) return null;
+  const normalized = normalizeStage4Artifact(opts.existing);
+  if (!normalized.ok) return null;
+  const slug = moduleSlug(opts.module.id);
+  const validation = validateStage4Artifact(normalized.content, closedKeys, {
+    moduleId: opts.module.id,
+    moduleRole: classifyModuleRole(opts.module, opts.pathRoleConfig),
+    // Pages completed under the relaxed round (`quality: degraded`) only
+    // pass the relaxed contract they were accepted with.
+    ...(isDegradedArtifact(opts.existing) ? { relaxed: true } : {}),
+    ...(opts.moduleDiagrams
+      ? { expectedModuleDiagram: `livewiki/diagrams/${slug}.mmd` }
+      : {}),
+  });
+  if (!validation.ok) return null;
+
+  const artifacts: NonNullable<TaskCheckpoint["artifacts"]> = {
+    wikiPath: opts.wikiPath,
+    pageHash: sha256(opts.existing),
+  };
+  if (!opts.moduleDiagrams) return artifacts;
+  const diagramPath = `livewiki/diagrams/${slug}.mmd`;
+  const diagram = await safeIo.readText(opts.absRoot, diagramPath).catch(() => null);
+  if (diagram === null || await validateMermaidSyntax(diagram) !== null) return null;
+  const elements = countFlowDiagramElements(diagram);
+  if (elements.nodes > opts.moduleMaxDiagramNodes ||
+      elements.edges > opts.moduleMaxDiagramEdges) return null;
+  return {
+    ...artifacts,
+    diagramPath,
+    diagramHash: sha256(diagram),
+  };
+}
 
 interface TopicStageResult {
   usage: StageUsage;
@@ -3232,8 +3400,19 @@ async function runSemanticTopicStage(opts: {
     // Recovery tier (Component 2): set when this topic completed via the
     // relaxed completion round (checkpoint flag + degradedPages entry).
     let degraded = false;
+    const recoveredArtifacts = opts.mode !== "only" && owner === "generated"
+      ? await recoverDocumentationReceipt({
+          repoRoot: opts.absRoot,
+          taskId: target,
+          kind: "topic",
+          evidence: candidate,
+          page: wikiPath,
+        })
+      : null;
     if (owner === "human" || owner === "mixed" || owner === "untrusted" || owner === "unparseable") {
       taskError = { code: "refused_owned_topic", message: `topic page ${wikiPath} is not automation-owned; human/mixed/untrusted content is preserved`, failedAt: 5 };
+    } else if (recoveredArtifacts !== null) {
+      artifacts = recoveredArtifacts;
     } else {
       let priorCandidate = "";
       let priorErrors: ArtifactValidationError[] = [];
@@ -3417,6 +3596,26 @@ async function runSemanticTopicStage(opts: {
       }
       if (!artifacts && !taskError) {
         taskError = { code: "repair_exhausted", message: `task "${target}" exhausted its bounded generation/repair attempts`, failedAt: 5 };
+      }
+    }
+
+    if (!taskError && artifacts) {
+      try {
+        await commitDocumentationTask({
+          repoRoot: opts.absRoot,
+          taskId: target,
+          kind: "topic",
+          page: wikiPath,
+          symbolKeys: candidate.seedKeys,
+          evidence: candidate,
+          artifacts,
+        });
+      } catch (error) {
+        taskError = {
+          code: "durable_commit_failed",
+          message: `verified artifact was not committed to repository authority: ${(error as Error).message}`,
+          failedAt: 5,
+        };
       }
     }
 
@@ -3938,12 +4137,23 @@ async function runUnderstandingStage(opts: {
   const owner = readOwnerFromFrontmatter(existing);
   let taskError: TaskCheckpoint["error"] | undefined;
   let artifacts: TaskCheckpoint["artifacts"] | undefined;
+  const recoveredArtifacts = opts.mode !== "only" && owner === "generated"
+    ? await recoverDocumentationReceipt({
+        repoRoot: opts.absRoot,
+        taskId: target,
+        kind: "understanding",
+        evidence: { evidenceHash },
+        page: wikiPath,
+      })
+    : null;
   if (owner === "human" || owner === "mixed" || owner === "untrusted" || owner === "unparseable") {
     taskError = {
       code: "refused_owned_understanding",
       message: `understanding page ${wikiPath} is not automation-owned; human/mixed/untrusted content is preserved (rule #6)`,
       failedAt: 5,
     };
+  } else if (recoveredArtifacts !== null) {
+    artifacts = recoveredArtifacts;
   } else {
     const evidenceBlock = renderUnderstandingEvidence(evidence);
     let priorCandidate = "";
@@ -4059,6 +4269,26 @@ async function runUnderstandingStage(opts: {
       taskError = {
         code: "repair_exhausted",
         message: `task "${target}" exhausted its bounded generation/repair attempts`,
+        failedAt: 5,
+      };
+    }
+  }
+
+  if (!taskError && artifacts) {
+    try {
+      await commitDocumentationTask({
+        repoRoot: opts.absRoot,
+        taskId: target,
+        kind: "understanding",
+        page: wikiPath,
+        symbolKeys: [],
+        evidence: { evidenceHash },
+        artifacts,
+      });
+    } catch (error) {
+      taskError = {
+        code: "durable_commit_failed",
+        message: `verified artifact was not committed to repository authority: ${(error as Error).message}`,
         failedAt: 5,
       };
     }
@@ -4676,7 +4906,8 @@ async function tryWriteAndVerify(
     return { ok: false, exception: { message: (e as Error).message } };
   }
   const broken = verifyResult.issues.filter(
-    (i) => i.wikiPath === wikiPath && (rejectAnySeverity || i.severity === "error"),
+    (i) => i.wikiPath === wikiPath && !isDeferredBaselineIssue(i) &&
+      (rejectAnySeverity || i.severity === "error"),
   );
 
   if (broken.length > 0) {
@@ -4784,6 +5015,7 @@ async function tryWriteModuleDiagramAndVerify(
   const broken = verifyResult.issues.filter(
     (i) =>
       (i.wikiPath === pagePath || i.wikiPath === diagramPath) &&
+      !isDeferredBaselineIssue(i) &&
       i.severity === "error",
   );
 
@@ -4814,7 +5046,7 @@ async function tryWriteModuleDiagramAndVerify(
       wikiPath: pagePath,
       pageHash: sha256(finalContent),
       diagramPath,
-      diagramHash: sha256(diagramSource),
+      diagramHash: sha256(diagramSource.endsWith("\n") ? diagramSource : `${diagramSource}\n`),
     },
   };
 }
@@ -4832,16 +5064,35 @@ async function tryWriteModuleDiagramAndVerify(
 function verifyIssuesToValidationErrors(
   issues: ReadonlyArray<VerifyIssue>,
 ): ArtifactValidationError[] {
-  return issues.map((i) => {
+  return issues.flatMap((i) => {
+    // Baseline-file compatibility and removed-anchor findings are repository
+    // audit failures, not candidate-shape errors the model can repair. Keep
+    // them out of the closed artifact repair contract.
+    if (!isArtifactVerifyCode(i.code)) return [];
     const location =
       i.code === "broken_anchor" ? "frontmatter" : "body";
-    return {
+    return [{
       code: i.code,
       message: i.detail,
       location,
       ...(i.wikiPath ? { offending: i.wikiPath } : {}),
-    };
+    }];
   });
+}
+
+function isArtifactVerifyCode(
+  code: VerifyIssue["code"],
+): code is Extract<ArtifactValidationError["code"], VerifyIssue["code"]> {
+  return code === "broken_anchor" ||
+    code === "broken_internal_link" ||
+    code === "invalid_mermaid_diagram" ||
+    code === "manual_block_altered" ||
+    code === "missing_wiki_path";
+}
+
+/** Expected between a verified page rewrite and its immediately following CAS. */
+function isDeferredBaselineIssue(issue: VerifyIssue): boolean {
+  return issue.code === "baseline_entry_without_anchor";
 }
 
 type DiagnosticErrors = {
@@ -7069,7 +7320,8 @@ async function tryWriteFlowAndVerify(
   //    pair (R10.1 item B; deliberate asymmetry with the error-only stage-4
   //    gate). Issues on other paths never block this gate.
   const broken = verifyResult.issues.filter(
-    (i) => i.wikiPath === pagePath || i.wikiPath === diagramPath,
+    (i) => (i.wikiPath === pagePath || i.wikiPath === diagramPath) &&
+      !isDeferredBaselineIssue(i),
   );
 
   if (broken.length > 0) {
@@ -7101,7 +7353,7 @@ async function tryWriteFlowAndVerify(
       wikiPath: pagePath,
       pageHash: sha256(finalContent),
       diagramPath,
-      diagramHash: sha256(diagramSource),
+      diagramHash: sha256(diagramSource.endsWith("\n") ? diagramSource : `${diagramSource}\n`),
     },
   };
 }

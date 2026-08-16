@@ -199,6 +199,14 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     // arquivo mas NÃO re-rodar o ledger — os anchors precisam entrar no
     // DB com o hash ANTIGO pra próxima mudança ser detectável.
     const indexBeforeChange = await runCli(["index"], repoRoot);
+    const acceptInitial = await runCli([
+      "baseline",
+      "accept",
+      "--page",
+      "livewiki/auth.md",
+      "--all",
+    ], repoRoot);
+    expect(acceptInitial.code, `baseline accept failed: ${acceptInitial.stderr}`).toBe(0);
     expect(indexBeforeChange.code, `index pré-modify falhou: ${indexBeforeChange.stderr}`).toBe(0);
 
     // Snapshot do manifest (updatedAt atual)
@@ -235,15 +243,21 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     const statusResult = await runCli(["status", "--json"], repoRoot);
     expect(statusResult.code, `status falhou: ${statusResult.stderr}`).toBe(0);
     const status = JSON.parse(statusResult.stdout) as {
-      debt: { total: number; items: Array<{ event: string; symbol_key: string; wiki_path: string }> };
+      debt: {
+        repository: {
+          total: number;
+          items: Array<{ event: string; symbol_key: string; wiki_path: string }>;
+        };
+      };
     };
-    expect(status.debt.total, "esperava ≥ 1 dívida após mudança").toBeGreaterThanOrEqual(1);
+    expect(status.debt.repository.total, "expected portable debt after the source change")
+      .toBeGreaterThanOrEqual(1);
     // A dívida pode estar em qualquer posição (ordenada por detected_at).
     // Procuramos o item específico do validate (que foi o que mudou).
-    const validateDebt = status.debt.items.find(
+    const validateDebt = status.debt.repository.items.find(
       (i) => i.symbol_key === "src/auth.ts#validate",
     );
-    expect(validateDebt, `esperava dívida pra validate, items: ${JSON.stringify(status.debt.items.map(i => i.symbol_key))}`).toBeDefined();
+    expect(validateDebt, `expected validate debt, items: ${JSON.stringify(status.debt.repository.items.map(i => i.symbol_key))}`).toBeDefined();
     expect(validateDebt!.event).toBe("changed");
     expect(validateDebt!.wiki_path).toBe("livewiki/auth.md");
 
@@ -277,6 +291,11 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
         name: "livewiki_write_doc",
         arguments: { path: "livewiki/auth.md", content: updatedPage },
       })) as typeof writeResult;
+      const acceptance = await mcp2.client.callTool({
+        name: "livewiki_resolve_debt",
+        arguments: { page: "livewiki/auth.md", all: true },
+      });
+      expect(acceptance.isError, JSON.stringify(acceptance)).toBeFalsy();
     } finally {
       await teardown(mcp2);
     }
@@ -314,12 +333,15 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
 
     // ── PASSO 8 (sanity): status agora mostra debt zerada ──────────────
     const statusAfter = await runCli(["status", "--json"], repoRoot);
-    const statusAfterJson = JSON.parse(statusAfter.stdout) as { debt: { total: number } };
+    const statusAfterJson = JSON.parse(statusAfter.stdout) as {
+      debt: { repository: { total: number } };
+    };
     // Após write_doc bem-sucedido, a dívida deveria ter sido resolvida
     // (re-index detecta que a âncora foi reescrita, ledger resolve).
     // Pode ser 0 (limpa) ou diferente do original — não exige 0, mas checa
     // que diminuiu.
-    expect(statusAfterJson.debt.total, "dívida não diminuiu após write_doc").toBeLessThanOrEqual(status.debt.total);
+    expect(statusAfterJson.debt.repository.total, "debt did not decrease after acceptance")
+      .toBeLessThan(status.debt.repository.total);
   }, 60_000);
 
   it("write_doc rejeita página com anchor quebrada E rollback restaura estado anterior", async () => {

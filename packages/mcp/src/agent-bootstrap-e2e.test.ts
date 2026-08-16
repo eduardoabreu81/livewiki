@@ -14,6 +14,9 @@ import { createServer } from "./server.js";
 import { buildStatusReport } from "@livewiki/core/batch-status";
 import { openIndex } from "@livewiki/core/db";
 import { run as runVerify } from "@livewiki/core/verify";
+import { run as runIndexer } from "@livewiki/core/indexer";
+import { run as runStatus } from "@livewiki/core/status";
+import { markDegradedArtifact } from "@livewiki/core/artifact";
 import { prompts } from "@livewiki/core";
 import * as nodeFs from "node:fs/promises";
 import * as nodeOs from "node:os";
@@ -334,6 +337,8 @@ function renderSubmission(task: QueueTask): string {
 describe("MCP agent bootstrap queue", () => {
   it("bootstraps from an empty queue without credentials and finishes with a clean verify", async () => {
     const connection = await connect();
+    let connectionClosed = false;
+    let recoveredConnection: Awaited<ReturnType<typeof connect>> | null = null;
     const seenKinds = new Set<TaskKind>();
     const seenTaskIds = new Set<number>();
     const observedFilePaths: string[] = [];
@@ -458,6 +463,135 @@ describe("MCP agent bootstrap queue", () => {
       } finally {
         db.close();
       }
+
+      // The queue database is disposable. After losing it, the rebuilt run
+      // must recover every completed task from the versioned baseline and
+      // artifact receipts without asking the agent to write anything again.
+      await close(connection);
+      connectionClosed = true;
+      for (const name of ["index.db", "index.db-shm", "index.db-wal"]) {
+        await nodeFs.rm(nodePath.join(repoRoot, ".livewiki", name), { force: true });
+      }
+      recoveredConnection = await connect();
+      const recovered = await nextTask(recoveredConnection.client);
+      expect(recovered.status, JSON.stringify(recovered.task)).toBe("completed");
+      expect(recovered.task).toBeUndefined();
+
+      const rebuiltDb = openIndex(nodePath.join(repoRoot, ".livewiki", "index.db"));
+      try {
+        const rebuilt = rebuiltDb.prepare(
+          "SELECT status, checkpoint_json FROM batch_tasks ORDER BY id",
+        ).all() as Array<{ status: string; checkpoint_json: string }>;
+        expect(rebuilt.length).toBeGreaterThan(0);
+        expect(rebuilt.every((row) => row.status === "done")).toBe(true);
+        expect(rebuilt.every((row) => JSON.parse(row.checkpoint_json).attempt === 0)).toBe(true);
+      } finally {
+        rebuiltDb.close();
+      }
+    } finally {
+      if (recoveredConnection !== null) await close(recoveredConnection);
+      if (!connectionClosed) await close(connection);
+    }
+  }, 60_000);
+
+  it("recovers a relaxed-round (degraded) file page after SQLite loss without reoffering the task", async () => {
+    const connection = await connect();
+    let connectionClosed = false;
+    let recoveredConnection: Awaited<ReturnType<typeof connect>> | null = null;
+    let filePagePath: string | null = null;
+    try {
+      for (let guard = 0; guard < 30; guard++) {
+        const response = await nextTask(connection.client);
+        if (response.status !== "task") {
+          expect(response.status).toBe("completed");
+          break;
+        }
+        const task = response.task!;
+        if (task.kind === "file-page" && filePagePath === null) {
+          filePagePath = task.targetPath;
+        }
+        const write = await connection.client.callTool({
+          name: "livewiki_write_doc",
+          arguments: {
+            taskId: task.taskId,
+            path: task.targetPath,
+            content: renderSubmission(task),
+          },
+        });
+        expect(write.isError, text(write)).toBeFalsy();
+      }
+      expect(filePagePath).not.toBeNull();
+
+      // A page completed under the relaxed round carries `quality: degraded`
+      // + the reader notice and only passes the relaxed contract.
+      const absPage = nodePath.join(repoRoot, ...filePagePath!.split("/"));
+      const degraded = markDegradedArtifact(await nodeFs.readFile(absPage, "utf8"));
+      expect(degraded).toContain("quality: degraded");
+      await nodeFs.writeFile(absPage, degraded, "utf8");
+
+      await close(connection);
+      connectionClosed = true;
+      for (const name of ["index.db", "index.db-shm", "index.db-wal"]) {
+        await nodeFs.rm(nodePath.join(repoRoot, ".livewiki", name), { force: true });
+      }
+      recoveredConnection = await connect();
+      const recovered = await nextTask(recoveredConnection.client);
+      expect(recovered.status, JSON.stringify(recovered.task)).toBe("completed");
+      expect(recovered.task).toBeUndefined();
+    } finally {
+      if (recoveredConnection !== null) await close(recoveredConnection);
+      if (!connectionClosed) await close(connection);
+    }
+  }, 60_000);
+
+  it("never baseline-accepts code that drifted between task completion and finalize", async () => {
+    const connection = await connect();
+    let flowPagePath: string | null = null;
+    let driftedKey: string | null = null;
+    try {
+      for (let guard = 0; guard < 30; guard++) {
+        const response = await nextTask(connection.client);
+        if (response.status !== "task") {
+          expect(response.status).toBe("completed");
+          break;
+        }
+        const task = response.task!;
+        const write = await connection.client.callTool({
+          name: "livewiki_write_doc",
+          arguments: {
+            taskId: task.taskId,
+            path: task.targetPath,
+            content: renderSubmission(task),
+          },
+        });
+        expect(write.isError, text(write)).toBeFalsy();
+
+        // Drift one flow-covered symbol AFTER the flow task committed its
+        // baseline but BEFORE finalize: finalize refreshes receipts only and
+        // must leave the drift visible as `changed`, never accepted.
+        if (task.kind === "flow" && driftedKey === null) {
+          flowPagePath = task.targetPath;
+          driftedKey = task.closedKeys[0]!;
+          const sourceRel = driftedKey.split("#")[0]!;
+          const absSource = nodePath.join(repoRoot, ...sourceRel.split("/"));
+          const source = await nodeFs.readFile(absSource, "utf8");
+          const drifted = source
+            .replaceAll("{ return ", "{ return (")
+            .replaceAll("; }", "); }");
+          expect(drifted).not.toBe(source);
+          await nodeFs.writeFile(absSource, drifted, "utf8");
+          await runIndexer(repoRoot, { quiet: true });
+        }
+      }
+      expect(driftedKey).not.toBeNull();
+
+      const report = await runStatus(repoRoot);
+      const changed = report.debt.repository?.items.filter(
+        (item) => item.event === "changed" &&
+          item.symbol_key === driftedKey &&
+          item.wiki_path === flowPagePath,
+      ) ?? [];
+      expect(changed).toHaveLength(1);
     } finally {
       await close(connection);
     }

@@ -344,7 +344,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       const manifest = JSON.parse(
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/.manifest.json"), "utf8"),
       );
-      expect(manifest.version).toBe(1);
+      expect(manifest.version).toBe(2);
       expect(manifest.snapshotHash).toMatch(/^[a-f0-9]{64}$/);
 
       const quickstart = await nodeFs.readFile(

@@ -26,6 +26,12 @@ import { extractAnchors, slugify } from "./anchors.js";
 import { sha256 } from "./hashes.js";
 import { maskCodeSpans } from "./markdown-mask.js";
 import { validateMermaidSyntax } from "./mermaid-validator.js";
+import {
+  BASELINE_REL_PATH,
+  collectBaselineDocumentationInventory,
+  evaluateBaseline,
+  readBaseline,
+} from "./baseline.js";
 
 export type IssueSeverity = "error" | "warning";
 
@@ -34,7 +40,10 @@ export type IssueCode =
   | "broken_internal_link" // [text](page.md) ou [text](page.md#section) pra página inexistente
   | "invalid_mermaid_diagram"
   | "manual_block_altered"  // bloco <!-- lw:manual -->...<!-- /lw:manual --> com hash divergente
-  | "missing_wiki_path";    // doc_page do banco sumiu da wiki
+  | "missing_wiki_path"     // doc_page do banco sumiu da wiki
+  | "unsupported_baseline_algorithm"
+  | "invalid_documentation_baseline"
+  | "baseline_entry_without_anchor";
 
 export interface VerifyIssue {
   severity: IssueSeverity;
@@ -263,6 +272,38 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
           code: "missing_wiki_path",
           wikiPath,
           detail: "página sumiu da wiki",
+        });
+      }
+    }
+
+    const baselineLoad = await readBaseline(absRoot);
+    if (baselineLoad.state === "incompatible") {
+      for (const issue of baselineLoad.issues) {
+        issues.push({
+          severity: "error",
+          code:
+            issue.code === "unsupported_schema" || issue.code === "unsupported_extraction"
+              ? "unsupported_baseline_algorithm"
+              : "invalid_documentation_baseline",
+          wikiPath: BASELINE_REL_PATH,
+          detail: issue.entryIndex === undefined
+            ? issue.detail
+            : `entry ${issue.entryIndex}: ${issue.detail}`,
+        });
+      }
+    } else if (baselineLoad.state === "available") {
+      const inventory = await collectBaselineDocumentationInventory(absRoot);
+      const health = evaluateBaseline(
+        baselineLoad.baseline,
+        [...activeSymbols.values()],
+        inventory,
+      );
+      for (const entry of health.removedAnchors) {
+        issues.push({
+          severity: "error",
+          code: "baseline_entry_without_anchor",
+          wikiPath: entry.wikiPath,
+          detail: `baseline entry for ${entry.symbolKey} has no current anchor; use the explicit anchor-removal operation`,
         });
       }
     }

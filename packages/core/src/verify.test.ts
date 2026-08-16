@@ -5,6 +5,7 @@ import * as nodeFs from "node:fs/promises";
 import { run as runIndexer } from "./indexer.js";
 import { run as runLedger } from "./anchor-ledger.js";
 import { run as runVerify, formatHuman } from "./verify.js";
+import { writeBaseline } from "./baseline.js";
 
 let repoRoot: string;
 
@@ -109,6 +110,63 @@ The page documents the marker syntax below.
 
     expect(result.ok).toBe(true);
     expect(result.issues.filter((issue) => issue.code === "broken_anchor")).toEqual([]);
+  });
+});
+
+describe("verify — versioned documentation baseline", () => {
+  it("fails closed on an unsupported extraction version", async () => {
+    await runIndexer(repoRoot, { quiet: true });
+    await writeWiki(
+      "livewiki/.baseline.json",
+      "{\n" +
+      "\"schemaVersion\":1,\n" +
+      "\"entries\":[\n" +
+      `${JSON.stringify({
+        wikiPath: "livewiki/a.md",
+        symbolKey: "src/a.ts#a",
+        hash: "a".repeat(64),
+        extraction: "ts-v99",
+        provenance: "accepted",
+      })}\n` +
+      "]\n" +
+      "}\n",
+    );
+    const result = await runVerify(repoRoot);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "unsupported_baseline_algorithm",
+      wikiPath: "livewiki/.baseline.json",
+    }));
+  });
+
+  it("catches an anchor removed without the explicit baseline operation", async () => {
+    await writeCode("src/a.ts", "export function run() {}\n");
+    await writeWiki(
+      "livewiki/a.md",
+      "---\ntitle: A\nowner: generated\nanchors:\n  - src/a.ts#run\n---\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await writeBaseline(repoRoot, {
+      schemaVersion: 1,
+      entries: [{
+        wikiPath: "livewiki/a.md",
+        symbolKey: "src/a.ts#run",
+        hash: "a".repeat(64),
+        extraction: "ts-v1",
+        provenance: "accepted",
+      }],
+    });
+    await writeWiki(
+      "livewiki/a.md",
+      "---\ntitle: A\nowner: generated\nanchors: []\n---\n",
+    );
+
+    const result = await runVerify(repoRoot);
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: "baseline_entry_without_anchor",
+      wikiPath: "livewiki/a.md",
+    }));
   });
 });
 

@@ -122,6 +122,18 @@
       "types": "./dist/artifact.d.ts",
       "import": "./dist/artifact.js"
     },
+    "./baseline": {
+      "types": "./dist/baseline.d.ts",
+      "import": "./dist/baseline.js"
+    },
+    "./baseline-operations": {
+      "types": "./dist/baseline-operations.d.ts",
+      "import": "./dist/baseline-operations.js"
+    },
+    "./documentation-commit": {
+      "types": "./dist/documentation-commit.d.ts",
+      "import": "./dist/documentation-commit.js"
+    },
     "./gitignore": {
       "types": "./dist/gitignore.d.ts",
       "import": "./dist/gitignore.js"

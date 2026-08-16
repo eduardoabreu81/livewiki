@@ -3,6 +3,7 @@ import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { runBatch, runOnly } from "./batch.js";
+import { markDegradedArtifact } from "./artifact.js";
 import type { LlmClient } from "./llm/index.js";
 import type { GenerateResult } from "./llm/types.js";
 
@@ -28,9 +29,11 @@ class MockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
   public readonly model = "claude-test-mock";
   public callCount = 0;
+  public totalCallCount = 0;
   public callLog: Array<{ system: string; user: string; maxTokens: number | undefined }> = [];
 
   async generate(req: import("./llm/types.js").GenerateRequest): Promise<GenerateResult> {
+    this.totalCallCount++;
     // Stage 5c (item 23): answer the understanding task with a valid page
     // OUTSIDE this mock's instrumentation — stage 5c has its own dedicated
     // suite (batch-understanding.test.ts).
@@ -143,7 +146,64 @@ describe("batch.runBatch — orquestrador end-to-end com mock LLM", () => {
 
     // Manifest escrito
     const manifestPath = nodePath.join(repoRoot, "livewiki/.manifest.json");
-    expect(await nodeFs.readFile(manifestPath, "utf8")).toMatch(/"version": 1/);
+    expect(await nodeFs.readFile(manifestPath, "utf8")).toMatch(/"version": 2/);
+  });
+
+  it("rebuilds a lost SQLite queue without repeating proven documentation calls", async () => {
+    const first = await runBatch({
+      repoRoot,
+      llmClient: mockLlm,
+      noRefine: true,
+      skipManifestWrite: false,
+    });
+    expect(first.status).toBe("completed");
+    expect(mockLlm.totalCallCount).toBeGreaterThan(0);
+
+    for (const name of ["index.db", "index.db-shm", "index.db-wal"]) {
+      await nodeFs.rm(nodePath.join(repoRoot, ".livewiki", name), { force: true });
+    }
+    const recoveryLlm = new MockLlm();
+    const recovered = await runBatch({
+      repoRoot,
+      llmClient: recoveryLlm,
+      noRefine: true,
+      skipManifestWrite: false,
+    });
+
+    expect(recovered.status).toBe("completed");
+    expect(recoveryLlm.totalCallCount).toBe(0);
+  });
+
+  it("rebuilds a lost SQLite queue for a relaxed-round (degraded) file page without a paid call", async () => {
+    const first = await runBatch({
+      repoRoot,
+      llmClient: mockLlm,
+      noRefine: true,
+      skipManifestWrite: false,
+    });
+    expect(first.status).toBe("completed");
+
+    // Mark the file page as completed under the relaxed contract
+    // (`quality: degraded` + reader notice): it only passes relaxed
+    // validation, so recovery must re-validate it under that same contract.
+    const filePageAbs = nodePath.join(repoRoot, "livewiki/auth/login.md");
+    const degraded = markDegradedArtifact(await nodeFs.readFile(filePageAbs, "utf8"));
+    expect(degraded).toContain("quality: degraded");
+    await nodeFs.writeFile(filePageAbs, degraded, "utf8");
+
+    for (const name of ["index.db", "index.db-shm", "index.db-wal"]) {
+      await nodeFs.rm(nodePath.join(repoRoot, ".livewiki", name), { force: true });
+    }
+    const recoveryLlm = new MockLlm();
+    const recovered = await runBatch({
+      repoRoot,
+      llmClient: recoveryLlm,
+      noRefine: true,
+      skipManifestWrite: false,
+    });
+
+    expect(recovered.status).toBe("completed");
+    expect(recoveryLlm.totalCallCount).toBe(0);
   });
 
   it("etapa 2 é determinística (#29): zero LLM calls, com ou sem --no-refine", async () => {

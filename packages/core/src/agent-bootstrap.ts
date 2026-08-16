@@ -85,6 +85,7 @@ import {
 import {
   countFlowDiagramElements,
   extractInlineModuleDiagram,
+  isDegradedArtifact,
   normalizeStage4Artifact,
   validateStage4Artifact,
   type Stage4ValidationContext,
@@ -108,12 +109,13 @@ import {
 } from "./flow-diagram.js";
 import { moduleSlug } from "./diagrams.js";
 import { validateMermaidSyntax } from "./mermaid-validator.js";
-import {
-  buildManifest,
-  computeSnapshotHash,
-  writeManifestIfChanged,
-} from "./manifest.js";
+import { computeSnapshotHash, refreshArtifactReceiptHashes, writeManifestState } from "./manifest.js";
 import { sha256 } from "./hashes.js";
+import {
+  commitDocumentationTask,
+  recoverDocumentationReceipt,
+} from "./documentation-commit.js";
+import { hasCurrentContractBaseline } from "./baseline-operations.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import type {
   BatchRunSummary,
@@ -483,19 +485,90 @@ function makeRunState(
   };
 }
 
-function insertTask(
+async function insertTask(
+  repoRoot: string,
   db: Database.Database,
   runId: number,
   stage: 4 | 5,
   target: string,
   task: PersistedAgentTask,
+  state: AgentRunState,
   now: number,
-): number {
+): Promise<number> {
+  const recoveredArtifacts = await recoverTaskArtifacts(repoRoot, task, state);
+  const checkpoint = checkpointForTask(task, stage, now);
+  if (recoveredArtifacts !== null) {
+    checkpoint.status = "done";
+    checkpoint.finishedAt = now;
+    checkpoint.artifacts = recoveredArtifacts;
+  }
   const result = db.prepare(
     "INSERT INTO batch_tasks (run_id, stage, target, status, checkpoint_json, updated_at) " +
-      "VALUES (?, ?, ?, 'pending', ?, ?)",
-  ).run(runId, stage, target, JSON.stringify(checkpointForTask(task, stage, now)), now);
+      "VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(
+    runId,
+    stage,
+    target,
+    recoveredArtifacts === null ? "pending" : "done",
+    JSON.stringify(checkpoint),
+    now,
+  );
   return Number(result.lastInsertRowid);
+}
+
+async function recoverTaskArtifacts(
+  repoRoot: string,
+  task: PersistedAgentTask,
+  state: AgentRunState,
+): Promise<import("./batch-state.js").TaskArtifacts | null> {
+  if (task.kind !== "file-page") {
+    return recoverDocumentationReceipt({
+      repoRoot,
+      taskId: receiptTaskId(task),
+      kind: task.kind,
+      evidence: receiptEvidence(task),
+      page: task.targetPath,
+      ...(task.kind === "flow"
+        ? { diagram: `livewiki/diagrams/flow-${task.candidate.slug}.mmd` }
+        : {}),
+    });
+  }
+
+  if (!await hasCurrentContractBaseline(repoRoot, task.targetPath, task.closedKeys)) return null;
+  const page = await safeIo.readText(repoRoot, task.targetPath).catch(() => null);
+  if (page === null) return null;
+  const normalized = normalizeStage4Artifact(page);
+  if (!normalized.ok) return null;
+  const slug = moduleSlug(task.module.id);
+  const validation = validateStage4Artifact(normalized.content, task.closedKeys, {
+    moduleId: task.module.id,
+    moduleRole: task.moduleRole,
+    // Pages completed under the relaxed round (`quality: degraded`) only
+    // pass the relaxed contract they were accepted with.
+    ...(isDegradedArtifact(page) ? { relaxed: true } : {}),
+    ...(state.config.moduleDiagrams
+      ? { expectedModuleDiagram: `livewiki/diagrams/${slug}.mmd` }
+      : {}),
+  });
+  if (!validation.ok) return null;
+
+  if (!state.config.moduleDiagrams) {
+    return { wikiPath: task.targetPath, pageHash: sha256(page) };
+  }
+  const diagramPath = `livewiki/diagrams/${slug}.mmd`;
+  const diagram = await safeIo.readText(repoRoot, diagramPath).catch(() => null);
+  if (diagram === null || await validateMermaidSyntax(diagram) !== null) return null;
+  const elements = countFlowDiagramElements(diagram);
+  if (elements.nodes > state.config.moduleMaxDiagramNodes ||
+      elements.edges > state.config.moduleMaxDiagramEdges) {
+    return null;
+  }
+  return {
+    wikiPath: task.targetPath,
+    pageHash: sha256(page),
+    diagramPath,
+    diagramHash: sha256(diagram),
+  };
 }
 
 function fileTask(
@@ -551,12 +624,14 @@ async function createAgentRun(repoRoot: string): Promise<RunRow> {
       keysByFile.set(filePath, keys);
     }
     for (const unit of orderedFiles) {
-      insertTask(
+      await insertTask(
+        repoRoot,
         db,
         runId,
         4,
         unit.id,
         fileTask(unit, state, [...(keysByFile.get(unit.filePath) ?? [])].sort()),
+        state,
         now,
       );
     }
@@ -742,7 +817,7 @@ async function materializeFolderPhase(
       symbolCountByPath: state.symbolCountByPath,
     };
     if (moduleRole === "product") {
-      insertTask(db, runId, 4, module.id, task, now);
+      await insertTask(repoRoot, db, runId, 4, module.id, task, state, now);
       continue;
     }
 
@@ -787,7 +862,7 @@ async function materializeFlowPhase(
       candidate,
       modules: state.ordered,
     };
-    insertTask(db, runId, 5, `flow:${candidate.slug}`, task, now);
+    await insertTask(repoRoot, db, runId, 5, `flow:${candidate.slug}`, task, state, now);
   }
   state.phase = "flows";
   persistRunState(db, runId, state);
@@ -845,7 +920,16 @@ async function materializeTopicPhase(
         moduleRole: "product",
         candidate,
       };
-      insertTask(db, runId, 5, `topic:${candidate.evidenceHash}`, task, now);
+      await insertTask(
+        repoRoot,
+        db,
+        runId,
+        5,
+        `topic:${candidate.evidenceHash}`,
+        task,
+        state,
+        now,
+      );
     }
   }
   state.phase = "topics";
@@ -891,7 +975,16 @@ async function materializeUnderstandingPhase(
         evidenceHash,
         suggestedTitle: evidence.readmeTitle ?? "Repository understanding",
       };
-      insertTask(db, runId, 5, `understanding:${evidenceHash}`, task, Date.now());
+      await insertTask(
+        repoRoot,
+        db,
+        runId,
+        5,
+        `understanding:${evidenceHash}`,
+        task,
+        state,
+        Date.now(),
+      );
     }
   }
   state.phase = "understanding";
@@ -917,6 +1010,9 @@ async function finalizeAgentRun(
     counts.failed > 0 || verify.issues.length > 0
       ? "completed_with_failures"
       : "completed";
+  if (status === "completed") {
+    await refreshCompletedTaskReceipts(repoRoot, db, runId);
+  }
   const summary = emptySummary({
     modules: state.modules,
     done: counts.done,
@@ -928,11 +1024,37 @@ async function finalizeAgentRun(
   ).run(status, Date.now(), JSON.stringify(summary), JSON.stringify(state), runId);
 
   const snapshotHash = await computeSnapshotHash(repoRoot);
-  await writeManifestIfChanged(
-    repoRoot,
-    buildManifest({ lastDocumentedCommit: null, snapshotHash, pendingBatch: null }),
-  );
+  await writeManifestState(repoRoot, {
+    lastDocumentedCommit: null,
+    snapshotHash,
+    pendingBatch: null,
+  });
   return status;
+}
+
+async function refreshCompletedTaskReceipts(
+  repoRoot: string,
+  db: Database.Database,
+  runId: number,
+): Promise<void> {
+  const rows = db.prepare(
+    "SELECT id, run_id, stage, target, status, checkpoint_json FROM batch_tasks " +
+      "WHERE run_id = ? AND status = 'done' ORDER BY id",
+  ).all(runId) as TaskRow[];
+  // Receipt-only refresh: the finalize navigation regen may have rewritten
+  // pages, so re-hash the receipted artifacts. The baseline is NEVER
+  // advanced here — code that drifted after the task completed must surface
+  // as `changed`, not get silently accepted.
+  const changedPaths: string[] = [];
+  for (const row of rows) {
+    const { task } = readAgentTask(row);
+    if (task.kind === "file-page") continue;
+    changedPaths.push(task.targetPath);
+    if (task.kind === "flow") {
+      changedPaths.push(`livewiki/diagrams/flow-${task.candidate.slug}.mmd`);
+    }
+  }
+  await refreshArtifactReceiptHashes(repoRoot, changedPaths);
 }
 
 async function advancePhase(
@@ -1469,6 +1591,7 @@ async function writeAndVerifySubmission(
     const issues = result.issues.filter(
       (issue) =>
         paths.has(issue.wikiPath) &&
+        issue.code !== "baseline_entry_without_anchor" &&
         (prepared.rejectAnySeverity || issue.severity === "error"),
     );
     if (issues.length === 0) {
@@ -1708,10 +1831,23 @@ export async function submitAgentBootstrapTask(
       ...(prepared.companion !== undefined
         ? {
             diagramPath: prepared.companion.path,
-            diagramHash: sha256(prepared.companion.content),
+            diagramHash: sha256(
+              prepared.companion.content.endsWith("\n")
+                ? prepared.companion.content
+                : `${prepared.companion.content}\n`,
+            ),
           }
         : {}),
     };
+    await commitDocumentationTask({
+      repoRoot: absRoot,
+      taskId: receiptTaskId(task),
+      kind: task.kind,
+      page: task.targetPath,
+      symbolKeys: task.closedKeys,
+      evidence: receiptEvidence(task),
+      artifacts,
+    });
     const taskStatus = persistAttempt(db, row, checkpoint, opts.content, [], {
       success: true,
       terminal: true,
@@ -1728,5 +1864,25 @@ export async function submitAgentBootstrapTask(
     };
   } finally {
     db.close();
+  }
+}
+
+function receiptTaskId(task: PersistedAgentTask): string {
+  switch (task.kind) {
+    case "file-page": return `file:${task.targetPath}`;
+    case "folder-page": return `folder:${task.targetPath}`;
+    case "flow": return `flow:${task.candidate.slug}`;
+    case "topic": return `topic:${task.candidate.evidenceHash}`;
+    case "understanding": return `understanding:${task.evidenceHash}`;
+  }
+}
+
+function receiptEvidence(task: PersistedAgentTask): unknown {
+  switch (task.kind) {
+    case "file-page": return task.fileUnit;
+    case "folder-page": return task.folder;
+    case "flow": return task.candidate;
+    case "topic": return task.candidate;
+    case "understanding": return { evidenceHash: task.evidenceHash };
   }
 }

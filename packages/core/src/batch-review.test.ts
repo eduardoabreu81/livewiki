@@ -19,6 +19,7 @@ import type { LlmClient } from "./llm/index.js";
 import type { GenerateResult } from "./llm/types.js";
 import type { PricingOverride } from "./pricing.js";
 import { computeSnapshotHash, readManifest } from "./manifest.js";
+import { emptyBaseline, writeBaseline } from "./baseline.js";
 
 function makeCompactAuxiliaryPage(closedKeys: string[]): string {
   return [
@@ -178,6 +179,7 @@ beforeEach(async () => {
     JSON.stringify({ moduleDiagrams: false, deepHierarchy: false }),
     "utf8",
   );
+  await writeBaseline(repoRoot, emptyBaseline());
 });
 
 afterEach(async () => {

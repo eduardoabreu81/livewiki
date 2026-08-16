@@ -29,10 +29,16 @@ import {
 } from "./risk.js";
 import { loadGoModulePath, loadRustCrateName } from "./import-resolution.js";
 import { classifyPathRole, type PathRole } from "./modules.js";
+import {
+  collectBaselineDocumentationInventory,
+  evaluateBaseline,
+  readBaseline,
+  type BaselineIssue,
+} from "./baseline.js";
 
 /** Coverage tier of a language (SPEC §"Coverage ladder"). */
 export type LangTier = "anchored" | "prose";
-export type DebtBaseline = "available" | "unavailable";
+export type DebtBaseline = "available" | "unavailable" | "incompatible";
 
 /**
  * Languages whose files have a tree-sitter grammar (tier 1): the values of
@@ -65,6 +71,20 @@ export interface DebtItem {
   risk?: RiskScore;
 }
 
+export interface RepositoryDebtItem {
+  event: "changed" | "moved" | "deleted";
+  assignee: "agent" | "human";
+  symbol_key: string;
+  wiki_path: string;
+  detail: string | null;
+}
+
+export interface BaselineGapItem {
+  symbol_key: string;
+  wiki_path: string;
+  assignee?: "agent" | "human";
+}
+
 export interface StatusReport {
   files: {
     total: number;
@@ -83,6 +103,18 @@ export interface StatusReport {
   };
   debt: {
     baseline: DebtBaseline;
+    baselineIssues?: BaselineIssue[];
+    /** Repository-portable authority. Null means no measurable baseline. */
+    repository?: {
+      total: number;
+      byEvent: { changed: number; moved: number; deleted: number };
+      clean: number;
+      items: RepositoryDebtItem[];
+      unbaselined: { total: number; items: BaselineGapItem[] };
+      inferred: { total: number; items: BaselineGapItem[] };
+      removedAnchors: { total: number; items: BaselineGapItem[] };
+    } | null;
+    /** Local SQLite projection retained for backward-compatible debt IDs. */
     total: number;
     byEvent: { changed: number; moved: number; deleted: number };
     byAssignee: { agent: number; human: number };
@@ -153,6 +185,7 @@ export async function run(
       config = applyDefaults({});
     }
     const report = collect(db, opts.topN ?? 10, config);
+    await applyVersionedBaseline(db, absRoot, report);
     // Backlog #3: index freshness, bounded by the index itself (stat the
     // indexed files only — never a repo walk).
     await applyFreshness(db, absRoot, report);
@@ -297,22 +330,13 @@ function collect(
   const lastLedgerRow = db.prepare("SELECT value FROM meta WHERE key = 'last_ledger_at'").get() as
     | { value: string }
     | undefined;
-  const ledgerRunsRow = db.prepare("SELECT value FROM meta WHERE key = 'ledger_runs'").get() as
-    | { value: string }
-    | undefined;
-  const ledgerRuns = ledgerRunsRow ? Number.parseInt(ledgerRunsRow.value, 10) : null;
-  // Databases created before ledger_runs existed can still prove that the
-  // ledger ran from last_ledger_at. Treat that legacy state as mature rather
-  // than falsely reporting an unavailable baseline after an upgrade.
-  const debtBaseline: DebtBaseline =
-    ledgerRuns === null ? (lastLedgerRow ? "available" : "unavailable") :
-      ledgerRuns > 1 ? "available" : "unavailable";
-
   return {
     files: { total: files.length, byLang, tiers, top },
     symbols: { total: symbols.length, byKind },
     debt: {
-      baseline: debtBaseline,
+      baseline: "unavailable",
+      baselineIssues: [],
+      repository: null,
       total: debtRows.length,
       byEvent: debtByEvent,
       byAssignee: debtByAssignee,
@@ -333,6 +357,106 @@ function collect(
       lastLedgerAt: lastLedgerRow ? Number.parseInt(lastLedgerRow.value, 10) : null,
     },
   };
+}
+
+async function applyVersionedBaseline(
+  db: import("better-sqlite3").Database,
+  absRoot: string,
+  report: StatusReport,
+): Promise<void> {
+  const loaded = await readBaseline(absRoot);
+  report.debt.baseline = loaded.state;
+  if (loaded.state === "unavailable") return;
+  if (loaded.state === "incompatible") {
+    report.debt.baselineIssues = loaded.issues;
+    return;
+  }
+
+  const symbols = db.prepare(
+    "SELECT key, name, content_hash FROM symbols WHERE status = 'active'",
+  ).all() as Array<{ key: string; name: string; content_hash: string }>;
+  const inventory = await collectBaselineDocumentationInventory(absRoot);
+  const health = evaluateBaseline(loaded.baseline, symbols, inventory);
+  const movesByOldIdentity = new Set(
+    health.moves.map((move) => `${move.wikiPath}\0${move.oldKey}`),
+  );
+  // An entry whose anchor is gone is surfaced exactly once, as a
+  // removed-anchor finding — never also as a changed/deleted item.
+  const removedIdentities = new Set(
+    health.removedAnchors.map((entry) => `${entry.wikiPath}\0${entry.symbolKey}`),
+  );
+  const items: RepositoryDebtItem[] = [];
+  for (const entry of health.entries) {
+    if (entry.provenance !== "accepted") continue;
+    if (removedIdentities.has(`${entry.wikiPath}\0${entry.symbolKey}`)) continue;
+    if (entry.state === "changed") {
+      items.push({
+        event: "changed",
+        assignee: entry.assignee,
+        symbol_key: entry.symbolKey,
+        wiki_path: entry.wikiPath,
+        detail: null,
+      });
+    } else if (entry.state === "deleted" &&
+               !movesByOldIdentity.has(`${entry.wikiPath}\0${entry.symbolKey}`)) {
+      items.push({
+        event: "deleted",
+        assignee: entry.assignee,
+        symbol_key: entry.symbolKey,
+        wiki_path: entry.wikiPath,
+        detail: null,
+      });
+    }
+  }
+  for (const move of health.moves) {
+    items.push({
+      event: "moved",
+      assignee: move.assignee,
+      symbol_key: move.newKey,
+      wiki_path: move.wikiPath,
+      detail: JSON.stringify({ from: move.oldKey, to: move.newKey }),
+    });
+  }
+  items.sort((left, right) =>
+    compareText(left.wiki_path, right.wiki_path) ||
+    compareText(left.symbol_key, right.symbol_key) ||
+    compareText(left.event, right.event));
+
+  report.debt.repository = {
+    total: items.length,
+    byEvent: {
+      changed: items.filter((item) => item.event === "changed").length,
+      moved: items.filter((item) => item.event === "moved").length,
+      deleted: items.filter((item) => item.event === "deleted").length,
+    },
+    clean: health.counts.clean,
+    items,
+    unbaselined: {
+      total: health.unbaselined.length,
+      items: health.unbaselined.map((item) => ({
+        symbol_key: item.symbolKey,
+        wiki_path: item.wikiPath,
+        assignee: item.assignee,
+      })),
+    },
+    inferred: {
+      total: health.counts.inferred,
+      items: health.entries
+        .filter((entry) => entry.state === "inferred")
+        .map((entry) => ({ symbol_key: entry.symbolKey, wiki_path: entry.wikiPath })),
+    },
+    removedAnchors: {
+      total: health.removedAnchors.length,
+      items: health.removedAnchors.map((entry) => ({
+        symbol_key: entry.symbolKey,
+        wiki_path: entry.wikiPath,
+      })),
+    },
+  };
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /**
@@ -554,7 +678,26 @@ export function formatHuman(report: StatusReport): string {
     }
     lines.push("");
   }
-  lines.push(`Open debt: ${report.debt.total}`);
+  lines.push(`Documentation baseline: ${report.debt.baseline}`);
+  if ((report.debt.baselineIssues ?? []).length > 0) {
+    for (const issue of report.debt.baselineIssues ?? []) {
+      lines.push(`  [${issue.code}] ${issue.detail}`);
+    }
+  }
+  if (report.debt.repository) {
+    lines.push(`Repository debt: ${report.debt.repository.total}`);
+    lines.push(
+      `  by event:   changed=${report.debt.repository.byEvent.changed} ` +
+        `moved=${report.debt.repository.byEvent.moved} ` +
+        `deleted=${report.debt.repository.byEvent.deleted}`,
+    );
+    lines.push(
+      `  coverage gaps: unbaselined=${report.debt.repository.unbaselined.total} ` +
+        `inferred=${report.debt.repository.inferred.total} ` +
+        `removed-anchors=${report.debt.repository.removedAnchors.total}`,
+    );
+  }
+  lines.push(`Local projected debt: ${report.debt.total}`);
   lines.push(
     `  by event:   changed=${report.debt.byEvent.changed} ` +
       `moved=${report.debt.byEvent.moved} deleted=${report.debt.byEvent.deleted}`,

@@ -4,10 +4,9 @@
 # signals: baseline availability, detected debt, verify issues, and
 # undocumented symbols. Indexing and verification cost ZERO LLM tokens.
 #
-# A fresh CI checkout has no prior ledger state, so changed content debt is
-# not measurable there. Report mode tells that truth without breaking existing
-# installations. Enforce mode fails closed when the baseline is unavailable or
-# verify finds issues; debt and undocumented totals remain report-only.
+# The versioned baseline makes documentation health portable to a fresh CI
+# checkout. Enforce mode fails closed on unavailable/incompatible evidence,
+# repository debt, baseline gaps, removed anchors, or verify issues.
 #
 # Install: copy this file to `.github/workflows/docs-debt.yml` in a repo
 # where `livewiki/` already exists (run `livewiki init` once locally
@@ -30,10 +29,11 @@ permissions:
   contents: read
 
 env:
-  # report: never fails — the step summary is the signal (safe default).
-  # enforce: fails when baseline is unavailable or verify finds issues.
-  # Today enforce fails on every CI run because fresh checkouts never have a baseline; it becomes useful once baselines are recorded in the repository.
-  LIVEWIKI_DEBT_MODE: report
+  # report: never fails — the step summary is the signal.
+  # enforce: fails on unavailable/incompatible evidence, repository debt,
+  # unbaselined or inferred obligations, removed anchors, or verify issues.
+  # Version the baseline before enabling this workflow on an existing wiki.
+  LIVEWIKI_DEBT_MODE: enforce
 
 jobs:
   docs-debt:
@@ -68,6 +68,7 @@ jobs:
             const v = JSON.parse(fs.readFileSync(process.env.VERIFY_JSON, "utf8"));
             const debt = s.debt ?? { total: 0, byEvent: {}, items: [] };
             const baseline = debt.baseline ?? "unavailable";
+            const repository = debt.repository ?? null;
             const issues = Array.isArray(v.issues) ? v.issues : [];
             const undocumented = s.undocumented ?? { total: 0, sample: [] };
             const undocumentedByRole = undocumented.byRole ?? {};
@@ -79,24 +80,22 @@ jobs:
             lines.push("### Baseline");
             lines.push("");
             if (baseline === "available") {
-              lines.push("**Available.** Content-debt comparisons use prior ledger state from this checkout.");
+              lines.push("**Available.** Health is computed from the repository-versioned documentation baseline.");
             } else {
-              lines.push("**Unavailable.** Content debt cannot be measured in this checkout: the index is new and has no previous ledger state.");
+              lines.push(`**${baseline}.** Repository-portable documentation health cannot be established.`);
             }
             lines.push("");
             lines.push("### Documentation debt");
             lines.push("");
-            if (baseline === "unavailable") {
-              lines.push("**Not measurable in this checkout.** `changed` debt cannot be detected without a baseline; only `deleted` is reliable here.");
-              lines.push("");
-              lines.push(`Detected anyway: ${debt.byEvent?.deleted ?? 0} deleted item(s).`);
+            if (baseline !== "available" || repository === null) {
+              lines.push("**Not measurable.** Create or repair the versioned baseline before enforcing documentation health.");
             } else {
-              lines.push(`**${debt.total ?? 0} open item(s).** Changed: ${debt.byEvent?.changed ?? 0}, ` +
-                `moved: ${debt.byEvent?.moved ?? 0}, deleted: ${debt.byEvent?.deleted ?? 0}.`);
+              lines.push(`**${repository.total ?? 0} open item(s).** Changed: ${repository.byEvent?.changed ?? 0}, ` +
+                `moved: ${repository.byEvent?.moved ?? 0}, deleted: ${repository.byEvent?.deleted ?? 0}.`);
+              lines.push("");
+              lines.push(`Unbaselined: ${repository.unbaselined?.total ?? 0}; inferred: ${repository.inferred?.total ?? 0}; removed anchors: ${repository.removedAnchors?.total ?? 0}.`);
             }
-            const visibleDebtItems = baseline === "unavailable"
-              ? (debt.items ?? []).filter((item) => item.event === "deleted")
-              : (debt.items ?? []);
+            const visibleDebtItems = repository?.items ?? [];
             if (visibleDebtItems.length > 0) {
               lines.push("");
               lines.push("| risk | event | assignee | page | anchor |");
@@ -138,7 +137,11 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
             console.log(lines.join("\n"));
             const failures = [];
-            if (baseline === "unavailable") failures.push("content-debt baseline unavailable");
+            if (baseline !== "available" || repository === null) failures.push(`documentation baseline ${baseline}`);
+            if ((repository?.total ?? 0) > 0) failures.push(`${repository.total} repository debt item(s)`);
+            if ((repository?.unbaselined?.total ?? 0) > 0) failures.push(`${repository.unbaselined.total} unbaselined anchor(s)`);
+            if ((repository?.inferred?.total ?? 0) > 0) failures.push(`${repository.inferred.total} inferred baseline entries`);
+            if ((repository?.removedAnchors?.total ?? 0) > 0) failures.push(`${repository.removedAnchors.total} removed anchor(s)`);
             if (issues.length > 0) failures.push(`${issues.length} verify issue(s)`);
             if (failures.length > 0 && process.env.LIVEWIKI_DEBT_MODE !== "report") {
               console.error(`livewiki documentation gate: ${failures.join("; ")} — failing (mode=enforce)`);

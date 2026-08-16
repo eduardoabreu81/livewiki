@@ -268,11 +268,11 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
   });
 
   it("usa report por padrão e documenta o gate fail-closed de enforce", () => {
-    expect(content).toMatch(/LIVEWIKI_DEBT_MODE:\s*report/);
-    expect(content).toMatch(/baseline === "unavailable"/);
+    expect(content).toMatch(/LIVEWIKI_DEBT_MODE:\s*enforce/);
+    expect(content).toMatch(/baseline !== "available"/);
     expect(content).toMatch(/issues\.length > 0/);
     expect(content).toMatch(/LIVEWIKI_DEBT_MODE\s*!==\s*"report"/);
-    expect(content).not.toMatch(/debt\.total > 0/);
+    expect(content).toMatch(/repository\?\.total \?\? 0\) > 0/);
     expect(content).not.toMatch(/undocumented\.total > 0/);
   });
 
@@ -280,6 +280,7 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     const status = {
       debt: {
         baseline: "unavailable",
+        repository: null,
         total: 0,
         byEvent: { changed: 0, moved: 0, deleted: 0 },
         items: [],
@@ -304,10 +305,9 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     const report = await runDocsDebtReporter(content, status, cleanVerify, "report");
     expect(report.exitCode).toBe(0);
     expect(report.summary).toContain("### Baseline");
-    expect(report.summary).toContain("**Unavailable.**");
+    expect(report.summary).toContain("**unavailable.**");
     expect(report.summary).toContain("### Documentation debt");
-    expect(report.summary).toContain("**Not measurable in this checkout.**");
-    expect(report.summary).toContain("Detected anyway: 0 deleted item(s).");
+    expect(report.summary).toContain("**Not measurable.**");
     expect(report.summary).not.toContain("**0 open item(s).**");
     expect(report.summary).toContain("### Verify issues");
     expect(report.summary).toContain("**0 issue(s)** across 133 page(s).");
@@ -328,23 +328,28 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
       "enforce",
     );
     expect(unavailableEnforce.exitCode).toBe(1);
-    expect(unavailableEnforce.stderr).toContain("content-debt baseline unavailable");
+    expect(unavailableEnforce.stderr).toContain("documentation baseline unavailable");
 
     const availableWithReportedTotals = {
       ...status,
       debt: {
         ...status.debt,
         baseline: "available",
-        total: 7,
-        byEvent: { changed: 7, moved: 0, deleted: 0 },
-        items: [
-          {
-            event: "changed",
-            assignee: "agent",
-            wiki_path: "livewiki/core-db.md",
-            symbol_key: "packages/core/src/db.ts#CURRENT_SCHEMA_VERSION",
-          },
-        ],
+        repository: {
+          total: 7,
+          byEvent: { changed: 7, moved: 0, deleted: 0 },
+          unbaselined: { total: 0, items: [] },
+          inferred: { total: 0, items: [] },
+          removedAnchors: { total: 0, items: [] },
+          items: [
+            {
+              event: "changed",
+              assignee: "agent",
+              wiki_path: "livewiki/core-db.md",
+              symbol_key: "packages/core/src/db.ts#CURRENT_SCHEMA_VERSION",
+            },
+          ],
+        },
       },
     };
     const totalsOnly = await runDocsDebtReporter(
@@ -353,7 +358,8 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
       cleanVerify,
       "enforce",
     );
-    expect(totalsOnly.exitCode).toBe(0);
+    expect(totalsOnly.exitCode).toBe(1);
+    expect(totalsOnly.stderr).toContain("7 repository debt item(s)");
     expect(totalsOnly.summary).toContain("| risk | event | assignee | page | anchor |");
     expect(totalsOnly.summary).toContain("`livewiki/core-db.md`");
 
@@ -371,7 +377,18 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     };
     const verifyEnforce = await runDocsDebtReporter(
       content,
-      availableWithReportedTotals,
+      {
+        ...availableWithReportedTotals,
+        debt: {
+          ...availableWithReportedTotals.debt,
+          repository: {
+            ...availableWithReportedTotals.debt.repository,
+            total: 0,
+            byEvent: { changed: 0, moved: 0, deleted: 0 },
+            items: [],
+          },
+        },
+      },
       brokenVerify,
       "enforce",
     );

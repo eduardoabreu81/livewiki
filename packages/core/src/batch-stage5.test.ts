@@ -34,6 +34,7 @@ import { runBatch, runOnly } from "./batch.js";
 import * as safeIo from "./safe-io.js";
 import { run as runIndexer } from "./indexer.js";
 import { run as runVerify } from "./verify.js";
+import { writeBaseline } from "./baseline.js";
 import {
   extractInlineFlowDiagram,
   countFlowDiagramElements,
@@ -641,7 +642,6 @@ describe("batch stage 5 — diagram gates (Priority-0 fix: deterministic generat
       JSON.stringify({ moduleDiagrams: false, deepHierarchy: false, flowMaxDiagramNodes: 1, flowMaxDiagramEdges: 1 }),
       "utf8",
     );
-
     const result = await runBatch({
       repoRoot,
       llmClient: llm,
@@ -1333,6 +1333,7 @@ describe("batch stage 5 — write gate severity (R10.1 B)", () => {
       ].join("\n"),
       "utf8",
     );
+    await writeBaseline(repoRoot, { schemaVersion: 1, entries: [] });
 
     const result = await runBatch({
       repoRoot,

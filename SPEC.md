@@ -19,8 +19,13 @@
    (`--write-pointer`) or interactive confirmation. Never automatic. The
    modification is an append of a delimited block
    (`<!-- livewiki:start -->` ... `<!-- livewiki:end -->`), idempotent.
-3. **The DB is derived**: no information may exist ONLY in SQLite. Everything that
-   matters for handoff lives in versioned markdown/manifest.
+3. **SQLite is non-authoritative local operational state**: versioned code,
+   wiki artifacts, the documentation baseline, and the manifest are sufficient
+   to reconstruct the current documentation-health state. Deleting SQLite may
+   discard attempt-level history, diagnostics, and local telemetry, but it must
+   not lose repository truth or force a repeat paid call whose completed output
+   can be proven from versioned artifacts. No cross-machine or CI claim may
+   depend on SQLite-only history.
 4. **No telemetry, no network** except: LLM calls in batch mode (opt-in, user's
    key) and a one-time download of WASM grammars on first use.
 5. **Tests**: vitest; 80% minimum coverage in core (indexer, anchors, debt,
@@ -140,6 +145,7 @@ conditions are met on it.
 target-repo/
 ├── livewiki/
 │   ├── .manifest.json
+│   ├── .baseline.json             # versioned symbol-documentation attestation
 │   ├── quickstart.md
 │   ├── tasks.md                    # deterministic intent-oriented work index
 │   ├── architecture/
@@ -176,16 +182,216 @@ target-repo/
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "lastDocumentedCommit": "<sha>",
-  "snapshotHash": "<sha256 of livewiki/ content excluding the manifest itself>",
+  "snapshotHash": "<sha256 of rendered livewiki/ content; excludes .manifest.json and .baseline.json>",
   "updatedAt": "<ISO 8601>",
-  "pendingBatch": { "runId": "...", "stage": 4, "done": 23, "total": 61 } // or null
+  "pendingBatch": { "runId": "...", "stage": 4, "done": 23, "total": 61 },
+  "artifactReceipts": [
+    {
+      "taskId": "understanding:<evidenceHash>",
+      "evidenceHash": "<sha256>",
+      "contract": "understanding-v1",
+      "artifacts": [
+        { "path": "livewiki/understanding.md", "hash": "<sha256>" }
+      ]
+    }
+  ]
 }
 ```
 
 `snapshotHash` follows the OpenWiki pattern: only rewrite the manifest if content
-changed (avoids CI loops).
+changed (avoids CI loops). The baseline is excluded because `snapshotHash`
+describes rendered wiki artifacts, not audit state; this exclusion prevents no
+hash cycle and is solely a semantic boundary.
+
+`artifactReceipts` is the durable recovery surface for contract-bound tasks
+whose completion cannot be proven from symbol baseline entries alone (folder,
+flow, topic, and repository-understanding artifacts). Each receipt records a
+stable task identity, evidence hash, contract version, and the sorted
+`(artifactPath, contentHash)` outputs. Receipt serialization is deterministic.
+Receipts sort by `taskId`; receipt keys stay in the order `taskId`,
+`evidenceHash`, `contract`, `artifacts`; artifacts sort by `path` and use key
+order `path`, `hash`. Duplicate task IDs or artifact paths are invalid.
+On SQLite loss, livewiki rebuilds the deterministic task plan and treats a task
+as complete only when its receipt still matches existing artifacts and the full
+current artifact contract passes. A missing, stale, incompatible, or ambiguous
+receipt means `pending`, never an inferred success. Receipts must never contain
+prompts, provider credentials, model responses, diagnostics, timestamps, or
+token accounting. Manifest v1 is read-compatible and behaves as if receipts
+were absent; the baseline migration writes manifest v2.
+
+### `.baseline.json` (versioned documentation baseline)
+
+> Implemented post-0.1.2 contract. SQLite remains a rebuildable local
+> projection and compatibility surface; it is not repository authority.
+
+The baseline answers one repository-portable question: **against which exact
+version of each symbol was a wiki page written or explicitly accepted?** It is
+the authority for current documentation alignment. SQLite is a rebuildable
+projection for fast queries plus explicitly local operational history.
+
+The file is dedicated to this purpose. It is not folded into `.manifest.json`,
+whose timestamps, batch summary, and rendered snapshot serve a different
+lifecycle. Its identity is one entry per `(wikiPath, symbolKey)`, never one per
+anchor occurrence: frontmatter and section occurrences of the same symbol on
+the same page represent one documentation obligation.
+
+```json
+{
+"schemaVersion":1,
+"entries":[
+{"wikiPath":"livewiki/core-src/db.md","symbolKey":"packages/core/src/db.ts#SCHEMA_SQL","hash":"7b2e...","extraction":"ts-v1","provenance":"inferred"},
+{"wikiPath":"livewiki/core-src/db.md","symbolKey":"packages/core/src/db.ts#openIndex","hash":"a3f9...","extraction":"ts-v1","provenance":"accepted"}
+]
+}
+```
+
+Canonical serialization is part of the public contract:
+
+- valid JSON, UTF-8 without BOM, LF, and one final newline;
+- exactly one compact entry per line, with no internal indentation or spaces
+  after `:` or `,`;
+- entry keys in the fixed order `wikiPath`, `symbolKey`, `hash`, `extraction`,
+  `provenance`;
+- entries sorted by `wikiPath`, then `symbolKey`, using code-point order;
+- duplicate composite keys are a `verify` error, never last-one-wins;
+- no dates, assignee, risk, counters, resolution state, or local run identity.
+
+Durable paths use `/`, are relative to the repository root, preserve case, and
+compare case-sensitively on every host. They reject an empty path, a leading
+`./`, empty segments, `.` or `..` segments, backslashes, absolute paths, and
+aliases that canonicalize to the same path. Path segments are serialized in
+Unicode NFC. The symbol-name suffix after `#` is parser identity, not a path:
+it is preserved exactly and is never Unicode-normalized or case-folded. A host
+whose filesystem cannot represent two distinct canonical repository paths must
+fail closed rather than merge their identities.
+
+#### Symbol hash and extraction compatibility
+
+`hash` is lowercase hexadecimal SHA-256 of the symbol AST-node slice from the
+source text seen by the parser. Before parsing, CRLF is normalized to LF; lone
+CR is preserved. Tree-sitter boundaries are JavaScript string indices
+(UTF-16 code units), despite the legacy `startByte`/`source_start_byte` names.
+The hash covers the exact `source.slice(startIndex, endIndex)` result and does
+not include the file path or symbol key.
+
+`extraction` versions the language-specific grammar and extraction semantics
+for that entry. A format or extraction version unknown to the running livewiki
+is incompatible evidence, not missing evidence: baseline state is
+`incompatible`, `verify` emits `unsupported_baseline_algorithm`, and `enforce`
+fails. There is no automatic rewrite or migration of incompatible evidence.
+
+Historical bootstrap may parse a blob with the current compatible extractor.
+The required invariant is symbol-local: an untouched symbol has the same hash
+even when surrounding symbols or offsets in the file changed. Before shipping
+an extraction version, this invariant must be checked against historical blobs
+from a file that changed between commits. The initial TypeScript check used
+`packages/core/src/anchor-ledger.ts` at `70c8d0d` and `86986f5`: 25 keys were
+shared, 24 untouched symbols retained identical hashes, and only the actually
+edited `orchestrate` symbol changed; `detectMoves` matched exactly.
+
+#### Availability and entry states
+
+The repository-level baseline state is `available`, `unavailable`, or
+`incompatible`. Per documentation unit, the derived state is:
+
+- `clean`: accepted baseline hash equals the current compatible symbol hash;
+- `changed`: the accepted symbol exists and its hash differs;
+- `deleted`: the accepted symbol key no longer exists and has no unambiguous
+  move candidate;
+- `unbaselined`: a current anchor has no baseline entry;
+- `inferred`: bootstrap evidence exists but has not been explicitly accepted.
+
+`unbaselined` is absence of comparison evidence and does not increment
+`debt.total`; it is reported separately. Both `unbaselined` and `inferred`
+fail `enforce`, otherwise adding an anchor without a baseline would bypass the
+gate and bootstrap review would be ceremonial. An unavailable or incompatible
+baseline can never be reported as zero debt.
+
+#### Advancement, acceptance, and recovery
+
+The baseline advances only when a contract-bound write completes and validates
+its documentation unit, or when a human explicitly accepts alignment.
+Structural Markdown validity alone is not evidence that prose follows code.
+Editing an `owner: human` page therefore does not advance its baseline until an
+explicit acceptance.
+
+Advancement uses compare-and-swap over the expected baseline entry and current
+symbol hash. SQLite debt IDs are never portable identity. Precise acceptance
+names both `--page` and `--symbol`; accepting every symbol on a page requires
+an explicit `--all`. Removing a symbol, removing an anchor, moving a page, and
+migrating an old symbol key to a new one are distinct explicit operations.
+Key migration preserves the recorded hash and provenance unchanged, so content
+drift after a rename surfaces as `changed` debt for explicit acceptance rather
+than being silently absorbed.
+Rebuilding the file from HEAD is never acceptance or merge-conflict resolution.
+
+Batch advances per completed task, not per run. The mandatory order is:
+
+1. write the page and companion artifacts;
+2. validate the complete artifact contract;
+3. advance the applicable baseline entries and artifact receipt;
+4. only then mark the SQLite task complete.
+
+The baseline is never advanced before the page. If a later step fails, the
+page may remain while the previous baseline remains authoritative and the task
+is not complete: this is a recoverable false-positive, never a false clean.
+Mechanical repair inherits a task's authorization but must re-pass the whole
+contract. A generic format-only repair never advances the baseline.
+
+After SQLite loss, livewiki rebuilds symbols, anchors, open documentation
+health, and the deterministic task inventory from versioned inputs. A
+symbol-bearing task is recovered as complete only if its expected artifacts
+validate and every required baseline entry is `clean`; an anchor-free task also
+requires a matching artifact receipt. Everything else becomes `pending`.
+Attempt history, repair diagnostics, exact interrupted-run accounting, and
+resolution counters may be lost and are explicitly local telemetry. This loss
+must not trigger a repeated paid call for a task whose completion is proven.
+
+Git is used once for explicit bootstrap, never as the continuous authority.
+For each anchored symbol, bootstrap locates the selected historical page
+baseline, parses the corresponding source blob with a compatible extractor,
+and records reconstructable entries as `provenance: inferred`. Failure to
+reconstruct a symbol produces `unbaselined`, never a guessed hash. After review
+and explicit acceptance, normal baseline comparison no longer consults Git.
+
+Manual-block portability is outside baseline schema v1. The byte-for-byte
+`lw:manual` protection continues to use its machine-local SQLite baseline, so a
+pre-clone manual edit can pass on a fresh machine. This is a declared v1
+limitation, not a repository-portable guarantee.
+
+#### `moved` semantics
+
+Move detection is read-only and conservative. It proposes `moved` from
+`(wikiPath, oldKey)` to `(wikiPath, newKey)` only when all of these hold:
+
+1. `oldKey` is absent from the active symbol inventory and `newKey != oldKey`;
+2. exactly one active symbol has the same compatible extraction version,
+   content hash, and logical symbol name as the old baseline evidence;
+3. the candidate is unique in both directions: no second active candidate can
+   receive the old entry and no second deleted entry can claim the new key;
+4. no other active same-name twin survives outside the candidate, regardless
+   of kind;
+5. the page still contains the old anchor and neither the old entry nor the
+   candidate changed since detection.
+
+Ambiguous matches, hash-only twins, incompatible extraction versions, and a
+move combined with a content edit are not silently inferred. They remain
+`deleted` plus `unbaselined` and may include diagnostic candidates. A user can
+still assert identity through the explicit key-migration operation, guarded by
+compare-and-swap against the old baseline hash and current new-symbol hash.
+
+`index` never rewrites Markdown or the baseline while detecting a move. Applying
+a generated-content move is an explicit contract-bound operation: preflight
+all occurrences and ownership, rewrite and validate the page, then replace the
+old baseline key with the new key as the final authoritative write. If the
+baseline write fails, the old entry remains and recovery reports the page as
+not clean. An `owner: human` page, or any page where an occurrence is inside
+`lw:manual`, is refused as a whole by automatic migration (human-wins); the
+human changes the anchor first, then explicitly accepts the key migration. A
+simultaneous wiki-page rename uses the separate page-move operation rather than
+overloading symbol `moved`.
 
 ### Doc page frontmatter
 
@@ -551,6 +757,15 @@ batch_tasks(id, run_id→batch_runs, stage, target, status,    -- pending|done|f
 meta(key PRIMARY KEY, value)                                  -- schema_version, etc.
 ```
 
+The schema may retain non-reproducible operational state: interrupted-run
+checkpoints, attempts, diagnostic history, local resolution timestamps, and
+usage telemetry. These rows improve local continuity but are not repository
+authority. In particular, setting `resolved_at` does not prove documentation
+payment; payment is an accepted baseline advance. Open debt and current health
+must be rebuildable from the versioned baseline and working tree. A checkpoint
+may enable an exact local resume, while semantic recovery after database loss
+uses validated artifacts and the rules in §`.baseline.json`.
+
 **Call-edge confidence** (schema v7): every `calls` row is tagged at
 extraction — `extracted` for bare-identifier and `new X()` callees (the name
 the parser saw IS the invoked symbol), `inferred` for member/attribute
@@ -562,32 +777,21 @@ Consumers are confidence-aware:
 cross-module callee sets and caller centrality count `extracted` rows only;
 blast radius presents direct vs inferred callers separately.
 
-**Moved** detection: a symbol disappears from file A and appears in file B with
-the same `content_hash` (or the same name+signature) → `moved` event, anchors are
-automatically updated to the new key, and the debt records `detail` with the
-from/to. **Twin guard (roadmap item 13)**: a move is accepted only when the
-disappeared symbol's name is gone from ALL active files — if any same-name,
-same-kind symbol survives anywhere (the match candidate excepted), there is
-no move and no anchor rewrite; the disappearance follows the normal
-`changed`/`deleted` path. Provider twins and exact rotations are therefore
-never misclassified as moves; a relocation of the only copy (twin count 0)
-remains a legitimate `moved`. **Prerequisite**: symbols that disappear from an *updated* file also
-become `status='deleted'` (never hard-delete) — without the old row there's no
-hash to match the move against. This applies to file updates, not just file
-deletions. **Supersession ≠ moved**: a pair with `oldKey === newKey` is a re-index
-of the same symbol, never generates an event. After the ledger, `deleted` rows
-whose key has an `active` row are purged (otherwise the table grows one dead row
-per symbol per edit). **Where the anchor is updated**: in the **markdown**
-(frontmatter + markers), via safe-io — the DB is derived (rule 3), updating only
-the DB loses it on rebuild. Order: rewrite markdown → update DB → create debt.
-Exception (rule 6): an anchor in an `lw:manual` block or an `owner: human` page is
-NOT rewritten — it becomes `moved` debt with assignee=`human`.
+**Moved** detection follows the read-only, bijective, exact-hash contract in
+§`moved` semantics. Symbols that disappear from an updated file remain
+available as deleted evidence long enough to compare; a same-key re-index is
+supersession, never a move. Detection never rewrites Markdown, SQLite identity,
+or the baseline. The pre-baseline implementation's automatic Markdown rewrite
+and name+signature fallback are compatibility behavior to remove during the
+baseline migration, not part of the target contract.
 
 **Debt dedup**: don't create new debt if OPEN debt already exists
 (`resolved_at IS NULL`) for the same anchor + same event — otherwise every
 `index` re-flags the same items and the ledger becomes noise. Debt must also
 carry the `symbol_key` (in a column or in `detail`), so it isn't orphaned if the
-anchor is removed later.
+anchor is removed later. This is a local projection rule; durable identity is
+`(wikiPath, symbolKey, event)` plus the compared baseline hash, never
+`anchor_id` or `debt.id`.
 
 ## CLI commands
 
@@ -596,6 +800,12 @@ anchor is removed later.
 | `livewiki init` | creates `livewiki/` + `.livewiki/`, indexes the repo, generates deterministic `quickstart.md`, `tasks.md`, architecture overview, and diagrams (no LLM). With `--batch` it triggers the full documentation pipeline and regenerates navigation after stage 4 |
 | `livewiki index` | (re)indexes: scans files (respects `.gitignore` + config ignores), extracts symbols, updates hashes, generates debt events. Idempotent. A missing `.livewiki/` is auto-created **silently** (it's a derived cache; rebuilding it is the normal post-clone/handoff flow — never require `init`). If the `livewiki/` wiki also doesn't exist, it indexes anyway and emits an informational note suggesting `init` (exit 0) |
 | `livewiki status` | shows: open debt (by page/section/event), new undocumented symbols, pending batch. `--json` for agent consumption. `--diff`: read-only preview mapping the uncommitted working-tree diff to the wiki pages it would invalidate (changed/deleted per page; `moved` out of scope; exits 1 only outside a git repo) |
+| `livewiki baseline status` | shows repository-portable baseline health, including debt, inferred evidence, unbaselined anchors, and removed anchors |
+| `livewiki baseline bootstrap` | one-time explicit Git migration: reconstructs historical symbol hashes as `inferred`; failures remain `unbaselined`; refuses to regenerate an existing baseline |
+| `livewiki baseline accept --page <path> (--symbol <key...> \| --all)` | explicitly accepts the current symbol version for precisely named page anchors; `--all` is required for page-wide acceptance |
+| `livewiki baseline move --page <path> --from <key> --to <key>` | explicitly migrates one durable page+symbol identity after the page anchor has been edited; guarded by current symbol evidence and baseline compare-and-swap |
+| `livewiki baseline remove --page <path> --symbol <key>` | explicitly retires one baseline entry after that exact anchor has been removed from the page |
+| `livewiki baseline relocate --from-page <path> --to-page <path> --symbol <key>` | explicitly moves one clean baseline entry after the unchanged anchor has moved between wiki pages |
 | `livewiki update` | incremental mode: given the diff since `lastDocumentedCommit`, lists the debt and (a) emits the "work package" for the in-session agent to document, or (b) with `--llm` calls the configured API to pay off the debt |
 | `livewiki verify` | validates the wiki: do anchors point to existing symbols? do cited signatures match? are internal links ok? Exits with a nonzero code on failure (CI-friendly). **Parses the wiki fresh from disk** — an anchor in a never-indexed page MUST be caught (that's the anti-hallucination promise: docs freshly written by an LLM are verifiable without running `index` first) |
 | `livewiki serve` | starts the MCP server (stdio) |
@@ -645,7 +855,7 @@ when git is absent or the directory is not a repo it degrades silently (churn fa
 | `livewiki_debt` | open debt (equivalent to `status --json`) |
 | `livewiki_next_task` | starts or resumes the agent-written bootstrap queue and returns the next prioritized Markdown task |
 | `livewiki_write_doc` | writes/updates a page (path validated by the allowlist; runs `verify` on the content before accepting) |
-| `livewiki_resolve_debt` | marks debt as paid (tied to a write) |
+| `livewiki_resolve_debt` | explicitly accepts the current anchored symbols for one named page into the versioned baseline (`symbols` or `all`; never local SQLite IDs) |
 | `livewiki_impact` | blast radius of a symbol key: resolved call-graph callers + the wiki pages documenting them (best-effort, bounded by maxDepth/maxNodes) |
 
 A successful, non-error `livewiki_write_doc` result means the page was written
