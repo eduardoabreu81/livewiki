@@ -43,7 +43,8 @@ export type IssueCode =
   | "missing_wiki_path"     // doc_page do banco sumiu da wiki
   | "unsupported_baseline_algorithm"
   | "invalid_documentation_baseline"
-  | "baseline_entry_without_anchor";
+  | "baseline_entry_without_anchor"
+  | "think_block_present";   // reasoning <think> block leaked into the page (outside code spans/fences)
 
 export interface VerifyIssue {
   severity: IssueSeverity;
@@ -151,6 +152,17 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
             detail: `âncora ${a.key} (${a.sectionSlug ?? "página"}) referencia símbolo inexistente`,
           });
         }
+      }
+
+      // Provider thinking leak: a reasoning <think> block outside code
+      // spans/fences is never page content (quoted examples stay legal).
+      if (/<think[\s>]/.test(maskCodeSpans(source))) {
+        issues.push({
+          severity: "error",
+          code: "think_block_present",
+          wikiPath: page.relPath,
+          detail: "reasoning <think> block present outside code spans/fences",
+        });
       }
 
       // Verify stored manual blocks byte-for-byte. Offsets are not identities:

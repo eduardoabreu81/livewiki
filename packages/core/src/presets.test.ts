@@ -123,6 +123,12 @@ describe("preset.openrouter / deepseek / kimi / gemini / nvidia", () => {
     expect(PRESET_TABLE.gemini.envVar).toBe("GEMINI_API_KEY");
     expect(PRESET_TABLE.nvidia.envVar).toBe("NVIDIA_API_KEY");
   });
+  it("deepseek pins thinking disabled (v4 enables thinking when omitted)", () => {
+    // Regression: 2026-08-16 dogfood — v4 default thinking silently burned
+    // the whole output budget on reasoning and truncated every large page.
+    expect(PRESET_TABLE.deepseek.thinkingDefault).toBe("disabled");
+    expect(PRESET_TABLE.deepseek.pricing["deepseek-v4-flash"]).toBeDefined();
+  });
 });
 
 describe("preset.ollama / lmstudio (locais)", () => {

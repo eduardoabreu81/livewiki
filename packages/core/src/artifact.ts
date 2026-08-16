@@ -339,6 +339,15 @@ export function normalizeStage4Artifact(raw: string): NormalizeResult {
     }
   }
 
+  // 1b. A reasoning block surviving PAST the leading-strip position (outside code spans/fences, where quoting it is legitimate) is a provider thinking leak — never page content.
+  if (/<think[s>]/.test(maskCodeSpansPreservingLength(s))) {
+    return {
+      ok: false,
+      content: "",
+      errors: [err("think_block_present", "reasoning <think> block present outside code spans/fences", "global")],
+    };
+  }
+
   // 2. Detect "reasoning only" — after strip, content is empty.
   if (s.trim().length === 0) {
     return {

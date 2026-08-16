@@ -49,6 +49,14 @@ export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
 export const LAY_READER_PROMPT_RULE =
   `- Your reader is a capable developer who has never opened this repository: explain what things are FOR before how they work, and define any project-specific term or acronym the first time it appears.`;
 
+/**
+ * 2026-08-16: reasoning wrappers are a provider leak, never page content.
+ * Validation rejects them (think_block_present); this rule keeps initial and
+ * repair prompts from emitting them in the first place.
+ */
+export const NO_REASONING_WRAPPER_PROMPT_RULE =
+  `- Output only the Markdown document: never include reasoning, scratchpad, or \`<think>\` blocks anywhere in the response, not even inside an otherwise valid page.`;
+
 /** #30: replaces "this is reference documentation, not marketing". */
 export const WRITE_FOR_UNDERSTANDING_PROMPT_RULE =
   `- Keep prose tight and factual, but write for understanding, not lookup: a newcomer should finish each section knowing why it exists and when they would care.`;
@@ -56,6 +64,7 @@ export const WRITE_FOR_UNDERSTANDING_PROMPT_RULE =
 /** Shared stage-4 editorial contract. Initial and repair prompts must not drift. */
 export const PAGE_OPENING_PROMPT_RULES = [
   LAY_READER_PROMPT_RULE,
+  NO_REASONING_WRAPPER_PROMPT_RULE,
   `- After frontmatter and before the first implementation section, open with this exact structure in order: an H1 human-meaningful title; exactly one sentence stating the page's responsibility; an H2 \`When to use this page\`; two to four task bullets that each begin with an action verb; an H2 \`How it fits\`; and one or more short prose paragraphs naming the module's role and immediate repository context without claiming a complete call graph. The shown H2 casing is canonical, while structural validation matches those exact words case-insensitively.`,
   `- Each task bullet must have non-empty content after its Markdown bullet marker. Bold text, inline code, and links are allowed around the leading action or command.`,
   `- The frontmatter title and H1 must be a concise semantic responsibility title. For a product module, neither may be the stable module ID alone.`,
@@ -79,6 +88,7 @@ export const PAGE_OPENING_PROMPT_RULES = [
  */
 export const FLOW_PAGE_PROMPT_RULES = [
   LAY_READER_PROMPT_RULE,
+  NO_REASONING_WRAPPER_PROMPT_RULE,
   `- After the frontmatter, open with this exact structure in order: an H1 human-meaningful flow title; exactly one sentence stating what end-to-end behavior the page explains; then these H2 sections in this order and with this exact casing: \`Purpose\`, \`Ordered flow\`, \`Invariants\`, \`Failure and recovery\`, \`Related pages\`. Structural validation matches those exact words case-insensitively. Do NOT write a \`Diagram\` section — the orchestrator generates and inserts the companion diagram itself; do not mention Mermaid or attempt to draw one.`,
   `- \`Purpose\`: one or more prose paragraphs stating what starts the flow and what it produces. Open with the user-visible goal of the flow in plain words (what a person is trying to accomplish), before any internal step or component name.`,
   `- \`Ordered flow\`: a numbered Markdown list of the end-to-end steps. It is the textual fallback of the diagram — a reader who cannot render Mermaid must get the same sequence from this list.`,
@@ -94,6 +104,7 @@ export const FLOW_PAGE_PROMPT_RULES = [
 /** Shared semantic-topic contract. Initial and repair prompts must not drift. */
 export const TOPIC_PAGE_PROMPT_RULES = [
   LAY_READER_PROMPT_RULE,
+  NO_REASONING_WRAPPER_PROMPT_RULE,
   `- After frontmatter, write: an H1 matching the title; exactly one sentence stating the reader problem; then these H2 sections in order: \`Purpose\`, \`When to use this page\`, \`Behavioral contract\`, \`Failure and recovery\`, \`Change map\`, \`Related pages\`.`,
   `- Put \`lw:anchors\` markers only in Purpose, When to use this page, Behavioral contract, Failure and recovery, and Change map. H3-H6 descendants belong to their ancestral H2. Each of those five sections must cite at least one distinct closed-list key.`,
   `- The closed key list is an upper bound. Every key actually cited appears exactly once in frontmatter and exactly once across section markers; unused closed keys are valid.`,
@@ -743,6 +754,7 @@ export type ArtifactValidationCode =
   | "empty_after_normalize"        // nothing left after think/fence strip
   | "unclosed_reasoning"            // <think> without matching </think>
   | "reasoning_only"                // output was ONLY the <think>…</think> block
+  | "think_block_present"           // <think> block outside code spans/fences survived normalization
   | "no_frontmatter"                // no --- ... --- at the top
   | "invalid_frontmatter"           // frontmatter present but didn't parse
   | "missing_owner"                 // frontmatter `owner:` line is absent
@@ -1631,6 +1643,7 @@ export function buildSurgicalRepairPrompt(
  */
 export const UNDERSTANDING_PAGE_PROMPT_RULES = [
   LAY_READER_PROMPT_RULE,
+  NO_REASONING_WRAPPER_PROMPT_RULE,
   `- After the frontmatter, write exactly: an H1 human-meaningful title naming the repository's product; then ONE prose paragraph stating what the repository is, whom it serves, and the main way it is used; then optionally ONE H2 \`Where to look in the code\` section with a flat bullet list naming the main parts of the product (entry points, CLIs, services, containers) and what each does. Nothing else — no other sections, no extra paragraphs.`,
   `- Naming: when the evidence inventory carries a "Product name" line, the H1 and the frontmatter \`title\` MUST be exactly that name. Otherwise derive the name from the README purpose excerpt or the dominant module names — NEVER from directory names or wiki page paths: "livewiki" is the documentation TOOL that generated this wiki (every page path starts with \`livewiki/\`), never the name of the documented product.`,
   `- The purpose paragraph is between 40 and 600 characters — aim for 400–550 and COUNT the characters before returning; overshooting the maximum is the most common rejection of this page. The cap outranks completeness and term definitions: when a clause does not fit, DROP it — a shorter paragraph that passes is always better than a fuller one that is rejected. Where to look in the code is at most 10 bullets, each at most 160 characters — aim for at most 120: name the part and its role in plain words, and drop qualifiers that do not fit.`,
@@ -1735,6 +1748,7 @@ export function buildUnderstandingRepairPrompt(
  */
 export const FOLDER_PURPOSE_PROMPT_RULES = [
   LAY_READER_PROMPT_RULE,
+  NO_REASONING_WRAPPER_PROMPT_RULE,
   `- Write ONE prose paragraph (at most two) answering the reader's question "what is this directory for?" — a real synthesis of the directory's role in the product, never a concatenation of per-file summaries.`,
   `- The paragraph is between 40 and 800 characters — aim for 400–700 so the cap keeps a safety margin, and COUNT the characters before returning; overshooting the maximum is the most common rejection. The cap outranks every other rule, including completeness and term definitions: when a clause does not fit, DROP it — a shorter paragraph that passes is always better than a fuller one that is rejected.`,
   `- Plain prose only: no frontmatter, no headings, no code fences, no HTML comments, no Markdown links, no images. You may name important files with inline code spans.`,

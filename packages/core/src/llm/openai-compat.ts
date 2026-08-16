@@ -111,6 +111,9 @@ export class OpenAiCompatAdapter implements LlmClient {
         inputTokens: raw.usage?.prompt_tokens ?? 0,
         outputTokens: raw.usage?.completion_tokens ?? 0,
         model: raw.model,
+        ...(raw.usage?.completion_tokens_details?.reasoning_tokens !== undefined
+          ? { reasoningTokens: raw.usage.completion_tokens_details.reasoning_tokens }
+          : {}),
       },
       stopReason: normalizeFinishReason(raw.choices?.[0]?.finish_reason),
       ...(raw.choices?.[0]?.finish_reason != null
@@ -154,5 +157,9 @@ export function resolveThinkingMode(
 interface OpenAiCompatResponse {
   choices: Array<{ message: { role: string; content: string }; finish_reason?: string | null }>;
   model: string;
-  usage?: { prompt_tokens: number; completion_tokens: number };
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
 }

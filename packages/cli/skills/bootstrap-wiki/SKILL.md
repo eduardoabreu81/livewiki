@@ -77,3 +77,6 @@ token count.
    replace the task's format contract with a generic page template.
 5. **The clean verifier is the finish line.** Require both exit code 0 and zero
    issues.
+6. **Never write reasoning into a page.** No `<think>` blocks, scratchpad, or
+   self-talk anywhere in the content — `verify` rejects them
+   (`think_block_present`). Output only the Markdown document.

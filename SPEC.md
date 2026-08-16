@@ -1209,7 +1209,15 @@ Stage-4 output budget defaults to `stage4MaxOutputTokens` **8192** (config
 override allowed). Provider presets carry market defaults; **where an API can
 disable thinking/reasoning for documentation, livewiki disables it by default**
 (e.g. MiniMax-M3 Chat Completions: `thinking: { "type": "disabled" }` — omitting
-the field enables thinking on that API).
+the field enables thinking on that API). Provider defaults change without notice
+(DeepSeek v4 enabled reasoning when the field was omitted — dogfood incident
+2026-08-16), so livewiki does not rely on static defaults alone:
+`livewiki config` runs a bounded connectivity probe before saving and refuses
+configurations where reasoning leaks under the current settings, and every
+batch run repeats the same probe as a preflight (`"preflight": false` opts out).
+A reasoning `<think>` block outside code spans/fences is never page content:
+artifact normalization rejects it (`think_block_present`, repairable by
+deletion) and `verify` flags it as an error in any page, however it was written.
 
 **LLM HTTP timeout** (client/provider level, not stage-specific) is controlled
 by `timeoutMs` in `.livewiki/config.json`:

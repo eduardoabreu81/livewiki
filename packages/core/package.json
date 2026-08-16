@@ -202,6 +202,10 @@
       "types": "./dist/install.d.ts",
       "import": "./dist/install.js"
     },
+    "./llm": {
+      "types": "./dist/llm/index.d.ts",
+      "import": "./dist/llm/index.js"
+    },
     "./community": {
       "types": "./dist/community.d.ts",
       "import": "./dist/community.js"

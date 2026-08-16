@@ -19,6 +19,13 @@ export interface LlmUsage {
   inputTokens: number;
   outputTokens: number;
   model: string;
+  /**
+   * Reasoning/thinking tokens when the provider reports them (openai-compat
+   * `completion_tokens_details.reasoning_tokens`). Already INCLUDED in
+   * `outputTokens` — diagnostic only, used by the connectivity probe to
+   * detect a thinking leak. Never used for accounting.
+   */
+  reasoningTokens?: number;
 }
 
 /**

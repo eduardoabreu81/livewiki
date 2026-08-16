@@ -207,6 +207,13 @@ export interface LivewikiConfig {
    */
   surgicalRepair?: boolean;
   /**
+   * Provider preflight probe before any paid batch generation. Default true:
+   * one bounded minimal request verifies connectivity and that reasoning does
+   * not leak under the current configuration (providers change defaults
+   * without notice — dogfood incident 2026-08-16). Set false to bypass.
+   */
+  preflight?: boolean;
+  /**
    * Relaxed completion round (recovery tier, Component 2). Default true;
    * when the strict loop would mark `repair_exhausted`, ONE final attempt
    * runs under a relaxed presentation contract (prose/bullet shape and
@@ -775,6 +782,13 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
       throw new Error(`invalid surgicalRepair: must be a boolean, got ${JSON.stringify(v)}`);
     }
     out.surgicalRepair = v;
+  }
+  if (obj["preflight"] !== undefined) {
+    const v = obj["preflight"];
+    if (typeof v !== "boolean") {
+      throw new Error(`invalid preflight: must be a boolean, got ${JSON.stringify(v)}`);
+    }
+    out.preflight = v;
   }
   if (obj["relaxedRound"] !== undefined) {
     const v = obj["relaxedRound"];

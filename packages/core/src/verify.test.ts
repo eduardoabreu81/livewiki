@@ -610,3 +610,52 @@ describe("formatHuman", () => {
     expect(out).toContain("WARN");
   });
 });
+
+describe("verify — think_block_present (provider reasoning leak)", () => {
+  it("<think> block in prose: error", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+
+# Foo
+
+Prose documenting \`bar\`.
+
+<think>leaked reasoning</think>
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    const think = result.issues.filter((i) => i.code === "think_block_present");
+    expect(think).toHaveLength(1);
+    expect(think[0]?.severity).toBe("error");
+    expect(result.ok).toBe(false);
+  });
+
+  it("<think> inside a code fence: no issue", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/foo.md", `---
+title: Foo
+anchors:
+  - src/foo.ts#bar
+---
+
+# Foo
+
+\`bar\` returns nothing.
+
+\`\`\`xml
+<think>quoted example</think>
+\`\`\`
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+    expect(result.issues.filter((i) => i.code === "think_block_present")).toHaveLength(0);
+  });
+});

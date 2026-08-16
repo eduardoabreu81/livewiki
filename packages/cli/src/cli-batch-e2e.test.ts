@@ -280,14 +280,14 @@ async function writeCode(rel: string, content: string): Promise<void> {
   await nodeFs.writeFile(abs, content);
 }
 
-async function writeConfig(provider: string, model: string, baseUrl: string): Promise<void> {
+async function writeConfig(provider: string, model: string, baseUrl: string, extra?: Record<string, unknown>): Promise<void> {
   await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki"), { recursive: true });
   await nodeFs.writeFile(
     nodePath.join(repoRoot, ".livewiki/config.json"),
     // Roadmap #22: pin the pre-#22 stage-4 format — the stub pages emit no
     // Diagram section. #22-on is covered (core) by module-diagram-format.test.ts
     // and batch-module-diagrams.test.ts.
-    JSON.stringify({ provider, model, baseUrl, moduleDiagrams: false, deepHierarchy: false }, null, 2),
+    JSON.stringify({ provider, model, baseUrl, moduleDiagrams: false, deepHierarchy: false, ...extra }, null, 2),
     "utf8",
   );
 }
@@ -439,6 +439,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     let filePageCalls = 0;
     let folderCalls = 0;
     let otherCalls = 0;
+    let probeCalls = 0;
     stub.setHandler((req) => {
       if (req.user.includes("Heuristic module grouping")) {
         stage2Calls++;
@@ -452,7 +453,8 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
           },
         };
       }
-      if (req.user.includes("# File: ")) filePageCalls++;
+      if (req.user.includes("Reply with exactly: OK")) probeCalls++;
+      else if (req.user.includes("# File: ")) filePageCalls++;
       else if (
         req.system.includes("purpose paragraph of ONE folder page") ||
         req.system.includes("folder purpose paragraph")
@@ -484,7 +486,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       expect(filePageCalls).toBeGreaterThanOrEqual(2);
       expect(folderCalls).toBe(2);
       expect(otherCalls).toBe(1);
-      expect(stub.callCount() - callsBefore).toBe(filePageCalls + folderCalls + otherCalls);
+      // Preflight probe: exactly one minimal call per run, before any generation.
+      expect(probeCalls).toBe(1);
+      expect(stub.callCount() - callsBefore).toBe(probeCalls + filePageCalls + folderCalls + otherCalls);
 
       // Real-unit pages produced (#29: file page + folder page)
       expect(
@@ -657,7 +661,8 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       n++;
       return { status: 500, body: { error: "simulated failure" } };
     });
-    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    // preflight off: this suite exercises the in-run circuit breaker, not the preflight gate.
+    await writeConfig("anthropic", "claude-test-mock", stub.url, { preflight: false });
     process.env["ANTHROPIC_API_KEY"] = "test-canary-3";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
@@ -671,6 +676,26 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   }, 60_000);
 
+  it("preflight: provider down fails BEFORE any generation (exit 1)", async () => {
+    await writeCode("src/auth/login.ts", "export function a() {}");
+    stub.setHandler(() => ({ status: 500, body: { error: "always fail" } }));
+    // preflight ON (default): the probe must fail closed before the run spends.
+    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    process.env["ANTHROPIC_API_KEY"] = "test-canary-preflight";
+    const callsBefore = stub.callCount();
+    try {
+      const r = await runCli(["--repo", repoRoot, "init", "--batch"]);
+      expect(r.status, `stderr=${r.stderr}`).toBe(1);
+      expect(r.stderr).toContain("livewiki preflight failed");
+      // Only probe retries hit the stub — zero generation calls.
+      const probeHits = stub.callCount() - callsBefore;
+      expect(probeHits).toBeGreaterThanOrEqual(1);
+      expect(probeHits).toBeLessThanOrEqual(4);
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+  }, 60_000);
+
   it("(O) init --batch aborted → exit code 2 (sem --json)", async () => {
     // Antes do fix (O), init --batch SEMPRE retornava 0 mesmo quando o batch
     // tinha aborted (circuit breaker) — escondia falha sistêmica do orquestrador.
@@ -679,7 +704,8 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     await writeCode("src/utils/x.ts", "export function b() {}");
     await writeCode("src/api/y.ts", "export function c() {}");
     stub.setHandler(() => ({ status: 500, body: { error: "always fail" } }));
-    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    // preflight off: this suite exercises the in-run circuit breaker, not the preflight gate.
+    await writeConfig("anthropic", "claude-test-mock", stub.url, { preflight: false });
     process.env["ANTHROPIC_API_KEY"] = "test-canary-exit-aborted";
     try {
       const r = await runCli(["--repo", repoRoot, "init", "--batch"]);
@@ -744,7 +770,8 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     await writeCode("src/utils/x.ts", "export function b() {}");
     await writeCode("src/api/y.ts", "export function c() {}");
     stub.setHandler(() => ({ status: 500, body: { error: "always fail" } }));
-    await writeConfig("anthropic", "claude-test-mock", stub.url);
+    // preflight off: this suite exercises the in-run circuit breaker, not the preflight gate.
+    await writeConfig("anthropic", "claude-test-mock", stub.url, { preflight: false });
     process.env["ANTHROPIC_API_KEY"] = "test-canary-exit-json";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);

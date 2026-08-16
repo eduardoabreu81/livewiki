@@ -18,6 +18,11 @@ import {
   type PresetName,
 } from "@livewiki/core/presets";
 import { applyInstall, planInstall } from "@livewiki/core/install";
+import {
+  probeProvider,
+  formatProbeFailure,
+  type ProviderProbeResult,
+} from "@livewiki/core/llm";
 import { emit } from "../output.js";
 import { resolveRepoRoot } from "../cli.js";
 
@@ -97,6 +102,8 @@ export async function runConfigWizard(opts: {
   home: string;
   io: ConfigWizardIo;
   env?: NodeJS.ProcessEnv;
+  /** Test seam: replaces the real connectivity probe. */
+  probe?: (repoRoot: string, config: LivewikiConfig) => Promise<ProviderProbeResult>;
 }): Promise<ConfigWizardResult> {
   const { io } = opts;
   if (!io.isTTY) {
@@ -157,6 +164,53 @@ export async function runConfigWizard(opts: {
   if (credentialValue === "") credentialValue = null;
   if (!credentialOptional && credentialSource === null && credentialValue === null) {
     return { ok: false, error: "The API key cannot be empty; no files were written." };
+  }
+
+  // Connectivity + thinking-leak probe before anything is written: the
+  // configuration is only worth saving if the endpoint answers and reasoning
+  // stays off — providers change defaults without notice (2026-08-16 dogfood
+  // incident: v4 thinking-on-by-default silently burned a paid round). A
+  // freshly typed credential is exposed through the process environment for
+  // the duration of the probe only (env wins over the store by design).
+  const probe = opts.probe ?? probeProvider;
+  const { baseUrl: _probePreviousBaseUrl, ...probeRetained } = existing;
+  const candidateConfig: LivewikiConfig = {
+    ...probeRetained,
+    preset,
+    model,
+    language,
+    ...(baseUrl !== undefined ? { baseUrl } : {}),
+  };
+  const previousEnvValue = credentialValue !== null
+    ? process.env[presetConfig.envVar]
+    : undefined;
+  if (credentialValue !== null) process.env[presetConfig.envVar] = credentialValue;
+  let probeResult: ProviderProbeResult;
+  try {
+    io.write("Running connectivity probe (one minimal request)...\n");
+    probeResult = await probe(opts.repoRoot, candidateConfig);
+  } finally {
+    if (credentialValue !== null) {
+      if (previousEnvValue === undefined) delete process.env[presetConfig.envVar];
+      else process.env[presetConfig.envVar] = previousEnvValue;
+    }
+  }
+  if (probeResult.thinkingLeak) {
+    return {
+      ok: false,
+      error: `Connectivity probe failed: ${formatProbeFailure(probeResult)} No files were written.`,
+    };
+  }
+  if (!probeResult.ok) {
+    io.write(`Connectivity probe failed: ${formatProbeFailure(probeResult)}\n`);
+    const saveAnyway = await io.promptYesNo("Save the configuration anyway? [y/N] ", false);
+    if (!saveAnyway) {
+      return { ok: false, error: "Connectivity probe failed; no files were written." };
+    }
+  } else {
+    io.write(
+      `Probe OK${probeResult.modelEcho !== null ? ` (served model: ${probeResult.modelEcho})` : ""}.\n`,
+    );
   }
 
   let credentialPlan = null;

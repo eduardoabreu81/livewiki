@@ -85,6 +85,7 @@ import {
   type CommunityCrossCheckReport,
 } from "./community.js";
 import { createLlmClient, LlmTimeoutError, type LlmClient } from "./llm/index.js";
+import { probeProvider, formatProbeFailure } from "./llm/probe.js";
 import type { GenerateRequest, GenerateResult, StopReason } from "./llm/types.js";
 import { loadConfig, applyDefaults, validateConfigForBatch, resolveExtraIgnores, CONFIG_DEFAULTS } from "./config.js";
 import { calculateCostUsd, lookupPricing } from "./pricing.js";
@@ -530,6 +531,19 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       // Valida config e cria client. Falha clara se ausente.
       validateConfigForBatch(absRoot, resolvedConfig);
       llmClient = createLlmClient(absRoot, resolvedConfig);
+      // Preflight (2026-08-16): one bounded probe before any paid generation.
+      // Catches providers that changed defaults (e.g. thinking enabled when
+      // the field is omitted) BEFORE the run burns budget. Injected clients
+      // (tests/stubs) skip it; "preflight": false in config opts out.
+      if (resolvedConfig.preflight !== false) {
+        const probe = await probeProvider(absRoot, resolvedConfig);
+        if (!probe.ok || probe.thinkingLeak) {
+          throw new Error(
+            "livewiki preflight failed: " + formatProbeFailure(probe) +
+            " Set \"preflight\": false in .livewiki/config.json to bypass (not recommended).",
+          );
+        }
+      }
     }
 
     let runId: number;
@@ -5087,6 +5101,7 @@ function isArtifactVerifyCode(
     code === "broken_internal_link" ||
     code === "invalid_mermaid_diagram" ||
     code === "manual_block_altered" ||
+    code === "think_block_present" ||
     code === "missing_wiki_path";
 }
 

@@ -128,4 +128,7 @@ export class LlmRequestError extends Error {
 
 export { LlmTimeoutError, DEFAULT_LLM_TIMEOUT_MS } from "./base.js";
 
+export { probeProvider, formatProbeFailure } from "./probe.js";
+export type { ProviderProbeResult } from "./probe.js";
+
 export type { GenerateRequest, GenerateResult, LlmUsage, StopReason } from "./types.js";

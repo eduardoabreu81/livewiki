@@ -2575,3 +2575,24 @@ describe("model_invented_manual diagnostics (2026-08-12)", () => {
     expect(manual[0]?.message).toContain("2 <!-- lw:manual --> marker occurrence(s) at body line(s)");
   });
 });
+
+describe("artifact.normalizeStage4Artifact — think_block_present guard", () => {
+  it("rejects a mid-page <think> block outside code spans/fences", () => {
+    const raw = "---\ntitle: x\nowner: generated\nanchors:\n  - src/x.ts#f\n---\n# x\n\nProse.\n\n<think>leaked reasoning</think>\n\nMore prose.\n";
+    const r = normalizeStage4Artifact(raw);
+    expect(r.ok).toBe(false);
+    expect(r.errors[0]?.code).toBe("think_block_present");
+  });
+
+  it("keeps <think> inside a code fence legal (quoted example)", () => {
+    const raw = "---\ntitle: x\nowner: generated\nanchors:\n  - src/x.ts#f\n---\n# x\n\n```xml\n<think>documented example</think>\n```\n";
+    const r = normalizeStage4Artifact(raw);
+    expect(r.ok).toBe(true);
+  });
+
+  it("keeps <think> inside an inline code span legal", () => {
+    const raw = "---\ntitle: x\nowner: generated\nanchors:\n  - src/x.ts#f\n---\n# x\n\nThe adapter strips a `<think>` block.\n";
+    const r = normalizeStage4Artifact(raw);
+    expect(r.ok).toBe(true);
+  });
+});

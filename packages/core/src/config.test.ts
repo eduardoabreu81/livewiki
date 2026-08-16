@@ -956,3 +956,21 @@ describe("config — roadmap item 22 module format keys", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(new RegExp(key));
   });
 });
+
+describe("config — preflight key", () => {
+  it("parses a boolean and rejects non-booleans", () => {
+    expect(applyDefaults({ preflight: false }).preflight).toBe(false);
+    expect(applyDefaults({ preflight: true }).preflight).toBe(true);
+    // Absent means enabled (undefined — the batch checks `!== false`).
+    expect(applyDefaults({}).preflight).toBeUndefined();
+  });
+
+  it("loadConfig rejects a non-boolean preflight", async () => {
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, ".livewiki/config.json"),
+      JSON.stringify({ preflight: "yes" }),
+      "utf8",
+    );
+    await expect(loadConfig(repoRoot)).rejects.toThrow(/invalid preflight/);
+  });
+});

@@ -167,8 +167,16 @@ function formatDiagnosticLine(d: {
     seen.add(e.code);
     codes.push(e.code);
   }
-  return `attempt ${d.attempt}: ${stopReason} -> ${d.outcome}` +
+  const base = `attempt ${d.attempt}: ${stopReason} -> ${d.outcome}` +
     (codes.length > 0 ? ` [${codes.join(", ")}]` : "");
+  // 2026-08-16 dogfood incident: provider-side reasoning silently burned the
+  // whole output budget and surfaced as repeated length truncations. Point at
+  // the fix instead of leaving the operator guessing.
+  if (d.outcome === "truncated_by_token_limit") {
+    return base +
+      ` — output cut by the token limit; if the provider reasons by default, set "thinking": "disabled" in .livewiki/config.json (the livewiki config wizard probes this)`;
+  }
+  return base;
 }
 
 /**

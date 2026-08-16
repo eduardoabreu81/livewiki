@@ -110,6 +110,9 @@ produto.
 4. **Verify limpo é o critério**. Exit 0 não basta — zero issues também.
    `livewiki update` em batch mode (Fase 3) e o E2E do produto usam
    essa regra. Siga o mesmo padrão.
+5. **Raciocínio nunca entra na página**. Nada de blocos `<think>`, rascunho
+   ou conversa consigo mesmo no conteúdo — o `verify` rejeita
+   (`think_block_present`). Escreva apenas o documento Markdown.
 
 ## Quando você NÃO deve pagar a dívida
 

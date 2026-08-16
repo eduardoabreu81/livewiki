@@ -507,7 +507,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   // broken_anchor → rejeitado com detalhe.
   server.tool(
     "livewiki_write_doc",
-    "Writes or updates a wiki page. Path MUST be inside livewiki/ (allowlist). Content is validated via `verify` before being accepted — pages with broken anchors are rejected. Pass the taskId returned by livewiki_next_task to validate against that task's full page contract and complete it atomically.",
+    "Writes or updates a wiki page. Path MUST be inside livewiki/ (allowlist). Content is validated via `verify` before being accepted — pages with broken anchors are rejected. Never include reasoning or <think> blocks in the content; verify rejects them. Pass the taskId returned by livewiki_next_task to validate against that task's full page contract and complete it atomically.",
     {
       path: z
         .string()

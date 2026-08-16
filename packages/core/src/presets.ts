@@ -23,6 +23,11 @@
  *   - envVar NUNCA é gravada em config.json / checkpoint / logs / erros
  *     (regra da Fase 3 — `key-leak.test.ts` cobre).
  *   - Adicionar preset = adicionar entry em PRESET_TABLE. Sem código novo.
+ *   - Presets carregam TRIVIA DE CONEXÃO (baseUrl, envVar, adapter, pricing)
+ *     — nunca suposição comportamental. Defaults de provider mudam sem aviso
+ *     (DeepSeek v4 ligou thinking na omissão, 2026-08-16): a segurança mora
+ *     no probe (`llm/probe.ts`, wizard + preflight de batch) e na rejeição
+ *     `think_block_present`, não em dados de preset.
  *
  * Tabela:
  *   - anthropic: API oficial Anthropic Messages
@@ -167,11 +172,14 @@ export const PRESET_TABLE: Record<PresetName, ProviderPreset> = {
     baseUrl: "https://api.deepseek.com",
     envVar: "DEEPSEEK_API_KEY",
     pricing: {
+      // v4 peak rates (off-peak is half); the API echoes the served model id.
+      "deepseek-v4-flash": { input: 0.44, output: 1.32 },
+      "deepseek-v4-pro": { input: 1.32, output: 3.96 },
       "deepseek-chat": { input: 0.27, output: 1.1 },
       "deepseek-reasoner": { input: 0.55, output: 2.19 },
     },
-    notes: "DeepSeek API (openai-compat). Prefer deepseek-chat for docs; reasoner keeps reasoning on.",
-    thinkingDefault: "omit",
+    notes: "DeepSeek API (openai-compat). v4 models default thinking ON when the field is omitted — the preset pins disabled; reasoning would burn the output budget (dogfood incident 2026-08-16).",
+    thinkingDefault: "disabled",
     preferMaxCompletionTokens: false,
     defaultMaxOutputTokens: 8192,
   },

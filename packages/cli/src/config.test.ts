@@ -14,6 +14,15 @@ import {
 
 const CANARY = "CONFIG-SHOW-SECRET-CANARY";
 
+/** Wizard tests never hit the network: the connectivity probe is stubbed. */
+const PROBE_OK = async () => ({
+  ok: true,
+  thinkingLeak: false,
+  modelEcho: "stub-model",
+  reasoningTokens: 0,
+  error: null,
+});
+
 describe("livewiki config", () => {
   let home: string;
   let repoRoot: string;
@@ -92,7 +101,7 @@ describe("livewiki config", () => {
       confirmations: [true],
     });
 
-    const result = await runConfigWizard({ repoRoot, home, io, env: {} });
+    const result = await runConfigWizard({ repoRoot, home, io, env: {}, probe: PROBE_OK });
     expect(result.ok).toBe(true);
 
     const repoConfigRaw = await nodeFs.readFile(
@@ -122,7 +131,7 @@ describe("livewiki config", () => {
         secret: "",
         confirmations: [true],
       });
-      const result = await runConfigWizard({ repoRoot, home, io, env: {} });
+      const result = await runConfigWizard({ repoRoot, home, io, env: {}, probe: PROBE_OK });
       expect(result.ok).toBe(true);
       expect(io.promptSecret).toHaveBeenCalledOnce();
       await expect(
@@ -138,7 +147,7 @@ describe("livewiki config", () => {
       confirmations: [true],
     });
 
-    const result = await runConfigWizard({ repoRoot, home, io, env: {} });
+    const result = await runConfigWizard({ repoRoot, home, io, env: {}, probe: PROBE_OK });
     expect(result.ok).toBe(true);
     expect(JSON.parse(await nodeFs.readFile(nodePath.join(repoRoot, ".livewiki", "config.json"), "utf8"))).toMatchObject({
       preset: "ollama",
@@ -164,6 +173,7 @@ describe("livewiki config", () => {
       repoRoot,
       home,
       io,
+      probe: PROBE_OK,
       env: { OPENAI_API_KEY: "environment-key" },
     });
 
@@ -184,6 +194,7 @@ describe("livewiki config", () => {
       repoRoot,
       home,
       io,
+      probe: PROBE_OK,
       env: { ANTHROPIC_API_KEY: "already-set" },
     });
     expect(result.ok).toBe(true);
@@ -201,6 +212,7 @@ describe("livewiki config", () => {
       repoRoot,
       home,
       io,
+      probe: PROBE_OK,
       env: { ANTHROPIC_API_KEY: "environment-key" },
     });
 
@@ -217,7 +229,7 @@ describe("livewiki config", () => {
       secret: CANARY,
       confirmations: [false],
     });
-    const result = await runConfigWizard({ repoRoot, home, io, env: {} });
+    const result = await runConfigWizard({ repoRoot, home, io, env: {}, probe: PROBE_OK });
 
     expect(result).toMatchObject({ ok: false, cancelled: true });
     expect(io.output.join("\n")).toContain("Choose a preset by name or number.");
@@ -227,14 +239,14 @@ describe("livewiki config", () => {
 
   it("rejects an empty remote credential before confirmation", async () => {
     const io = makeIo({ answers: ["anthropic", "claude-sonnet-5", "en"], secret: "" });
-    const result = await runConfigWizard({ repoRoot, home, io, env: {} });
+    const result = await runConfigWizard({ repoRoot, home, io, env: {}, probe: PROBE_OK });
     expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/cannot be empty/) });
   });
 
   it("preserves current wizard values when answers are left blank", async () => {
     await saveConfig(repoRoot, { preset: "ollama", model: "qwen3", language: "pt-BR" });
     const io = makeIo({ answers: ["", "", ""], confirmations: [true] });
-    const result = await runConfigWizard({ repoRoot, home, io, env: {} });
+    const result = await runConfigWizard({ repoRoot, home, io, env: {}, probe: PROBE_OK });
     expect(result).toMatchObject({ ok: true, preset: "ollama", model: "qwen3", language: "pt-BR" });
   });
 
@@ -243,14 +255,14 @@ describe("livewiki config", () => {
     await nodeFs.mkdir(nodePath.dirname(configPath), { recursive: true });
     await nodeFs.writeFile(configPath, "{ invalid", "utf8");
     const io = makeIo({ answers: [] });
-    const result = await runConfigWizard({ repoRoot, home, io, env: {} });
+    const result = await runConfigWizard({ repoRoot, home, io, env: {}, probe: PROBE_OK });
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining("config.json") });
     expect(io.promptSecret).not.toHaveBeenCalled();
   });
 
   it("fails closed without a TTY and writes nothing", async () => {
     const io = makeIo({ answers: [], isTTY: false });
-    const result = await runConfigWizard({ repoRoot, home, io, env: {} });
+    const result = await runConfigWizard({ repoRoot, home, io, env: {}, probe: PROBE_OK });
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/interactive TTY/);
     await expect(nodeFs.access(nodePath.join(repoRoot, ".livewiki", "config.json"))).rejects.toThrow();
@@ -464,5 +476,77 @@ describe("livewiki config", () => {
     expect(process.exitCode).toBe(1);
     expect(JSON.parse(stdout)).toMatchObject({ ok: false, error: expect.stringMatching(/interactive TTY/) });
     expect(stderr).toBe("");
+  });
+});
+
+describe("livewiki config — connectivity probe gate", () => {
+  let home: string;
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    home = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-cli-probe-home-"));
+    repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-cli-probe-repo-"));
+  });
+
+  afterEach(async () => {
+    await nodeFs.rm(home, { recursive: true, force: true });
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  function makeProbeIo(confirmations: boolean[]): ConfigWizardIo & { output: string[] } {
+    const answers = ["anthropic", "claude-sonnet-5", "en"];
+    const queue = [...confirmations];
+    const output: string[] = [];
+    return {
+      isTTY: true,
+      output,
+      promptText: async () => answers.shift() ?? "",
+      promptSecret: async () => "probe-test-key",
+      promptYesNo: async () => queue.shift() ?? false,
+      write: (text: string) => output.push(text),
+    };
+  }
+
+  const repoConfigPath = () => nodePath.join(repoRoot, ".livewiki", "config.json");
+
+  it("refuses to save when the probe detects a thinking leak", async () => {
+    const io = makeProbeIo([true]);
+    const result = await runConfigWizard({
+      repoRoot,
+      home,
+      io,
+      env: {},
+      probe: async () => ({ ok: true, thinkingLeak: true, modelEcho: "m", reasoningTokens: 128, error: null }),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("reasoning");
+    expect(result.error).not.toContain("probe-test-key");
+    await expect(nodeFs.access(repoConfigPath())).rejects.toThrow();
+  });
+
+  it("unreachable probe + explicit save-anyway keeps the configuration", async () => {
+    const io = makeProbeIo([true, true]);
+    const result = await runConfigWizard({
+      repoRoot,
+      home,
+      io,
+      env: {},
+      probe: async () => ({ ok: false, thinkingLeak: false, modelEcho: null, reasoningTokens: 0, error: "network down" }),
+    });
+    expect(result.ok).toBe(true);
+    expect(io.output.join("\n")).toContain("Connectivity probe failed");
+  });
+
+  it("unreachable probe + decline writes nothing", async () => {
+    const io = makeProbeIo([false]);
+    const result = await runConfigWizard({
+      repoRoot,
+      home,
+      io,
+      env: {},
+      probe: async () => ({ ok: false, thinkingLeak: false, modelEcho: null, reasoningTokens: 0, error: "network down" }),
+    });
+    expect(result.ok).toBe(false);
+    await expect(nodeFs.access(repoConfigPath())).rejects.toThrow();
   });
 });

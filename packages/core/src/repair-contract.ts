@@ -67,6 +67,7 @@ export const ALL_ARTIFACT_VALIDATION_CODES = [
   "empty_after_normalize",
   "unclosed_reasoning",
   "reasoning_only",
+  "think_block_present",
   "no_frontmatter",
   "invalid_frontmatter",
   "missing_owner",
@@ -186,6 +187,9 @@ const EMPTY_BODY: FixDirective = () =>
 const REASONING_WRAPPER: FixDirective = () =>
   `output the raw Markdown page only — no reasoning wrapper, no <think> block, no explanatory preamble; the first bytes must be the frontmatter --- delimiter.`;
 
+const THINK_BLOCK_PRESENT: FixDirective = () =>
+  `DELETE the <think>…</think> reasoning block entirely and keep the surrounding prose byte-for-byte; reasoning is never page content. Do not rewrite anything else.`;
+
 const VERIFY_FAILED_GENERIC: FixDirective = () =>
   `fix the exact verify issue named in the error.`;
 
@@ -214,6 +218,7 @@ const MODULE_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
   empty_after_normalize: REASONING_WRAPPER,
   unclosed_reasoning: REASONING_WRAPPER,
   reasoning_only: REASONING_WRAPPER,
+  think_block_present: THINK_BLOCK_PRESENT,
   no_frontmatter: NO_FRONTMATTER,
   invalid_frontmatter: INVALID_FRONTMATTER,
   missing_owner: MISSING_OWNER,
@@ -253,6 +258,7 @@ const FLOW_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
   empty_after_normalize: REASONING_WRAPPER,
   unclosed_reasoning: REASONING_WRAPPER,
   reasoning_only: REASONING_WRAPPER,
+  think_block_present: THINK_BLOCK_PRESENT,
   no_frontmatter: NO_FRONTMATTER,
   invalid_frontmatter: INVALID_FRONTMATTER,
   missing_owner: MISSING_OWNER,
@@ -315,6 +321,7 @@ const TOPIC_FIXES: Partial<Record<ArtifactValidationCode, FixDirective>> = {
   empty_after_normalize: REASONING_WRAPPER,
   unclosed_reasoning: REASONING_WRAPPER,
   reasoning_only: REASONING_WRAPPER,
+  think_block_present: THINK_BLOCK_PRESENT,
   no_frontmatter: NO_FRONTMATTER,
   invalid_frontmatter: INVALID_FRONTMATTER,
   missing_owner: MISSING_OWNER,
