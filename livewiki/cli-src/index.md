@@ -38,5 +38,5 @@ This directory holds automated tests with no co-located product code.
 - [packages/cli/src/commands](../commands/index.md) — used both ways
 - [packages/core/src](../core-src/index.md) — used here
 
-> Coverage note: this folder's source (18 files, ~246k chars) is too large to read in full; this page documents its main entry points.
+> Coverage note: this folder's source (18 files, ~247k chars) is too large to read in full; this page documents its main entry points.
 <!-- livewiki:navigate:end -->

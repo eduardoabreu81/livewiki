@@ -1,14 +1,8 @@
-graph LR
-    A[presets.ts] --> B[PRESET_TABLE]
-    A --> C[AVAILABLE_PRESETS]
-    A --> D[resolvePreset]
-    A --> E[resolveProviderConfig]
-    A --> F[isKnownPreset]
-    A --> G[UnknownPresetError]
-    D --> B
-    D --> C
-    D --> G
-    E --> D
-    E --> C
-    E --> G
-    F --> B
+graph TD
+    A[resolveProviderConfig] --> B[resolvePreset]
+    A --> C[UnknownPresetError]
+    B --> D[PRESET_TABLE]
+    B --> C
+    D --> E[AVAILABLE_PRESETS]
+    F[isKnownPreset] --> D
+    A --> G[ResolvedProviderConfig]
