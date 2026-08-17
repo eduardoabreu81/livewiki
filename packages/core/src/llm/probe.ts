@@ -64,12 +64,14 @@ export async function probeProvider(
       user: PROBE_USER,
       maxTokens: PROBE_MAX_TOKENS,
     });
-    const reasoningTokens = result.usage.reasoningTokens ?? 0;
+    // No usage reported ⇒ no reasoning evidence from tokens; the inline
+    // `<think` check still applies. The probe never invents numbers.
+    const reasoningTokens = result.usage?.reasoningTokens ?? 0;
     const thinkInContent = /<think[\s>]/.test(result.content);
     return {
       ok: result.content.trim().length > 0,
       thinkingLeak: reasoningTokens > 0 || thinkInContent,
-      modelEcho: result.usage.model,
+      modelEcho: result.usage?.model ?? null,
       reasoningTokens,
       error: null,
     };

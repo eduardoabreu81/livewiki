@@ -77,13 +77,21 @@ export class AnthropicAdapter implements LlmClient {
       firstContent && firstContent.type === "text" && typeof firstContent.text === "string"
         ? firstContent.text
         : "";
+    // Same contract as openai-compat: a body without a usable usage block
+    // means UNKNOWN usage, never 0/0 (and never a TypeError on `raw.usage`).
+    const usage = raw.usage;
     return {
       content: text,
-      usage: {
-        inputTokens: raw.usage.input_tokens,
-        outputTokens: raw.usage.output_tokens,
-        model: raw.model,
-      },
+      usage:
+        usage == null ||
+        !Number.isFinite(usage.input_tokens) ||
+        !Number.isFinite(usage.output_tokens)
+          ? null
+          : {
+              inputTokens: usage.input_tokens,
+              outputTokens: usage.output_tokens,
+              model: raw.model,
+            },
       stopReason: normalizeStopReason(raw.stop_reason),
       ...(raw.stop_reason != null ? { rawStopReason: raw.stop_reason } : {}),
     };
@@ -101,6 +109,6 @@ function normalizeStopReason(stopReason: string | null | undefined): StopReason 
 interface AnthropicResponse {
   content: Array<{ type: string; text?: string }>;
   model: string;
-  usage: { input_tokens: number; output_tokens: number };
+  usage?: { input_tokens: number; output_tokens: number } | null;
   stop_reason?: string | null;
 }

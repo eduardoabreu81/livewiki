@@ -80,7 +80,7 @@ describe("createLlmClient / adapter timeoutMs end-to-end", () => {
     );
     const r = await p;
     expect(r.content).toBe("ok");
-    expect(r.usage.inputTokens).toBe(2);
+    expect(r.usage?.inputTokens).toBe(2);
   });
 
   it("openai-compat: short timeoutMs aborts once (no second generation)", async () => {

@@ -71,7 +71,13 @@ export type StopReason = "complete" | "length" | "incomplete" | "unknown";
 /** Canonical response — the only shape adapters return. */
 export interface GenerateResult {
   content: string;
-  usage: LlmUsage;
+  /**
+   * Usage as REPORTED by the provider. Null when the response body carried
+   * no usage block at all: unknown is not zero, and fabricating 0/0 would
+   * silently understate the cost report. Callers propagate the null as
+   * `usageKnown: false` (same contract as a client timeout).
+   */
+  usage: LlmUsage | null;
   stopReason?: StopReason;
   /** Provider value retained for checkpoints and diagnostics. */
   rawStopReason?: string;

@@ -3310,7 +3310,7 @@ async function runSemanticTopicStage(opts: {
         const usageEntry: UsageAttempt = {
           attempt,
           usage: generated.usage,
-          usageKnown: true,
+          usageKnown: generated.usage !== null,
           costUsd: computeCostFromUsage(generated.usage, opts.pricing),
           finishedAt: Date.now(),
           ...(generated.stopReason !== undefined ? { stopReason: generated.stopReason } : {}),
@@ -3738,7 +3738,7 @@ async function attemptUnderstandingGeneration(opts: {
       : buildUnderstandingPrompt(opts.evidenceBlock, opts.language);
 
   let raw: string;
-  let usage: { inputTokens: number; outputTokens: number; model: string };
+  let usage: { inputTokens: number; outputTokens: number; model: string } | null;
   let stopReason: StopReason = "unknown";
   let rawStopReason: string | undefined;
   try {
@@ -3792,7 +3792,9 @@ async function attemptUnderstandingGeneration(opts: {
   const usageEntry: UsageAttempt = {
     attempt: opts.attemptNumber,
     usage,
-    usageKnown: true,
+    // A response the provider did not account for is unknown usage, exactly
+    // like a timeout — the aggregate flags it instead of counting 0 tokens.
+    usageKnown: usage !== null,
     costUsd: cost,
     finishedAt: Date.now(),
     stopReason,
@@ -3944,7 +3946,7 @@ async function attemptFolderGeneration(opts: {
   };
 
   let raw: string;
-  let usage: { inputTokens: number; outputTokens: number; model: string };
+  let usage: { inputTokens: number; outputTokens: number; model: string } | null;
   let stopReason: StopReason = "unknown";
   let rawStopReason: string | undefined;
   try {
@@ -3986,7 +3988,8 @@ async function attemptFolderGeneration(opts: {
   const usageEntry: UsageAttempt = {
     attempt: opts.attemptNumber,
     usage,
-    usageKnown: true,
+    // Response without provider usage ⇒ unknown, same contract as a timeout.
+    usageKnown: usage !== null,
     costUsd: computeCostFromUsage(usage, opts.pricing),
     finishedAt: Date.now(),
     stopReason,
@@ -5533,6 +5536,12 @@ async function generateOversizedFilePage(opts: {
     .catch(() => null);
 
   const usageAcc = { inputTokens: 0, outputTokens: 0, model: "" };
+  // One sub-call without provider usage makes the SUM unknown: the pipeline
+  // total would silently omit that call's real tokens. Unknown, not partial.
+  let usageKnown = true;
+  // Sub-calls whose usage entered the sum. Zero (first call timed out) means
+  // there is nothing measured to report — not a real 0/0 pipeline.
+  let accountedCalls = 0;
   const call = async (prompt: PromptPair, maxTokens: number) => {
     const result = await opts.llmClient.generate({
       system: prompt.system,
@@ -5540,11 +5549,18 @@ async function generateOversizedFilePage(opts: {
       maxTokens,
       ...(opts.thinking ? { thinking: opts.thinking } : {}),
     });
+    if (result.usage === null) {
+      usageKnown = false;
+      return result;
+    }
     usageAcc.inputTokens += result.usage.inputTokens;
     usageAcc.outputTokens += result.usage.outputTokens;
     usageAcc.model = result.usage.model;
+    accountedCalls++;
     return result;
   };
+  const pipelineUsage = (): { inputTokens: number; outputTokens: number; model: string } | null =>
+    usageKnown && accountedCalls > 0 ? { ...usageAcc } : null;
 
   try {
     // Pass 0 — opening (one retry on provider non-completion).
@@ -5635,20 +5651,21 @@ async function generateOversizedFilePage(opts: {
       sectionProse,
       closedKeyList,
     });
-    return { raw, usage: { ...usageAcc }, llmError: null };
+    return { raw, usage: pipelineUsage(), llmError: null };
   } catch (err) {
     if (err instanceof LlmTimeoutError) {
       return {
         raw: null,
-        // Sub-call usage so far IS real (billed); report it, not 0/0.
-        usage: { ...usageAcc },
+        // Sub-call usage already accounted for IS real (billed); report it.
+        // Nothing accounted for yet ⇒ unknown, not a 0/0 pipeline.
+        usage: pipelineUsage(),
         llmError: { code: "llm_timeout", message: err.message },
       };
     }
     const e = err as Error;
     return {
       raw: null,
-      usage: { ...usageAcc },
+      usage: pipelineUsage(),
       llmError: { code: "llm_call_failed", message: e.message },
     };
   }
@@ -5842,7 +5859,7 @@ async function attemptStage4Generation(
 
   // Call LLM
   let raw: string;
-  let usage: { inputTokens: number; outputTokens: number; model: string };
+  let usage: { inputTokens: number; outputTokens: number; model: string } | null;
   let stopReason: StopReason = "unknown";
   let rawStopReason: string | undefined;
   try {
@@ -5908,7 +5925,8 @@ async function attemptStage4Generation(
   const usageEntry: UsageAttempt = {
     attempt: opts.attemptNumber,
     usage,
-    usageKnown: true,
+    // Response without provider usage ⇒ unknown, same contract as a timeout.
+    usageKnown: usage !== null,
     costUsd: cost,
     finishedAt: Date.now(),
     stopReason,
@@ -6126,9 +6144,11 @@ async function attemptStage4Generation(
  * not there. Review finding #5 — preserves the override in repairs.
  */
 function computeCostFromUsage(
-  usage: { inputTokens: number; outputTokens: number; model: string },
+  usage: { inputTokens: number; outputTokens: number; model: string } | null,
   override: import("./pricing.js").PricingOverride | undefined,
 ): ReturnType<typeof calculateCostUsd> {
+  // Unknown usage has no cost to compute — null, never a zeroed estimate.
+  if (usage === null) return null;
   // Tries the override first; if the model has no price there, falls back to the table.
   if (override && usage.model in override) {
     return calculateCostUsd(usage.inputTokens, usage.outputTokens, usage.model, override);
@@ -6588,7 +6608,7 @@ async function attemptStage5Generation(
 
   // Call LLM (identical error accounting to stage 4).
   let raw: string;
-  let usage: { inputTokens: number; outputTokens: number; model: string };
+  let usage: { inputTokens: number; outputTokens: number; model: string } | null;
   let stopReason: StopReason = "unknown";
   let rawStopReason: string | undefined;
   try {
@@ -6651,7 +6671,8 @@ async function attemptStage5Generation(
   const usageEntry: UsageAttempt = {
     attempt: opts.attemptNumber,
     usage,
-    usageKnown: true,
+    // Response without provider usage ⇒ unknown, same contract as a timeout.
+    usageKnown: usage !== null,
     costUsd: cost,
     finishedAt: Date.now(),
     stopReason,
@@ -6939,7 +6960,8 @@ async function attemptTopicGeneration(opts: TopicAttemptOpts): Promise<Stage4Att
   const usageEntry: UsageAttempt = {
     attempt: opts.attemptNumber,
     usage: result.usage,
-    usageKnown: true,
+    // Response without provider usage ⇒ unknown, same contract as a timeout.
+    usageKnown: result.usage !== null,
     costUsd: computeCostFromUsage(result.usage, opts.pricing),
     finishedAt: Date.now(),
     ...(result.stopReason !== undefined ? { stopReason: result.stopReason } : {}),

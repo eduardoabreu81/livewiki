@@ -103,11 +103,9 @@ class MockLlm implements LlmClient {
     // mock discriminates on the system prompt and returns valid prose.
     if (/purpose paragraph of ONE folder page/.test(req.system ?? "")) {
       this.folderPurposeCount++;
-      const result: GenerateResult = {
-        content: VALID_FOLDER_PURPOSE,
-        usage: { inputTokens: 100, outputTokens: 50, model: this.model },
-      };
-      this.costInputs.push(result.usage);
+      const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+      const result: GenerateResult = { content: VALID_FOLDER_PURPOSE, usage };
+      this.costInputs.push(usage);
       return result;
     }
     // Extract the closed key list from the user prompt (format "- <key>")
@@ -149,11 +147,9 @@ class MockLlm implements LlmClient {
             "",
             ].join("\n")
         : "# t\n");
-    const result: GenerateResult = {
-      content,
-      usage: { inputTokens: 100, outputTokens: 50, model: this.model },
-    };
-    this.costInputs.push(result.usage);
+    const usage = { inputTokens: 100, outputTokens: 50, model: this.model };
+    const result: GenerateResult = { content, usage };
+    this.costInputs.push(usage);
     return result;
   }
 }

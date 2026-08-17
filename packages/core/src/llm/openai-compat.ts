@@ -9,7 +9,13 @@
  */
 
 import type { LlmClient } from "./index.js";
-import type { GenerateRequest, GenerateResult, StopReason, ThinkingMode } from "./types.js";
+import type {
+  GenerateRequest,
+  GenerateResult,
+  LlmUsage,
+  StopReason,
+  ThinkingMode,
+} from "./types.js";
 import { type AdapterConfig, requestWithRetry, withTimeoutMs } from "./base.js";
 
 export interface OpenAiCompatAdapterOpts {
@@ -107,20 +113,40 @@ export class OpenAiCompatAdapter implements LlmClient {
     const text = raw.choices?.[0]?.message?.content ?? "";
     return {
       content: text,
-      usage: {
-        inputTokens: raw.usage?.prompt_tokens ?? 0,
-        outputTokens: raw.usage?.completion_tokens ?? 0,
-        model: raw.model,
-        ...(raw.usage?.completion_tokens_details?.reasoning_tokens !== undefined
-          ? { reasoningTokens: raw.usage.completion_tokens_details.reasoning_tokens }
-          : {}),
-      },
+      usage: normalizeUsage(raw),
       stopReason: normalizeFinishReason(raw.choices?.[0]?.finish_reason),
       ...(raw.choices?.[0]?.finish_reason != null
         ? { rawStopReason: raw.choices[0].finish_reason }
         : {}),
     };
   }
+}
+
+/**
+ * Provider usage → normalized usage, or null when the body carries none.
+ *
+ * A 200 without a usable `usage` block (some OpenAI-compatible proxies omit
+ * it entirely) means the usage is UNKNOWN — never 0/0. Fabricated zeros are
+ * indistinguishable from a free call and silently understate the cost report,
+ * so the unknown propagates as `usageKnown: false` instead.
+ */
+function normalizeUsage(raw: OpenAiCompatResponse): LlmUsage | null {
+  const usage = raw.usage;
+  if (
+    usage == null ||
+    !Number.isFinite(usage.prompt_tokens) ||
+    !Number.isFinite(usage.completion_tokens)
+  ) {
+    return null;
+  }
+  return {
+    inputTokens: usage.prompt_tokens,
+    outputTokens: usage.completion_tokens,
+    model: raw.model,
+    ...(usage.completion_tokens_details?.reasoning_tokens !== undefined
+      ? { reasoningTokens: usage.completion_tokens_details.reasoning_tokens }
+      : {}),
+  };
 }
 
 /** OpenAI-compat `finish_reason` → normalized `StopReason`. */

@@ -43,9 +43,9 @@ describe("AnthropicAdapter", () => {
     });
     const r = await adapter.generate({ system: "sys", user: "hi" });
     expect(r.content).toBe("hi from claude");
-    expect(r.usage.inputTokens).toBe(10);
-    expect(r.usage.outputTokens).toBe(5);
-    expect(r.usage.model).toBe("claude-sonnet-5");
+    expect(r.usage?.inputTokens).toBe(10);
+    expect(r.usage?.outputTokens).toBe(5);
+    expect(r.usage?.model).toBe("claude-sonnet-5");
 
     // Verifies request shape
     const [calledUrl, calledInit] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
@@ -73,8 +73,8 @@ describe("AnthropicAdapter", () => {
       apiKey: "k", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-5", fetchImpl,
     });
     const r = await adapter.generate({ system: "s", user: "u" });
-    expect(r.usage.inputTokens).toBe(1234);
-    expect(r.usage.outputTokens).toBe(567);
+    expect(r.usage?.inputTokens).toBe(1234);
+    expect(r.usage?.outputTokens).toBe(567);
   });
 
   it("normalizes Anthropic stop reasons and preserves unknown values safely", async () => {
@@ -138,8 +138,8 @@ describe("OpenAiCompatAdapter", () => {
     });
     const r = await adapter.generate({ system: "sys", user: "hi" });
     expect(r.content).toBe("hi");
-    expect(r.usage.inputTokens).toBe(20);
-    expect(r.usage.outputTokens).toBe(10);
+    expect(r.usage?.inputTokens).toBe(20);
+    expect(r.usage?.outputTokens).toBe(10);
 
     const [calledUrl, calledInit] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(calledUrl).toBe("https://api.openai.com/v1/chat/completions");
@@ -230,8 +230,47 @@ describe("OpenAiCompatAdapter", () => {
       apiKey: "k", baseUrl: "https://api.openai.com", model: "x", fetchImpl,
     });
     const r = await adapter.generate({ system: "s", user: "u" });
-    expect(r.usage.inputTokens).toBe(100);
-    expect(r.usage.outputTokens).toBe(50);
+    expect(r.usage?.inputTokens).toBe(100);
+    expect(r.usage?.outputTokens).toBe(50);
+  });
+
+  it.each([
+    ["no usage field", { choices: [{ message: { role: "assistant", content: "x" } }], model: "x" }],
+    ["null usage", { choices: [{ message: { role: "assistant", content: "x" } }], model: "x", usage: null }],
+    ["usage without token counts", {
+      choices: [{ message: { role: "assistant", content: "x" } }],
+      model: "x",
+      usage: {},
+    }],
+  ])("200 with %s → usage unknown (null), never 0/0", async (_label, body) => {
+    const adapter = new OpenAiCompatAdapter({
+      apiKey: "k",
+      baseUrl: "https://api.openai.com",
+      model: "x",
+      fetchImpl: fakeFetch({ status: 200, body }),
+    });
+
+    const r = await adapter.generate({ system: "s", user: "u" });
+
+    expect(r.content).toBe("x");
+    expect(r.usage).toBeNull();
+  });
+
+  it("Anthropic 200 without a usage block → usage unknown (null), never 0/0", async () => {
+    const adapter = new AnthropicAdapter({
+      apiKey: "k",
+      baseUrl: "https://api.anthropic.com",
+      model: "claude-sonnet-5",
+      fetchImpl: fakeFetch({
+        status: 200,
+        body: { content: [{ type: "text", text: "hi" }], model: "claude-sonnet-5" },
+      }),
+    });
+
+    const r = await adapter.generate({ system: "s", user: "u" });
+
+    expect(r.content).toBe("hi");
+    expect(r.usage).toBeNull();
   });
 
   it("normalizes OpenAI-compatible finish reasons and preserves unknown values safely", async () => {
@@ -448,8 +487,8 @@ describe("requestWithRetry — retry policy (timeout vs HTTP)", () => {
       maxTokens: 16,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(result.usage.inputTokens).toBe(11);
-    expect(result.usage.outputTokens).toBe(7);
+    expect(result.usage?.inputTokens).toBe(11);
+    expect(result.usage?.outputTokens).toBe(7);
   });
 
   it("E2E stub: timeout does not start a second generation", async () => {
