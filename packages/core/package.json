@@ -213,7 +213,8 @@
   },
   "files": [
     "dist",
-    "grammars"
+    "grammars",
+    "!dist/**/*.test.*"
   ],
   "scripts": {
     "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json",

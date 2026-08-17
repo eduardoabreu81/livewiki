@@ -31,7 +31,7 @@
     "livewiki": "dist/index.js"
   },
   "main": "dist/index.js",
-  "files": ["dist", "skills", "templates"],
+  "files": ["dist", "skills", "templates", "!dist/**/*.test.*"],
   "scripts": {
     "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/make-executable.mjs",
     "test": "vitest run",
