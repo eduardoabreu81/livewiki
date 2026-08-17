@@ -4812,6 +4812,27 @@ function injectManualBlocksBySection(existing: string, newContent: string): stri
 }
 
 /**
+ * Write one wiki artifact all-or-nothing (temp + rename). The write→verify→
+ * rollback transaction assumes the write either lands whole or is undone; a
+ * plain `writeText` killed mid-`writeFile` left a truncated page that the
+ * next run reads as valid content, which no rollback can catch.
+ *
+ * The lock is per artifact path: the shared `safe-io` default would serialize
+ * — and, on contention, fail — the stage-4 worker pool writing DIFFERENT
+ * pages concurrently. No compare-and-swap: the observable success/rollback
+ * behavior must stay identical to the previous write.
+ */
+async function writeArtifactAtomic(
+  absRoot: string,
+  relPath: string,
+  content: string,
+): Promise<void> {
+  await safeIo.writeTextAtomic(absRoot, relPath, content, {
+    lockRelPath: `.livewiki/locks/${sha256(relPath).slice(0, 16)}.lock`,
+  });
+}
+
+/**
  * Best-effort rollback of written artifacts (R10.1 item A). For each entry,
  * restores the snapshot when one existed, otherwise removes the newly
  * created file. With `guardedRemoval` (the exception path, where a failed
@@ -4918,7 +4939,7 @@ async function tryWriteAndVerify(
   //    crashing) rolls the page back best-effort, exactly like a rejection.
   let verifyResult: VerifyResult;
   try {
-    await safeIo.writeText(absRoot, wikiPath, finalContent);
+    await writeArtifactAtomic(absRoot, wikiPath, finalContent);
     verifyResult = await runVerify(absRoot);
   } catch (e) {
     const reasons = await rollbackWrittenArtifacts(
@@ -5013,8 +5034,8 @@ async function tryWriteModuleDiagramAndVerify(
   //    both artifacts back best-effort, exactly like a verify rejection.
   let verifyResult: VerifyResult;
   try {
-    await safeIo.writeText(absRoot, pagePath, finalContent);
-    await safeIo.writeText(
+    await writeArtifactAtomic(absRoot, pagePath, finalContent);
+    await writeArtifactAtomic(
       absRoot,
       diagramPath,
       diagramSource.endsWith("\n") ? diagramSource : diagramSource + "\n",
@@ -7316,8 +7337,8 @@ async function tryWriteFlowAndVerify(
   //    exactly like a verify rejection.
   let verifyResult: VerifyResult;
   try {
-    await safeIo.writeText(absRoot, pagePath, finalContent);
-    await safeIo.writeText(
+    await writeArtifactAtomic(absRoot, pagePath, finalContent);
+    await writeArtifactAtomic(
       absRoot,
       diagramPath,
       diagramSource.endsWith("\n") ? diagramSource : diagramSource + "\n",
