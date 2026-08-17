@@ -52,7 +52,10 @@ export type BaselineIssueCode =
   | "unsupported_extraction"
   | "invalid_provenance"
   | "duplicate_entry"
-  | "noncanonical_serialization";
+  | "noncanonical_serialization"
+  // Not a defect of the baseline FILE: a wiki page the inventory could not
+  // parse, surfaced here so `status` never presents it as absent obligations.
+  | "malformed_frontmatter";
 
 export interface BaselineIssue {
   code: BaselineIssueCode;
@@ -77,9 +80,21 @@ export interface BaselineObligation {
   assignee: "agent" | "human";
 }
 
+/**
+ * A wiki page whose frontmatter does not parse. No obligation can be read
+ * from it, so it is reported instead of silently dropped out of the
+ * debt/baseline system (`verify` reports the same page as
+ * `malformed_frontmatter`).
+ */
+export interface MalformedDocumentationPage {
+  wikiPath: string;
+  detail: string;
+}
+
 export interface BaselineDocumentationInventory {
   obligations: BaselineObligation[];
   ownerByWikiPath: Map<string, Owner>;
+  malformedPages: MalformedDocumentationPage[];
 }
 
 export type BaselineEntryState = "clean" | "changed" | "deleted" | "inferred";
@@ -103,6 +118,8 @@ export interface BaselineHealth {
   moves: BaselineMoveCandidate[];
   unbaselined: BaselineObligation[];
   removedAnchors: BaselineEntry[];
+  /** Pages the inventory could not read; reported, never counted as clean. */
+  malformedPages: MalformedDocumentationPage[];
   counts: {
     clean: number;
     changed: number;
@@ -365,13 +382,21 @@ export async function collectBaselineDocumentationInventory(
 ): Promise<BaselineDocumentationInventory> {
   const ownerByWikiPath = new Map<string, Owner>();
   const obligations = new Map<string, BaselineObligation>();
+  const malformedPages: MalformedDocumentationPage[] = [];
   for (const wikiPath of await collectMarkdownPaths(repoRoot)) {
     const source = await safeIo.readText(repoRoot, wikiPath).catch(() => null);
     if (source === null) continue;
     let extracted;
     try {
       extracted = extractAnchors(source);
-    } catch {
+    } catch (error) {
+      // Unparseable page: its obligations are unreadable, never zero. Record
+      // it so the page leaves a trace instead of vanishing from the debt
+      // system (`anchor-ledger.ts` reports the same failure mode).
+      malformedPages.push({
+        wikiPath,
+        detail: error instanceof Error ? error.message : String(error),
+      });
       continue;
     }
     ownerByWikiPath.set(wikiPath, extracted.owner);
@@ -403,6 +428,8 @@ export async function collectBaselineDocumentationInventory(
       compareCodePoints(left.wikiPath, right.wikiPath) ||
       compareCodePoints(left.symbolKey, right.symbolKey)),
     ownerByWikiPath,
+    malformedPages: [...malformedPages].sort((left, right) =>
+      compareCodePoints(left.wikiPath, right.wikiPath)),
   };
 }
 
@@ -495,6 +522,7 @@ export function evaluateBaseline(
       compareCodePoints(left.oldKey, right.oldKey)),
     unbaselined,
     removedAnchors,
+    malformedPages: inventory.malformedPages,
     counts: {
       clean: count("clean"),
       changed: count("changed"),

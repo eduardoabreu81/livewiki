@@ -211,6 +211,7 @@ describe("migrateBaselineKey", () => {
           assignee: "agent",
         }],
         ownerByWikiPath: new Map(),
+        malformedPages: [],
       },
     );
     expect(health.entries[0]?.state).toBe("clean");
@@ -248,6 +249,7 @@ describe("migrateBaselineKey", () => {
           assignee: "agent",
         }],
         ownerByWikiPath: new Map(),
+        malformedPages: [],
       },
     );
     expect(health.entries[0]?.state).toBe("changed");

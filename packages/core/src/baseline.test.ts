@@ -175,7 +175,7 @@ describe("baseline health evaluation", () => {
         symbol({ key: "src/inferred.ts#inferred", name: "inferred" }),
         symbol({ key: "src/new.ts#newSymbol", name: "newSymbol" }),
       ],
-      { obligations, ownerByWikiPath: new Map() },
+      { obligations, ownerByWikiPath: new Map(), malformedPages: [] },
     );
     expect(health.counts).toMatchObject({
       clean: 1,
@@ -202,6 +202,7 @@ describe("baseline health evaluation", () => {
           assignee: "agent",
         }],
         ownerByWikiPath: new Map(),
+        malformedPages: [],
       },
     );
     expect(health.moves).toEqual([{
@@ -229,6 +230,7 @@ describe("baseline health evaluation", () => {
           assignee: "agent",
         }],
         ownerByWikiPath: new Map(),
+        malformedPages: [],
       },
     );
     expect(health.moves).toEqual([]);
@@ -239,7 +241,7 @@ describe("baseline health evaluation", () => {
     const health = evaluateBaseline(
       { schemaVersion: 1, entries: [entry()] },
       [symbol()],
-      { obligations: [], ownerByWikiPath: new Map() },
+      { obligations: [], ownerByWikiPath: new Map(), malformedPages: [] },
     );
     expect(health.removedAnchors).toEqual([entry()]);
     expect(health.counts.removedAnchors).toBe(1);
@@ -287,6 +289,41 @@ describe("documentation inventory", () => {
       symbolKey: "src/db.ts#open",
       assignee: "agent",
     }]);
+  });
+
+  it("reports an unparseable page instead of dropping it out of the inventory", async () => {
+    await writeLivewikiFile(
+      "livewiki/core/broken.md",
+      "---\n" +
+      "title: Broken\n" +
+      "anchors:\n" +
+      "  - src/db.ts#open\n",  // frontmatter never closed
+    );
+    await writeLivewikiFile(
+      "livewiki/core/db.md",
+      "---\n" +
+      "title: DB\n" +
+      "owner: generated\n" +
+      "anchors:\n" +
+      "  - src/db.ts#open\n" +
+      "---\n\n" +
+      "# DB\n",
+    );
+
+    const inventory = await collectBaselineDocumentationInventory(repoRoot);
+
+    expect(inventory.malformedPages).toHaveLength(1);
+    expect(inventory.malformedPages[0]?.wikiPath).toBe("livewiki/core/broken.md");
+    expect(inventory.malformedPages[0]?.detail).toContain("Frontmatter parse error");
+    // The readable page still produces its obligation.
+    expect(inventory.obligations).toEqual([{
+      wikiPath: "livewiki/core/db.md",
+      symbolKey: "src/db.ts#open",
+      assignee: "agent",
+    }]);
+    expect(
+      evaluateBaseline(emptyBaseline(), [], inventory).malformedPages,
+    ).toEqual(inventory.malformedPages);
   });
 });
 

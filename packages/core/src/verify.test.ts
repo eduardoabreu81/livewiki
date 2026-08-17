@@ -659,3 +659,75 @@ anchors:
     expect(result.issues.filter((i) => i.code === "think_block_present")).toHaveLength(0);
   });
 });
+
+describe("verify — malformed_frontmatter (unparseable page)", () => {
+  it("page whose frontmatter does not parse: error naming the page", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/broken.md", `---
+title: Foo
+this line is not a key: value pair @@@
+---
+
+# Broken
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+
+    expect(result.ok).toBe(false);
+    const malformed = result.issues.filter((i) => i.code === "malformed_frontmatter");
+    expect(malformed).toHaveLength(1);
+    expect(malformed[0]?.severity).toBe("error");
+    expect(malformed[0]?.wikiPath).toBe("livewiki/broken.md");
+    expect(malformed[0]?.detail).toContain("Frontmatter parse error");
+  });
+
+  it("a ghost anchor hidden behind malformed frontmatter still fails the gate", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    // Frontmatter opened and never closed: the page carries a ghost anchor
+    // AND a think leak, neither of which can be parsed out of it.
+    await writeWiki("livewiki/ghost.md", `---
+title: Ghost
+anchors:
+  - src/foo.ts#ghost
+
+# Ghost
+
+<think>leaked reasoning</think>
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+
+    expect(result.ok).toBe(false);
+    expect(
+      result.issues.filter(
+        (i) => i.code === "malformed_frontmatter" && i.wikiPath === "livewiki/ghost.md",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("a valid page next to the malformed one is still checked", async () => {
+    await writeCode("src/foo.ts", "export function bar() {}");
+    await writeWiki("livewiki/broken.md", "---\nnot: a: valid: frontmatter\n");
+    await writeWiki("livewiki/ok.md", `---
+title: Foo
+anchors:
+  - src/foo.ts#ghost
+---
+`);
+    await runIndexer(repoRoot, { quiet: true });
+    await runLedger(repoRoot, { quiet: true });
+
+    const result = await runVerify(repoRoot);
+
+    expect(result.issues.filter((i) => i.code === "malformed_frontmatter")).toHaveLength(1);
+    expect(
+      result.issues.filter(
+        (i) => i.code === "broken_anchor" && i.wikiPath === "livewiki/ok.md",
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
+  });
+});

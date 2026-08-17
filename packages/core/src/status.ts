@@ -377,6 +377,14 @@ async function applyVersionedBaseline(
   ).all() as Array<{ key: string; name: string; content_hash: string }>;
   const inventory = await collectBaselineDocumentationInventory(absRoot);
   const health = evaluateBaseline(loaded.baseline, symbols, inventory);
+  // A page whose frontmatter does not parse contributes no obligation. It is
+  // reported so the absence is visible instead of reading as "nothing owed".
+  if (health.malformedPages.length > 0) {
+    report.debt.baselineIssues = health.malformedPages.map((page) => ({
+      code: "malformed_frontmatter" as const,
+      detail: `${page.wikiPath}: ${page.detail}`,
+    }));
+  }
   const movesByOldIdentity = new Set(
     health.moves.map((move) => `${move.wikiPath}\0${move.oldKey}`),
   );

@@ -374,6 +374,26 @@ describe("status debt baseline", () => {
     ).toEqual([]);
     expect(repository?.byEvent).toEqual({ changed: 0, moved: 0, deleted: 0 });
   });
+
+  it("surfaces a page whose frontmatter does not parse as a baseline issue", async () => {
+    await mkdir(join(repoRoot, "livewiki"), { recursive: true });
+    await writeFile(
+      join(repoRoot, "livewiki/broken.md"),
+      "---\ntitle: Broken\nanchors:\n  - src/service.ts#run\n",
+    );
+    await runIndexer(repoRoot, { quiet: true });
+    await writeBaseline(repoRoot, emptyBaseline());
+
+    const report = await runStatus(repoRoot);
+
+    expect(report.debt.baseline).toBe("available");
+    expect(report.debt.baselineIssues).toEqual([
+      {
+        code: "malformed_frontmatter",
+        detail: expect.stringContaining("livewiki/broken.md"),
+      },
+    ]);
+  });
 });
 
 describe("status undocumented symbols by path role", () => {

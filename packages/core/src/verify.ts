@@ -44,7 +44,8 @@ export type IssueCode =
   | "unsupported_baseline_algorithm"
   | "invalid_documentation_baseline"
   | "baseline_entry_without_anchor"
-  | "think_block_present";   // reasoning <think> block leaked into the page (outside code spans/fences)
+  | "think_block_present"    // reasoning <think> block leaked into the page (outside code spans/fences)
+  | "malformed_frontmatter"; // the page frontmatter does not parse, so no page check can run
 
 export interface VerifyIssue {
   severity: IssueSeverity;
@@ -129,7 +130,18 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
       let extracted;
       try {
         extracted = extractAnchors(source);
-      } catch {
+      } catch (error) {
+        // Without a parse none of the per-page checks below can run — but the
+        // page must still FAIL the gate. A silent `continue` let a malformed
+        // page skip broken_anchor, the thinking leak, the manual blocks and
+        // the internal links while verify still answered ok: exactly the
+        // hole the anti-hallucination promise cannot have.
+        issues.push({
+          severity: "error",
+          code: "malformed_frontmatter",
+          wikiPath: page.relPath,
+          detail: error instanceof Error ? error.message : String(error),
+        });
         continue;
       }
 
