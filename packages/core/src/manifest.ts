@@ -156,6 +156,13 @@ export async function writeManifestState(
       ? await safeIo.readText(repoRoot, MANIFEST_REL_PATH).catch(() => null)
       : null;
     const current = currentRaw === null ? null : parseManifest(currentRaw);
+    // Present but unparseable: the durable artifact receipts are still on
+    // disk and cannot be read. Falling through would persist an empty
+    // receipt list over them and make the next run re-pay LLM generation.
+    // Absent (currentRaw === null) keeps building a fresh manifest.
+    if (currentRaw !== null && current === null) {
+      throw new Error("cannot update manifest state in an incompatible manifest");
+    }
     const next = buildManifest({
       ...args,
       artifactReceipts: current?.artifactReceipts ?? [],

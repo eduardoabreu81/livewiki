@@ -333,6 +333,45 @@ describe("manifest artifact receipts", () => {
     expect(manifest?.artifactReceipts.map((receipt) => receipt.taskId)).toEqual(["topic:a"]);
   });
 
+  it("fails closed on a present-but-unparseable manifest instead of dropping receipts", async () => {
+    await writeLivewikiFile("livewiki/topics/a.md", "topic");
+    await recordArtifactReceipt(repoRoot, {
+      taskId: "topic:a",
+      evidenceHash: HASH_A,
+      contract: "topic-v1",
+      artifacts: [{ path: "livewiki/topics/a.md", hash: HASH_A }],
+    });
+    // Corrupt the manifest on disk (truncated write, manual edit, bad merge).
+    const manifestAbs = nodePath.join(repoRoot, MANIFEST_REL_PATH);
+    const corrupted = (await nodeFs.readFile(manifestAbs, "utf8")).slice(0, 40);
+    await nodeFs.writeFile(manifestAbs, corrupted);
+
+    await expect(
+      writeManifestState(repoRoot, {
+        lastDocumentedCommit: "abc123",
+        snapshotHash: await computeSnapshotHash(repoRoot),
+        pendingBatch: null,
+      }),
+    ).rejects.toThrow(/incompatible manifest/);
+
+    // Byte-for-byte intact: the receipts are still recoverable by hand.
+    expect(await nodeFs.readFile(manifestAbs, "utf8")).toBe(corrupted);
+  });
+
+  it("still builds a fresh manifest when none exists on disk", async () => {
+    expect(await readManifest(repoRoot)).toBeNull();
+
+    await writeManifestState(repoRoot, {
+      lastDocumentedCommit: "abc123",
+      snapshotHash: await computeSnapshotHash(repoRoot),
+      pendingBatch: null,
+    });
+
+    const manifest = await readManifest(repoRoot);
+    expect(manifest?.lastDocumentedCommit).toBe("abc123");
+    expect(manifest?.artifactReceipts).toEqual([]);
+  });
+
   it("merges concurrent receipt writers without losing either task", async () => {
     await writeLivewikiFile("livewiki/topics/a.md", "a");
     await writeLivewikiFile("livewiki/topics/b.md", "b");
