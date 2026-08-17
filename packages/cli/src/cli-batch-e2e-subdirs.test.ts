@@ -1,25 +1,25 @@
 /**
- * CLI E2E Fase 3 rev2 — cenário do revisor empírico (achados H–M).
+ * CLI E2E Phase 3 rev2 — empirical reviewer scenario (findings H–M).
  *
- * Cenário: repo com módulos em SUBDIRETÓRIOS (src/auth/, src/billing/, src/utils/),
- * imports cruzados NodeNext (../utils/crypto.js → crypto.ts), config openai-compat
- * apontando pra stub local, key só no env. Esse cenário EXPLICITAMENTE expõe os
- * bugs que o fixture flat do cli-batch-e2e.test.ts não cobre.
+ * Scenario: repo with modules in SUBDIRECTORIES (src/auth/, src/billing/, src/utils/),
+ * cross NodeNext imports (../utils/crypto.js → crypto.ts), openai-compat config
+ * pointing at a local stub, key only in the env. This scenario EXPLICITLY exposes
+ * the bugs that the flat fixture of cli-batch-e2e.test.ts does not cover.
  *
- * Cobertura (contrato #29 — real page units: um FILE unit por arquivo com
- * símbolos, um FOLDER unit por diretório real; stage 2 é determinístico e
- * NÃO existe refine LLM):
- *   H — init --batch com subdiretórios + imports cruzados gera TODAS as
- *       páginas de unidade real (file pages + folder pages), não 0.
- *   I — stage 2 não faz NENHUMA chamada LLM: o planner determinístico
- *       particiona o inventário e o summary reflete as pastas reais.
- *   K — imports NodeNext ../utils/crypto.js resolvem pra crypto.ts (edges > 0).
- *   L — batch sem config LLM falha com mensagem clara E exit 1 (não crasha
- *       com exit -1073740791 do libuv).
- *   M — filesWritten do init não lista manifest que não foi regravado
- *       (writeManifestIfChanged retorna false → não faz push).
+ * Coverage (contract #29 — real page units: one FILE unit per file with
+ * symbols, one FOLDER unit per real directory; stage 2 is deterministic and
+ * there is NO LLM refine):
+ *   H — init --batch with subdirectories + cross imports generates ALL the
+ *       real unit pages (file pages + folder pages), not 0.
+ *   I — stage 2 makes NO LLM call: the deterministic planner
+ *       partitions the inventory and the summary reflects the real folders.
+ *   K — NodeNext imports ../utils/crypto.js resolve to crypto.ts (edges > 0).
+ *   L — batch without LLM config fails with a clear message AND exit 1 (does
+ *       not crash with libuv exit -1073740791).
+ *   M — init's filesWritten does not list a manifest that was not rewritten
+ *       (writeManifestIfChanged returns false → no push).
  *
- * Stub in-process (mesmo padrão do cli-batch-e2e.test.ts): zero chamada real.
+ * In-process stub (same pattern as cli-batch-e2e.test.ts): zero real calls.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
@@ -34,7 +34,7 @@ interface StubServer {
   close: () => Promise<void>;
   setHandler: (h: (req: { system: string; user: string }) => StubResponse | null) => void;
   callCount: () => number;
-  /** Lista os bodies recebidos (parsed JSON) — pra asserções finas. */
+  /** Lists the received bodies (parsed JSON) — for fine-grained assertions. */
   received: () => Array<{ system: string; user: string }>;
 }
 
@@ -130,7 +130,7 @@ function understandingResponse(req: { system: string; user: string }): StubRespo
   };
 }
 
-/** Gera doc Markdown válido pra qualquer file unit (mesmo formato do E2E da Fase 3). */
+/** Generates valid Markdown doc for any file unit (same format as the Phase 3 E2E). */
 function defaultHandler(req: { system: string; user: string }): StubResponse | null {
   const understanding = understandingResponse(req);
   if (understanding) return understanding;
@@ -261,9 +261,9 @@ async function writeOpenAiConfig(model: string, baseUrl: string): Promise<void> 
   );
 }
 
-describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (achados H–M)", () => {
-  it("H: init --batch com subdiretórios + NodeNext gera TODAS as páginas (não 0)", async () => {
-    // Cenário do revisor: 3 subdiretórios, 4 arquivos, imports cruzados NodeNext.
+describe("CLI E2E Phase 3 rev2 — subdirectories + NodeNext + openai-compat (findings H–M)", () => {
+  it("H: init --batch with subdirectories + NodeNext generates ALL pages (not 0)", async () => {
+    // Reviewer scenario: 3 subdirectories, 4 files, cross NodeNext imports.
     await writeCode(
       "src/auth/login.ts",
       "import { hashPassword } from '../utils/crypto.js';\nexport function login(user: string, pass: string) { return hashPassword(pass); }",
@@ -287,9 +287,9 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
     process.env["OPENAI_API_KEY"] = "test-canary-H-DONOTLEAK";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
-      expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
+      expect(r.status, `init failed: ${r.stderr}`).toBe(0);
 
-      // #29 real units: 4 file pages + 3 folder pages (não 0!)
+      // #29 real units: 4 file pages + 3 folder pages (not 0!)
       await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/login.md"))).resolves.toBeUndefined();
       await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/session.md"))).resolves.toBeUndefined();
       await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/index.md"))).resolves.toBeUndefined();
@@ -326,28 +326,28 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       expect(stage2Tasks.length).toBe(1);
       const stage2 = stage2Tasks[0];
       expect(stage2.status).toBe("done");
-      expect(stage2.inputTokens, "stage 2 determinístico: zero tokens de LLM").toBe(0);
-      expect(stage2.outputTokens, "stage 2 determinístico: zero tokens de LLM").toBe(0);
+      expect(stage2.inputTokens, "deterministic stage 2: zero LLM tokens").toBe(0);
+      expect(stage2.outputTokens, "deterministic stage 2: zero LLM tokens").toBe(0);
     } finally {
       delete process.env.OPENAI_API_KEY;
     }
   }, 60_000);
 
-  it("I: stage 2 NÃO chama o LLM — o planner determinístico particiona em unidades reais", async () => {
+  it("I: stage 2 does NOT call the LLM — the deterministic planner partitions into real units", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
     await writeCode("src/billing/invoice.ts", "export function inv() {}");
     await writeCode("src/utils/crypto.ts", "export function c() {}");
 
-    // #29: não existe refine de stage 2. Qualquer chamada com o marcador do
-    // antigo prompt de refine ("Heuristic module grouping") falha o teste —
-    // o stub registra tudo e asserimos no fim.
+    // #29: there is no stage-2 refine. Any call with the old refine prompt's
+    // marker ("Heuristic module grouping") fails the test — the stub records
+    // everything and we assert at the end.
     stub.setHandler(defaultHandler);
 
     await writeOpenAiConfig("gpt-test-mock", stub.url);
     process.env["OPENAI_API_KEY"] = "test-canary-I-DONOTLEAK";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
-      expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
+      expect(r.status, `init failed: ${r.stderr}`).toBe(0);
 
       // Real units: 3 file pages + 3 folder pages.
       await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/auth/login.md"))).resolves.toBeUndefined();
@@ -360,24 +360,24 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       const report = JSON.parse(status.stdout);
       expect(report.run.status).toBe("completed");
-      // Stage 2: done, ZERO tokens — nenhuma chamada LLM saiu do stage 2.
+      // Stage 2: done, ZERO tokens — no LLM call came out of stage 2.
       const stage2 = report.tasks.find(
         (t: { stage: number }) => t.stage === 2,
       );
       expect(stage2).toBeDefined();
       expect(stage2.status).toBe("done");
-      expect(stage2.inputTokens, "stage 2 determinístico não chama o LLM").toBe(0);
-      expect(stage2.outputTokens, "stage 2 determinístico não chama o LLM").toBe(0);
-      // E no transporte: nenhum prompt de refine chegou ao stub.
+      expect(stage2.inputTokens, "deterministic stage 2 doesn't call the LLM").toBe(0);
+      expect(stage2.outputTokens, "deterministic stage 2 doesn't call the LLM").toBe(0);
+      // And on the wire: no refine prompt reached the stub.
       expect(
         stub.received().filter((c) => c.user.includes("Heuristic module grouping")).length,
-        "nenhum prompt de refine de stage 2 pode existir sob #29",
+        "no stage 2 refine prompt may exist under #29",
       ).toBe(0);
-      // O summary reflete a partição determinística: as 3 pastas reais.
+      // The summary reflects the deterministic partition: the 3 real folders.
       const refined = report.run.summary?.modulesRefined ?? [];
       expect(
         refined.map((m: { id: string }) => m.id).sort(),
-        "summary.modulesRefined = pastas reais do planner",
+        "summary.modulesRefined = the planner's real folders",
       ).toEqual(["auth", "billing", "utils"]);
       const pathsById = Object.fromEntries(
         refined.map((m: { id: string; paths: string[] }) => [m.id, m.paths]),
@@ -392,7 +392,7 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
     }
   }, 60_000);
 
-  it("K: imports NodeNext ../utils/crypto.js resolvem pra crypto.ts (edges > 0)", async () => {
+  it("K: NodeNext imports ../utils/crypto.js resolve to crypto.ts (edges > 0)", async () => {
     await writeCode(
       "src/auth/login.ts",
       "import { hashPassword } from '../utils/crypto.js';\nexport function login(p: string) { return hashPassword(p); }",
@@ -410,27 +410,27 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
       expect(r.status, r.stderr).toBe(0);
 
-      // modules.mmd tem que ter edges — não "No module edges detected"
+      // modules.mmd must have edges — not "No module edges detected"
       const modulesMmd = await nodeFs.readFile(
         nodePath.join(repoRoot, "livewiki/architecture/modules.mmd"),
         "utf8",
       );
       expect(modulesMmd).not.toMatch(/No module edges detected/);
-      // Edge auth→utils (login importa de utils via NodeNext)
+      // Edge auth→utils (login imports from utils via NodeNext)
       expect(modulesMmd).toMatch(/auth.*--.*utils|auth.*→.*utils/s);
     } finally {
       delete process.env.OPENAI_API_KEY;
     }
   }, 60_000);
 
-  it("L: batch sem config LLM falha com exit ≠ 0 e mensagem clara (sem crash libuv)", async () => {
+  it("L: batch without LLM config fails with exit ≠ 0 and a clear message (no libuv crash)", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
-    // SEM .livewiki/config.json E SEM env var
+    // WITHOUT .livewiki/config.json AND WITHOUT env var
     const prev = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
-      // Deve ser exit 1 (erro de config), não -1073740791 (libuv crash) e nem 0.
+      // Must be exit 1 (config error), not -1073740791 (libuv crash) nor 0.
       expect(r.status).toBe(1);
       expect(r.stderr).toMatch(/Cannot run LLM batch/);
       expect(r.stderr).toMatch(/missing provider/);
@@ -440,14 +440,14 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
     }
   }, 30_000);
 
-  it("M: filesWritten do init NÃO lista manifest que não foi regravado", async () => {
+  it("M: init's filesWritten does NOT list a manifest that was not rewritten", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
     stub.setHandler(defaultHandler);
 
     await writeOpenAiConfig("gpt-test-mock", stub.url);
     process.env["OPENAI_API_KEY"] = "test-canary-M-DONOTLEAK";
     try {
-      // 1º init: manifest é gravado
+      // 1st init: manifest is written
       const r1 = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
       const report1 = JSON.parse(r1.stdout);
       expect(report1.filesWritten).toContain("livewiki/.manifest.json");
@@ -459,7 +459,7 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
         nodePath.join(repoRoot, "livewiki/.manifest.json"),
       )).mtimeMs;
 
-      // 2º init SEM mudança no repo: snapshotHash igual, manifest NÃO regrava
+      // 2nd init WITHOUT repo change: same snapshotHash, manifest NOT rewritten
       await new Promise((r) => setTimeout(r, 50));
       const r2 = await runCli(["--json", "--repo", repoRoot, "init"]);
       const report2 = JSON.parse(r2.stdout);
@@ -470,11 +470,11 @@ describe("CLI E2E Fase 3 rev2 — subdiretórios + NodeNext + openai-compat (ach
       const manifestTime2 = (await nodeFs.stat(
         nodePath.join(repoRoot, "livewiki/.manifest.json"),
       )).mtimeMs;
-      // Arquivo no disco tem que ser byte-idêntico (writeManifestIfChanged pulou)
+      // File on disk must be byte-identical (writeManifestIfChanged skipped it)
       expect(manifestContent2).toBe(manifestContent1);
       expect(manifestTime2).toBe(manifestTime1);
-      // report2.filesWritten NÃO contém o manifest
-      expect(report2.filesWritten, "manifest byte-idêntico não pode aparecer como written").not.toContain(
+      // report2.filesWritten does NOT contain the manifest
+      expect(report2.filesWritten, "a byte-identical manifest must not show up as written").not.toContain(
         "livewiki/.manifest.json",
       );
     } finally {

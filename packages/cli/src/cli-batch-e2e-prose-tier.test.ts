@@ -1,5 +1,5 @@
 /**
- * CLI E2E — Etapa 1: tier-2 universal prose floor (SPEC §"Coverage ladder"),
+ * CLI E2E — Stage 1: tier-2 universal prose floor (SPEC §"Coverage ladder"),
  * migrated to the #29 real-page-units contract.
  *
  * Scenario: a repository mixing grammar-mapped sources (.ts — tier 1,
@@ -282,7 +282,7 @@ async function readWikiPage(rel: string): Promise<string> {
   return nodeFs.readFile(nodePath.join(repoRoot, rel), "utf8");
 }
 
-describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", () => {
+describe("CLI E2E Stage 1 — tier-2 prose floor (mixed anchored/prose repo)", () => {
   it("init --batch on a .ts + .rb + .kt repo completes, verify clean, tiers reported", async () => {
     await writeCode(
       "src/api/handler.ts",
@@ -319,7 +319,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
     process.env["OPENAI_API_KEY"] = "test-canary-prose-tier-DONOTLEAK";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch", "--no-refine"]);
-      expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
+      expect(r.status, `init failed: ${r.stderr}`).toBe(0);
 
       // #29 page units: the symbol-bearing .ts file gets a FILE page at
       // `livewiki/<folderId>/<fileBase>.md`; every real directory gets a
@@ -444,7 +444,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
     process.env["OPENAI_API_KEY"] = "test-canary-prose-only-DONOTLEAK";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch", "--no-refine"]);
-      expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
+      expect(r.status, `init failed: ${r.stderr}`).toBe(0);
 
       // The wiki is NOT empty: with zero symbol-bearing files there is no
       // file page, but the FOLDER page documents the whole inventory — both
@@ -476,7 +476,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
     }
   }, 90_000);
 
-  it("stage-4 file-page prompt carries the indexed rationale evidence block (Etapa 2b)", async () => {
+  it("stage-4 file-page prompt carries the indexed rationale evidence block (Stage 2b)", async () => {
     await writeCode(
       "src/api/handler.ts",
       "// WHY: bursts are smoothed to protect the upstream API\n" +
@@ -494,7 +494,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
     process.env["OPENAI_API_KEY"] = "test-canary-rationale-DONOTLEAK";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch", "--no-refine"]);
-      expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
+      expect(r.status, `init failed: ${r.stderr}`).toBe(0);
 
       // #29: the file page prompt is keyed by the real path, not a module id.
       const fileRequests = captured.filter((c) => c.user.includes("# File: src/api/handler.ts"));
@@ -507,7 +507,7 @@ describe("CLI E2E Etapa 1 — tier-2 prose floor (mixed anchored/prose repo)", (
       expect(fileRequests[0]!.system).toMatch(/NEVER a source of anchor keys/);
 
       // Exactly one folder-purpose call (the product `api` folder), and the
-      // folder prompt carries no rationale block (Etapa 2b scope: stage-4
+      // folder prompt carries no rationale block (Stage 2b scope: stage-4
       // module/file and topic prompts only).
       const folderRequests = captured.filter((c) => isFolderPurposePrompt(c.system));
       expect(folderRequests.length, "one folder-purpose call for the api folder").toBe(1);

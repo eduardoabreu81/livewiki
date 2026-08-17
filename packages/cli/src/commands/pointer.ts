@@ -15,17 +15,17 @@ import { resolveRepoRoot } from "../cli.js";
 interface PointerOptions {
   json?: boolean;
   repo?: string;
-  /** `--write-pointer`: opt-in explícito — pula confirmação interativa. */
+  /** `--write-pointer`: explicit opt-in — skips interactive confirmation. */
   writePointer?: boolean;
-  /** `--remove`: remove o bloco em vez de inserir. */
+  /** `--remove`: removes the block instead of inserting it. */
   remove?: boolean;
-  /** `--file <name>`: força AGENTS.md ou CLAUDE.md (default: auto). */
+  /** `--file <name>`: forces AGENTS.md or CLAUDE.md (default: auto). */
   file?: string;
-  /** `--yes`: pula confirmação interativa (alias do --write-pointer). */
+  /** `--yes`: skips interactive confirmation (alias for --write-pointer). */
   yes?: boolean;
   /**
-   * `--block <texto>`: conteúdo customizado do bloco. Default: buildPointerBlock().
-   * Útil pra projetos com instruções específicas no pointer.
+   * `--block <text>`: custom block content. Default: buildPointerBlock().
+   * Useful for projects with specific instructions in the pointer.
    */
   block?: string;
 }

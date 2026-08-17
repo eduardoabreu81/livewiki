@@ -47,7 +47,7 @@ describe("AnthropicAdapter", () => {
     expect(r.usage.outputTokens).toBe(5);
     expect(r.usage.model).toBe("claude-sonnet-5");
 
-    // Verifica request shape
+    // Verifies request shape
     const [calledUrl, calledInit] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(calledUrl).toBe("https://api.anthropic.com/v1/messages");
     expect((calledInit as RequestInit).method).toBe("POST");
@@ -104,7 +104,7 @@ describe("AnthropicAdapter", () => {
     }
   });
 
-  it("status 4xx (não 429) lança LlmRequestError sem retry", async () => {
+  it("status 4xx (not 429) throws LlmRequestError without retry", async () => {
     const fetchImpl = vi.fn(async () =>
       new Response("invalid api key", { status: 401 }),
     ) as unknown as typeof fetch;
@@ -112,7 +112,7 @@ describe("AnthropicAdapter", () => {
       apiKey: "k", baseUrl: "https://api.anthropic.com", model: "x", fetchImpl, maxRetries: 3,
     });
     await expect(adapter.generate({ system: "s", user: "u" })).rejects.toThrow(LlmRequestError);
-    // 1 única chamada — sem retry
+    // exactly 1 call — no retry
     expect((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
 });
@@ -147,7 +147,7 @@ describe("OpenAiCompatAdapter", () => {
     expect(headers["authorization"]).toBe("Bearer sk-openai-test");
   });
 
-  it("respeita baseUrl que JÁ termina em /v1 (não duplica)", async () => {
+  it("respects a baseUrl that ALREADY ends in /v1 (doesn't duplicate)", async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(JSON.stringify({ choices: [], model: "x", usage: { prompt_tokens: 0, completion_tokens: 0 } }), { status: 200 }),
     ) as unknown as typeof fetch;

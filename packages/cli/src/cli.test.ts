@@ -1,18 +1,18 @@
 /**
- * Smoke tests do CLI — travam o scaffold da Fase 0 + Fase 5.
+ * CLI smoke tests — lock down the Phase 0 + Phase 5 scaffold.
  *
- * Fase 0 promete que todos os comandos principais da SPEC estão registrados.
- * Fase 5 step 4 adicionou `pointer` (opt-in). Total: 10 comandos.
- * Se alguém remover um sem querer, este teste falha. O critério de aceite
- * é `pnpm exec livewiki --help` funcionar — este teste valida a estrutura
- * por baixo, sem precisar executar o binário.
+ * Phase 0 promises that every primary SPEC command is registered.
+ * Phase 5 step 4 added `pointer` (opt-in). Total: 10 commands.
+ * If someone removes one by accident, this test fails. The acceptance
+ * criterion is `pnpm exec livewiki --help` working — this test validates
+ * the structure underneath, without needing to run the binary.
  */
 
 import { describe, it, expect } from "vitest";
 import { createProgram } from "./cli.js";
 
-describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
-  it("nome do programa é 'livewiki'", () => {
+describe("CLI scaffold (Phase 0 + Phase 5 pointer)", () => {
+  it("program name is 'livewiki'", () => {
     const program = createProgram();
     expect(program.name()).toBe("livewiki");
   });
@@ -37,17 +37,17 @@ describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
     ]);
   });
 
-  it("flags globais --json e --repo estão registradas", () => {
+  it("global flags --json and --repo are registered", () => {
     const program = createProgram();
     const optNames = program.options.map((o) => o.long);
     expect(optNames).toContain("--json");
     expect(optNames).toContain("--repo");
   });
 
-  it("--help lista todos os comandos", async () => {
+  it("--help lists all commands", async () => {
     const program = createProgram();
-    // commander escreve help em stdout via writeOut. Capturamos redirecionando
-    // configureOutput temporariamente.
+    // commander writes help to stdout via writeOut. We capture it by
+    // temporarily redirecting configureOutput.
     let captured = "";
     const original = program.configureOutput();
     program.configureOutput({
@@ -59,8 +59,8 @@ describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
     try {
       await program.parseAsync(["--help"], { from: "user" });
     } catch {
-      // --help faz commander chamar outputHelp e sair com helpDisplayed — pode
-      // lançar dependendo da versão. Capturamos a saída antes.
+      // --help makes commander call outputHelp and exit with helpDisplayed —
+      // it may throw depending on the version. We capture the output first.
     }
     program.configureOutput(original);
     for (const name of [
@@ -82,7 +82,7 @@ describe("CLI scaffold (Fase 0 + Fase 5 pointer)", () => {
     }
   });
 
-  it("resolveRepoRoot aceita absoluto, relativo e undefined", async () => {
+  it("resolveRepoRoot accepts absolute, relative and undefined", async () => {
     const { resolveRepoRoot } = await import("./cli.js");
     const cwd = process.cwd();
     expect(resolveRepoRoot(undefined)).toBe(cwd);

@@ -52,9 +52,9 @@ afterEach(async () => {
 });
 
 /**
- * Em Windows, criar symlinks exige privilégio (admin ou Developer Mode).
- * Detectamos uma vez no boot do test run — se não consegue, pulamos testes
- * sensíveis a symlinks via `it.runIf(canSymlink)`.
+ * On Windows, creating symlinks requires privilege (admin or Developer Mode).
+ * We detect once at test-run boot — if unsupported, we skip symlink-sensitive
+ * tests via `it.runIf(canSymlink)`.
  */
 async function detectSymlinkSupport(): Promise<boolean> {
   const probe = nodePath.join(nodeOs.tmpdir(), `livewiki-symlink-probe-${process.pid}`);
@@ -73,28 +73,28 @@ async function detectSymlinkSupport(): Promise<boolean> {
 const canSymlink = await detectSymlinkSupport();
 
 describe("ALLOWED_DIRS", () => {
-  it("contém livewiki e .livewiki (regra #1)", () => {
+  it("contains livewiki and .livewiki (rule #1)", () => {
     expect(ALLOWED_DIRS).toEqual(["livewiki", ".livewiki"]);
   });
 });
 
 describe("isInsideAllowlist", () => {
-  it("aceita livewiki/ na raiz", () => {
+  it("accepts livewiki/ at the root", () => {
     const target = nodePath.join(repoRoot, "livewiki", "foo.md");
     expect(isInsideAllowlist(repoRoot, target)).toBe(true);
   });
 
-  it("aceita .livewiki/ na raiz", () => {
+  it("accepts .livewiki/ at the root", () => {
     const target = nodePath.join(repoRoot, ".livewiki", "index.db");
     expect(isInsideAllowlist(repoRoot, target)).toBe(true);
   });
 
-  it("rejeita src/ (fora da allowlist)", () => {
+  it("rejects src/ (outside the allowlist)", () => {
     const target = nodePath.join(repoRoot, "src", "index.ts");
     expect(isInsideAllowlist(repoRoot, target)).toBe(false);
   });
 
-  it("rejeita caminho fora do repoRoot", async () => {
+  it("rejects path outside of repoRoot", async () => {
     const other = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-other-"));
     try {
       const target = nodePath.join(other, "livewiki", "foo.md");
@@ -104,67 +104,67 @@ describe("isInsideAllowlist", () => {
     }
   });
 
-  it("NÃO confunde livewiki com livewiki-evil (prefixo não é substring)", () => {
+  it("does NOT confuse livewiki with livewiki-evil (prefix is not substring)", () => {
     const target = nodePath.join(repoRoot, "livewiki-evil", "foo.md");
     expect(isInsideAllowlist(repoRoot, target)).toBe(false);
   });
 
-  it("NÃO confunde .livewiki com .livewiki-evil", () => {
+  it("does NOT confuse .livewiki with .livewiki-evil", () => {
     const target = nodePath.join(repoRoot, ".livewiki-evil", "foo.md");
     expect(isInsideAllowlist(repoRoot, target)).toBe(false);
   });
 
-  it("com allowPointer=true aceita AGENTS.md na raiz", () => {
+  it("with allowPointer=true accepts AGENTS.md at root", () => {
     const target = nodePath.join(repoRoot, "AGENTS.md");
     expect(isInsideAllowlist(repoRoot, target, { allowPointer: true })).toBe(true);
   });
 
-  it("com allowPointer=true aceita CLAUDE.md na raiz", () => {
+  it("with allowPointer=true accepts CLAUDE.md at root", () => {
     const target = nodePath.join(repoRoot, "CLAUDE.md");
     expect(isInsideAllowlist(repoRoot, target, { allowPointer: true })).toBe(true);
   });
 
-  it("com allowPointer=true rejeita subdir/AGENTS.md (só na raiz)", () => {
+  it("with allowPointer=true rejects subdir/AGENTS.md (only at root)", () => {
     const target = nodePath.join(repoRoot, "subdir", "AGENTS.md");
     expect(isInsideAllowlist(repoRoot, target, { allowPointer: true })).toBe(false);
   });
 
-  it("com allowPointer=false (default) rejeita AGENTS.md na raiz", () => {
+  it("with allowPointer=false (default) rejects AGENTS.md at root", () => {
     const target = nodePath.join(repoRoot, "AGENTS.md");
     expect(isInsideAllowlist(repoRoot, target)).toBe(false);
   });
 
-  it("com allowReadme=true aceita README.md na raiz", () => {
+  it("with allowReadme=true accepts README.md at root", () => {
     const target = nodePath.join(repoRoot, "README.md");
     expect(isInsideAllowlist(repoRoot, target, { allowReadme: true })).toBe(true);
   });
 
-  it("com allowReadme=true rejeita outros arquivos da raiz", () => {
+  it("with allowReadme=true rejects other root files", () => {
     for (const name of ["CONTRIBUTING.md", "package.json", "AGENTS.md"]) {
       const target = nodePath.join(repoRoot, name);
       expect(isInsideAllowlist(repoRoot, target, { allowReadme: true })).toBe(false);
     }
   });
 
-  it("com allowReadme=true rejeita subdir/README.md (só na raiz)", () => {
+  it("with allowReadme=true rejects subdir/README.md (only at root)", () => {
     const target = nodePath.join(repoRoot, "subdir", "README.md");
     expect(isInsideAllowlist(repoRoot, target, { allowReadme: true })).toBe(false);
   });
 
-  it("com allowReadme=false (default) rejeita README.md na raiz", () => {
+  it("with allowReadme=false (default) rejects README.md at root", () => {
     const target = nodePath.join(repoRoot, "README.md");
     expect(isInsideAllowlist(repoRoot, target)).toBe(false);
   });
 });
 
-describe("resolveAndValidate (declared path, sem symlinks)", () => {
-  it("rejeita path absoluto", async () => {
+describe("resolveAndValidate (declared path, without symlinks)", () => {
+  it("rejects absolute path", async () => {
     await expect(
       resolveAndValidate(repoRoot, nodePath.join(repoRoot, "livewiki", "x.md")),
     ).rejects.toBeInstanceOf(InvalidRelativePathError);
   });
 
-  it("rejeita path com .. (traversal)", async () => {
+  it("rejects path with .. (traversal)", async () => {
     await expect(resolveAndValidate(repoRoot, "../etc/passwd")).rejects.toBeInstanceOf(
       InvalidRelativePathError,
     );
@@ -173,7 +173,7 @@ describe("resolveAndValidate (declared path, sem symlinks)", () => {
     ).rejects.toBeInstanceOf(InvalidRelativePathError);
   });
 
-  it("rejeita path fora da allowlist", async () => {
+  it("rejects path outside allowlist", async () => {
     await expect(resolveAndValidate(repoRoot, "src/index.ts")).rejects.toBeInstanceOf(
       PathOutsideAllowlistError,
     );
@@ -182,7 +182,7 @@ describe("resolveAndValidate (declared path, sem symlinks)", () => {
     );
   });
 
-  it("aceita path dentro de livewiki/", async () => {
+  it("accepts path inside livewiki/", async () => {
     const abs = await resolveAndValidate(repoRoot, "livewiki/architecture/overview.md");
     // The returned path is canonicalized: realpath(repoRoot) + relPath.
     // On macOS (/var → /private/var) and Windows (8.3 RUNNER~1) the two
@@ -193,16 +193,16 @@ describe("resolveAndValidate (declared path, sem symlinks)", () => {
     );
   });
 
-  it("aceita path dentro de .livewiki/", async () => {
+  it("accepts path inside .livewiki/", async () => {
     const abs = await resolveAndValidate(repoRoot, ".livewiki/index.db");
     const realRoot = await nodeFs.realpath(repoRoot);
     expect(abs).toBe(nodePath.join(realRoot, ".livewiki", "index.db"));
   });
 
-  it("erros têm nome e contexto útil", async () => {
+  it("errors have descriptive name and context", async () => {
     try {
       await resolveAndValidate(repoRoot, "src/x.ts");
-      expect.fail("deveria ter lançado");
+      expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(PathOutsideAllowlistError);
       expect((err as PathOutsideAllowlistError).name).toBe("PathOutsideAllowlistError");
@@ -254,19 +254,19 @@ describe("resolveAndValidate (declared path, sem symlinks)", () => {
   });
 });
 
-describe("symlink attack defense (realpath do ancestral existente + revalidação)", () => {
-  // Estes testes exercem o ponto crítico da defesa: o path declarado está
-  // dentro da allowlist, mas o realpath não. Devem todos rejeitar.
+describe("symlink attack defense (realpath of existing ancestor + revalidation)", () => {
+  // These tests exercise the critical point of the defense: the declared path is
+  // inside the allowlist, but the realpath is not. All must reject.
 
   it.runIf(canSymlink)(
-    "ATAQUE: livewiki é symlink para diretório FORA do repo → writeText rejeita",
+    "ATTACK: livewiki is a symlink to a directory OUTSIDE the repo → writeText rejects",
     async () => {
-      // Cria um diretório completamente fora do repoRoot
+      // Creates a directory completely outside repoRoot
       const outsideDir = await nodeFs.mkdtemp(
         nodePath.join(nodeOs.tmpdir(), "livewiki-outside-"),
       );
       try {
-        // Remove livewiki (que não existe ainda) e cria como symlink
+        // Removes livewiki (which doesn't exist yet) and creates it as symlink
         await nodeFs.symlink(outsideDir, nodePath.join(repoRoot, "livewiki"), "dir");
         await expect(
           writeText(repoRoot, "livewiki/pwned.md", "x"),
@@ -278,14 +278,14 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   );
 
   it.runIf(canSymlink)(
-    "ATAQUE: livewiki/sub é symlink para ../src (dentro do repo, fora da allowlist)",
+    "ATTACK: livewiki/sub is a symlink to ../src (inside repo, outside allowlist)",
     async () => {
-      // Setup: cria src/ dentro do repo (fora da allowlist) e livewiki/
+      // Setup: creates src/ inside repo (outside allowlist) and livewiki/
       await nodeFs.mkdir(nodePath.join(repoRoot, "src"));
       await nodeFs.writeFile(nodePath.join(repoRoot, "src", "real.ts"), "real content");
       await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"));
 
-      // livewiki/sub → ../src (escapa do livewiki/ para src/)
+      // livewiki/sub → ../src (escapes livewiki/ to src/)
       await nodeFs.symlink(
         nodePath.join(repoRoot, "src"),
         nodePath.join(repoRoot, "livewiki", "sub"),
@@ -296,28 +296,28 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
         writeText(repoRoot, "livewiki/sub/pwned.md", "x"),
       ).rejects.toBeInstanceOf(PathOutsideAllowlistError);
 
-      // Garante que nada foi escrito no src/
+      // Asserts that nothing was written to src/
       const srcFiles = await nodeFs.readdir(nodePath.join(repoRoot, "src"));
       expect(srcFiles).toEqual(["real.ts"]);
     },
   );
 
   it.runIf(canSymlink)(
-    "ATAQUE: livewiki/leaf é symlink de arquivo para ../src/secret.ts",
+    "ATTACK: livewiki/leaf is a file symlink to ../src/secret.ts",
     async () => {
       await nodeFs.mkdir(nodePath.join(repoRoot, "src"));
       await nodeFs.writeFile(nodePath.join(repoRoot, "src", "secret.ts"), "secret");
       await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"));
 
-      // Arquivo symlink em vez de diretório
+      // File symlink instead of directory
       await nodeFs.symlink(
         nodePath.join(repoRoot, "src", "secret.ts"),
         nodePath.join(repoRoot, "livewiki", "leaf"),
         "file",
       );
 
-      // writeText vai achar o ancestral existente mais profundo (o arquivo leaf),
-      // fazer realpath dele, ver que aponta pra src/secret.ts (fora), e rejeitar.
+      // writeText will find the deepest existing ancestor (the leaf file),
+      // resolve its realpath, see that it points to src/secret.ts (outside), and reject.
       await expect(
         writeText(repoRoot, "livewiki/leaf", "x"),
       ).rejects.toBeInstanceOf(PathOutsideAllowlistError);
@@ -325,7 +325,7 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   );
 
   it.runIf(canSymlink)(
-    "ATAQUE: readText via symlink para fora também rejeita",
+    "ATTACK: readText via an outward symlink also rejects",
     async () => {
       await nodeFs.writeFile(nodePath.join(repoRoot, "package.json"), "{}");
       await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"));
@@ -342,7 +342,7 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   );
 
   it.runIf(canSymlink)(
-    "ATAQUE: exists() também passa pela validação — não vaza info",
+    "ATTACK: exists() also goes through validation — does not leak info",
     async () => {
       await nodeFs.writeFile(nodePath.join(repoRoot, "secret.txt"), "x");
       await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"));
@@ -352,8 +352,8 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
         "file",
       );
 
-      // exists() deve lançar PathOutsideAllowlistError, não retornar true
-      // (saber que existe um arquivo "secret.txt" no repo já é leak).
+      // exists() must throw PathOutsideAllowlistError, not return true
+      // (knowing that a file "secret.txt" exists in the repo is already an info leak).
       await expect(exists(repoRoot, "livewiki/leak.txt")).rejects.toBeInstanceOf(
         PathOutsideAllowlistError,
       );
@@ -361,20 +361,19 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   );
 
   it.runIf(canSymlink)(
-    "PERMITIDO: livewiki/data é symlink para .livewiki/data (interno)",
+    "ALLOWED: livewiki/data is a symlink to .livewiki/data (internal)",
     async () => {
       await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki", "data"), { recursive: true });
       await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"));
 
-      // Symlink que aponta para outro ponto DENTRO da allowlist
+      // Symlink that points to another location INSIDE the allowlist
       await nodeFs.symlink(
         nodePath.join(repoRoot, ".livewiki", "data"),
         nodePath.join(repoRoot, "livewiki", "data"),
         "dir",
       );
 
-      // Escrever deve funcionar: o realpath final cai em .livewiki/data,
-      // que está na allowlist.
+      // Writing must work: final realpath lands in .livewiki/data, which is in allowlist.
       await writeText(repoRoot, "livewiki/data/x.json", "{}");
       expect(
         await nodeFs.readFile(
@@ -386,7 +385,7 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   );
 
   it.runIf(canSymlink)(
-    "PERMITIDO: readText via symlink interno (livewiki/data → .livewiki/data)",
+    "ALLOWED: readText via internal symlink (livewiki/data → .livewiki/data)",
     async () => {
       await nodeFs.mkdir(nodePath.join(repoRoot, ".livewiki", "data"), { recursive: true });
       await nodeFs.writeFile(
@@ -406,12 +405,12 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   );
 
   it.runIf(canSymlink)(
-    "PERMITIDO: repoRoot passado ATRAVÉS de um symlink (macOS /var → /private/var)",
+    "ALLOWED: repoRoot passed THROUGH a symlink (macOS /var → /private/var)",
     async () => {
-      // Reproduz a falha em massa do CI macOS (run 29445115951): mkdtemp
-      // devolve /var/folders/... mas realpath é /private/var/folders/... —
-      // o target realpathado nunca batia com o root lexical e TODA escrita
-      // caía em PathOutsideAllowlistError ("failed to create .livewiki/").
+      // Reproduces the macOS CI mass failure (run 29445115951): mkdtemp
+      // returns /var/folders/... but realpath is /private/var/folders/... —
+      // the realpath'd target never matched the lexical root and EVERY write
+      // fell into PathOutsideAllowlistError ("failed to create .livewiki/").
       const linkRoot = nodePath.join(nodeOs.tmpdir(), `livewiki-rootlink-${process.pid}`);
       await nodeFs.symlink(repoRoot, linkRoot, "dir");
       try {
@@ -428,13 +427,13 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
   );
 
   it.runIf(canSymlink)(
-    "ancestral existente mais profundo: target novo, parent é symlink para fora",
+    "deepest existing ancestor: target new, parent is outward symlink",
     async () => {
-      // Cenário: livewiki/novo-dir/file.md
-      //   - livewiki/novo-dir NÃO existe (vamos criar)
-      //   - livewiki EXISTE
-      //   - Mas livewiki é symlink para FORA
-      // Esperado: rejeita porque realpath(livewiki) cai fora da allowlist
+      // Scenario: livewiki/novo-dir/file.md
+      //   - livewiki/novo-dir does NOT exist (we are about to create it)
+      //   - livewiki EXISTS
+      //   - But livewiki is a symlink to OUTSIDE
+      // Expected: rejects because realpath(livewiki) falls outside the allowlist
       const outsideDir = await nodeFs.mkdtemp(
         nodePath.join(nodeOs.tmpdir(), "livewiki-outside2-"),
       );
@@ -449,12 +448,12 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
     },
   );
 
-  it("skip notice quando symlinks não são suportados no host", () => {
-    // Mostra no log de teste por que esses foram pulados, se for o caso.
+  it("skip notice when symlinks are not supported on the host", () => {
+    // Shows in the test log why these were skipped, if that is the case.
     if (!canSymlink) {
       // eslint-disable-next-line no-console
       console.warn(
-        "[safe-io] symlink tests skipped — host não permite criar symlinks (Windows sem Developer Mode / sem admin)",
+        "[safe-io] symlink tests skipped — host does not allow creating symlinks (Windows without Developer Mode / without admin)",
       );
     }
     expect(true).toBe(true);
@@ -462,83 +461,83 @@ describe("symlink attack defense (realpath do ancestral existente + revalidaçã
 });
 
 describe("I/O operations (writeText / readText / exists / mkdir / remove)", () => {
-  it("writeText + readText roundtrip em livewiki/", async () => {
+  it("writeText + readText roundtrip in livewiki/", async () => {
     await writeText(repoRoot, "livewiki/quickstart.md", "# hello");
     const got = await readText(repoRoot, "livewiki/quickstart.md");
     expect(got).toBe("# hello");
   });
 
-  it("writeText cria diretórios intermediários", async () => {
+  it("writeText creates intermediate directories", async () => {
     await writeText(repoRoot, "livewiki/architecture/deep/nested/file.md", "x");
     const exists1 = await exists(repoRoot, "livewiki/architecture/deep/nested/file.md");
     expect(exists1).toBe(true);
   });
 
-  it("writeText em .livewiki/ funciona", async () => {
+  it("writeText in .livewiki/ works", async () => {
     await writeText(repoRoot, ".livewiki/config.json", "{}");
     expect(await exists(repoRoot, ".livewiki/config.json")).toBe(true);
   });
 
-  it("writeText REJEITA escrever fora da allowlist (regra #1)", async () => {
+  it("writeText REJECTS writing outside the allowlist (rule #1)", async () => {
     await expect(
       writeText(repoRoot, "src/index.ts", "console.log('pwned')"),
     ).rejects.toBeInstanceOf(PathOutsideAllowlistError);
   });
 
-  it("writeText REJEITA escape via .. (regra #1, traversal)", async () => {
+  it("writeText REJECTS an escape via .. (rule #1, traversal)", async () => {
     await expect(
       writeText(repoRoot, "livewiki/../../../etc/passwd", "x"),
     ).rejects.toBeInstanceOf(InvalidRelativePathError);
   });
 
-  it("exists retorna false para path inexistente dentro da allowlist", async () => {
+  it("exists returns false for a nonexistent path inside the allowlist", async () => {
     expect(await exists(repoRoot, "livewiki/nope.md")).toBe(false);
   });
 
-  it("mkdir cria diretório aninhado", async () => {
+  it("mkdir creates a nested directory", async () => {
     await mkdir(repoRoot, "livewiki/decisions");
     expect(await exists(repoRoot, "livewiki/decisions")).toBe(true);
   });
 
-  it("mkdir REJEITA fora da allowlist", async () => {
+  it("mkdir REJECTS outside the allowlist", async () => {
     await expect(mkdir(repoRoot, "src/novo")).rejects.toBeInstanceOf(
       PathOutsideAllowlistError,
     );
   });
 
-  it("readText REJEITA ler fora da allowlist", async () => {
+  it("readText REJECTS reading outside the allowlist", async () => {
     await nodeFs.writeFile(nodePath.join(repoRoot, "package.json"), "{}");
     await expect(readText(repoRoot, "package.json")).rejects.toBeInstanceOf(
       PathOutsideAllowlistError,
     );
   });
 
-  it("remove apaga dentro da allowlist", async () => {
+  it("remove deletes inside the allowlist", async () => {
     await writeText(repoRoot, "livewiki/temp.md", "x");
     expect(await exists(repoRoot, "livewiki/temp.md")).toBe(true);
     await remove(repoRoot, "livewiki/temp.md");
     expect(await exists(repoRoot, "livewiki/temp.md")).toBe(false);
   });
 
-  it("remove REJEITA fora da allowlist", async () => {
+  it("remove REJECTS outside the allowlist", async () => {
     await expect(remove(repoRoot, "src/index.ts")).rejects.toBeInstanceOf(
       PathOutsideAllowlistError,
     );
   });
 });
 
-describe("integração com cwd (não vaza fora do repoRoot passado)", () => {
-  it("quando repoRoot = cwd, validar contra cwd e não contra o sistema", async () => {
+describe("integration with cwd (does not leak outside the passed repoRoot)", () => {
+  it("when repoRoot = cwd, validate against cwd and not against the system", async () => {
     process.chdir(repoRoot);
     await writeText(repoRoot, "livewiki/ok.md", "ok");
     expect(await exists(repoRoot, "livewiki/ok.md")).toBe(true);
-    // Tentar escapar do repoRoot mesmo usando caminho "interno" deve falhar.
+    // Trying to escape repoRoot even using an "internal" path must fail.
     await expect(writeText(repoRoot, "../../../tmp/escape.md", "x")).rejects.toThrow();
   });
 });
 
-// Sanity check final: confirma que existSync está disponível (usado internamente).
-it("smoke: existSync importável via node:fs", () => {
+// Final sanity check: confirms that existSync is available (used internally).
+it("smoke: existSync importable via node:fs", () => {
   expect(typeof nodeFsSync.existsSync).toBe("function");
 });
 

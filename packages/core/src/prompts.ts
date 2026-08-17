@@ -1,17 +1,17 @@
 /**
- * prompts — templates de prompt pra LLM (Fase 3 batch).
+ * prompts — LLM prompt templates (Phase 3 batch).
  *
- * SPEC §"Pipeline batch (etapa 4)": "contexto = símbolos + código relevante
- * (limitado por orçamento de tokens configurável) → LLM gera página com
- * âncoras → verify → grava → checkpoint".
+ * SPEC §"Batch pipeline (stage 4)": "context = symbols + relevant code
+ * (bounded by configurable token budget) → LLM generates page with
+ * anchors → verify → write → checkpoint".
  *
- * **Templates em INGLÊS** (correção #2 da revisão do plano): contribuidores
- * precisam ler os prompts pra auditar o que vai pra LLM. `${language}` controla
- * SÓ o idioma de saída da doc gerada — não muda o texto do prompt.
+ * **Templates in ENGLISH** (fix #2 from plan review): contributors
+ * need to read prompts to audit what is sent to the LLM. `${language}` controls
+ * ONLY the output language of the generated doc — does not change prompt text.
  *
- * Chave canônica (regra inviolável #3): a LLM recebe a lista FECHADA de chaves
- * do módulo e DISTRIBUI pelas seções — nunca inventa. `verify` rejeita chave
- * fora do índice (Fase 2 já cobre).
+ * Canonical key (inviolable rule #3): the LLM receives the CLOSED list of keys
+ * for the module and DISTRIBUTES them across sections — never invents. `verify` rejects
+ * keys outside the index (already covered in Phase 2).
  */
 
 import { classifyModuleRole, type Module, type PathRole } from "./modules.js";
@@ -26,19 +26,19 @@ import type {
 import { renderActionDirective, renderReportOnlyBlock, type PageKind } from "./repair-contract.js";
 import { splitH2Sections, surgicalRepairTargetSections } from "./section-guard.js";
 
-/** Idioma da saída. Default "en". BCP-47 (en, pt-BR, es, fr, ...). */
+/** Output language. Default "en". BCP-47 (en, pt-BR, es, fr, ...). */
 export type Language = string;
 
-/** Pair system/user — formato que o LlmClient.generate aceita. */
+/** Pair system/user — format accepted by LlmClient.generate. */
 export interface PromptPair {
   system: string;
   user: string;
 }
 
-/** Limite default de tokens do contexto (código) por módulo. */
+/** Default context (code) token budget per module. */
 export const DEFAULT_CONTEXT_TOKEN_BUDGET = 30_000;
 
-/** Limite default de tokens da resposta (Markdown gerado). */
+/** Default output (generated Markdown) token budget. */
 export const DEFAULT_OUTPUT_TOKEN_BUDGET = 4_000;
 
 /**

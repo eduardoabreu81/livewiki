@@ -1,14 +1,14 @@
 /**
- * hashes — sha256 de conteúdo.
+ * hashes — sha256 of content.
  *
- * Usado em dois lugares:
- *   - content_hash de files (detecção de mudança para index incremental)
- *   - content_hash de symbols (slice do source; detecta mudança dentro de um
- *     arquivo que não alterou o hash total — Fase 2 detecta dívida por símbolo)
+ * Used in two places:
+ *   - content_hash of files (change detection for the incremental index)
+ *   - content_hash of symbols (source slice; detects a change inside a
+ *     file that did not change the total hash — Phase 2 detects per-symbol debt)
  *
- * Sempre hex (lowercase, 64 chars). Sem salt — é fingerprint de conteúdo,
- * não autenticação. Diferentes purposes (files vs symbols) se distinguem pelo
- * nome do campo, não pelo algoritmo.
+ * Always hex (lowercase, 64 chars). No salt — it is a content fingerprint,
+ * not authentication. Different purposes (files vs symbols) are distinguished by
+ * the field name, not by the algorithm.
  *
  * EOL-insensitivity (roadmap item 12): every content_hash in the index is
  * computed over `normalizeEol` text (CRLF → LF), and the indexer feeds that
@@ -59,8 +59,8 @@ export function expandEolToCrlf(content: string): string {
 }
 
 /**
- * Hash do source slice de um símbolo (start_byte..end_byte). Usado pelo
- * indexador para detectar mudança local em um símbolo sem re-parsear tudo.
+ * Hash of a symbol's source slice (start_byte..end_byte). Used by the
+ * indexer to detect a local change in a symbol without re-parsing everything.
  */
 export function sha256Slice(source: string, startByte: number, endByte: number): string {
   return sha256(source.slice(startByte, endByte));

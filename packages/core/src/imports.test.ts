@@ -3,7 +3,7 @@ import { collectImports, extractImportsFromTree } from "./imports.js";
 import { initParser, parseSource } from "./parser.js";
 
 describe("imports.collectImports (TS)", () => {
-  it("extrai import relativo", async () => {
+  it("extracts a relative import", async () => {
     const imps = await collectImports(
       "src/foo.ts",
       `import { bar } from "./bar";\nexport const x = 1;`,
@@ -12,7 +12,7 @@ describe("imports.collectImports (TS)", () => {
     expect(sources).toContain("./bar");
   });
 
-  it("extrai export from (re-export)", async () => {
+  it("extracts export from (re-export)", async () => {
     const imps = await collectImports(
       "src/foo.ts",
       `export { bar } from "./bar";`,
@@ -22,7 +22,7 @@ describe("imports.collectImports (TS)", () => {
     expect(imps[0]?.kind).toBe("ts-export");
   });
 
-  it("extrai import absoluto (não-relativo)", async () => {
+  it("extracts an absolute (non-relative) import", async () => {
     const imps = await collectImports(
       "src/foo.ts",
       `import express from "express";\nimport { join } from "node:path";`,
@@ -32,7 +32,7 @@ describe("imports.collectImports (TS)", () => {
     expect(sources).toContain("node:path");
   });
 
-  it("strip aspas do source", async () => {
+  it("strips quotes from the source", async () => {
     const imps = await collectImports(
       "src/foo.ts",
       `import x from "./bar";`,
@@ -41,7 +41,7 @@ describe("imports.collectImports (TS)", () => {
     expect(imps[0]?.source).not.toMatch(/['"]/);
   });
 
-  it("múltiplos imports no mesmo arquivo", async () => {
+  it("multiple imports in the same file", async () => {
     const imps = await collectImports(
       "src/foo.ts",
       `import a from "./a";\nimport b from "./b";\nimport c from "../c";`,
@@ -52,7 +52,7 @@ describe("imports.collectImports (TS)", () => {
 });
 
 describe("imports.collectImports (Python)", () => {
-  it("extrai 'from X import Y'", async () => {
+  it("extracts 'from X import Y'", async () => {
     const imps = await collectImports(
       "src/foo.py",
       `from os import path\nfrom .local import helper`,
@@ -62,7 +62,7 @@ describe("imports.collectImports (Python)", () => {
     expect(sources).toContain(".local");
   });
 
-  it("'names' não duplica o próprio módulo 'from' quando o alvo é um dotted_name absoluto", async () => {
+  it("'names' does not duplicate the 'from' module itself when the target is an absolute dotted_name", async () => {
     // Priority-0 fix: `module_name`'s own node type ("dotted_name") for an
     // absolute "from" target used to also match the loop that collects
     // imported names, so "from app.services import bgm" produced
@@ -76,7 +76,7 @@ describe("imports.collectImports (Python)", () => {
     expect(imps[0]?.names).toEqual(["bgm as bgm_service", "llm"]);
   });
 
-  it("extrai 'import X' (sem from)", async () => {
+  it("extracts 'import X' (without from)", async () => {
     const imps = await collectImports(
       "src/foo.py",
       `import os\nimport sys.path`,
@@ -88,7 +88,7 @@ describe("imports.collectImports (Python)", () => {
 });
 
 describe("imports.collectImports (Go)", () => {
-  it("extrai import simples", async () => {
+  it("extracts a simple import", async () => {
     const imps = await collectImports(
       "main.go",
       `package main\n\nimport "fmt"\n\nfunc main() { fmt.Println() }\n`,
@@ -96,7 +96,7 @@ describe("imports.collectImports (Go)", () => {
     expect(imps).toEqual([{ source: "fmt", kind: "go-import" }]);
   });
 
-  it("extrai import agrupado, com alias e blank import", async () => {
+  it("extracts grouped import, with alias and blank import", async () => {
     const imps = await collectImports(
       "cmd/main.go",
       `package main
@@ -119,7 +119,7 @@ import (
     expect(imps.every((i) => i.kind === "go-import")).toBe(true);
   });
 
-  it("strip aspas/backticks do path", async () => {
+  it("strips quotes/backticks from the path", async () => {
     const imps = await collectImports(
       "main.go",
       "package main\n\nimport `fmt`\n",
@@ -130,7 +130,7 @@ import (
 });
 
 describe("imports.collectImports (Rust, roadmap item 20)", () => {
-  it("extrai use simples e com path scoped", async () => {
+  it("extracts simple use and use with a scoped path", async () => {
     const imps = await collectImports(
       "src/main.rs",
       "use std::fmt;\nuse crate::server::Server;\n\nfn main() {}\n",
@@ -141,7 +141,7 @@ describe("imports.collectImports (Rust, roadmap item 20)", () => {
     ]);
   });
 
-  it("extrai use com chaves registrando o prefixo compartilhado", async () => {
+  it("extracts use with braces recording the shared prefix", async () => {
     const imps = await collectImports(
       "src/main.rs",
       "use std::collections::{HashMap, BTreeMap};\n",
@@ -149,7 +149,7 @@ describe("imports.collectImports (Rust, roadmap item 20)", () => {
     expect(imps).toEqual([{ source: "std::collections", kind: "rust-use" }]);
   });
 
-  it("extrai use com alias registrando o path original", async () => {
+  it("extracts use with alias recording the original path", async () => {
     const imps = await collectImports(
       "src/main.rs",
       "use crate::server::Server as Srv;\n",
@@ -157,12 +157,12 @@ describe("imports.collectImports (Rust, roadmap item 20)", () => {
     expect(imps).toEqual([{ source: "crate::server::Server", kind: "rust-use" }]);
   });
 
-  it("extrai use wildcard sem o sufixo ::*", async () => {
+  it("extracts wildcard use without the ::* suffix", async () => {
     const imps = await collectImports("src/main.rs", "use super::models::*;\n");
     expect(imps).toEqual([{ source: "super::models", kind: "rust-use" }]);
   });
 
-  it("extrai pub use da mesma forma", async () => {
+  it("extracts pub use in the same way", async () => {
     const imps = await collectImports(
       "src/lib.rs",
       "pub use crate::server::Server;\n",
@@ -170,7 +170,7 @@ describe("imports.collectImports (Rust, roadmap item 20)", () => {
     expect(imps).toEqual([{ source: "crate::server::Server", kind: "rust-use" }]);
   });
 
-  it("extrai mod foo; como rust-mod e ignora mod inline com corpo", async () => {
+  it("extracts mod foo; as rust-mod and ignores an inline mod with a body", async () => {
     const imps = await collectImports(
       "src/main.rs",
       "mod server;\nmod inline {\n    pub fn x() {}\n}\n",
@@ -180,7 +180,7 @@ describe("imports.collectImports (Rust, roadmap item 20)", () => {
 });
 
 describe("imports.collectImports (Java, roadmap item 21)", () => {
-  it("extrai import simples com o path completo", async () => {
+  it("extracts a simple import with the full path", async () => {
     const imps = await collectImports(
       "src/main/java/com/fixture/Main.java",
       "package com.fixture;\n\nimport com.fixture.server.Server;\n\nclass Main {}\n",
@@ -188,7 +188,7 @@ describe("imports.collectImports (Java, roadmap item 21)", () => {
     expect(imps).toEqual([{ source: "com.fixture.server.Server", kind: "java-import" }]);
   });
 
-  it("extrai import estático mantendo o membro no path", async () => {
+  it("extracts a static import keeping the member in the path", async () => {
     const imps = await collectImports(
       "src/main/java/com/fixture/Main.java",
       "import static com.fixture.server.Server.create;\n",
@@ -196,7 +196,7 @@ describe("imports.collectImports (Java, roadmap item 21)", () => {
     expect(imps).toEqual([{ source: "com.fixture.server.Server.create", kind: "java-import" }]);
   });
 
-  it("extrai import wildcard sem o sufixo .*", async () => {
+  it("extracts a wildcard import without the .* suffix", async () => {
     const imps = await collectImports(
       "src/main/java/com/fixture/Main.java",
       "import com.fixture.model.*;\n",
@@ -204,7 +204,7 @@ describe("imports.collectImports (Java, roadmap item 21)", () => {
     expect(imps).toEqual([{ source: "com.fixture.model", kind: "java-import" }]);
   });
 
-  it("extrai vários imports em ordem (java.* fica registrado; resolução decide)", async () => {
+  it("extracts several imports in order (java.* is recorded; resolution decides)", async () => {
     const imps = await collectImports(
       "src/main/java/com/fixture/Main.java",
       "import java.util.List;\nimport com.fixture.model.Item;\n",
@@ -217,12 +217,12 @@ describe("imports.collectImports (Java, roadmap item 21)", () => {
 });
 
 describe("imports.collectImports (edge cases)", () => {
-  it("arquivo não-parseável retorna [] (graceful)", async () => {
+  it("an unparseable file returns [] (graceful)", async () => {
     const imps = await collectImports("src/foo.ts", "this is not { valid ts");
     expect(imps).toEqual([]);
   });
 
-  it("arquivo sem imports retorna []", async () => {
+  it("a file without imports returns []", async () => {
     const imps = await collectImports("src/foo.ts", "const x = 1;");
     expect(imps).toEqual([]);
   });

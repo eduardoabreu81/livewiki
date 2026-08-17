@@ -1,11 +1,11 @@
 /**
- * parser — wrapper sobre web-tree-sitter com cache de Language por arquivo.
+ * parser — wrapper over web-tree-sitter with a per-file Language cache.
  *
- * Carrega `.wasm` de `packages/core/grammars/` (versionado no repo). O caminho
- * é resolvido relativo ao package.json do módulo, então funciona tanto em dev
- * (`src/`) quanto em build (`dist/`).
+ * Loads `.wasm` from `packages/core/grammars/` (versioned in the repo). The
+ * path is resolved relative to the module's package.json, so it works both in
+ * dev (`src/`) and in build (`dist/`).
  *
- * Idiomas suportados:
+ * Supported languages:
  *   - typescript (.ts)
  *   - tsx (.tsx, .jsx)
  *   - javascript (.js, .mjs, .cjs)
@@ -14,9 +14,9 @@
  *   - rust (.rs)
  *   - java (.java)
  *
- * `initParser()` é global, idempotente e deve ser chamado uma vez no startup
- * do CLI antes do primeiro `parseFile()`. Mais de uma chamada é segura
- * (Promise resolve imediatamente).
+ * `initParser()` is global, idempotent and must be called once at CLI
+ * startup before the first `parseFile()`. More than one call is safe
+ * (the Promise resolves immediately).
  */
 
 import { Parser, Language, Tree } from "web-tree-sitter";
@@ -28,7 +28,7 @@ import { sha256 } from "./hashes.js";
 let initPromise: Promise<void> | null = null;
 
 /**
- * Inicializa o runtime WASM do tree-sitter. Idempotente.
+ * Initializes the tree-sitter WASM runtime. Idempotent.
  */
 export async function initParser(): Promise<void> {
   if (initPromise) return initPromise;
@@ -36,13 +36,13 @@ export async function initParser(): Promise<void> {
   return initPromise;
 }
 
-/** Localiza o diretório `grammars/` a partir do package.json deste módulo.
+/** Locates the `grammars/` directory from this module's package.json.
  *
- * Estratégia robusta: tenta `./package.json` (dev: src/), depois
- * `../package.json` (build: dist/). Lança se nenhum existir.
+ * Robust strategy: try `./package.json` (dev: src/), then
+ * `../package.json` (build: dist/). Throws if neither exists.
  *
- * Não usamos `require.resolve("package.json")` porque isso procura no
- * node_modules, não no próprio package.
+ * We do not use `require.resolve("package.json")` because that looks in
+ * node_modules, not in the package itself.
  */
 function grammarsDir(): string {
   const req = createRequire(import.meta.url);
@@ -51,15 +51,15 @@ function grammarsDir(): string {
       const pkgPath = req.resolve(rel);
       return nodePath.join(nodePath.dirname(pkgPath), "grammars");
     } catch {
-      // tenta o próximo
+      // try the next one
     }
   }
   throw new Error(
-    "Não foi possível localizar package.json a partir de " + import.meta.url,
+    "Could not locate package.json from " + import.meta.url,
   );
 }
 
-/** Cache de Language por nome. Carregar é caro (parsing WASM). */
+/** Language cache by name. Loading is expensive (WASM parsing). */
 const languageCache = new Map<string, Language>();
 
 async function loadLanguage(name: string): Promise<Language> {
@@ -68,8 +68,8 @@ async function loadLanguage(name: string): Promise<Language> {
   const wasmPath = nodePath.join(grammarsDir(), `tree-sitter-${name}.wasm`);
   if (!nodeFs.existsSync(wasmPath)) {
     throw new Error(
-      `Grammar WASM não encontrada em ${wasmPath}. ` +
-        `Gramática '${name}' não suportada nesta build do livewiki.`,
+      `WASM grammar not found at ${wasmPath}. ` +
+        `Grammar '${name}' not supported in this build of livewiki.`,
     );
   }
   const lang = await Language.load(wasmPath);
@@ -77,7 +77,7 @@ async function loadLanguage(name: string): Promise<Language> {
   return lang;
 }
 
-/** Mapeamento extensão → nome da gramática (mesmo arquivo .wasm). */
+/** Extension → grammar name mapping (same .wasm file). */
 const EXT_TO_GRAMMAR: Record<string, string> = {
   ".ts": "typescript",
   ".tsx": "tsx",
@@ -95,7 +95,7 @@ const GRAMMAR_TO_EXT = new Map<string, string>(
   Object.entries(EXT_TO_GRAMMAR).map(([ext, grammar]) => [grammar, ext]),
 );
 
-/** Tipo de linguagem dado uma extensão de arquivo. */
+/** Language type given a file extension. */
 export function grammarForExtension(ext: string): string | undefined {
   return EXT_TO_GRAMMAR[ext.toLowerCase()];
 }
@@ -133,7 +133,7 @@ export function grammarState(): GrammarState {
   return { map, artifacts };
 }
 
-/** Parseia source com a linguagem apropriada para a extensão. */
+/** Parses source with the language appropriate for the extension. */
 export async function parseSource(
   ext: string,
   source: string,
@@ -141,21 +141,21 @@ export async function parseSource(
   await initParser();
   const grammar = EXT_TO_GRAMMAR[ext.toLowerCase()];
   if (!grammar) {
-    throw new Error(`Sem gramática tree-sitter para extensão ${ext}`);
+    throw new Error(`No tree-sitter grammar for extension ${ext}`);
   }
   const lang = await loadLanguage(grammar);
   const parser = new Parser();
   parser.setLanguage(lang);
   const tree = parser.parse(source);
   if (!tree) {
-    // tree-sitter retorna null só em casos muito excepcionais (input vazio?).
-    // Não acontece com source não-vazio; tratamos como erro pra não propagar null.
-    throw new Error(`tree-sitter retornou árvore nula para ${ext}`);
+    // tree-sitter returns null only in very exceptional cases (empty input?).
+    // Does not happen with non-empty source; we treat it as an error so null is not propagated.
+    throw new Error(`tree-sitter returned null tree for ${ext}`);
   }
   return tree;
 }
 
-/** Lista as linguagens suportadas (nomes dos arquivos .wasm disponíveis). */
+/** Lists the supported languages (names of the available .wasm files). */
 export function listSupportedGrammars(): string[] {
   const dir = grammarsDir();
   if (!nodeFs.existsSync(dir)) return [];
@@ -165,7 +165,7 @@ export function listSupportedGrammars(): string[] {
     .map((f) => f.replace(/^tree-sitter-/, "").replace(/\.wasm$/, ""));
 }
 
-/** Usado por testes para garantir que linguagens são referenciáveis. */
+/** Used by tests to ensure languages are referenceable. */
 export function _grammarToExtensionForTest(grammar: string): string | undefined {
   return GRAMMAR_TO_EXT.get(grammar);
 }

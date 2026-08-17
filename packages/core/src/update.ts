@@ -1,35 +1,35 @@
 /**
- * update — modo incremental (coração do produto, Fase 5).
+ * update — incremental mode (the product's heart, Phase 5).
  *
- * SPEC §"Comandos CLI":
- *   livewiki update — modo incremental: dado o diff desde lastDocumentedCommit,
- *   lista a dívida e (a) emite o "pacote de trabalho" para o agente em sessão
- *   documentar, ou (b) com --llm chama a API configurada para pagar a dívida.
+ * SPEC §"CLI commands":
+ *   livewiki update — incremental mode: given the diff since lastDocumentedCommit,
+ *   lists the debt and (a) emits the "work package" for the in-session agent to
+ *   document, or (b) with --llm calls the configured API to pay the debt.
  *
- * SPEC §"Contabilidade de tokens (Fase 3)":
- *   Incremental: o `update` registra o tamanho (tokens estimados por tokenizer)
- *   do pacote de trabalho emitido ao agente e da doc escrita de volta.
- *   Métricas em tabela própria no `.livewiki/`, expostas via `status --json`.
+ * SPEC §"Token accounting (Phase 3)":
+ *   Incremental: `update` records the size (tokens estimated by a tokenizer)
+ *   of the work package emitted to the agent and of the doc written back.
+ *   Metrics in their own table in `.livewiki/`, exposed via `status --json`.
  *
- * Esse número é a tese do produto ("800 tokens em vez de reler o repo"): o
- * pacote é focado — só dívida + snippets das âncoras afetadas + chaves
- * válidas — não o repo inteiro.
+ * That number is the product's thesis ("800 tokens instead of rereading the
+ * repo"): the package is focused — only debt + snippets of the affected anchors
+ * + valid keys — not the whole repo.
  *
- * Estrutura do pacote (WorkPackage):
- *   - manifest: dados do manifest (lastDocumentedCommit, pendingBatch)
- *   - debt: items abertos (changed/moved/deleted) com assignee
- *   - snippets: pra cada debt item, trecho do source atual em torno do symbol
- *     (janela de N linhas centrada em start_line do symbol — bounded)
- *   - validAnchors: chaves de symbols ativos que o agente pode ancorar
- *   - tokensEstimated: tamanho do pacote (chars / 4 — heurística comum;
- *     GPT tokenizer reporta ~4 chars/token pra inglês/code)
+ * Package structure (WorkPackage):
+ *   - manifest: manifest data (lastDocumentedCommit, pendingBatch)
+ *   - debt: open items (changed/moved/deleted) with assignee
+ *   - snippets: for each debt item, a slice of the current source around the
+ *     symbol (a window of N lines centered on the symbol's start_line — bounded)
+ *   - validAnchors: keys of active symbols the agent may anchor
+ *   - tokensEstimated: package size (chars / 4 — a common heuristic;
+ *     the GPT tokenizer reports ~4 chars/token for English/code)
  *
- * Ações do agente após receber o pacote (SPEC §Skill "document-as-you-go"):
- *   1. Para cada debt item: atualiza o markdown correspondente (ou cria
- *      se não existir) — ancorando nos symbols válidos.
- *   2. Roda `livewiki verify` pra confirmar zero issues.
- *   3. (Opcional) `livewiki update --record-write <tokens>` pra contabilizar
- *      o tamanho da doc escrita de volta — alimenta a métrica de economia.
+ * Agent actions after receiving the package (SPEC §Skill "document-as-you-go"):
+ *   1. For each debt item: updates the corresponding markdown (or creates it
+ *      if it does not exist) — anchoring on the valid symbols.
+ *   2. Runs `livewiki verify` to confirm zero issues.
+ *   3. (Optional) `livewiki update --record-write <tokens>` to account for
+ *      the size of the doc written back — feeds the savings metric.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -46,51 +46,51 @@ import { recordUpdateMetric, type UpdateMetric } from "./update-metrics.js";
 // hoisted function declaration referenced only at call time.
 import { computeChangeImpact, type ChangeImpact } from "./change-impact.js";
 
-/** Estimativa padrão de tokens: ~4 chars/token (code/EN). */
+/** Default token estimate: ~4 chars/token (code/EN). */
 export const CHARS_PER_TOKEN = 4;
 
-/** Janela de linhas em torno do symbol no snippet (default ±20 linhas). */
+/** Line window around the symbol in the snippet (default ±20 lines). */
 export const SNIPPET_WINDOW = 20;
 
 export interface WorkPackageOptions {
-  /** Idioma dos messages humanos (default: "en"). Hoje não usado, mas reserva. */
+  /** Language of the human messages (default: "en"). Unused today, but reserved. */
   language?: "en" | "pt-BR";
-  /** Override do tamanho da janela de snippet (em linhas). Default 20. */
+  /** Override of the snippet window size (in lines). Default 20. */
   snippetWindow?: number;
-  /** Limite de snippets (defesa — não incluir 1000 se a dívida for grande). */
+  /** Snippet limit (defense — do not include 1000 if the debt is large). */
   maxSnippets?: number;
 }
 
 export interface DebtSnippet {
-  /** Symbol key (path/to/file.ts#name) — usado pelo agente pra escrever a âncora. */
+  /** Symbol key (path/to/file.ts#name) — used by the agent to write the anchor. */
   symbolKey: string;
-  /** Conteúdo do source atual (janela em torno do symbol). */
+  /** Current source content (window around the symbol). */
   snippet: string;
-  /** Path absoluto do arquivo no disco (relativo a repoRoot). */
+  /** Absolute file path on disk (relative to repoRoot). */
   filePath: string;
-  /** Linha inicial do symbol (1-indexed) — útil pra debug. */
+  /** Symbol's start line (1-indexed) — useful for debug. */
   startLine: number;
-  /** Linha final do symbol (1-indexed). */
+  /** Symbol's end line (1-indexed). */
   endLine: number;
 }
 
 export interface WorkPackage {
-  /** Dados do manifest lido. Null se não existir (repo nunca inicializado). */
+  /** Data from the read manifest. Null if it does not exist (repo never initialized). */
   manifest: {
     lastDocumentedCommit: string | null;
     pendingBatch: unknown;
   } | null;
-  /** Items de dívida aberta — o agente paga cada um. */
+  /** Open debt items — the agent pays each one. */
   debt: DebtItem[];
-  /** Snippets do source para cada debt item (janela em torno do symbol). */
+  /** Source snippets for each debt item (window around the symbol). */
   snippets: DebtSnippet[];
-  /** Chaves de symbols ativos que o agente pode ancorar (subset das debt). */
+  /** Keys of active symbols the agent may anchor (subset of the debt). */
   validAnchors: string[];
-  /** Estimativa de tokens do pacote (chars / CHARS_PER_TOKEN). */
+  /** Token estimate of the package (chars / CHARS_PER_TOKEN). */
   tokensEstimated: number;
-  /** Tamanho em bytes do pacote serializado. */
+  /** Size in bytes of the serialized package. */
   bytes: number;
-  /** Idioma dos messages humanos. */
+  /** Language of the human messages. */
   language: "en" | "pt-BR";
   /**
    * Additive bounded change-impact context (backlog #2, Item 2 of
@@ -103,12 +103,12 @@ export interface WorkPackage {
 }
 
 /**
- * Carrega o pacote de trabalho: manifest + dívida + snippets + âncoras
- * válidas + contabilidade. NÃO chama LLM — emite o pacote pra consumo
- * do agente em sessão (ou do `--llm` que está em outro lugar).
+ * Loads the work package: manifest + debt + snippets + valid anchors +
+ * accounting. Does NOT call an LLM — emits the package for the in-session
+ * agent to consume (or for the `--llm` that lives elsewhere).
  *
- * Side effect: registra métrica de "pacote emitido" em update-metrics.json
- * (escrita idempotente — só regrava se algo mudou).
+ * Side effect: records a "package emitted" metric in update-metrics.json
+ * (idempotent write — only rewrites if something changed).
  */
 export async function loadWorkPackage(
   repoRoot: string,
@@ -126,11 +126,11 @@ export async function loadWorkPackage(
       }
     : null;
 
-  // 2) Dívida aberta (via status — fonte única de verdade da Fase 2)
+  // 2) Open debt (via status — Phase 2's single source of truth)
   const status = await runStatus(absRoot);
   const debt = status.debt.items;
 
-  // 3) Snippets do source atual para cada debt item que tem symbol_key
+  // 3) Current source snippets for each debt item that has a symbol_key
   const window = opts.snippetWindow ?? SNIPPET_WINDOW;
   const maxSnippets = opts.maxSnippets ?? 50;
   const snippets: DebtSnippet[] = [];
@@ -140,9 +140,9 @@ export async function loadWorkPackage(
     if (snippet) snippets.push(snippet);
   }
 
-  // 4) Chaves válidas: subset das symbol_keys que o agente pode ancorar.
-  //    São exatamente os symbols ativos — limitado aos debt items pra
-  //    reduzir ruído (o agente só precisa ancorar nesses).
+  // 4) Valid keys: subset of the symbol_keys the agent may anchor.
+  //    They are exactly the active symbols — limited to the debt items to
+  //    reduce noise (the agent only needs to anchor on those).
   const validAnchors = Array.from(
     new Set(debt.map((d) => d.symbol_key).filter((k): k is string => k !== null)),
   ).sort();
@@ -151,13 +151,13 @@ export async function loadWorkPackage(
   //    read-only. Degrades to `notGitRepo: true` outside git — never throws.
   const impact = await computeChangeImpact(absRoot);
 
-  // 6) Monta o pacote + estima tokens
+  // 6) Assembles the package + estimates tokens
   const pkg: WorkPackage = {
     manifest: manifestView,
     debt,
     snippets,
     validAnchors,
-    tokensEstimated: 0, // preenchido abaixo
+    tokensEstimated: 0, // filled in below
     bytes: 0,
     language,
     impact,
@@ -166,8 +166,8 @@ export async function loadWorkPackage(
   pkg.tokensEstimated = Math.ceil(json.length / CHARS_PER_TOKEN);
   pkg.bytes = json.length;
 
-  // 7) Contabilidade (SPEC §Contabilidade): registra métrica incremental.
-  //    Side effect em .livewiki/update_metrics.json (não bloqueia o retorno).
+  // 7) Accounting (SPEC §Accounting): records an incremental metric.
+  //    Side effect in .livewiki/update_metrics.json (does not block the return).
   await recordUpdateMetric(absRoot, {
     kind: "package_emitted",
     timestamp: Date.now(),
@@ -180,8 +180,8 @@ export async function loadWorkPackage(
 }
 
 /**
- * Lê o source do arquivo da âncora e retorna a janela em torno do symbol.
- * Retorna null se o arquivo não existe ou o símbolo não tem start/end.
+ * Reads the anchor's source file and returns the window around the symbol.
+ * Returns null if the file does not exist or the symbol has no start/end.
  *
  * Exported (hoisted) for the change-impact package (backlog #2) — reused,
  * never duplicated. Behavior unchanged.
@@ -198,17 +198,17 @@ export async function snippetForSymbol(
   try {
     source = await nodeFs.readFile(nodePath.join(absRoot, filePath), "utf8");
   } catch {
-    return null; // arquivo sumiu
+    return null; // file vanished
   }
   const lines = source.split("\n");
 
-  // Pega linhas do símbolo — busca simples por nome. Para Fase 5 é OK;
-  // Fase 6+ pode usar o índice (symbol.start_line/end_line) direto.
+  // Gets the symbol's lines — a simple search by name. Fine for Phase 5;
+  // Phase 6+ can use the index (symbol.start_line/end_line) directly.
   let symStart = -1;
   let symEnd = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? "";
-    // match simples: linha que define function/classe com o nome
+    // simple match: a line that defines a function/class with the name
     if (
       symStart === -1 &&
       (line.includes(`function ${symName}`) ||
@@ -221,27 +221,27 @@ export async function snippetForSymbol(
         line.includes(`export async function ${symName}`))
     ) {
       symStart = i;
-      // Estimativa: symbols duram ~20 linhas. Bom o bastante pro snippet.
+      // Estimate: symbols last ~20 lines. Good enough for the snippet.
       symEnd = Math.min(lines.length, i + window);
     }
   }
 
-  // Se não achou pelo nome, usa o índice de símbolos (mais confiável)
+  // If not found by name, uses the symbol index (more reliable)
   if (symStart === -1) {
     const indexed = await lookupSymbol(absRoot, symbolKey);
     if (indexed) {
       symStart = indexed.startLine - 1; // 0-indexed
       symEnd = indexed.endLine;
     } else {
-      // Sem jeito de localizar — usa a primeira linha do arquivo como
-      // snippet mínimo. Melhor que nada pro agente ter contexto.
+      // No way to locate it — uses the file's first line as a minimal
+      // snippet. Better than nothing for the agent to have context.
       symStart = 0;
       symEnd = Math.min(lines.length, window);
     }
   }
 
-  const fromLine = Math.max(0, symStart - 3); // 3 linhas de contexto antes
-  const toLine = Math.min(lines.length, symEnd + 3); // 3 depois
+  const fromLine = Math.max(0, symStart - 3); // 3 lines of context before
+  const toLine = Math.min(lines.length, symEnd + 3); // 3 after
   const snippetLines: string[] = [];
   for (let i = fromLine; i < toLine; i++) {
     snippetLines.push(`${i + 1}: ${lines[i] ?? ""}`);
@@ -256,7 +256,7 @@ export async function snippetForSymbol(
   };
 }
 
-/** Look up no DB pra pegar start/end_line exatos (mais confiável). */
+/** DB lookup to get exact start/end_line (more reliable). */
 async function lookupSymbol(
   absRoot: string,
   symbolKey: string,
@@ -275,12 +275,12 @@ async function lookupSymbol(
 }
 
 /**
- * Helper: registra o tamanho da doc escrita de volta pelo agente.
- * Chamado pelo skill/CLI depois do agente (ou humano) atualizar a wiki.
+ * Helper: records the size of the doc written back by the agent.
+ * Called by the skill/CLI after the agent (or human) updates the wiki.
  *
- * Diferente de `recordUpdateMetric(kind='package_emitted')` — este é
- * `kind='write_received'` e rastreia o OUTPUT (economia: pacote grande
- * → doc pequena = boa economia; pacote grande → doc grande = má economia).
+ * Different from `recordUpdateMetric(kind='package_emitted')` — this one is
+ * `kind='write_received'` and tracks the OUTPUT (savings: big package → small
+ * doc = good savings; big package → big doc = bad savings).
  */
 export async function recordDocWrittenBack(
   repoRoot: string,
@@ -298,5 +298,5 @@ export async function recordDocWrittenBack(
   });
 }
 
-// Re-exporta tipo de métrica pra conveniência do CLI
+// Re-exports the metric type for the CLI's convenience
 export type { UpdateMetric };

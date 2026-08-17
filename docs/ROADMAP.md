@@ -1,60 +1,61 @@
 # Roadmap — post-MVP backlog
 
-> Phase status lives in `AGENTS.md` §Status (source of truth). This file
-> tracks evaluated, approved backlog items that come AFTER the committed
-> phases (Phase 6 export, Phase 7 viewer) and records why rejected ideas
-> were rejected, so they are not re-litigated.
+> This file is the source of truth for phase status AND for what comes
+> next. It tracks evaluated, approved backlog items that come AFTER the
+> committed phases and records why rejected ideas were rejected, so they
+> are not re-litigated.
+
+## Phase status (source of truth)
+
+All committed phases are DONE and shipped. The product has been published
+to npm since 2026-08-12.
+
+- **Phase 0–4, Phase 3 rev2, Phase 5, Phase 6 (export), Phase 7
+  (viewer): DONE.**
+- **Beta closed.** `@livewiki/core`, `@livewiki/cli`, `@livewiki/mcp`
+  published at **0.1.0** (2026-08-12, matrix green), **0.2.0**
+  (2026-08-16 — portable baseline + SQLite-loss recovery, thinking-leak
+  defense, 17 provider presets), and **0.2.1** (2026-08-17 — README
+  rewrite, tarball regression test, post-0.2.0 fixes).
+- **#29 real page units** DONE (P0–P5, commit `6e5efdb`) — deterministic
+  file+folder planner; one page per symbol-bearing product file plus one
+  folder page per directory.
+- **#30 human-first readability** DONE + measured (2026-08-11/12).
+- **Portable baseline + SQLite-loss recovery** DONE (0.2.0, 2026-08-15/16).
+- **Thinking-leak defense + 17 provider presets** DONE (`7f36412`,
+  `a40b8e9`).
+- **Post-release hardening + onboarding** DONE (2026-08-16).
 
 ## Execution queue (priority order)
 
-> Source of truth for WHAT COMES NEXT. Phase status lives in `AGENTS.md`
-> §Status; the numbered item bodies further down hold the evidence.
-> **Reordered 2026-08-07** — this section had accreted reconciliation notes
-> from three separate dates and no longer told a reader what to do next.
-> The provenance was not discarded; it moved to "Decision history" below.
+> Source of truth for WHAT COMES NEXT. The numbered item bodies further
+> down hold the evidence. **Reordered 2026-08-17** — the pre-beta (P0) and
+> beta-launch (P1) sections are CLOSED (0.2.1 shipped); the remaining open
+> items follow. The earlier reconciliation notes moved to "Decision
+> history" below.
 
-### P0 — pre-beta (blocks launch)
+### P2 — post-launch (decided, written, unscheduled)
 
-1. **#29 real repository page units** — P0–P4 IMPLEMENTED (2026-08-09,
-   working tree, uncommitted): deterministic file+folder planner, file
-   pages with narrative contract, folder pages (skeleton + bounded purpose
-   paragraph), plan-then-write for oversized files, zero test pages (D3),
-   keep-set stale cleanup (item 2 below landed with it), full deterministic
-   gate green (core 1828 / CLI 126 / MCP 56), zero paid calls. Open:
-   **P5 paid rehearsal on the EXTERNAL MoneyPrinterTurbo-Plus clone**
-   (never the dogfood repo) + maintainer diff review before commit/push.
-   Supersedes #25. Design:
-   `docs/plans/2026-08-07-real-repository-page-units.md`.
-2. **`syncStaleModulePages` keep-set** — DONE with #29 P0 (2026-08-09):
-   the keep-set is built from the planner's resolved page paths
-   (`livewiki/<folder>/index.md` + `livewiki/<folder>/<file>.md`), the
-   walk is recursive, reserved hubs and deterministic root pages are
-   skipped, and empty folder shells are removed.
-3. **`purpose_too_long` live validation** — the deterministic hardening
-   landed in `755bd2a`; the failure class has not been re-observed under a
-   real understanding rerun. Validation only, no code planned.
-
-### P1 — beta launch
-
-4. Green matrix repetition (3+ consecutive runs), the maintainer's
-   `npm pack` pass, then `pnpm publish -r`. Naming and metadata were
-   decided 2026-08-04 and have been ready since `ef403aa`: keep
-   `@livewiki`, MIT, 0.1.0, engines >=24, grammars in the tarball.
-
-### P2 — post-beta (decided, written, unscheduled)
-
-5. **#6 v2** — pay-variant: `update --llm` + draft PR on detected debt.
-6. **#26** — metadata-boosted ranking for `livewiki_search`: product tier
+1. **#6 v2** — pay-variant: `update --llm` + draft PR on detected debt.
+2. **#26** — metadata-boosted ranking for `livewiki_search`: product tier
    over auxiliary, fresh over stale. Deterministic, zero LLM.
-7. **#28** — validation severity lifecycle: new codes enter report-only
+3. **#28** — validation severity lifecycle: new codes enter report-only
    and become blocking later, so tightening a contract never
    retroactively breaks an existing user wiki.
-8. **`orchestrate()` split** — P4 code health. `batch.ts` is 6,432 lines;
-   the reviewer called it "next cycle's parking brake".
-9. Housekeeping: `filesDeleted` recount guard (cosmetic), dependency
-   modernization (commander/vitest/better-sqlite3/typescript), vitest
-   parallelism cap + linter, PT-BR comment normalization,
-   `understanding.md` stale cleanup.
+4. **#32** — npm Trusted Publishing (OIDC) for automated releases, before
+   any CI release flow.
+5. **`orchestrate()` split** — `batch.ts` code health; the reviewer called
+   it "next cycle's parking brake".
+6. **Baseline-review nits** (deferred 2026-08-15): dead `risk` column in
+   the Action reporters, `debt_resolved` metric on no-op accepts, MCP
+   `resolve_debt` error without a bootstrap pointer, phantom `running`
+   run row on baseline-gate throw, NFC/duplicate-receipt test gaps.
+7. **Onboarding leftovers** (from the hermes-agent comparison): preset
+   that reads everything from env; standalone `livewiki doctor`.
+8. Housekeeping: `filesDeleted` recount guard, dependency modernization,
+   vitest parallelism cap + linter, `understanding.md` stale cleanup,
+   `docs-debt.yml` dogfood installing from npm instead of building
+   locally.
 
 ### P3 — candidates and watch-list (need evidence before promotion)
 
@@ -118,12 +119,11 @@ traceability, but they do not by themselves explain how a product, application,
 or repository works. A directory tree says what exists; a product-flow view must
 show how responsibilities communicate to produce behavior.
 
-The bounded semantic flow layer is implemented in the uncommitted R10/R10.1
-body. R11-NAV now exposes those existing flows directly from Quickstart and
-Tasks and moves auxiliary inventory out of primary navigation. R11-A
-concept-topic synthesis is implemented in the working tree and remains
-unvalidated, uncommitted, and outside the beta-launch gate until review.
-Phase 7 must render the same canonical artifacts for humans instead of
+The bounded semantic flow layer is shipped (R10/R10.1, then the R11-NAV
+intent routes exposing those flows from Quickstart and Tasks with auxiliary
+inventory out of primary navigation, and the R11-A concept-topic synthesis,
+validated by the Etapa 3 acceptance run and kept on main 2026-07-26).
+Phase 7 renders the same canonical artifacts for humans instead of
 inventing a separate, competing narrative.
 
 Required content:
@@ -170,8 +170,8 @@ reading the low-token entry path and a human using the Phase 7 viewer can answer
 The answer must come from a short topic path plus a readable diagram, not from a
 directory tree or manual reconstruction of module pages. `SPEC.md` is aligned
 for bounded semantic flows and R11-NAV's deterministic intent routes. The
-R11-A amendment is implemented under maintainer authorization but still needs
-review and validation; it preserves the
+R11-A amendment was validated end-to-end (Etapa 3 run #5, 2026-07-26) and kept
+on main; it preserves the
 distinction between rejected automatic mega-call-graphs and approved, bounded
 semantic synthesis.
 
@@ -179,8 +179,8 @@ semantic synthesis.
 
 > Numeric order, NOT priority — priority lives in the execution queue at
 > the top of this file. These bodies are the record: what each item was,
-> why it was approved, and the evidence it closed on. Items 1–24 are DONE,
-> #25 is SUPERSEDED, and #26–#29 are open.
+> why it was approved, and the evidence it closed on. Items 1–24 and
+> #29–#30 are DONE, #25 is SUPERSEDED, and #26–#28 plus #31–#32 are open.
 
 
 Source: maintainer-approved evaluation (2026-07-13) of

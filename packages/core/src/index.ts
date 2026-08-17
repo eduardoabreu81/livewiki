@@ -1,7 +1,7 @@
 // Public surface of @livewiki/core.
-// Fase 0: safe-io. Fase 1 adiciona: hashes, walker, parser, symbols, db, indexer, status.
-// Fase 2 adiciona: anchors, frontmatter, verify, anchor-ledger.
-// Fase 3 adiciona: pricing, config, llm/*, imports, modules, diagrams, prompts, manifest, batch, init.
+// Phase 0: safe-io. Phase 1 adds: hashes, walker, parser, symbols, db, indexer, status.
+// Phase 2 adds: anchors, frontmatter, verify, anchor-ledger.
+// Phase 3 adds: pricing, config, llm/*, imports, modules, diagrams, prompts, manifest, batch, init.
 
 export * from "./safe-io.js";
 export * as hashes from "./hashes.js";

@@ -1,33 +1,33 @@
 /**
- * frontmatter — parser de YAML subset usado nos arquivos da wiki.
+ * frontmatter — subset YAML parser used in the wiki files.
  *
- * Por que subset próprio e não `yaml` lib: nosso uso é limitado e o subset
- * é simples (chaves top-level, listas de strings, comentários). Manter parser
- * próprio evita dep extra e dá controle total do erro.
+ * Why our own subset and not the `yaml` lib: our usage is limited and the
+ * subset is simple (top-level keys, string lists, comments). Keeping our own
+ * parser avoids an extra dep and gives full control of the error.
  *
- * Formato suportado:
+ * Supported format:
  *
  *   ---
- *   title: Auth — login e sessão          # string
+ *   title: Auth — login and session      # string
  *   owner: generated                     # string
- *   anchors:                             # lista de strings
+ *   anchors:                             # list of strings
  *     - src/auth/login.ts
  *     - src/auth/login.ts#validateToken
- *   modules: [hooks, services, lib]      # lista inline (flow-style, 1 nível)
- *   updated: 2026-07-08                  # string (não interpretamos data)
+ *   modules: [hooks, services, lib]      # inline list (flow-style, 1 level)
+ *   updated: 2026-07-08                  # string (we do not interpret dates)
  *   ---
- *   body markdown aqui...
+ *   body markdown here...
  *
- * Limitações intencionais (não implementamos YAML completo):
- *   - Sem listas aninhadas, mapas aninhados, strings multi-linha (| >)
- *   - Listas inline são de strings simples (sem aspas, sem vírgula interna)
- *   - Sem booleans/null tipados (são strings: "true"/"false"/"null")
- *   - Sem âncoras/aliases `&foo` / `*foo`
- *   - Sem escape `\"` em strings
+ * Intentional limitations (we do not implement full YAML):
+ *   - No nested lists, nested maps, multi-line strings (| >)
+ *   - Inline lists are of simple strings (no quotes, no internal comma)
+ *   - No typed booleans/null (they are strings: "true"/"false"/"null")
+ *   - No anchors/aliases `&foo` / `*foo`
+ *   - No `\"` escape in strings
  *
- * Se a wiki precisar de features mais ricas no futuro, trocamos por `yaml` lib.
- * Por enquanto (Fase 2), os campos do SPEC §"Frontmatter das páginas de doc"
- * cabem no subset.
+ * If the wiki needs richer features in the future, we swap in the `yaml` lib.
+ * For now (Phase 2), the SPEC §"Doc page frontmatter" fields fit in the
+ * subset.
  */
 
 export type FrontmatterValue = string | string[];
@@ -44,38 +44,38 @@ export class FrontmatterParseError extends Error {
 }
 
 export interface ParseResult {
-  /** Mapa de campos. Ausente se a página não tem frontmatter. */
+  /** Field map. Absent if the page has no frontmatter. */
   frontmatter: Frontmatter | null;
-  /** Conteúdo após o `---` de fechamento (markdown body). */
+  /** Content after the closing `---` (markdown body). */
   body: string;
-  /** Byte offset onde o body começa no source original. */
+  /** Byte offset where the body starts in the original source. */
   bodyOffset: number;
 }
 
 /**
- * Parseia frontmatter + body. Retorna `frontmatter: null` se a página não
- * começa com `---` (não é erro — páginas sem frontmatter são permitidas).
+ * Parses frontmatter + body. Returns `frontmatter: null` if the page does not
+ * start with `---` (not an error — pages without frontmatter are allowed).
  */
 export function parseFrontmatter(source: string): ParseResult {
-  // Normaliza line endings pra simplificar parsing
+  // Normalize line endings to simplify parsing
   const normalized = source.replace(/\r\n/g, "\n");
 
-  // Detecta abertura
+  // Detect the opening
   if (!normalized.startsWith("---\n")) {
     return { frontmatter: null, body: source, bodyOffset: 0 };
   }
 
-  // Procura fechamento
+  // Look for the closing
   const closeIdx = normalized.indexOf("\n---", 4);
   if (closeIdx === -1) {
     throw new FrontmatterParseError(
-      "frontmatter aberto com --- mas sem fechamento --- antes do fim do arquivo",
+      "frontmatter opened with --- but missing closing --- before end of file",
       1,
     );
   }
 
   const yamlBlock = normalized.slice(4, closeIdx);
-  const afterClose = closeIdx + 4; // pula "\n---"
+  const afterClose = closeIdx + 4; // skips "\n---"
   const body = normalized.slice(afterClose).replace(/^\n/, "");
 
   const frontmatter = parseYamlBlock(yamlBlock);
@@ -94,13 +94,13 @@ function parseYamlBlock(yaml: string): Frontmatter {
     const line = rawLine.replace(/\s+$/, ""); // strip trailing whitespace
     if (line === "" || line.startsWith("#")) continue;
 
-    // Item de lista: "  - valor" (indent + dash + espaço)
+    // List item: "  - value" (indent + dash + space)
     const listItemMatch = /^(\s*)-\s+(.*)$/.exec(line);
     if (listItemMatch) {
       const value = stripComment(listItemMatch[2] ?? "").trim();
       if (currentList === null) {
         throw new FrontmatterParseError(
-          `item de lista sem chave anterior: ${line}`,
+          `list item without preceding key: ${line}`,
           lineNumber,
         );
       }
@@ -108,16 +108,16 @@ function parseYamlBlock(yaml: string): Frontmatter {
       continue;
     }
 
-    // Chave: valor OU chave: (inicia lista)
+    // Key: value OR key: (starts a list)
     const kvMatch = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line);
     if (!kvMatch) {
-      throw new FrontmatterParseError(`linha inválida: ${line}`, lineNumber);
+      throw new FrontmatterParseError(`invalid line: ${line}`, lineNumber);
     }
     const key = kvMatch[1] ?? "";
     const restRaw = stripComment(kvMatch[2] ?? "");
 
     if (restRaw === "") {
-      // Início de lista (ou vazio intencional)
+      // Start of a list (or intentionally empty)
       currentListKey = key;
       currentList = [];
       out[key] = currentList;
@@ -135,7 +135,7 @@ function parseYamlBlock(yaml: string): Frontmatter {
                 .map((item) => item.trim())
                 .filter((item) => item !== "");
       } else {
-        // Valor string
+        // String value
         out[key] = value;
       }
       currentListKey = null;
@@ -158,14 +158,14 @@ function stripComment(s: string): string {
   return idx === -1 ? s : s.slice(0, idx);
 }
 
-/** Helper: lê anchors (sempre lista de strings). */
+/** Helper: reads anchors (always a list of strings). */
 export function getAnchors(fm: Frontmatter | null): string[] {
   if (!fm) return [];
   const a = fm["anchors"];
   return Array.isArray(a) ? a : [];
 }
 
-/** Helper: lê owner (default: generated). */
+/** Helper: reads owner (default: generated). */
 export function getOwner(fm: Frontmatter | null): "generated" | "human" | "mixed" {
   if (!fm) return "generated";
   const o = fm["owner"];

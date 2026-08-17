@@ -26,12 +26,12 @@ afterEach(async () => {
 });
 
 describe("config.loadConfig", () => {
-  it("retorna {} se .livewiki/config.json não existe", async () => {
+  it("returns {} if .livewiki/config.json does not exist", async () => {
     const cfg = await loadConfig(repoRoot);
     expect(cfg).toEqual({});
   });
 
-  it("carrega config válido", async () => {
+  it("loads a valid config", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({
@@ -47,7 +47,7 @@ describe("config.loadConfig", () => {
     expect(cfg.language).toBe("pt-BR");
   });
 
-  it("falha em JSON malformado (não retorna config parcial)", async () => {
+  it("fails on malformed JSON (does not return a partial config)", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       "{ broken json",
@@ -56,7 +56,7 @@ describe("config.loadConfig", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/Failed to parse/);
   });
 
-  it("rejeita provider desconhecido", async () => {
+  it("rejects an unknown provider", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({ provider: "magic-llm-9000" }),
@@ -65,7 +65,7 @@ describe("config.loadConfig", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/invalid provider/);
   });
 
-  it("carrega preset válido (Fase 5 step 5)", async () => {
+  it("loads a valid preset (Phase 5 step 5)", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({ preset: "minimax", model: "MiniMax-M3" }),
@@ -77,7 +77,7 @@ describe("config.loadConfig", () => {
     expect(cfg.provider).toBeUndefined();
   });
 
-  it("rejeita preset desconhecido", async () => {
+  it("rejects an unknown preset", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({ preset: "magic-llm-9000" }),
@@ -86,22 +86,22 @@ describe("config.loadConfig", () => {
     await expect(loadConfig(repoRoot)).rejects.toThrow(/invalid preset/);
   });
 
-  it("preset coexiste com provider (preset vence pra adapter)", async () => {
+  it("preset coexists with provider (preset wins for the adapter)", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({
         preset: "openai",
-        provider: "anthropic", // legacy field presente
+        provider: "anthropic", // legacy field present
         model: "gpt-4o",
       }),
       "utf8",
     );
     const cfg = await loadConfig(repoRoot);
     expect(cfg.preset).toBe("openai");
-    expect(cfg.provider).toBe("anthropic"); // preservado
+    expect(cfg.provider).toBe("anthropic"); // preserved
   });
 
-  it("ignora silenciosamente chaves desconhecidas (forward compat)", async () => {
+  it("silently ignores unknown keys (forward compat)", async () => {
     await nodeFs.writeFile(
       nodePath.join(repoRoot, ".livewiki/config.json"),
       JSON.stringify({ provider: "anthropic", futureField: 42 }),
@@ -176,7 +176,7 @@ describe("config.loadConfig", () => {
 });
 
 describe("config.saveConfig + loadConfig round-trip", () => {
-  it("grava e lê de volta sem perda", async () => {
+  it("writes and reads back without loss", async () => {
     const original = {
       provider: "openai-compat" as const,
       model: "gpt-4o-mini",
@@ -190,43 +190,43 @@ describe("config.saveConfig + loadConfig round-trip", () => {
 });
 
 describe("config.applyDefaults", () => {
-  it("aplica language default = en quando ausente", () => {
+  it("applies language default = en when absent", () => {
     const cfg = applyDefaults({});
     expect(cfg.language).toBe("en");
   });
 
-  it("preserva language explícito do usuário", () => {
+  it("preserves the user's explicit language", () => {
     const cfg = applyDefaults({ language: "pt-BR" });
     expect(cfg.language).toBe("pt-BR");
   });
 
-  it("NÃO aplica default de provider ou model — sempre undefined se ausente", () => {
+  it("does NOT apply a default for provider or model — always undefined when absent", () => {
     const cfg = applyDefaults({});
     expect(cfg.provider).toBeUndefined();
     expect(cfg.model).toBeUndefined();
   });
 });
 
-describe("config.validateConfigForBatch — sem modelo default hardcoded", () => {
-  it("passa quando provider + model estão presentes", () => {
+describe("config.validateConfigForBatch — no hardcoded default model", () => {
+  it("passes when provider + model are present", () => {
     expect(() =>
       validateConfigForBatch(repoRoot, { provider: "anthropic", model: "claude-sonnet-5" }),
     ).not.toThrow();
   });
 
-  it("falha com MissingProviderConfigError se provider ausente", () => {
+  it("fails with MissingProviderConfigError if provider is absent", () => {
     expect(() => validateConfigForBatch(repoRoot, { model: "claude-sonnet-5" })).toThrow(
       MissingProviderConfigError,
     );
   });
 
-  it("falha com MissingProviderConfigError se model ausente", () => {
+  it("fails with MissingProviderConfigError if model is absent", () => {
     expect(() => validateConfigForBatch(repoRoot, { provider: "anthropic" })).toThrow(
       MissingProviderConfigError,
     );
   });
 
-  it("falha com MissingProviderConfigError se ambos ausentes", () => {
+  it("fails with MissingProviderConfigError if both are absent", () => {
     try {
       validateConfigForBatch(repoRoot, {});
       expect.fail("should have thrown");
@@ -259,13 +259,13 @@ describe("config.validateConfigForBatch — sem modelo default hardcoded", () =>
 });
 
 describe("config.resolveBaseUrl", () => {
-  it("usa baseUrl do config quando presente", () => {
+  it("uses baseUrl from the config when present", () => {
     expect(
       resolveBaseUrl({ provider: "anthropic", baseUrl: "https://proxy.example.com" }),
     ).toBe("https://proxy.example.com");
   });
 
-  it("cai no default por provider quando config.baseUrl ausente", () => {
+  it("falls back to the per-provider default when config.baseUrl is absent", () => {
     expect(resolveBaseUrl({ provider: "anthropic" })).toBe(CONFIG_DEFAULTS.baseUrls.anthropic);
     expect(resolveBaseUrl({ provider: "openai-compat" })).toBe(
       CONFIG_DEFAULTS.baseUrls["openai-compat"],
@@ -663,7 +663,7 @@ describe("config — stage4MaxOutputTokens ceiling", () => {
   });
 });
 
-describe("config — Etapa 2c risk-prioritization keys", () => {
+describe("config — Step 2c risk-prioritization keys", () => {
   it("applyDefaults fills riskAnalysis=true and riskChurnCommits=500 when absent", () => {
     const cfg = applyDefaults({});
     expect(cfg.riskAnalysis).toBe(true);

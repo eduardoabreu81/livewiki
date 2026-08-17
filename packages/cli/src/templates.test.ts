@@ -7,26 +7,27 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 /**
- * Templates de hooks (Fase 5).
+ * Hook templates (Phase 5).
  *
- * SPEC §"Skills e hooks (fase 5)":
- *   "Hook git post-commit (template, instalação opt-in via core.hooksPath):
- *    roda `livewiki index --quiet`; se dívida nova, imprime resumo no
- *    terminal (não bloqueia o commit)."
- *   "Hook Claude Code Stop (template em `templates/`): idem, formato JSON
- *    de hooks."
+ * SPEC §"Skills and hooks (phase 5)":
+ *   "Git post-commit hook (template, opt-in install via core.hooksPath):
+ *    runs `livewiki index --quiet`; if there is new debt, prints a summary
+ *    to the terminal (does not block the commit)."
+ *   "Claude Code Stop hook (template in `templates/`): same, JSON hook
+ *    format."
  *
- * O teste aqui cobre:
- *   1. Os 3 arquivos existem e têm o conteúdo esperado (parseável,
- *      blocos obrigatórios)
- *   2. O script post-commit é EXECUTÁVEL de verdade (Unix: chmod +x;
- *      Git Bash/Windows: lido via sh -c)
- *   3. Simulação cross-platform: rodar `livewiki index --quiet` em subprocesso
- *      produz exit 0 e não imprime nada (modo quiet) — espelha o que o hook faz
+ * The test here covers:
+ *   1. The 3 files exist and have the expected content (parseable,
+ *      required blocks)
+ *   2. The post-commit script is ACTUALLY executable (Unix: chmod +x;
+ *      Git Bash/Windows: read via sh -c)
+ *   3. Cross-platform simulation: running `livewiki index --quiet` in a
+ *      subprocess produces exit 0 and prints nothing (quiet mode) — mirrors
+ *      what the hook does
  *
- * O hook NUNCA é executado de verdade neste teste (rodar git commit num
- * tmpdir pra testar hook é overkill e flaky). Em vez disso, validamos o
- * conteúdo + testamos o comando que o hook executa.
+ * The hook is NEVER actually run in this test (running git commit in a
+ * tmpdir to test the hook is overkill and flaky). Instead, we validate the
+ * content + test the command the hook runs.
  */
 
 const here = nodePath.dirname(fileURLToPath(import.meta.url));
@@ -143,37 +144,37 @@ describe("templates/git/post-commit", () => {
     );
   });
 
-  it("existe e tem shebang bash", () => {
+  it("exists and has a bash shebang", () => {
     expect(content.startsWith("#!/usr/bin/env bash")).toBe(true);
   });
 
-  it("documenta o comportamento no topo (Fase 5 + opt-in)", () => {
-    // Comentário inicial deve citar Fase 5 e "opt-in" pra usuário saber
-    // o que está instalando
+  it("documents the behavior at the top (Phase 5 + opt-in)", () => {
+    // The opening comment must mention Phase 5 and "opt-in" so the user knows
+    // what they are installing
     expect(content).toMatch(/Fase 5/);
     expect(content).toMatch(/opt-in/i);
     expect(content).toMatch(/nunca bloqueia|NUNCA bloqueia|never blocks/i);
   });
 
-  it("roda `livewiki index --quiet`", () => {
+  it("runs `livewiki index --quiet`", () => {
     expect(content).toMatch(/livewiki\s+index\s+--quiet/);
   });
 
-  it("checa dívida via `livewiki status --json`", () => {
+  it("checks debt via `livewiki status --json`", () => {
     expect(content).toMatch(/livewiki\s+status\s+--json/);
   });
 
-  it("NUNCA bloqueia — sempre exit 0 no final", () => {
-    // Garantia explícita: `exit 0` no fim do script
+  it("NEVER blocks — always exit 0 at the end", () => {
+    // Explicit guarantee: `exit 0` at the end of the script
     expect(content).toMatch(/^\s*exit\s+0\s*$/m);
   });
 
-  it("usa set +e (não propaga erro do livewiki)", () => {
-    // `set +e` no topo garante que falhas do livewiki não viram exit != 0
+  it("uses set +e (does not propagate livewiki errors)", () => {
+    // `set +e` at the top ensures livewiki failures do not become exit != 0
     expect(content).toMatch(/set\s+\+e/);
   });
 
-  it("imprime resumo apenas se dívida > 0", () => {
+  it("prints a summary only if debt > 0", () => {
     expect(content).toMatch(/DEBT_TOTAL.*-gt\s+0|debt.*-gt\s+0/i);
   });
 });
@@ -188,12 +189,12 @@ describe("templates/claude-code/settings.local.json", () => {
     parsed = JSON.parse(raw);
   });
 
-  it("é JSON válido (parseável)", () => {
+  it("is valid JSON (parseable)", () => {
     expect(parsed).toBeTypeOf("object");
     expect(parsed).not.toBeNull();
   });
 
-  it("tem bloco hooks.Stop com command que indexa", () => {
+  it("has a hooks.Stop block with an indexing command", () => {
     const obj = parsed as Record<string, unknown>;
     const hooks = obj["hooks"] as Record<string, unknown>;
     expect(hooks).toBeDefined();
@@ -203,15 +204,16 @@ describe("templates/claude-code/settings.local.json", () => {
     const inner = (stop[0]!["hooks"] as Array<Record<string, unknown>>);
     expect(Array.isArray(inner)).toBe(true);
     const cmd = inner[0]!["command"] as string;
-    // O command roda `$L index --quiet` (usa variável local pra livewiki path,
-    // não a string literal). Validamos que index --quiet é invocado.
+    // The command runs `$L index --quiet` (uses a local variable for the
+    // livewiki path, not the string literal). We validate that index --quiet
+    // is invoked.
     expect(cmd).toMatch(/index\s+--quiet/);
-    expect(cmd).toMatch(/exit\s+0/); // nunca bloqueia
+    expect(cmd).toMatch(/exit\s+0/); // never blocks
   });
 });
 
 describe("templates/README.md", () => {
-  it("existe e cobre instalação de ambos os hooks", async () => {
+  it("exists and covers installing both hooks", async () => {
     const content = await nodeFs.readFile(
       nodePath.join(templatesDir, "README.md"),
       "utf8",
@@ -221,7 +223,7 @@ describe("templates/README.md", () => {
     expect(content).toMatch(/desinstalar|uninstall/i);
   });
 
-  it("cobre o template GitHub Actions (instalação, modos, v2 não implementada)", async () => {
+  it("covers the GitHub Actions template (installation, modes, v2 not implemented)", async () => {
     const content = await nodeFs.readFile(
       nodePath.join(templatesDir, "README.md"),
       "utf8",
@@ -242,18 +244,18 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     );
   });
 
-  it("dispara em push na branch default + workflow_dispatch", () => {
+  it("triggers on push to the default branch + workflow_dispatch", () => {
     expect(content).toMatch(/push:\s*\n\s*branches:\s*\[main\]/);
     expect(content).toMatch(/workflow_dispatch:/);
   });
 
-  it("detecção determinística: index + status + verify, zero LLM", () => {
+  it("deterministic detection: index + status + verify, zero LLM", () => {
     expect(content).toMatch(/index\s+--quiet/);
     expect(content).toMatch(/status\s+--json/);
     expect(content).toMatch(/verify\s+--json/);
     expect(content).toMatch(/zero tokens/i);
-    // O reporter executa exatamente três comandos CLI (index + status + verify) — qualquer
-    // caminho pago (update --llm) só existe como texto informativo.
+    // The reporter runs exactly three CLI commands (index + status + verify) —
+    // any paid path (update --llm) exists only as informational text.
     const calls = content.match(/npx --yes @livewiki\/cli \S+/g) ?? [];
     expect(calls.sort()).toEqual([
       "npx --yes @livewiki/cli index",
@@ -262,12 +264,12 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     ]);
   });
 
-  it("permissões mínimas e fetch-depth 0 (risk/churn lê git log)", () => {
+  it("minimal permissions and fetch-depth 0 (risk/churn reads git log)", () => {
     expect(content).toMatch(/permissions:\s*\n\s*contents:\s*read/);
     expect(content).toMatch(/fetch-depth:\s*0/);
   });
 
-  it("usa report por padrão e documenta o gate fail-closed de enforce", () => {
+  it("uses report by default and documents the enforce fail-closed gate", () => {
     expect(content).toMatch(/LIVEWIKI_DEBT_MODE:\s*enforce/);
     expect(content).toMatch(/baseline !== "available"/);
     expect(content).toMatch(/issues\.length > 0/);
@@ -276,7 +278,7 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     expect(content).not.toMatch(/undocumented\.total > 0/);
   });
 
-  it("renderiza quatro seções honestas e aplica somente os gates decididos", async () => {
+  it("renders four honest sections and applies only the decided gates", async () => {
     const status = {
       debt: {
         baseline: "unavailable",
@@ -396,44 +398,44 @@ describe("templates/github-actions/docs-debt.yml (item 6, v1 detect+report)", ()
     expect(verifyEnforce.stderr).toContain("1 verify issue(s)");
   });
 
-  it("dogfood (.github/workflows/docs-debt.yml) espelha os passos-chave via build local", async () => {
+  it("dogfood (.github/workflows/docs-debt.yml) mirrors the key steps via local build", async () => {
     const dogfood = await nodeFs.readFile(
       nodePath.resolve(templatesDir, "..", "..", "..", ".github", "workflows", "docs-debt.yml"),
       "utf8",
     );
-    // Pré-publish: o dogfood constrói o CLI do checkout em vez de npx.
+    // Pre-publish: the dogfood builds the CLI from the checkout instead of npx.
     expect(dogfood).toMatch(/pnpm -r build/);
     expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js index --quiet/);
     expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js status --json/);
     expect(dogfood).toMatch(/node packages\/cli\/dist\/index\.js verify --json/);
     expect(dogfood).toMatch(/fetch-depth:\s*0/);
-    // Baseline dogfood commitado: o gate roda em enforce (fica vermelho
-    // enquanto as 35 entradas inferred não forem pagas).
+    // Baseline dogfood committed: the gate runs in enforce (stays red
+    // while the 35 inferred entries remain unpaid).
     expect(dogfood).toMatch(/LIVEWIKI_DEBT_MODE:\s*enforce/);
     expect(extractDocsDebtReporter(dogfood)).toBe(extractDocsDebtReporter(content));
   });
 });
 
-describe("templates/ — comportamento simulado do hook", () => {
-  // Simula o que o hook faz: roda `livewiki index --quiet` num repo temporário.
-  // Garante que o comando que o hook chama FUNCIONA e tem o exit code esperado.
-  // (O hook em si nunca é invocado de verdade — esse teste cobre a suposição.)
+describe("templates/ — simulated hook behavior", () => {
+  // Simulates what the hook does: runs `livewiki index --quiet` in a temp repo.
+  // Ensures the command the hook calls WORKS and has the expected exit code.
+  // (The hook itself is never actually invoked — this test covers the assumption.)
 
   let tmpRepo: string;
   let livewikiBin: string;
   beforeAll(async () => {
     tmpRepo = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-hook-sim-"));
-    // Localiza o binário livewiki: usa o entry compilado em dist/
+    // Locates the livewiki binary: uses the compiled entry in dist/
     livewikiBin = nodePath.resolve(here, "..", "dist", "index.js");
-    expect(nodeFsSync.existsSync(livewikiBin), `livewiki dist não existe em ${livewikiBin}`).toBe(true);
+    expect(nodeFsSync.existsSync(livewikiBin), `livewiki dist does not exist at ${livewikiBin}`).toBe(true);
   });
 
   afterAll(async () => {
     await nodeFs.rm(tmpRepo, { recursive: true, force: true });
   });
 
-  it("`livewiki index --quiet` num repo vazio: exit 0 e zero stdout (modo quiet)", async () => {
-    // Cria source file mínimo pra walker não falhar
+  it("`livewiki index --quiet` in an empty repo: exit 0 and zero stdout (quiet mode)", async () => {
+    // Creates a minimal source file so the walker does not fail
     await nodeFs.writeFile(
       nodePath.join(tmpRepo, "hello.ts"),
       "export function greet(): string { return 'hi'; }\n",
@@ -458,7 +460,7 @@ describe("templates/ — comportamento simulado do hook", () => {
     );
 
     expect(result.code).toBe(0);
-    // Quiet mode: stdout deve ser vazio (ou quase — algumas notas vão pro stderr)
+    // Quiet mode: stdout must be empty (or nearly — some notes go to stderr)
     expect(result.stdout.trim()).toBe("");
   }, 30_000);
 });

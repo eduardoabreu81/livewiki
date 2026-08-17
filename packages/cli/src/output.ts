@@ -1,14 +1,14 @@
 /**
- * Formatador de saída — toda saída do CLI passa por aqui.
- * SPEC §"Comandos CLI": "saída legível por humano E parseável (`--json` em
- * todo comando)".
+ * Output formatter — all CLI output passes through here.
+ * SPEC §"CLI commands": "human-readable AND parseable output (`--json` on
+ * every command)".
  *
- * JSON: 1 linha, newline final, para ser seguro com `JSON.parse` linha-a-linha.
- * Human: texto multi-linha, plain.
+ * JSON: 1 line, trailing newline, to be safe with line-by-line `JSON.parse`.
+ * Human: multi-line plain text.
  */
 
 export interface EmitOptions {
-  /** Quando true, força JSON mesmo se o caller não setar data. */
+  /** When true, forces JSON even if the caller does not set data. */
   json: boolean;
 }
 
@@ -21,8 +21,8 @@ export function emitJson(data: unknown): void {
 }
 
 /**
- * Helper único: se json, serializa `data`; senão, escreve `human`.
- * Use um ou outro — nunca os dois.
+ * Single helper: if json, serialize `data`; otherwise, write `human`.
+ * Use one or the other — never both.
  */
 export function emit(
   json: boolean,

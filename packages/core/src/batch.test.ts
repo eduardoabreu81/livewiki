@@ -22,8 +22,8 @@ const VALID_UNDERSTANDING_PAGE = [
 ].join("\n");
 
 /**
- * Mock LLM que devolve um Markdown válido com frontmatter + anchor.
- * Usado pra testar o orchestrator sem chamadas reais.
+ * Mock LLM that returns a valid Markdown with frontmatter + anchor.
+ * Used to test the orchestrator without real calls.
  */
 class MockLlm implements LlmClient {
   public readonly provider = "anthropic" as const;
@@ -99,7 +99,7 @@ let mockLlm: MockLlm;
 
 beforeEach(async () => {
   repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-batch-"));
-  // Cria estrutura mínima de repo: 1 arquivo com 1 função
+  // Creates minimal repo structure: 1 file with 1 function
   await nodeFs.mkdir(nodePath.join(repoRoot, "src/auth"), { recursive: true });
   await nodeFs.writeFile(
     nodePath.join(repoRoot, "src/auth/login.ts"),
@@ -122,12 +122,12 @@ afterEach(async () => {
   await nodeFs.rm(repoRoot, { recursive: true, force: true });
 });
 
-describe("batch.runBatch — orquestrador end-to-end com mock LLM", () => {
-  it("roda o pipeline completo: cria batch_run + tasks + manifest", async () => {
+describe("batch.runBatch — end-to-end orchestrator with mock LLM", () => {
+  it("runs the full pipeline: creates batch_run + tasks + manifest", async () => {
     const result = await runBatch({
       repoRoot,
       llmClient: mockLlm,
-      noRefine: true, // pula refinamento da etapa 2 (determinístico)
+      noRefine: true, // skips stage 2 refinement (deterministic)
       skipManifestWrite: false,
     });
 
@@ -144,7 +144,7 @@ describe("batch.runBatch — orquestrador end-to-end com mock LLM", () => {
       "login, session, and token handling",
     );
 
-    // Manifest escrito
+    // Manifest written
     const manifestPath = nodePath.join(repoRoot, "livewiki/.manifest.json");
     expect(await nodeFs.readFile(manifestPath, "utf8")).toMatch(/"version": 2/);
   });
@@ -249,7 +249,7 @@ describe("batch.runBatch — orquestrador end-to-end com mock LLM", () => {
     }
   });
 
-  it("checkpoint de cada task tem usageHistory populado", async () => {
+  it("each task's checkpoint has populated usageHistory", async () => {
     await runBatch({
       repoRoot,
       llmClient: mockLlm,
@@ -279,9 +279,9 @@ describe("batch.runBatch — orquestrador end-to-end com mock LLM", () => {
   });
 });
 
-describe("batch.runOnly — re-roda 1 task", () => {
-  it("incrementa attempt no checkpoint existente", async () => {
-    // Run inicial
+describe("batch.runOnly — re-runs 1 task", () => {
+  it("increments attempt in the existing checkpoint", async () => {
+    // Initial run
     const r1 = await runBatch({
       repoRoot,
       llmClient: mockLlm,
@@ -291,14 +291,14 @@ describe("batch.runOnly — re-roda 1 task", () => {
     expect(r1.byModule.length).toBeGreaterThan(0);
     const moduleId = r1.byModule[0]!.module;
 
-    // Re-roda 1 task
+    // Re-runs 1 task
     const r2 = await runOnly({
       repoRoot,
       llmClient: mockLlm,
       onlyTarget: moduleId,
     });
 
-    // usageHistory tem 2 entries (1 original + 1 do retry)
+    // usageHistory has 2 entries (1 original + 1 from retry)
     const dbPath = nodePath.join(repoRoot, ".livewiki/index.db");
     const Database = (await import("better-sqlite3")).default;
     const db = new Database(dbPath, { readonly: true });
@@ -310,7 +310,7 @@ describe("batch.runOnly — re-roda 1 task", () => {
         attempt: number;
         usageHistory: unknown[];
       };
-      expect(cp.attempt).toBe(2); // 1 inicial + 1 retry
+      expect(cp.attempt).toBe(2); // 1 initial + 1 retry
       expect(cp.usageHistory).toHaveLength(2);
     } finally {
       db.close();
@@ -378,8 +378,8 @@ describe("batch.runBatch — dynamic output-token budget (Priority-0 fix)", () =
   });
 });
 
-// === Etapa 2a — closed repair contract: early abort + report-only (stage 4) ===
-describe("batch — Etapa 2a closed repair contract (stage 4)", () => {
+// === Step 2a — closed repair contract: early abort + report-only (stage 4) ===
+describe("batch — Step 2a closed repair contract (stage 4)", () => {
   it("all-unclassified verify set aborts with `unrepairable` after ZERO repair calls", async () => {
     const verifyModule = await import("./verify.js");
     const realRun = verifyModule.run;

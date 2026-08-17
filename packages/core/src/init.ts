@@ -1,25 +1,25 @@
 /**
- * init — `livewiki init` real (Fase 3).
+ * init — the real `livewiki init` (Phase 3).
  *
- * SPEC §"Comandos CLI" (Fase 3): "cria livewiki/ + .livewiki/, indexa o repo,
- * gera quickstart.md + structure.mmd mínimos (sem LLM). Com --batch dispara
- * o pipeline de documentação completa".
+ * SPEC §"CLI commands" (Phase 3): "creates livewiki/ + .livewiki/, indexes the
+ * repo, generates a minimal quickstart.md + structure.mmd (no LLM). With
+ * --batch it fires the full documentation pipeline".
  *
- * Comportamento:
- *   - init (sem flags): indexa + gera layout determinístico (sem LLM)
- *     - livewiki/quickstart.md (entry point de baixo token)
- *     - livewiki/architecture/structure.mmd (organograma de diretórios)
- *     - livewiki/architecture/modules.mmd (grafo de imports)
- *     - livewiki/diagrams/<slug>.classes.mmd (1 por módulo com classes)
+ * Behavior:
+ *   - init (no flags): indexes + generates the deterministic layout (no LLM)
+ *     - livewiki/quickstart.md (low-token entry point)
+ *     - livewiki/architecture/structure.mmd (directory org chart)
+ *     - livewiki/architecture/modules.mmd (import graph)
+ *     - livewiki/diagrams/<slug>.classes.mmd (1 per module with classes)
  *     - livewiki/.manifest.json (snapshot hash)
- *   - init --plan: mostra plano de módulos (heurística determinística,
- *     SEM consumir token). Não gera arquivos — só relatório.
- *   - init --batch: depois do init base, dispara batch LLM (4 etapas)
- *   - init --batch --no-refine: pula refinamento LLM da etapa 2
- *     (correção #5 — refinamento é opt-in/degradável)
+ *   - init --plan: shows the module plan (deterministic heuristic, WITHOUT
+ *     consuming tokens). Generates no files — report only.
+ *   - init --batch: after the base init, fires the LLM batch (4 steps)
+ *   - init --batch --no-refine: skips the step-2 LLM refinement
+ *     (fix #5 — refinement is opt-in/degradable)
  *
- * init --plan NUNCA exige config LLM (correção #5). init sem --batch
- * também não. init --batch só exige se for chamar LLM.
+ * init --plan NEVER requires LLM config (fix #5). init without --batch
+ * does not either. init --batch only requires it if it will call the LLM.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -92,20 +92,20 @@ import {
 
 export interface InitOptions {
   repoRoot: string;
-  /** --batch: dispara o pipeline LLM completo depois do init base */
+  /** --batch: fires the full LLM pipeline after the base init */
   batch?: boolean;
-  /** --plan: mostra plano de módulos e sai (sem LLM, sem escrita) */
+  /** --plan: shows the module plan and exits (no LLM, no writes) */
   plan?: boolean;
-  /** --no-refine: pula refinamento LLM da etapa 2 (só com --batch) */
+  /** --no-refine: skips the step-2 LLM refinement (only with --batch) */
   noRefine?: boolean;
   /**
    * Roadmap item 7: stage-4 module-task worker pool size forwarded to
    * `runBatch` (only with --batch). Integer 1..16; default 1 = sequential.
    */
   batchConcurrency?: number;
-  /** Language do plano/report (default: config.language || "en") */
+  /** Language of the plan/report (default: config.language || "en") */
   language?: string;
-  /** Quiet mode (suprime notas informativas) */
+  /** Quiet mode (suppresses info notes) */
   quiet?: boolean;
 }
 
@@ -118,11 +118,11 @@ export interface InitPlanReport {
 }
 
 export interface InitResult {
-  /** Arquivos criados/atualizados */
+  /** Files created/updated */
   filesWritten: string[];
-  /** Se --plan, o report (sem escritas) */
+  /** With --plan, the report (no writes) */
   plan?: InitPlanReport;
-  /** Se --batch, summary do batch run */
+  /** With --batch, the batch run summary */
   batchSummary?: {
     runId: number;
     status: string;
@@ -130,12 +130,12 @@ export interface InitResult {
     tasksFailed: number;
   };
   /**
-   * Exit code POSIX a ser propagado pelo CLI quando --batch termina.
+   * POSIX exit code to be propagated by the CLI when --batch finishes.
    *   0 = completed
    *   1 = completed_with_failures
    *   2 = aborted
-   * Ausente (sem --batch ou --plan) → CLI usa exit 0 (sucesso de init).
-   * Cálculo delegado a core/batch.ts:statusToExitCode — fonte única de verdade.
+   * Absent (without --batch or --plan) → the CLI uses exit 0 (init success).
+   * Computation delegated to core/batch.ts:statusToExitCode — single source of truth.
    */
   batchExitCode?: 0 | 1 | 2;
   /**
@@ -164,22 +164,22 @@ export interface InitResult {
 }
 
 /**
- * Entry point principal.
+ * Main entry point.
  */
 export async function runInit(opts: InitOptions): Promise<InitResult> {
   const absRoot = nodePath.resolve(opts.repoRoot);
   const wikiExistedBeforeInit = await nodeFs.stat(nodePath.join(absRoot, "livewiki"))
     .then((stat) => stat.isDirectory(), () => false);
 
-  // Garante .livewiki/ e livewiki/ existem (safe-io)
+  // Ensure .livewiki/ and livewiki/ exist (safe-io)
   await safeIo.mkdir(absRoot, ".livewiki");
   await safeIo.mkdir(absRoot, "livewiki");
   await safeIo.mkdir(absRoot, "livewiki/architecture");
   await safeIo.mkdir(absRoot, "livewiki/diagrams");
 
-  // (R) Garante `.livewiki/` está no `.gitignore` do repo-alvo (regra #3:
-  // banco é derivado, gitignored, nunca viaja no git). Idempotente —
-  // re-init é no-op se já contém.
+  // (R) Ensure `.livewiki/` is in the target repo's `.gitignore` (rule #3:
+  // the DB is derived, gitignored, never travels in git). Idempotent —
+  // re-init is a no-op if it already contains it.
   await ensureGitignoreEntries(absRoot, [".livewiki/"]);
 
   // Load config ONCE so the init indexer and the private `buildPlan`
@@ -193,14 +193,14 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   const rawConfig = await loadConfig(absRoot);
   const extraIgnores = resolveExtraIgnores(rawConfig);
 
-  // 1. Indexa o repo (sempre — é a fonte do plano e dos diagramas)
+  // 1. Index the repo (always — it is the source of the plan and the diagrams)
   await runIndexer(absRoot, {
     ...(extraIgnores.length > 0 ? { extraIgnores } : {}),
     ...(opts.quiet ? { quiet: true } : {}),
   });
   await runLedger(absRoot, { ...(opts.quiet ? { quiet: true } : {}) });
 
-  // 2. Carrega símbolos + módulos heurísticos
+  // 2. Load symbols + heuristic modules
   const {
     symbols,
     pathRoleConfig,
@@ -212,7 +212,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     totalFiles,
   } = await buildPlan(absRoot, rawConfig);
 
-  // 3. --plan: relatório e sai (sem escrita, sem LLM)
+  // 3. --plan: report and exit (no writes, no LLM)
   if (opts.plan) {
     return {
       filesWritten: [],
@@ -220,7 +220,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     };
   }
 
-  // 4. Gera layout determinístico
+  // 4. Generate the deterministic layout
   const filesWritten: string[] = [];
   if (!wikiExistedBeforeInit && (await readBaseline(absRoot)).state === "unavailable") {
     await writeBaselineCompareAndSwap(absRoot, null, emptyBaseline());
@@ -232,12 +232,12 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   let skippedFlowCandidates: InitResult["skippedFlowCandidates"];
   let skippedTopicPlan: InitResult["skippedTopicPlan"];
 
-  // structure.mmd (organograma de diretórios)
+  // structure.mmd (directory org chart)
   const structureMmd = generateStructure(filePaths);
   await safeIo.writeText(absRoot, "livewiki/architecture/structure.mmd", structureMmd);
   filesWritten.push("livewiki/architecture/structure.mmd");
 
-  // modules.mmd (grafo de imports entre módulos)
+  // modules.mmd (import graph between modules)
   const modulesMmd = generateModulesGraph(edges);
   await safeIo.writeText(absRoot, "livewiki/architecture/modules.mmd", modulesMmd);
   filesWritten.push("livewiki/architecture/modules.mmd");
@@ -339,11 +339,11 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     ...changedFlowPages,
   ]);
 
-  // manifest.json (snapshotHash + pendingBatch=null pra init sem batch)
+  // manifest.json (snapshotHash + pendingBatch=null for init without batch)
   const snapshotHash = await computeSnapshotHash(absRoot);
-  // FIX M (rev2): só listar manifest em filesWritten se ele foi REALMENTE
-  // regravado. `writeManifestIfChanged` é idempotente (anti-loop CI) —
-  // se nada mudou, retorna false e não devemos fingir que escreveu.
+  // FIX M (rev2): only list the manifest in filesWritten if it was REALLY
+  // rewritten. `writeManifestIfChanged` is idempotent (anti-loop CI) —
+  // if nothing changed it returns false and we must not pretend it wrote.
   const wroteManifest = await writeManifestState(
     absRoot,
     {
@@ -354,11 +354,11 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
   );
   if (wroteManifest) filesWritten.push("livewiki/.manifest.json");
 
-  // 5. --batch: dispara pipeline LLM (delegado pro batch.ts)
+  // 5. --batch: fires the LLM pipeline (delegated to batch.ts)
   let batchSummary: InitResult["batchSummary"];
   let batchExitCode: InitResult["batchExitCode"];
   if (opts.batch) {
-    // Import dinâmico evita ciclo se batch.ts importa init.ts
+    // Dynamic import avoids a cycle if batch.ts imports init.ts
     const { runBatch, statusToExitCode } = await import("./batch.js");
     const result = await runBatch({
       repoRoot: absRoot,
@@ -367,12 +367,12 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
       ...(opts.batchConcurrency !== undefined
         ? { concurrency: opts.batchConcurrency }
         : {}),
-      // Não re-cria index (já rodou acima). The batch loads
+      // Does not re-create the index (already ran above). The batch loads
       // `.livewiki/config.json` itself (T0 fail-closed) and forwards
       // `config.ignores` to its own stage-1 indexer. We do NOT pass
       // `extraIgnores` from init — there is no programmatic override;
       // the configured value is the single source of truth.
-      skipManifestWrite: true, // init já escreveu; batch não regrava
+      skipManifestWrite: true, // init already wrote it; batch does not rewrite
     });
     // Priority-0 fix: `byModule.length`/`failures.length` mixed done+failed
     // entries across stages and disagreed with `batch status`'s own (also
@@ -385,8 +385,8 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
       tasksDone: result.tasksDone,
       tasksFailed: result.tasksFailed,
     };
-    // (O): propagar exit code do batch (antes fix: init --batch sempre
-    // retornava 0, escondendo completed_with_failures/aborted).
+    // (O): propagate the batch exit code (before the fix: init --batch always
+    // returned 0, hiding completed_with_failures/aborted).
     batchExitCode = statusToExitCode(result.status);
     // R10.1 C: a skipped flows hub in the batch regeneration is surfaced too.
     if (result.skippedFlowsHub) skippedFlowsHub = result.skippedFlowsHub;
@@ -394,7 +394,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
     if (result.skippedTopicsHub) skippedTopicsHub = result.skippedTopicsHub;
     if (result.skippedFlowCandidates) skippedFlowCandidates = result.skippedFlowCandidates;
     if (result.skippedTopicPlan) skippedTopicPlan = result.skippedTopicPlan;
-    // Atualiza manifest com pendingBatch se houve falhas (handoff)
+    // Update the manifest with pendingBatch if there were failures (handoff)
     if (result.status === "completed_with_failures" || result.status === "aborted") {
       const totalsDone = result.byModule.reduce((a, m) => a + (m.costUsd !== null ? 1 : 0), 0);
       await writeManifestState(
@@ -406,7 +406,7 @@ export async function runInit(opts: InitOptions): Promise<InitResult> {
         },
       );
     } else {
-      // Run completou sem falhas — limpa pendingBatch do manifest
+      // Run completed without failures — clear pendingBatch from the manifest
       await writeManifestState(
         absRoot,
         {
@@ -1035,10 +1035,10 @@ function formatNeighbors(
 }
 
 /**
- * Escape de id para uso em anchor HTML (`<a id="...">`).
- * Mantém alfanum + ponto + hífen + underscore. Qualquer outro vira `_`.
- * Garante que o id seja válido como atributo HTML e idêntico ao que o
- * quickstart emite no link (`#${m.id}`).
+ * Escapes an id for use in an HTML anchor (`<a id="...">`).
+ * Keeps alphanumerics + dot + hyphen + underscore. Anything else becomes `_`.
+ * Guarantees the id is valid as an HTML attribute and identical to what the
+ * quickstart emits in the link (`#${m.id}`).
  */
 function escapeHtmlId(s: string): string {
   return s.replace(/[^A-Za-z0-9._-]/g, "_");

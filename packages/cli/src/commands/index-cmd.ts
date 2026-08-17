@@ -9,9 +9,9 @@ interface IndexOptions {
   repo?: string;
   ignore?: string[];
   /**
-   * `--quiet`: suprime output humano sem produzir JSON. Usado pelos hooks
-   * (Fase 5) e pelo post-commit template — detecta dívida sem spammar o
-   * terminal. Diferente de `--json`, que produz saída estruturada.
+   * `--quiet`: suppresses human output without producing JSON. Used by the
+   * hooks (Phase 5) and by the post-commit template — detects debt without
+   * spamming the terminal. Unlike `--json`, which produces structured output.
    */
   quiet?: boolean;
 }

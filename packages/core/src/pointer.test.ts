@@ -29,91 +29,91 @@ afterEach(async () => {
   await nodeFs.rm(repoRoot, { recursive: true, force: true });
 });
 
-describe("pointer — constantes", () => {
-  it("marcadores são estáveis (parsers externos podem depender)", () => {
+describe("pointer — constants", () => {
+  it("markers are stable (external parsers may depend on them)", () => {
     expect(POINTER_START).toBe("<!-- livewiki:start -->");
     expect(POINTER_END).toBe("<!-- livewiki:end -->");
   });
 
-  it("POINTER_FILES contém apenas AGENTS.md e CLAUDE.md (regra #2)", () => {
+  it("POINTER_FILES contains only AGENTS.md and CLAUDE.md (rule #2)", () => {
     expect(POINTER_FILES).toEqual(["AGENTS.md", "CLAUDE.md"]);
   });
 });
 
 describe("pointer.pickPointerFile", () => {
-  it("retorna file solicitado se passado", () => {
+  it("returns the requested file if passed", () => {
     expect(pickPointerFile(false, false, "AGENTS.md")).toBe("AGENTS.md");
     expect(pickPointerFile(false, false, "CLAUDE.md")).toBe("CLAUDE.md");
   });
 
-  it("prefere AGENTS.md quando ambos existem", () => {
+  it("prefers AGENTS.md when both exist", () => {
     expect(pickPointerFile(true, true)).toBe("AGENTS.md");
   });
 
-  it("usa AGENTS.md se só ele existe", () => {
+  it("uses AGENTS.md if only it exists", () => {
     expect(pickPointerFile(true, false)).toBe("AGENTS.md");
   });
 
-  it("usa CLAUDE.md se só ele existe", () => {
+  it("uses CLAUDE.md if only it exists", () => {
     expect(pickPointerFile(false, true)).toBe("CLAUDE.md");
   });
 
-  it("cria AGENTS.md (default) se nenhum existe", () => {
+  it("creates AGENTS.md (default) if none exists", () => {
     expect(pickPointerFile(false, false)).toBe("AGENTS.md");
   });
 });
 
 describe("pointer.buildPointerBlock", () => {
-  it("contém os marcadores start e end", () => {
+  it("contains the start and end markers", () => {
     const block = buildPointerBlock();
     expect(block).toContain(POINTER_START);
     expect(block).toContain(POINTER_END);
   });
 
-  it("linka para ./livewiki/quickstart.md", () => {
+  it("links to ./livewiki/quickstart.md", () => {
     const block = buildPointerBlock();
     expect(block).toMatch(/\.\/livewiki\/quickstart\.md/);
   });
 
-  it("é curto (não duplica conteúdo da wiki)", () => {
+  it("is short (does not duplicate wiki content)", () => {
     const block = buildPointerBlock();
-    // Defesa: se alguém tentar adicionar muita coisa, falhamos
+    // Defense: if someone tries to add too much, we fail
     expect(block.length).toBeLessThan(800);
   });
 });
 
 describe("pointer.findPointerBlock", () => {
-  it("retorna null se bloco não existe", () => {
+  it("returns null if the block does not exist", () => {
     expect(findPointerBlock("# My README\nSome content\n")).toBeNull();
   });
 
-  it("encontra bloco presente", () => {
+  it("finds a present block", () => {
     const content = `# Header\n\n${POINTER_START}\nPointer content\n${POINTER_END}\n\n# Footer`;
     const found = findPointerBlock(content);
     expect(found).not.toBeNull();
     expect(found!.inner.trim()).toBe("Pointer content");
   });
 
-  it("tolera whitespace nos marcadores (BOM/CRLF/defensive)", () => {
+  it("tolerates whitespace in the markers (BOM/CRLF/defensive)", () => {
     const content = `prefix\n\n<!-- livewiki:start  -->\nX\n<!--  livewiki:end -->\n`;
     const found = findPointerBlock(content);
     expect(found).not.toBeNull();
     expect(found!.inner.trim()).toBe("X");
   });
 
-  it("retorna null se só tem start (bloco truncado — não corrompe)", () => {
-    const content = `${POINTER_START}\nsem end\n`;
+  it("returns null if there is only a start (truncated block — does not corrupt)", () => {
+    const content = `${POINTER_START}\nwithout end\n`;
     expect(findPointerBlock(content)).toBeNull();
   });
 
-  it("retorna null se só tem end (sem start)", () => {
+  it("returns null if there is only an end (no start)", () => {
     const content = `${POINTER_END}\n`;
     expect(findPointerBlock(content)).toBeNull();
   });
 });
 
-describe("pointer.applyPointerReplace (puro)", () => {
-  it("insere quando não existe bloco (arquivo vazio)", () => {
+describe("pointer.applyPointerReplace (pure)", () => {
+  it("inserts when there is no block (empty file)", () => {
     const block = buildPointerBlock();
     const { content, action } = applyPointerReplace("", block);
     expect(action).toBe("inserted");
@@ -121,7 +121,7 @@ describe("pointer.applyPointerReplace (puro)", () => {
     expect(content).toContain(POINTER_END);
   });
 
-  it("insere quando arquivo tem conteúdo mas sem bloco", () => {
+  it("inserts when the file has content but no block", () => {
     const block = buildPointerBlock();
     const { content, action } = applyPointerReplace(
       "# My AGENTS.md\n\nExisted content.\n",
@@ -131,7 +131,7 @@ describe("pointer.applyPointerReplace (puro)", () => {
     expect(content).toMatch(/^# My AGENTS\.md[\s\S]*<!-- livewiki:start/m);
   });
 
-  it("substitui bloco existente in-place (idempotência)", () => {
+  it("replaces an existing block in-place (idempotency)", () => {
     const oldBlock = `${POINTER_START}\nOld content\n${POINTER_END}`;
     const newBlock = `${POINTER_START}\nNew content\n${POINTER_END}`;
     const content = `# Header\n\n${oldBlock}\n\n# Footer\n`;
@@ -139,15 +139,15 @@ describe("pointer.applyPointerReplace (puro)", () => {
     expect(action).toBe("replaced");
     expect(replaced).toContain("New content");
     expect(replaced).not.toContain("Old content");
-    // Preserva conteúdo adjacente (header/footer)
+    // Preserves adjacent content (header/footer)
     expect(replaced).toMatch(/^# Header/);
     expect(replaced).toMatch(/# Footer\n$/);
-    // Bloco aparece UMA vez (não duplicou)
+    // Block appears ONCE (did not duplicate)
     const occurrences = (replaced.match(/<!-- livewiki:start -->/g) ?? []).length;
     expect(occurrences).toBe(1);
   });
 
-  it("retorna 'unchanged' quando novo bloco é byte-idêntico ao atual", () => {
+  it("returns 'unchanged' when the new block is byte-identical to the current one", () => {
     const block = buildPointerBlock();
     const content = `# Header\n\n${block}\n`;
     const { action } = applyPointerReplace(content, block);
@@ -155,8 +155,8 @@ describe("pointer.applyPointerReplace (puro)", () => {
   });
 });
 
-describe("pointer.applyPointerRemove (puro)", () => {
-  it("remove bloco existente", () => {
+describe("pointer.applyPointerRemove (pure)", () => {
+  it("removes an existing block", () => {
     const block = buildPointerBlock();
     const content = `# Header\n\n${block}\n\n# Footer\n`;
     const { content: cleaned, removed } = applyPointerRemove(content);
@@ -167,7 +167,7 @@ describe("pointer.applyPointerRemove (puro)", () => {
     expect(cleaned).toMatch(/# Footer\n$/);
   });
 
-  it("no-op quando bloco não existe", () => {
+  it("no-op when the block does not exist", () => {
     const content = `# Only header\n`;
     const { content: same, removed } = applyPointerRemove(content);
     expect(removed).toBe(false);
@@ -175,8 +175,8 @@ describe("pointer.applyPointerRemove (puro)", () => {
   });
 });
 
-describe("pointer.insertPointer (com disco)", () => {
-  it("cria AGENTS.md com bloco quando arquivo não existe", async () => {
+describe("pointer.insertPointer (with disk)", () => {
+  it("creates AGENTS.md with a block when the file does not exist", async () => {
     const result = await insertPointer(repoRoot);
     expect(result.file).toBe("AGENTS.md");
     expect(result.action).toBe("inserted");
@@ -187,7 +187,7 @@ describe("pointer.insertPointer (com disco)", () => {
     expect(written).toMatch(/\.\/livewiki\/quickstart\.md/);
   });
 
-  it("cria CLAUDE.md se file=CLAUDE.md forçado", async () => {
+  it("creates CLAUDE.md if file=CLAUDE.md is forced", async () => {
     const result = await insertPointer(repoRoot, { file: "CLAUDE.md" });
     expect(result.file).toBe("CLAUDE.md");
     expect(result.action).toBe("inserted");
@@ -195,7 +195,7 @@ describe("pointer.insertPointer (com disco)", () => {
     expect(written).toContain(POINTER_START);
   });
 
-  it("preserva conteúdo existente do AGENTS.md", async () => {
+  it("preserves existing AGENTS.md content", async () => {
     const original = `# My Project\n\nPre-existing instructions.\n`;
     await nodeFs.writeFile(nodePath.join(repoRoot, "AGENTS.md"), original, "utf8");
     await insertPointer(repoRoot);
@@ -205,7 +205,7 @@ describe("pointer.insertPointer (com disco)", () => {
     expect(written).toContain(POINTER_START);
   });
 
-  it("substitui bloco existente (não duplica)", async () => {
+  it("replaces an existing block (does not duplicate)", async () => {
     const oldBlock = `${POINTER_START}\nOld\n${POINTER_END}\n`;
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "AGENTS.md"),
@@ -221,14 +221,14 @@ describe("pointer.insertPointer (com disco)", () => {
     expect(occurrences).toBe(1);
   });
 
-  it("idempotente: rodar 2x resulta em 'replaced' no 2º (bloco atualizado é diferente) ou 'unchanged'", async () => {
+  it("idempotent: running 2x results in 'replaced' on the 2nd (updated block is different) or 'unchanged'", async () => {
     await insertPointer(repoRoot);
-    // 2ª chamada com mesmo block default = unchanged
+    // 2nd call with the same default block = unchanged
     const result = await insertPointer(repoRoot);
     expect(result.action).toBe("unchanged");
   });
 
-  it("idempotente: rodar 2x com block custom é replaced no 2º", async () => {
+  it("idempotent: running 2x with a custom block is replaced on the 2nd", async () => {
     await insertPointer(repoRoot, { block: `${POINTER_START}\nA\n${POINTER_END}` });
     const result = await insertPointer(repoRoot, { block: `${POINTER_START}\nB\n${POINTER_END}` });
     expect(result.action).toBe("replaced");
@@ -237,7 +237,7 @@ describe("pointer.insertPointer (com disco)", () => {
     expect(written).not.toContain("\nA\n");
   });
 
-  it("recusa arquivo fora de POINTER_FILES mesmo com allowPointer (defesa em profundidade)", async () => {
+  it("refuses a file outside POINTER_FILES even with allowPointer (defense in depth)", async () => {
     await expect(
       insertPointer(repoRoot, { file: "README.md" as PointerFile }),
     ).rejects.toThrow(/Invalid pointer file/);
@@ -245,7 +245,7 @@ describe("pointer.insertPointer (com disco)", () => {
 });
 
 describe("pointer.removePointer", () => {
-  it("remove bloco se existir", async () => {
+  it("removes the block if it exists", async () => {
     await insertPointer(repoRoot);
     const result = await removePointer(repoRoot);
     expect(result.action).toBe("replaced");
@@ -253,13 +253,13 @@ describe("pointer.removePointer", () => {
     expect(written).not.toContain(POINTER_START);
   });
 
-  it("no-op se bloco não existe", async () => {
+  it("no-op if the block does not exist", async () => {
     await nodeFs.writeFile(nodePath.join(repoRoot, "AGENTS.md"), "# Only header\n", "utf8");
     const result = await removePointer(repoRoot);
     expect(result.action).toBe("unchanged");
   });
 
-  it("recusa arquivo inválido", async () => {
+  it("refuses an invalid file", async () => {
     await expect(
       removePointer(repoRoot, { file: "README.md" as PointerFile }),
     ).rejects.toThrow(/Invalid pointer file/);
@@ -267,13 +267,13 @@ describe("pointer.removePointer", () => {
 });
 
 describe("pointer.readPointerStatus", () => {
-  it("reporta 'not present' se nenhum arquivo de pointer existe", async () => {
+  it("reports 'not present' if no pointer file exists", async () => {
     const status = await readPointerStatus(repoRoot);
     expect(status.file).toBeNull();
     expect(status.present).toBe(false);
   });
 
-  it("reporta 'present' com conteúdo extraído", async () => {
+  it("reports 'present' with extracted content", async () => {
     await insertPointer(repoRoot);
     const status = await readPointerStatus(repoRoot);
     expect(status.present).toBe(true);
@@ -282,36 +282,36 @@ describe("pointer.readPointerStatus", () => {
   });
 });
 
-describe("pointer — integração com safe-io", () => {
-  it("safe-io recusa escrita fora de AGENTS.md/CLAUDE.md mesmo com allowPointer", async () => {
-    // Pointer em outro nome (mesmo allowPointer=true) — safe-io tem que recusar.
-    // Testamos via isInsideAllowlist que é o coração da defesa.
+describe("pointer — safe-io integration", () => {
+  it("safe-io refuses a write outside AGENTS.md/CLAUDE.md even with allowPointer", async () => {
+    // Pointer under another name (even allowPointer=true) — safe-io must refuse.
+    // We test via isInsideAllowlist which is the heart of the defense.
     const result = safeIo.isInsideAllowlist(repoRoot, nodePath.join(repoRoot, "README.md"), {
       allowPointer: true,
     });
     expect(result).toBe(false);
   });
 
-  it("safe-io aceita AGENTS.md com allowPointer=true", () => {
+  it("safe-io accepts AGENTS.md with allowPointer=true", () => {
     const result = safeIo.isInsideAllowlist(repoRoot, nodePath.join(repoRoot, "AGENTS.md"), {
       allowPointer: true,
     });
     expect(result).toBe(true);
   });
 
-  it("safe-io aceita CLAUDE.md com allowPointer=true", () => {
+  it("safe-io accepts CLAUDE.md with allowPointer=true", () => {
     const result = safeIo.isInsideAllowlist(repoRoot, nodePath.join(repoRoot, "CLAUDE.md"), {
       allowPointer: true,
     });
     expect(result).toBe(true);
   });
 
-  it("safe-io recusa AGENTS.md SEM allowPointer (regra #1)", () => {
+  it("safe-io refuses AGENTS.md WITHOUT allowPointer (rule #1)", () => {
     const result = safeIo.isInsideAllowlist(repoRoot, nodePath.join(repoRoot, "AGENTS.md"));
     expect(result).toBe(false);
   });
 
-  it("ensurePointerFile recusa nome inválido", async () => {
+  it("ensurePointerFile refuses an invalid name", async () => {
     await expect(
       ensurePointerFile(repoRoot, "README.md" as PointerFile),
     ).rejects.toThrow(/Invalid pointer file/);

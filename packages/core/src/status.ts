@@ -1,13 +1,13 @@
 /**
- * status — relatório completo do estado da wiki + índice.
+ * status — comprehensive report on the state of the wiki + index.
  *
- * Fase 1: arquivos indexados, símbolos por kind, breakdown por linguagem,
- *         top-N arquivos com mais símbolos.
- * Fase 2: dívida aberta (changed/moved/deleted) por assignee,
- *         undocumented symbols.
+ * Phase 1: indexed files, symbols by kind, breakdown by language,
+ *          top-N files with the most symbols.
+ * Phase 2: open debt (changed/moved/deleted) by assignee,
+ *          undocumented symbols.
  *
- * Modo human: texto multi-linha.
- * Modo JSON: objeto completo (estruturado pra agentes).
+ * Human mode: multi-line text.
+ * JSON mode: complete object (structured for agents).
  */
 
 import * as nodePath from "node:path";
@@ -51,7 +51,7 @@ function anchoredLangs(): ReadonlySet<string> {
 }
 
 export interface StatusOptions {
-  /** Quantos arquivos mostrar no top-N (default 10). */
+  /** How many files to show in the top-N (default 10). */
   topN?: number;
 }
 
@@ -133,10 +133,10 @@ export interface StatusReport {
     >;
   };
   /**
-   * Contabilidade incremental (Fase 5 — SPEC §"Contabilidade de tokens"):
-   * mostra quantos tokens foram emitidos em pacotes `update` e quantos
-   * foram escritos de volta. Tese do produto: eficiência = write/package.
-   * null se nunca houve update (estado inicial).
+   * Incremental accounting (Phase 5 — SPEC §"Token accounting"):
+   * shows how many tokens were emitted in `update` packages and how many
+   * were written back. Product thesis: efficiency = write/package.
+   * null if there was never an update (initial state).
    */
   metrics: UpdateMetricsSnapshot | null;
   /**
@@ -195,7 +195,7 @@ export async function run(
     if (report.debt.items.length > 0) {
       await applyRiskRanking(db, absRoot, report, config);
     }
-    // Métricas incrementais (best-effort — falha aqui não quebra status)
+    // Incremental metrics (best-effort — failure here does not break status)
     try {
       report.metrics = await snapshotMetrics(absRoot);
     } catch {
@@ -347,9 +347,9 @@ function collect(
       sample: undocRows.slice(0, 20),
       byRole: undocumentedByRole,
     },
-    // metrics é setado por run() após collect (precisa repoRoot, não db)
+    // metrics is set by run() after collect (requires repoRoot, not db)
     metrics: null,
-    // degraded é setado por run() após collect (disk walk, não db)
+    // degraded is set by run() after collect (disk walk, not db)
     degraded: { total: 0, pages: [] },
     meta: {
       schemaVersion: versionRow ? Number.parseInt(versionRow.value, 10) : 0,

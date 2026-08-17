@@ -1,32 +1,32 @@
 /**
- * E2E Fase 5 — fluxo ponta a ponta: hook detecta → agente paga via MCP → verify limpo.
+ * E2E Phase 5 — end-to-end flow: hook detects → agent pays via MCP → clean verify.
  *
- * Critério de aceite (SPEC §Fase 5):
- *   "fluxo de ponta a ponta — agente altera código, hook detecta, agente paga
- *    a dívida via MCP (livewiki_write_doc), verify passa limpo (exit 0 E zero
- *    issues de qualquer severidade), manifest atualizado."
- *   "E2E deve assertar contagem de issues, não só exit code."
+ * Acceptance criterion (SPEC §Phase 5):
+ *   "end-to-end flow — agent edits code, hook detects, agent pays
+ *    the debt via MCP (livewiki_write_doc), verify passes clean (exit 0 AND zero
+ *    issues of any severity), manifest updated."
+ *   "The E2E must assert the issue count, not just the exit code."
  *
- * Cenário:
- *   1. Repo novo com código (sem wiki)
- *   2. `livewiki init` cria wiki + indexa
- *   3. Agente edita um símbolo no source (modifica corpo — não cria novo)
- *   4. Hook (`livewiki index --quiet`) detecta a mudança e gera dívida
- *   5. `livewiki status --json` confirma: debt.items > 0
- *   6. Agente paga via MCP `livewiki_write_doc` (InMemoryTransport — mesmo
- *      client MCP usado pelos agentes em produção)
- *   7. `livewiki verify`: exit 0 + ZERO issues (errors E warnings)
- *   8. `livewiki/.manifest.json`: updatedAt mudou (regra #3: disco é a verdade)
+ * Scenario:
+ *   1. Fresh repo with code (no wiki)
+ *   2. `livewiki init` creates the wiki + indexes
+ *   3. Agent edits a symbol in the source (modifies body — doesn't create a new one)
+ *   4. Hook (`livewiki index --quiet`) detects the change and generates debt
+ *   5. `livewiki status --json` confirms: debt.items > 0
+ *   6. Agent pays via MCP `livewiki_write_doc` (InMemoryTransport — the same
+ *      MCP client the agents use in production)
+ *   7. `livewiki verify`: exit 0 + ZERO issues (errors AND warnings)
+ *   8. `livewiki/.manifest.json`: updatedAt changed (rule #3: disk is the truth)
  *
- * Por que subprocess pra init/index/verify e in-process pra MCP?
- *   - subprocess: testa o binário REAL (não mocks) — o que o hook e o agente
- *     vão chamar em produção.
- *   - in-process MCP: o MCP server é o que o agente usa; InMemoryTransport
- *     é o mesmo client MCP usado pelos testes da Fase 4. Não precisa de
- *     subprocess stdio (que adiciona flakiness).
+ * Why subprocess for init/index/verify and in-process for MCP?
+ *   - subprocess: tests the REAL binary (no mocks) — what the hook and the agent
+ *     will call in production.
+ *   - in-process MCP: the MCP server is what the agent uses; InMemoryTransport
+ *     is the same MCP client the Phase 4 tests use. No stdio subprocess
+ *     needed (which adds flakiness).
  *
- * Importante: usa o CLI compilado em packages/cli/dist/index.js. O test
- * assume `pnpm -r build` foi rodado (igual aos outros E2E da CLI).
+ * Important: uses the CLI compiled at packages/cli/dist/index.js. The test
+ * assumes `pnpm -r build` was run (same as the other CLI E2Es).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -58,7 +58,7 @@ interface SubprocessResult {
   stderr: string;
 }
 
-/** Roda o CLI livewiki como subprocess. Captura stdout/stderr/code. */
+/** Runs the livewiki CLI as a subprocess. Captures stdout/stderr/code. */
 function runCli(args: readonly string[], cwd: string): Promise<SubprocessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliBin, ...args, "--repo", cwd], {
@@ -103,15 +103,15 @@ interface VerifyOutput {
   rawStdout: string;
 }
 
-/** Roda `livewiki verify --json` e parseia o output. */
+/** Runs `livewiki verify --json` and parses the output. */
 async function runVerify(repoRoot: string): Promise<VerifyOutput> {
   const r = await runCli(["verify", "--json"], repoRoot);
-  // verify pode emitir texto antes do JSON em modo human, mas com --json é só JSON
+  // verify may emit text before the JSON in human mode, but with --json it's only JSON
   let parsed: { ok?: boolean; issues?: VerifyOutput["issues"] } = {};
   try {
     parsed = JSON.parse(r.stdout);
   } catch {
-    // fallback: tenta extrair JSON do stdout
+    // fallback: try to extract JSON from stdout
     const match = r.stdout.match(/\{[\s\S]*\}/);
     if (match) parsed = JSON.parse(match[0]);
   }
@@ -123,12 +123,12 @@ async function runVerify(repoRoot: string): Promise<VerifyOutput> {
   };
 }
 
-describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
+describe("E2E Phase 5 — end-to-end flow (hook → MCP → verify)", () => {
   let repoRoot: string;
 
   beforeEach(async () => {
     repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-phase5-"));
-    // Setup source code: 1 arquivo, 2 funções
+    // Setup source code: 1 file, 2 functions
     await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "src/auth.ts"),
@@ -150,19 +150,19 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     await nodeFs.rm(repoRoot, { recursive: true, force: true });
   });
 
-  it("fluxo completo: edit → hook → MCP write_doc → verify zero issues → manifest atualizado", async () => {
-    // ── PASSO 1: livewiki init ───────────────────────────────────────────
+  it("full flow: edit → hook → MCP write_doc → verify zero issues → manifest updated", async () => {
+    // ── STEP 1: livewiki init ───────────────────────────────────────────
     const initResult = await runCli(["init"], repoRoot);
-    expect(initResult.code, `init falhou: ${initResult.stderr}`).toBe(0);
+    expect(initResult.code, `init failed: ${initResult.stderr}`).toBe(0);
 
-    // Verifica que wiki + index foram criados
+    // Checks that wiki + index were created
     expect(nodeFsSync.existsSync(nodePath.join(repoRoot, "livewiki", "quickstart.md"))).toBe(true);
     expect(nodeFsSync.existsSync(nodePath.join(repoRoot, ".livewiki", "index.db"))).toBe(true);
     expect(nodeFsSync.existsSync(nodePath.join(repoRoot, "livewiki", ".manifest.json"))).toBe(true);
 
-    // ── PASSO 1.5: agente cria página wiki inicial ancorada (pra ter dívida depois) ──
-    // Sem página ancorada, mudar o source não gera dívida (ledger detecta,
-    // mas sem anchor correspondente não vira debt com wiki_path).
+    // ── STEP 1.5: agent creates an initial anchored wiki page (to have debt later) ──
+    // Without an anchored page, changing the source generates no debt (the ledger detects it,
+    // but without a matching anchor it doesn't become debt with a wiki_path).
     const initialPage = [
       "---",
       "title: Auth module",
@@ -193,11 +193,11 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     } finally {
       await teardown(mcp1);
     }
-    expect(pageWriteResult?.isError, "write_doc inicial deveria passar").toBeFalsy();
+    expect(pageWriteResult?.isError, "initial write_doc should pass").toBeFalsy();
 
-    // CRÍTICO: rodar index ANTES da modificação. write_doc escreve o
-    // arquivo mas NÃO re-rodar o ledger — os anchors precisam entrar no
-    // DB com o hash ANTIGO pra próxima mudança ser detectável.
+    // CRITICAL: run index BEFORE the modification. write_doc writes the
+    // file but does NOT re-run the ledger — the anchors need to enter the
+    // DB with the OLD hash so the next change is detectable.
     const indexBeforeChange = await runCli(["index"], repoRoot);
     const acceptInitial = await runCli([
       "baseline",
@@ -207,21 +207,21 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
       "--all",
     ], repoRoot);
     expect(acceptInitial.code, `baseline accept failed: ${acceptInitial.stderr}`).toBe(0);
-    expect(indexBeforeChange.code, `index pré-modify falhou: ${indexBeforeChange.stderr}`).toBe(0);
+    expect(indexBeforeChange.code, `index pre-modify failed: ${indexBeforeChange.stderr}`).toBe(0);
 
-    // Snapshot do manifest (updatedAt atual)
+    // Snapshot of the manifest (current updatedAt)
     const manifestBeforeRaw = await nodeFs.readFile(
       nodePath.join(repoRoot, "livewiki", ".manifest.json"),
       "utf8",
     );
     const manifestBefore = JSON.parse(manifestBeforeRaw) as { updatedAt: string };
 
-    // ── PASSO 2: agente altera código (muda corpo de `validate`) ─────────
+    // ── STEP 2: agent edits code (changes the body of `validate`) ─────────
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "src/auth.ts"),
       [
         "export function validate(token: string): boolean {",
-        "  // CHANGED: agora exige length > 5 (era > 0)",
+        "  // CHANGED: now requires length > 5 (was > 0)",
         "  return token.length > 5;",
         "}",
         "",
@@ -233,15 +233,15 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
       "utf8",
     );
 
-    // ── PASSO 3: hook (git post-commit) — `livewiki index --quiet` ───────
+    // ── STEP 3: hook (git post-commit) — `livewiki index --quiet` ───────
     const indexResult = await runCli(["index", "--quiet"], repoRoot);
-    expect(indexResult.code, `index falhou: ${indexResult.stderr}`).toBe(0);
-    // Quiet mode: stdout vazio (nenhuma nota)
+    expect(indexResult.code, `index failed: ${indexResult.stderr}`).toBe(0);
+    // Quiet mode: empty stdout (no note)
     expect(indexResult.stdout.trim()).toBe("");
 
-    // ── PASSO 4: status confirma dívida aberta ──────────────────────────
+    // ── STEP 4: status confirms open debt ──────────────────────────
     const statusResult = await runCli(["status", "--json"], repoRoot);
-    expect(statusResult.code, `status falhou: ${statusResult.stderr}`).toBe(0);
+    expect(statusResult.code, `status failed: ${statusResult.stderr}`).toBe(0);
     const status = JSON.parse(statusResult.stdout) as {
       debt: {
         repository: {
@@ -252,8 +252,8 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     };
     expect(status.debt.repository.total, "expected portable debt after the source change")
       .toBeGreaterThanOrEqual(1);
-    // A dívida pode estar em qualquer posição (ordenada por detected_at).
-    // Procuramos o item específico do validate (que foi o que mudou).
+    // The debt can be in any position (ordered by detected_at).
+    // We look for the specific validate item (which is what changed).
     const validateDebt = status.debt.repository.items.find(
       (i) => i.symbol_key === "src/auth.ts#validate",
     );
@@ -261,9 +261,9 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     expect(validateDebt!.event).toBe("changed");
     expect(validateDebt!.wiki_path).toBe("livewiki/auth.md");
 
-    // ── PASSO 5: agente paga via MCP write_doc ─────────────────────────
-    // Reescreve a página com âncora nova (mesmo symbol_key — só mudou corpo,
-    // hash mudou, ledger gera 'changed'). O agente documenta a mudança.
+    // ── STEP 5: agent pays via MCP write_doc ─────────────────────────
+    // Rewrites the page with a new anchor (same symbol_key — only the body changed,
+    // the hash changed, the ledger generates 'changed'). The agent documents the change.
     const updatedPage = [
       "---",
       "title: Auth module",
@@ -299,21 +299,21 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     } finally {
       await teardown(mcp2);
     }
-    expect(writeResult?.isError, `write_doc falhou: ${JSON.stringify(writeResult)}`).toBeFalsy();
+    expect(writeResult?.isError, `write_doc failed: ${JSON.stringify(writeResult)}`).toBeFalsy();
 
-    // ── PASSO 6: verify — exit 0 + ZERO issues (errors E warnings) ────
+    // ── STEP 6: verify — exit 0 + ZERO issues (errors AND warnings) ────
     const verifyResult = await runVerify(repoRoot);
     expect(verifyResult.exitCode, `verify exit ${verifyResult.exitCode}. Issues: ${JSON.stringify(verifyResult.issues)}`).toBe(0);
-    // CRITÉRIO DA SPEC: assertar CONTAGEM de issues, não só exit code
-    expect(verifyResult.issues.length, `verify reportou ${verifyResult.issues.length} issues: ${JSON.stringify(verifyResult.issues)}`).toBe(0);
-    expect(verifyResult.ok, "verify.ok deve ser true").toBe(true);
+    // SPEC CRITERION: assert the issue COUNT, not just the exit code
+    expect(verifyResult.issues.length, `verify reported ${verifyResult.issues.length} issues: ${JSON.stringify(verifyResult.issues)}`).toBe(0);
+    expect(verifyResult.ok, "verify.ok should be true").toBe(true);
 
-    // ── PASSO 7: manifest atualizado — re-init atualiza snapshot hash ──
-    // (write_doc não atualiza manifest por design — Fase 4 E2E cobre write_doc.
-    //  O handoff do manifest acontece via `init` (snapshot de livewiki/).
-    //  Em produção, o agente roda `init` ao fechar a sessão; aqui simulamos.)
+    // ── STEP 7: manifest updated — re-init updates the snapshot hash ──
+    // (write_doc doesn't update the manifest by design — the Phase 4 E2E covers write_doc.
+    //  The manifest handoff happens via `init` (snapshot of livewiki/).
+    //  In production, the agent runs `init` when closing the session; here we simulate it.)
     const initAgain = await runCli(["init"], repoRoot);
-    expect(initAgain.code, `init pós-pagamento falhou: ${initAgain.stderr}`).toBe(0);
+    expect(initAgain.code, `init post-payment failed: ${initAgain.stderr}`).toBe(0);
     const manifestAfterRaw = await nodeFs.readFile(
       nodePath.join(repoRoot, "livewiki", ".manifest.json"),
       "utf8",
@@ -324,28 +324,28 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     };
     expect(
       manifestAfter.updatedAt,
-      "manifest.updatedAt não mudou após init pós-pagamento",
+      "manifest.updatedAt did not change after the post-payment init",
     ).not.toBe(manifestBefore.updatedAt);
     expect(
       manifestAfter.snapshotHash,
-      "manifest.snapshotHash deveria refletir auth.md novo",
+      "manifest.snapshotHash should reflect the new auth.md",
     ).not.toBe(JSON.parse(manifestBeforeRaw).snapshotHash);
 
-    // ── PASSO 8 (sanity): status agora mostra debt zerada ──────────────
+    // ── STEP 8 (sanity): status now shows zeroed debt ──────────────
     const statusAfter = await runCli(["status", "--json"], repoRoot);
     const statusAfterJson = JSON.parse(statusAfter.stdout) as {
       debt: { repository: { total: number } };
     };
-    // Após write_doc bem-sucedido, a dívida deveria ter sido resolvida
-    // (re-index detecta que a âncora foi reescrita, ledger resolve).
-    // Pode ser 0 (limpa) ou diferente do original — não exige 0, mas checa
-    // que diminuiu.
+    // After a successful write_doc, the debt should have been resolved
+    // (re-index detects that the anchor was rewritten, the ledger resolves it).
+    // It can be 0 (clean) or different from the original — doesn't require 0, but checks
+    // that it decreased.
     expect(statusAfterJson.debt.repository.total, "debt did not decrease after acceptance")
       .toBeLessThan(status.debt.repository.total);
   }, 60_000);
 
-  it("write_doc rejeita página com anchor quebrada E rollback restaura estado anterior", async () => {
-    // Setup mínimo: init + página ancorada
+  it("write_doc rejects a page with a broken anchor AND rollback restores the previous state", async () => {
+    // Minimal setup: init + an anchored page
     const initResult = await runCli(["init"], repoRoot);
     expect(initResult.code).toBe(0);
 
@@ -374,7 +374,7 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
       await teardown(mcp1);
     }
 
-    // Página com anchor quebrada (symbol inexistente no índice)
+    // Page with a broken anchor (symbol nonexistent in the index)
     const brokenPage = [
       "---",
       "title: Auth",
@@ -399,11 +399,11 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
     } finally {
       await teardown(mcp2);
     }
-    expect(brokenResult?.isError, "write_doc deveria rejeitar anchor quebrada").toBe(true);
+    expect(brokenResult?.isError, "write_doc should reject a broken anchor").toBe(true);
 
-    // Rollback: o arquivo NÃO deveria existir (ou ser o bom anterior se write atomic)
+    // Rollback: the file should NOT exist (or be the previous good one if the write is atomic)
     const fileExists = nodeFsSync.existsSync(nodePath.join(repoRoot, "livewiki", "auth.md"));
-    // Após rejeição + rollback, o arquivo ou não existe OU é o bom anterior
+    // After rejection + rollback, the file either doesn't exist OR is the previous good one
     if (fileExists) {
       const content = await nodeFs.readFile(
         nodePath.join(repoRoot, "livewiki", "auth.md"),
@@ -415,17 +415,17 @@ describe("E2E Fase 5 — fluxo ponta a ponta (hook → MCP → verify)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (R) Achado do revisor: `livewiki init` deve adicionar `.livewiki/` ao
-// .gitignore do repo-alvo (regra #3 SPEC: banco derivado, nunca viaja no git).
-// Idempotente: re-init é no-op se já contém.
+// (R) Reviewer finding: `livewiki init` must add `.livewiki/` to the
+// target repo's .gitignore (SPEC rule #3: derived database, never travels in git).
+// Idempotent: re-init is a no-op if it already contains it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("E2E Fase 5 — Achado R: livewiki init adiciona .livewiki/ ao .gitignore", () => {
+describe("E2E Phase 5 — Finding R: livewiki init adds .livewiki/ to .gitignore", () => {
   let repoRoot: string;
 
   beforeEach(async () => {
     repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-r-gitignore-"));
-    // Setup source mínimo (init precisa de algo pra indexar)
+    // Minimal source setup (init needs something to index)
     await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
     await nodeFs.writeFile(
       nodePath.join(repoRoot, "src/lib.ts"),
@@ -438,14 +438,14 @@ describe("E2E Fase 5 — Achado R: livewiki init adiciona .livewiki/ ao .gitigno
     await nodeFs.rm(repoRoot, { recursive: true, force: true });
   });
 
-  it("init cria .gitignore com .livewiki/ quando ausente", async () => {
-    // .gitignore NÃO existe
+  it("init creates .gitignore with .livewiki/ when absent", async () => {
+    // .gitignore does NOT exist
     expect(nodeFsSync.existsSync(nodePath.join(repoRoot, ".gitignore"))).toBe(false);
 
     const r = await runCli(["init"], repoRoot);
-    expect(r.code, `init falhou: ${r.stderr}`).toBe(0);
+    expect(r.code, `init failed: ${r.stderr}`).toBe(0);
 
-    // .gitignore foi criado com .livewiki/ dentro de bloco gerenciado
+    // .gitignore was created with .livewiki/ inside a managed block
     const giPath = nodePath.join(repoRoot, ".gitignore");
     expect(nodeFsSync.existsSync(giPath)).toBe(true);
     const content = await nodeFs.readFile(giPath, "utf8");
@@ -454,8 +454,8 @@ describe("E2E Fase 5 — Achado R: livewiki init adiciona .livewiki/ ao .gitigno
     expect(content).toContain("# livewiki:end");
   });
 
-  it("init PRESERVA entries existentes do user (append, não overwrite)", async () => {
-    // .gitignore já existe com entries do user
+  it("init PRESERVES existing user entries (append, not overwrite)", async () => {
+    // .gitignore already exists with user entries
     const userGi = "node_modules/\ndist/\n*.log\n";
     await nodeFs.writeFile(nodePath.join(repoRoot, ".gitignore"), userGi, "utf8");
 
@@ -463,18 +463,18 @@ describe("E2E Fase 5 — Achado R: livewiki init adiciona .livewiki/ ao .gitigno
     expect(r.code).toBe(0);
 
     const content = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
-    // Entries do user preservadas
+    // User entries preserved
     expect(content).toContain("node_modules/");
     expect(content).toContain("dist/");
     expect(content).toContain("*.log");
-    // .livewiki/ adicionado
+    // .livewiki/ added
     expect(content).toContain(".livewiki/");
-    // Bloco gerenciado presente
+    // Managed block present
     expect(content).toContain("# livewiki:start");
     expect(content).toContain("# livewiki:end");
   });
 
-  it("init idempotente: rodar 2x não duplica .livewiki/", async () => {
+  it("init is idempotent: running twice doesn't duplicate .livewiki/", async () => {
     await runCli(["init"], repoRoot);
     const first = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
 
@@ -482,37 +482,37 @@ describe("E2E Fase 5 — Achado R: livewiki init adiciona .livewiki/ ao .gitigno
     const second = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
 
     expect(second).toBe(first);
-    // Conta exata de ".livewiki/" — só 1 (não duplicada)
+    // Exact count of ".livewiki/" — only 1 (not duplicated)
     const matches = second.match(/^\.livewiki\/$/gm) ?? [];
     expect(matches.length).toBe(1);
   });
 
-  it("init respeita entry existente do user com mesmo nome (não duplica)", async () => {
-    // User já adicionou .livewiki/ manualmente (fora do bloco gerenciado)
+  it("init respects an existing user entry with the same name (doesn't duplicate)", async () => {
+    // The user already added .livewiki/ manually (outside the managed block)
     await nodeFs.writeFile(nodePath.join(repoRoot, ".gitignore"), ".livewiki/\n", "utf8");
 
     const r = await runCli(["init"], repoRoot);
     expect(r.code).toBe(0);
 
     const content = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
-    // Não duplicou — entry do user continua sendo a única
+    // Didn't duplicate — the user's entry remains the only one
     const matches = content.match(/^\.livewiki\/$/gm) ?? [];
     expect(matches.length).toBe(1);
   });
 
-  it("init --batch também adiciona .gitignore (regression: deve rodar antes do batch)", async () => {
-    // Garante que init (com ou sem --batch) faz o trabalho de gitignore
-    // ANTES de qualquer outra coisa — batch não deveria ter que cuidar disso.
+  it("init --batch also adds .gitignore (regression: must run before the batch)", async () => {
+    // Ensures init (with or without --batch) does the gitignore work
+    // BEFORE anything else — the batch shouldn't have to care about it.
     const r = await runCli(["init", "--batch"], repoRoot);
-    // init --batch pode falhar se não tiver LLM config; o que importa é o .gitignore
+    // init --batch may fail if no LLM is configured; what matters is the .gitignore
     const giExists = nodeFsSync.existsSync(nodePath.join(repoRoot, ".gitignore"));
     if (giExists) {
       const content = await nodeFs.readFile(nodePath.join(repoRoot, ".gitignore"), "utf8");
       expect(content).toContain(".livewiki/");
     } else {
-      // Se r.code !== 0 (ex.: batch aborted por falta de config), init base
-      // ainda pode ter rodado parcialmente. Verifica stderr.
-      // Não falhamos o teste aqui — o ponto é documentar o comportamento.
+      // If r.code !== 0 (e.g. batch aborted due to missing config), the base init
+      // may still have run partially. Check stderr.
+      // We don't fail the test here — the point is to document the behavior.
       expect(r.code).not.toBe(0);
     }
   }, 60_000);

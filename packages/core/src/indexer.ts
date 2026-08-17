@@ -1,25 +1,25 @@
 /**
- * indexer — orquestra: walk → read → hash → parse → extract → upsert.
+ * indexer — orchestrates: walk → read → hash → parse → extract → upsert.
  *
- * SPEC §"Fase 1 — Indexador":
- *   - extrai símbolos (funções, classes, métodos, exports)
- *   - calcula hashes
- *   - persiste no SQLite schema
- *   - respeita `.gitignore`
+ * SPEC §"Phase 1 — Indexer":
+ *   - extracts symbols (functions, classes, methods, exports)
+ *   - computes hashes
+ *   - persists to the SQLite schema
+ *   - respects `.gitignore`
  *
- * Incremental: arquivos com mesmo `content_hash` que já estão no DB são pulados
- * (read + hash só). Arquivos novos são parseados. Arquivos sumidos do disco
- * são marcados com `status='deleted'` nos symbols.
+ * Incremental: files with the same `content_hash` already in the DB are skipped
+ * (read + hash only). New files are parsed. Files gone from disk are
+ * marked with `status='deleted'` on their symbols.
  *
  * Performance:
- *   - alvo SPEC: 50k LOC < 30s primeiro run, < 2s incremental
- *   - tudo dentro de uma transaction SQLite (commit atômico)
- *   - readFile em série (I/O bound; paralelizar não ajuda em SSD)
- *   - tree-sitter parse em série (CPU bound; paralelizar não ajuda em 1 core)
+ *   - SPEC target: 50k LOC < 30s first run, < 2s incremental
+ *   - everything inside one SQLite transaction (atomic commit)
+ *   - readFile serially (I/O bound; parallelizing does not help on SSD)
+ *   - tree-sitter parse serially (CPU bound; parallelizing does not help on 1 core)
  *
- * Auto-init: se `.livewiki/` não existe, cria silenciosamente (SPEC §"index",
- * commit 300ad58). Se `livewiki/` também não existe, emite nota informativa
- * sugerindo `livewiki init` (Fase 3) — exit 0.
+ * Auto-init: if `.livewiki/` does not exist, it is created silently (SPEC §"index",
+ * commit 300ad58). If `livewiki/` does not exist either, an info note is emitted
+ * suggesting `livewiki init` (Phase 3) — exit 0.
  *
  * EOL-insensitive hashing + legacy silent migration (roadmap item 12):
  * file text is normalized with `normalizeEol` (CRLF → LF) ONCE right after
@@ -96,9 +96,9 @@ import { openIndex, type FileRow, type SymbolRow } from "./db.js";
 import { resolveCalls } from "./call-resolution.js";
 
 export interface IndexOptions {
-  /** Patterns extras a ignorar (além de .gitignore + defaults). */
+  /** Extra patterns to ignore (beyond .gitignore + defaults). */
   extraIgnores?: readonly string[];
-  /** Quando true, suprime notas informativas (modo JSON). */
+  /** When true, suppresses info notes (JSON mode). */
   quiet?: boolean;
 }
 
@@ -128,19 +128,19 @@ export const MAX_FILE_BYTES = 1024 * 1024;
 export const BINARY_SNIFF_BYTES = 8 * 1024;
 
 /**
- * Roda o index incremental. Idempotente: rodar 2x sem mudanças no repo é
- * barato (só walk + 1 hash por arquivo).
+ * Runs the incremental index. Idempotent: running it twice with no repo
+ * changes is cheap (just walk + 1 hash per file).
  */
 export async function run(repoRoot: string, opts: IndexOptions = {}): Promise<IndexResult> {
   const startedAt = Date.now();
   const absRoot = nodePath.resolve(repoRoot);
 
-  // 1. Garante `.livewiki/` existe (sem aviso se `livewiki/` também existir).
-  //    Se nem `livewiki/` existe, emite nota informativa (não erro) — mas só
-  //    se NÃO estiver em quiet (hooks da Fase 5 não devem spammar o terminal).
+  // 1. Ensure `.livewiki/` exists (no warning if `livewiki/` also exists).
+  //    If not even `livewiki/` exists, emit an info note (not an error) — but
+  //    only when NOT in quiet mode (Phase 5 hooks must not spam the terminal).
   await ensureLivewikiDir(absRoot, Boolean(opts.quiet));
 
-  // 2. Resolve dbPath via safe-io (revalida allowlist + symlinks).
+  // 2. Resolve dbPath via safe-io (re-validates allowlist + symlinks).
   const dbPathRel = ".livewiki/index.db";
   const dbPath = await safeIo.resolveAndValidate(absRoot, dbPathRel);
 
@@ -149,7 +149,7 @@ export async function run(repoRoot: string, opts: IndexOptions = {}): Promise<In
     ...(opts.extraIgnores ? { extraIgnores: opts.extraIgnores } : {}),
   });
 
-  // 4. Open DB e orquestra
+  // 4. Open the DB and orchestrate
   const db = openIndex(dbPath);
   try {
     return await orchestrateIndex(db, absRoot, walked, startedAt);
@@ -159,11 +159,11 @@ export async function run(repoRoot: string, opts: IndexOptions = {}): Promise<In
 }
 
 async function ensureLivewikiDir(absRoot: string, quiet: boolean): Promise<void> {
-  // Cria `.livewiki/` (allowlist — safe-io). É cache derivado.
+  // Create `.livewiki/` (allowlist — safe-io). It is a derived cache.
   try {
     await safeIo.mkdir(absRoot, ".livewiki");
   } catch {
-    // Se falhou por motivo diferente de "já existe", re-lança.
+    // If it failed for a reason other than "already exists", re-throw.
     if (!(await nodeFs.stat(nodePath.join(absRoot, ".livewiki")).catch(() => null))) {
       throw new Error("failed to create .livewiki/");
     }
@@ -192,7 +192,7 @@ async function orchestrateIndex(
 ): Promise<IndexResult> {
   await initParser();
 
-  // Carrega mapa path → file row atual pra comparar
+  // Load the current path → file row map for comparison
   const existingFiles = new Map<string, FileRow>();
   for (const row of db.prepare("SELECT * FROM files").all() as FileRow[]) {
     existingFiles.set(row.path, row);
@@ -245,8 +245,8 @@ async function orchestrateIndex(
     }
   }
 
-  // ── Fase A: I/O async (read + parse) FORA da transaction.
-  // better-sqlite3 transactions são síncronas e não podem conter await.
+  // ── Phase A: async I/O (read + parse) OUTSIDE the transaction.
+  // better-sqlite3 transactions are synchronous and cannot contain await.
   interface FilePlan {
     entry: { path: string; lang: string };
     content: string;
@@ -374,14 +374,14 @@ async function orchestrateIndex(
         const tree = await parseSource(ext, content);
         symbols = extractSymbolsWithRanges(tree, entry.path, content);
         calls = extractCalls(tree, entry.path, content);
-        // Etapa 2b: generated files (header sniff) yield zero rationale
+        // Step 2b: generated files (header sniff) yield zero rationale
         // rows — migration/protobuf revision comments are noise.
         if (!isLikelyGenerated(content)) {
           rationales = extractRationales(tree, entry.path, content);
         }
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.warn(`[livewiki] parse falhou em ${entry.path}: ${(err as Error).message}`);
+        console.warn(`[livewiki] parse failed in ${entry.path}: ${(err as Error).message}`);
       }
     }
 
@@ -399,7 +399,7 @@ async function orchestrateIndex(
     });
   }
 
-  // ── Fase B: writes SÍNCRONOS dentro de UMA transaction (atomicidade + speed).
+  // ── Phase B: SYNCHRONOUS writes inside ONE transaction (atomicity + speed).
   const seenPaths = new Set(walked.map((w) => w.path));
   const result = {
     filesAdded: 0,
@@ -431,14 +431,14 @@ async function orchestrateIndex(
     const updateFile = db.prepare(
       "UPDATE files SET lang = ?, content_hash = ?, size = ?, mtime = ?, indexed_at = ?, status = 'active' WHERE id = ?",
     );
-    // Reativar arquivo que estava deleted: limpa symbols antigos e reinsere.
+    // Reactivate a file that was deleted: clear the old symbols and re-insert.
     const reactivateFile = db.prepare(
       "UPDATE files SET status = 'active', content_hash = ?, size = ?, mtime = ?, indexed_at = ? WHERE id = ?",
     );
-    // SOFT-DELETE em vez de hard delete (Fix A — achado da revisão Fase 2):
-    // símbolos que somem de um arquivo ATUALIZADO precisam manter a row com
-    // content_hash antigo, para que o ledger possa detectar `moved` quando
-    // esse hash aparecer em outro arquivo.
+    // SOFT-DELETE instead of hard delete (Fix A — Phase 2 review finding):
+    // symbols that disappear from an UPDATED file need to keep their row with
+    // the old content_hash, so the ledger can detect `moved` when that hash
+    // shows up in another file.
     const markSymbolsActiveDeleted = db.prepare(
       "UPDATE symbols SET status = 'deleted' WHERE file_id = ? AND status = 'active'",
     );
@@ -458,7 +458,7 @@ async function orchestrateIndex(
     const insertCall = db.prepare(
       "INSERT INTO calls (file_id, caller_key, callee_name, line, confidence) VALUES (?, ?, ?, ?, ?)",
     );
-    // Rationales mirror calls exactly (Etapa 2b): recomputed wholesale per
+    // Rationales mirror calls exactly (Step 2b): recomputed wholesale per
     // file, no soft-delete — a rationale row has no identity worth
     // preserving across a re-parse.
     const deleteRationalesForFile = db.prepare("DELETE FROM rationales WHERE file_id = ?");
@@ -485,8 +485,8 @@ async function orchestrateIndex(
       // — steady state never builds this map.
       let oldSymbolHashes: Map<string, string> | null = null;
       if (prev) {
-        // Marca os antigos como deleted (mantém content_hash no DB) antes de
-        // inserir os novos. O ledger lê os deletados pra detectar moved.
+        // Mark the old ones as deleted (keeping content_hash in the DB) before
+        // inserting the new ones. The ledger reads the deleted ones to detect moved.
         markSymbolsActiveDeleted.run(prev.id);
         updateFile.run(
           plan.entry.lang,
@@ -605,12 +605,12 @@ async function orchestrateIndex(
       }
     }
 
-    // Arquivos que existiam no DB mas não no walk → marca como deleted (file + symbols)
-// SEM deletar a file row. Isso preserva histórico para detecção de moved na
-// Fase 2 (precisamos dos symbols deletados com content_hash para matching).
+    // Files that existed in the DB but not in the walk → mark as deleted (file + symbols)
+// WITHOUT deleting the file row. This preserves history for moved detection in
+// Phase 2 (we need the deleted symbols with content_hash for matching).
     for (const [prevPath, prevRow] of existingFiles) {
       if (!seenPaths.has(prevPath)) {
-        // Conta ANTES do UPDATE (senão o WHERE filtra o que acabou de mudar).
+        // Count BEFORE the UPDATE (otherwise the WHERE filters out what just changed).
         const oldSyms = db
           .prepare("SELECT id FROM symbols WHERE file_id = ? AND status = 'active'")
           .all(prevRow.id) as { id: number }[];
@@ -663,7 +663,7 @@ async function orchestrateIndex(
   };
 }
 
-/** Usado em erros pra dar dica de suporte. */
+/** Used in errors to give a support hint. */
 export { listSupportedGrammars };
 
 /** Structural equality for GrammarState (key order in stored JSON is not

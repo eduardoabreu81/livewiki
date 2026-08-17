@@ -1,15 +1,15 @@
 /**
- * db — SQLite schema + setup do índice.
+ * db — SQLite schema + index setup.
  *
- * SPEC §"Schema do SQLite" lista as tabelas da Fase 2+. Na Fase 1 só precisamos
- * de `files`, `symbols` e `meta`. As outras tabelas são criadas vazias nas suas
- * respectivas fases — schema_version evita drift se o banco for aberto por
- * uma versão antiga.
+ * SPEC §"SQLite schema" lists the Phase 2+ tables. In Phase 1 we only need
+ * `files`, `symbols` and `meta`. The other tables are created empty in their
+ * respective phases — schema_version avoids drift if the database is opened by
+ * an old version.
  *
- * Regra #3 da SPEC: o banco é derivado. Tudo aqui é cache; a verdade está no
- * markdown do repo. Deletou `.livewiki/`? `reindex` reconstrói.
+ * SPEC rule #3: the database is derived. Everything here is cache; the truth is
+ * in the repo's markdown. Deleted `.livewiki/`? `reindex` rebuilds it.
  *
- * Localização: `<repoRoot>/.livewiki/index.db` (caminho validado via safe-io).
+ * Location: `<repoRoot>/.livewiki/index.db` (path validated via safe-io).
  */
 
 import Database from "better-sqlite3";
@@ -20,14 +20,14 @@ export const CURRENT_SCHEMA_VERSION = 9;
 export const SCHEMA_VERSION_KEY = "schema_version";
 
 /**
- * Statements idempotentes — pode rodar em DB novo ou existente.
+ * Idempotent statements — can run on a new or existing DB.
  *
- * Schema v3 (commit 6183214) adiciona:
- *   - debt.symbol_key — sobrevive ao anchor ser removida (resolve órfão)
+ * Schema v3 (commit 6183214) adds:
+ *   - debt.symbol_key — survives the anchor being removed (resolves the orphan)
  *   - idx_debt_open — partial index for open documentation work
  *
- * Schema v4 (Fase 3 — contabilidade de tokens + batch resiliente):
- *   - batch_runs.started_by, finished_at, summary_json — auditoria completa do run
+ * Schema v4 (Phase 3 — token accounting + resilient batch):
+ *   - batch_runs.started_by, finished_at, summary_json — full run audit
  */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS files (
@@ -54,9 +54,9 @@ CREATE TABLE IF NOT EXISTS symbols (
   status TEXT NOT NULL DEFAULT 'active'
 );
 
--- UNIQUE só em symbols ativos (Fix A — soft-delete em update preserva o
--- content_hash antigo; sem partial index, INSERT do novo violaria UNIQUE
--- porque o row antigo (mesmo key, status='deleted') ainda existe).
+-- UNIQUE only on active symbols (Fix A — soft-delete in update preserves the
+-- old content_hash; without the partial index, the new INSERT would violate the
+-- UNIQUE because the old row (same key, status='deleted') still exists).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_symbols_active_key
   ON symbols(key) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
@@ -193,13 +193,13 @@ CREATE INDEX IF NOT EXISTS idx_rationales_symbol_key ON rationales(symbol_key);
 `;
 
 /**
- * Migrações leves (v2 → v3): adiciona coluna `symbol_key` em `debt`, índice
- * parcial de dívida aberta, e substitui o UNIQUE inline em symbols.key por
- * um partial unique index (que respeita status='deleted').
+ * Light migrations (v2 → v3): adds the `symbol_key` column in `debt`, the
+ * partial open-debt index, and replaces the inline UNIQUE on symbols.key with
+ * a partial unique index (which respects status='deleted').
  *
- * SQLite não permite `DROP INDEX` em índice UNIQUE inline (é parte do
- * schema da tabela). Recriamos a tabela `symbols` sem o UNIQUE inline e
- * adicionamos o índice parcial.
+ * SQLite does not allow `DROP INDEX` on an inline UNIQUE index (it is part of
+ * the table schema). We recreate the `symbols` table without the inline UNIQUE
+ * and add the partial index.
  */
 export const MIGRATION_SQL_V3 = `
 ALTER TABLE debt ADD COLUMN symbol_key TEXT;
@@ -231,21 +231,21 @@ CREATE INDEX IF NOT EXISTS idx_debt_open
 `;
 
 /**
- * Migração v3 → v4 (Fase 3): estende batch_runs com auditoria do run.
- *   - finished_at: timestamp do término (null enquanto em andamento)
- *   - started_by: 'cli' | 'agent' — quem disparou o run (auditoria/handoff)
- *   - summary_json: snapshot agregado (totals, byStage, byModule) — populado
- *     ao final do run pra servir o reporte sem precisar re-processar tasks.
- *   - Índices em batch_runs.status e batch_tasks(run_id, status) — `batch
- *     status <run>` fica O(1) mesmo com muitos runs antigos.
+ * Migration v3 → v4 (Phase 3): extends batch_runs with the run audit.
+ *   - finished_at: end timestamp (null while in progress)
+ *   - started_by: 'cli' | 'agent' — who fired the run (audit/handoff)
+ *   - summary_json: aggregated snapshot (totals, byStage, byModule) — populated
+ *     at the end of the run to serve the report without re-processing tasks.
+ *   - Indexes on batch_runs.status and batch_tasks(run_id, status) — `batch
+ *     status <run>` becomes O(1) even with many old runs.
  *
- * batch_tasks.checkpoint_json é TEXT livre — o shape vive em `batch-state.ts`
- * (TypeScript types) e em SPEC §"Contabilidade de tokens (Fase 3)".
+ * batch_tasks.checkpoint_json is free TEXT — the shape lives in `batch-state.ts`
+ * (TypeScript types) and in SPEC §"Token accounting (Phase 3)".
  *
- * Por que função JS e não string SQL: o SCHEMA_SQL sempre roda com a versão
- * ATUAL (v4), o que significa que um DB recriado do zero já tem as colunas
- * novas. A migration precisa ser idempotente nesse caso — daí checar
- * PRAGMA table_info antes de ALTER TABLE ADD COLUMN (SQLite não tem
+ * Why a JS function and not a SQL string: SCHEMA_SQL always runs with the
+ * CURRENT version (v4), which means a DB recreated from scratch already has the
+ * new columns. The migration must be idempotent in that case — hence checking
+ * PRAGMA table_info before ALTER TABLE ADD COLUMN (SQLite has no
  * `ADD COLUMN IF NOT EXISTS`).
  */
 export function migrateV3ToV4(db: Database.Database): void {
@@ -268,10 +268,10 @@ export function migrateV3ToV4(db: Database.Database): void {
 }
 
 /**
- * Migração v4 → v5 (Phase 3): adiciona a tabela `calls` (grafo de chamadas
- * por símbolo). `CREATE TABLE`/`CREATE INDEX ... IF NOT EXISTS` já são
- * idempotentes — reaproveita o mesmo trecho do SCHEMA_SQL em vez de duplicar,
- * então um DB recriado do zero e um DB migrado convergem pro mesmo shape.
+ * Migration v4 → v5 (Phase 3): adds the `calls` table (call graph per symbol).
+ * `CREATE TABLE`/`CREATE INDEX ... IF NOT EXISTS` are already idempotent — it
+ * reuses the same statements as SCHEMA_SQL instead of duplicating, so a
+ * from-scratch DB and a migrated DB converge to the same shape.
  */
 export function migrateV4ToV5(db: Database.Database): void {
   db.exec(`
@@ -384,9 +384,9 @@ export function migrateV8ToV9(db: Database.Database): void {
 }
 
 /**
- * Migrações pendentes para uma versão alvo. Mapeadas por versão de destino.
- * Cada entry é o SQL (string) OU a função (db) => void pra aplicar quando o
- * DB está em uma versão menor.
+ * Pending migrations for a target version. Mapped by destination version. Each
+ * entry is the SQL (string) OR the function (db) => void to apply when the DB is
+ * at a lower version.
  */
 export function migrationsFor(
   fromVersion: number,
@@ -398,9 +398,9 @@ export function migrationsFor(
 }
 
 /**
- * Migrações pós-v3 que precisam ser funções JS (idempotência em colunas).
- * Separadas de migrationsFor() porque executamos funções e strings de forma
- * diferente — e migrationsFor() precisa ser determinístico em testes.
+ * Post-v3 migrations that must be JS functions (column idempotence). Separated
+ * from migrationsFor() because we execute functions and strings differently —
+ * and migrationsFor() must be deterministic in tests.
  */
 export function postV3Migrations(
   fromVersion: number,
@@ -417,15 +417,17 @@ export function postV3Migrations(
 }
 
 /**
- * Abre (ou cria) o banco de índice em `dbPath`. Roda migrations idempotentes
- * e grava `schema_version` em `meta`.
+ * Opens (or creates) the index database at `dbPath`. Runs idempotent migrations
+ * and writes `schema_version` in `meta`.
  *
- * Não valida path — caller (indexer.ts) já passou pelo safe-io.
+ * Does not validate the path — the caller (indexer.ts) already went through
+ * safe-io.
  */
 export function openIndex(dbPath: string): Database.Database {
   const dir = nodePath.dirname(dbPath);
-  // O diretório .livewiki/ já foi criado pelo caller. Não usar mkdir recursivo
-  // aqui pra falhar fechado se ele sumir entre o setup e a abertura.
+  // The .livewiki/ directory was already created by the caller. Do not use
+  // recursive mkdir here so it fails closed if it vanishes between the setup and
+  // the open.
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
@@ -461,9 +463,9 @@ export function openIndex(dbPath: string): Database.Database {
   } else {
     const stored = Number.parseInt(versionRow.value, 10);
     if (stored !== CURRENT_SCHEMA_VERSION) {
-      // Aplica migrações pendentes antes de continuar. `migrationsFor()` aceita
-      // `string | ((db) => void)` — discriminamos por tipo porque db.exec só
-      // aceita string (e funções precisam receber `db` direto, ver
+      // Applies pending migrations before continuing. `migrationsFor()` accepts
+      // `string | ((db) => void)` — we discriminate by type because db.exec only
+      // accepts a string (and functions must receive `db` directly, see
       // postV3Migrations()).
       for (const migration of migrationsFor(stored, CURRENT_SCHEMA_VERSION)) {
         if (typeof migration === "function") {
@@ -472,7 +474,7 @@ export function openIndex(dbPath: string): Database.Database {
           db.exec(migration);
         }
       }
-      // Migrações pós-v3 (funções JS pra idempotência em colunas).
+      // Post-v3 migrations (JS functions for column idempotence).
       for (const fn of postV3Migrations(stored, CURRENT_SCHEMA_VERSION)) {
         fn(db);
       }

@@ -1,34 +1,34 @@
 /**
- * server — MCP server do livewiki (Fase 4).
+ * server — the livewiki MCP server (Phase 4).
  *
- * SPEC §"MCP tools" define 6 tools:
- *   - livewiki_quickstart  — retorna livewiki/quickstart.md (entry point)
- *   - livewiki_read        — lê página da wiki por path
- *   - livewiki_search      — busca full-text via SQLite FTS5
- *   - livewiki_debt        — dívida aberta (equivale a status --json)
- *   - livewiki_write_doc   — escreve/atualiza página (allowlist + verify)
- *   - livewiki_resolve_debt— marca dívida como paga
+ * SPEC §"MCP tools" defines 6 tools:
+ *   - livewiki_quickstart  — returns livewiki/quickstart.md (entry point)
+ *   - livewiki_read        — reads a wiki page by path
+ *   - livewiki_search      — full-text search via SQLite FTS5
+ *   - livewiki_debt        — open debt (equivalent to status --json)
+ *   - livewiki_write_doc   — writes/updates a page (allowlist + verify)
+ *   - livewiki_resolve_debt— marks debt as paid
  *
  * Phase 3 adds a 7th tool:
- *   - livewiki_impact      — blast radius de um símbolo (callers + páginas afetadas)
+ *   - livewiki_impact      — blast radius of a symbol (callers + affected pages)
  *
  * Agent bootstrap adds an 8th tool:
- *   - livewiki_next_task   — entrega a próxima tarefa validada da fila MCP
+ *   - livewiki_next_task   — hands out the next validated task from the MCP queue
  *
- * Princípio arquitetural: escrita passa por core/safe-io (regra #1 da SPEC).
- * write_doc valida o path contra allowlist (livewiki/, .livewiki/) E roda
- * `verify` no conteúdo antes de aceitar. Path fora de livewiki/ é erro;
- * conteúdo com broken_anchor é rejeitado com detalhe.
+ * Architectural principle: writes go through core/safe-io (SPEC rule #1).
+ * write_doc validates the path against the allowlist (livewiki/, .livewiki/) AND runs
+ * `verify` on the content before accepting. A path outside livewiki/ is an error;
+ * content with broken_anchor is rejected with detail.
  *
- * Server transport: stdio (SPEC §"Fase 4 — stdio, testes com MCP inspector").
- * Outros transports (HTTP/SSE) podem ser adicionados depois sem mudar tools.
+ * Server transport: stdio (SPEC §"Phase 4 — stdio, tests with the MCP inspector").
+ * Other transports (HTTP/SSE) can be added later without changing the tools.
  *
- * Erros são reportados via McpError com códigos padrão MCP:
- *   - InvalidParams: input do user inválido
- *   - InvalidRequest: estado inconsistente (ex.: wiki não inicializada)
- *   - InternalError: erro inesperado
+ * Errors are reported via McpError with the standard MCP codes:
+ *   - InvalidParams: invalid user input
+ *   - InvalidRequest: inconsistent state (e.g. wiki not initialized)
+ *   - InternalError: unexpected error
  *
- * Workflow-adjacency hints (Etapa 2d): every SUCCESS tool response also
+ * Workflow-adjacency hints (Step 2d): every SUCCESS tool response also
  * carries a `_hints` block suggesting the next most useful tool calls, so
  * arbitrary MCP clients discover the livewiki loop
  * (quickstart → search → read → write_doc → debt) on their own. JSON
@@ -123,7 +123,7 @@ import {
 } from "./search.js";
 
 export interface CreateServerOptions {
-  /** Repo root que o server atende. Default: process.cwd() */
+  /** Repo root the server serves. Default: process.cwd() */
   repoRoot?: string;
   /** Test seam for forcing verifier failures. Production uses core verify. */
   verify?: typeof runVerify;
@@ -279,8 +279,8 @@ function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
 }
 
 /**
- * Cria e configura o McpServer com as 8 tools. NÃO conecta o transport —
- * isso fica a cargo do caller (index.ts usa StdioServerTransport).
+ * Creates and configures the McpServer with the 8 tools. Does NOT connect the transport —
+ * that is the caller's job (index.ts uses StdioServerTransport).
  */
 export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
   const repoRoot = nodePath.resolve(opts.repoRoot ?? process.cwd());
@@ -298,11 +298,11 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     },
   );
 
-  // Helper: wrap conteúdo textual em tool result MCP.
+  // Helper: wrap textual content in an MCP tool result.
   function textResult(text: string) {
     return { content: [{ type: "text" as const, text }] };
   }
-  // Helper: textResult + trailing `_hints` block (Etapa 2d) for tools whose
+  // Helper: textResult + trailing `_hints` block (Step 2d) for tools whose
   // success response is plain text (quickstart/read/write_doc). The first
   // block stays byte-identical; hints are purely additive.
   function hintedTextResult(tool: string, text: string) {
@@ -326,7 +326,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   }
 
   // ─── livewiki_quickstart ───────────────────────────────────────────────
-  // Retorna livewiki/quickstart.md (entry point de baixo token para LLMs).
+  // Returns livewiki/quickstart.md (low-token entry point for LLMs).
   server.tool(
     "livewiki_quickstart",
     "Returns livewiki/quickstart.md (the low-token entry point for navigating the wiki). Errors if the wiki isn't initialized yet — run `livewiki init` first.",
@@ -344,7 +344,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   );
 
   // ─── livewiki_read ─────────────────────────────────────────────────────
-  // Lê uma página da wiki por path relativo (ex: "livewiki/auth.md").
+  // Reads a wiki page by relative path (e.g. "livewiki/auth.md").
   server.tool(
     "livewiki_read",
     "Reads a wiki page by its relative path inside the repo (e.g. 'livewiki/auth.md'). Path must be inside the livewiki/ allowlist.",
@@ -359,7 +359,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         const text = await safeIo.readText(repoRoot, path);
         return hintedTextResult("livewiki_read", text);
       } catch (err) {
-        // Mensagem NÃO vaza path absoluto nem conteúdo do repo (princípio safe-io).
+        // The message does NOT leak the absolute path or repo content (safe-io principle).
         return errorResult(
           err instanceof Error ? err.message : `failed to read ${path}`,
         );
@@ -368,7 +368,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   );
 
   // ─── livewiki_search ───────────────────────────────────────────────────
-  // Busca full-text via FTS5. Reindexa ao abrir o server; incremental via write_doc.
+  // Full-text search via FTS5. Reindexes on server open; incremental via write_doc.
   server.tool(
     "livewiki_search",
     "Full-text search over all wiki pages using SQLite FTS5. Returns up to N hits (default 20) with wiki path and a snippet around the match.",
@@ -398,7 +398,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   );
 
   // ─── livewiki_debt ─────────────────────────────────────────────────────
-  // Dívida aberta = status --json (Fase 2).
+  // Open debt = status --json (Phase 2).
   server.tool(
     "livewiki_debt",
     "Lists open documentation debt (changed/moved/deleted anchors), undocumented symbols, and overall wiki status. Equivalent to `livewiki status --json`.",
@@ -502,9 +502,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   );
 
   // ─── livewiki_write_doc ────────────────────────────────────────────────
-  // CRÍTICO (SPEC §"MCP tools"): valida allowlist (livewiki/) e roda verify
-  // antes de aceitar. Path fora de livewiki/ → rejeitado. Conteúdo com
-  // broken_anchor → rejeitado com detalhe.
+  // CRITICAL (SPEC §"MCP tools"): validates the allowlist (livewiki/) and runs verify
+  // before accepting. Path outside livewiki/ → rejected. Content with
+  // broken_anchor → rejected with detail.
   server.tool(
     "livewiki_write_doc",
     "Writes or updates a wiki page. Path MUST be inside livewiki/ (allowlist). Content is validated via `verify` before being accepted — pages with broken anchors are rejected. Never include reasoning or <think> blocks in the content; verify rejects them. Pass the taskId returned by livewiki_next_task to validate against that task's full page contract and complete it atomically.",
@@ -520,8 +520,8 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         .positive()
         .optional()
         .describe("Optional task ID returned by livewiki_next_task"),
-      /** Quando true, pula o verify (não recomendado; usar só pra escrever
-       *  páginas legítimas como quickstart que não ancoram símbolos) */
+      /** When true, skips verify (not recommended; use only to write
+       *  legitimate pages like quickstart that don't anchor symbols) */
       skipVerify: z
         .boolean()
         .optional()
@@ -560,17 +560,17 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         }
       }
 
-      // 1) Allowlist — safe-io.validateDeclared já falha com PathOutsideAllowlistError.
-      //    writeText chamará resolveAndValidate (com symlink check).
+      // 1) Allowlist — safe-io.validateDeclared already fails with PathOutsideAllowlistError.
+      //    writeText will call resolveAndValidate (with symlink check).
       try {
         await safeIo.writeText(repoRoot, path, content);
       } catch (err) {
-        // Mensagem do safe-io já é segura (não vaza conteúdo, não vaza path abs).
+        // The safe-io message is already safe (leaks no content, leaks no absolute path).
         if (err instanceof safeIo.PathOutsideAllowlistError) {
           throw new McpError(
             ErrorCode.InvalidParams,
             `Path ${JSON.stringify(path)} is outside the livewiki/ allowlist. ` +
-              `write_doc can only write to paths inside livewiki/ (regra #1 da SPEC).`,
+              `write_doc can only write to paths inside livewiki/ (SPEC rule #1).`,
           );
         }
         if (err instanceof safeIo.InvalidRelativePathError) {
@@ -582,19 +582,19 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         return errorResult(err instanceof Error ? err.message : "write failed");
       }
 
-      // 2) Verify — roda no repo e checa se a página recém-escrita quebrou algo.
-      //    Só roda se skipVerify !== true.
+      // 2) Verify — runs on the repo and checks whether the freshly-written page broke something.
+      //    Only runs if skipVerify !== true.
       if (!skipVerify) {
         try {
           const verifyResult = await verify(repoRoot);
-          // Falha se há issue error-level tocando esta página.
+          // Fails if there is an error-level issue touching this page.
           const issuesHere = verifyResult.issues.filter(
             (i) => i.severity === "error" && (i.wikiPath === path || i.wikiPath === ""),
           );
           if (issuesHere.length > 0) {
-            // Rollback: remove o arquivo que acabamos de escrever pra não
-            // deixar estado inconsistente (regra #3: banco é derivado, mas
-            // disco é a verdade — não deixe lixo).
+            // Rollback: remove the file we just wrote so we don't
+            // leave an inconsistent state (rule #3: the database is derived, but
+            // disk is the truth — don't leave junk).
             await rollbackWrittenPage(path);
             return errorResult(
               `verify rejected the page (${issuesHere.length} error issue(s)). ` +
@@ -617,7 +617,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         }
       }
 
-      // 3) Atualiza índice FTS5 incrementalmente (write bem-sucedido).
+      // 3) Update the FTS5 index incrementally (successful write).
       indexPage(searchIdx, path, content);
 
       // 4) Roadmap item 14: record the write in the activity ledger.

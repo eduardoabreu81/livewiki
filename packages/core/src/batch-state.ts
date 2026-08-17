@@ -1,18 +1,18 @@
 /**
- * batch-state — shape do `batch_tasks.checkpoint_json` e tipos auxiliares.
+ * batch-state — shape of `batch_tasks.checkpoint_json` and helper types.
  *
- * SPEC §"Contabilidade de tokens (Fase 3)": cada task que chama LLM grava o
- * usage real no checkpoint. `livewiki batch status <run>` agrega tudo por
- * stage + por módulo + total. O reporte é o coração da comparação de
- * economia com OpenWiki e afins.
+ * SPEC §"Token accounting (Phase 3)": every task that calls the LLM records
+ * the real usage in the checkpoint. `livewiki batch status <run>` aggregates
+ * everything by stage + by module + total. The report is the heart of the
+ * savings comparison against OpenWiki and the like.
  *
- * O `checkpoint_json` é TEXT livre no DB (schema v4). Os tipos aqui vivem em
- * código TypeScript — single source of truth, validado em runtime pelo
- * orchestrator e pelos adapters do LLM.
+ * `checkpoint_json` is free TEXT in the DB (schema v4). The types here live
+ * in TypeScript code — single source of truth, validated at runtime by the
+ * orchestrator and by the LLM adapters.
  *
- * Convenção de usageHistory (correção da revisão do plano): SEMPRE uma lista,
- * desde o attempt 1. "usage atual" = último item. Reporte agrega. Evita
- * migração de shape no futuro quando retry entra em jogo.
+ * usageHistory convention (fix from the plan review): ALWAYS a list, from
+ * attempt 1 on. "current usage" = last item. The report aggregates. Avoids
+ * a shape migration in the future when retry comes into play.
  */
 
 import type { LlmUsage } from "./llm/types.js";
@@ -21,7 +21,7 @@ import type { MechanicalArtifactRepair } from "./artifact-repair.js";
 import type { TopicCandidate } from "./topics.js";
 import type { CommunityCrossCheckReport } from "./community.js";
 
-/** Stages do pipeline batch. */
+/** Stages of the batch pipeline. */
 export type BatchStage = 1 | 2 | 3 | 4 | 5;
 
 export type BatchTaskStatus = "pending" | "running" | "done" | "failed" | "skipped";
@@ -33,21 +33,21 @@ export type BatchRunStatus =
   | "aborted";
 
 /**
- * Estimativa de custo em USD por chamada LLM. Null quando o modelo não está
- * na tabela de pricing — nesse caso o reporte mostra tokens sem USD, nunca
- * inventa.
+ * Cost estimate in USD per LLM call. Null when the model is not in the
+ * pricing table — in that case the report shows tokens without USD, it never
+ * invents them.
  */
 export interface CostUsd {
   input: number;
   output: number;
   total: number;
-  /** Data de referência da tabela de pricing usada (YYYY-MM-DD). */
+  /** Reference date of the pricing table used (YYYY-MM-DD). */
   refDate: string;
 }
 
 /**
- * Uma tentativa (attempt) dentro do histórico de usage de uma task.
- * Cada retry empilha um novo item aqui — o reporte agrega a soma.
+ * One attempt within a task's usage history.
+ * Each retry stacks a new item here — the report aggregates the sum.
  *
  * When `usageKnown` is false (e.g. client timeout), `usage` is null and
  * aggregators must not treat the attempt as zero-token real usage. Wire/cost
@@ -145,18 +145,18 @@ export function summarizeDiagnosticErrors(
 }
 
 /**
- * Checkpoint de uma task. Persistido como JSON em batch_tasks.checkpoint_json.
+ * Checkpoint of a task. Persisted as JSON in batch_tasks.checkpoint_json.
  *
- * Shape canônico:
- *   - stage: qual step do pipeline (1..4)
- *   - status: estado atual da task
- *   - attempt: número de vezes que essa task foi rodada (1 = primeira vez)
- *   - usageHistory: SEMPRE lista, mesmo na primeira tentativa. Vazio só se a
- *     task não chama LLM (ex.: etapa 1 varredura é só re-index, etapa 3
- *     priorização é puramente determinística).
- *   - error: preenchido quando status='failed' ou quando circuit breaker
- *     abortou por causa dessa task.
- *   - artifacts: paths/hashes do que a task produziu (página wiki, etc.)
+ * Canonical shape:
+ *   - stage: which pipeline step (1..4)
+ *   - status: current state of the task
+ *   - attempt: how many times this task was run (1 = first time)
+ *   - usageHistory: ALWAYS a list, even on the first attempt. Empty only if
+ *     the task does not call the LLM (e.g. step 1 scan is just a re-index,
+ *     step 3 prioritization is purely deterministic).
+ *   - error: filled in when status='failed' or when the circuit breaker
+ *     aborted because of this task.
+ *   - artifacts: paths/hashes of what the task produced (wiki page, etc.)
  */
 export interface TaskCheckpoint {
   stage: BatchStage;
@@ -198,14 +198,14 @@ export interface TaskCheckpoint {
 export interface TaskError {
   code: string;
   message: string;
-  /** stage em que falhou (normalmente = task.stage, mas circuit breaker abort pode apontar pro último). */
+  /** stage where it failed (normally = task.stage, but a circuit breaker abort may point at the last one). */
   failedAt?: BatchStage;
 }
 
 export interface TaskArtifacts {
-  /** Path da página wiki gerada (relativo ao repoRoot). */
+  /** Path of the generated wiki page (relative to repoRoot). */
   wikiPath?: string;
-  /** SHA-256 do conteúdo final da página (pós-verify). */
+  /** SHA-256 of the page's final content (post-verify). */
   pageHash?: string;
   /** Stage 5: companion flow diagram path (relative to repoRoot). */
   diagramPath?: string;
@@ -213,12 +213,12 @@ export interface TaskArtifacts {
   diagramHash?: string;
 }
 
-/** Item do reporte `byStage` (agregado por stage). */
+/** `byStage` report item (aggregated by stage). */
 export interface StageUsage {
   inputTokens: number;
   outputTokens: number;
   costUsd: number | null;
-  /** Models distintos usados nesse stage (pra debugging de drift). */
+  /** Distinct models used in this stage (for drift debugging). */
   models: string[];
   /**
    * True if any attempt had unknown usage (e.g. llm_timeout). Known token
@@ -227,12 +227,12 @@ export interface StageUsage {
   usageIncomplete?: boolean;
 }
 
-/** Item do reporte `byModule` (agregado por task stage=4 agrupado por módulo). */
+/** `byModule` report item (stage=4 tasks aggregated by module). */
 export interface ModuleUsage extends StageUsage {
   module: string;
 }
 
-/** Item do reporte `tasks` (lista detalhada de cada task). */
+/** `tasks` report item (detailed list of every task). */
 export interface TaskReportItem {
   taskId: number;
   stage: BatchStage;
@@ -259,11 +259,11 @@ export interface TaskReportItem {
    * `diagnosticHistory`). Only ever set on the stage-2 task.
    */
   communityCrossCheck?: CommunityCrossCheckReport;
-  /** Comando pronto pra retry: `livewiki batch --only <target> <runId>` */
+  /** Ready-to-use retry command: `livewiki batch --only <target> <runId>` */
   retryCommand: string;
 }
 
-/** Item do reporte `failures` (subset de tasks com status='failed'). */
+/** `failures` report item (subset of tasks with status='failed'). */
 export interface FailureReportItem {
   taskId: number;
   module: string;
@@ -273,13 +273,13 @@ export interface FailureReportItem {
 }
 
 /**
- * Snapshot agregado gravado em batch_runs.summary_json ao final do run.
- * Permite o reporte sem precisar re-processar todas as tasks.
+ * Aggregated snapshot written to batch_runs.summary_json at the end of the run.
+ * Enables the report without having to re-process every task.
  *
- * `modulesRefined` é a lista final de módulos que o stage 4 usou — pode
- * diferir da heurística se o refinamento LLM (opt-in) entrou em ação.
- * Guardado AQUI (e não no `checkpoint_json` de uma task) porque é uma
- * propriedade do RUN, não da task de stage 2 (achado J da rev2).
+ * `modulesRefined` is the final list of modules stage 4 used — it may differ
+ * from the heuristic one if the (opt-in) LLM refinement kicked in.
+ * Kept HERE (and not in a task's `checkpoint_json`) because it is a
+ * property of the RUN, not of the stage-2 task (finding J from rev2).
  */
 export interface BatchRunSummary {
   totals: StageUsage;
@@ -288,7 +288,7 @@ export interface BatchRunSummary {
   tasksDone: number;
   tasksFailed: number;
   tasksPending: number;
-  /** Lista final de módulos (pós-refinamento). Null se ainda não foi gravado. */
+  /** Final list of modules (post-refinement). Null if not written yet. */
   modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }> | null;
   /**
    * Recovery tier (Component 2): wiki paths of pages completed under the
@@ -305,13 +305,13 @@ export interface BatchRunSummary {
   topicRefine?: "not-run";
 }
 
-/** Módulo lightweight (sem symbolCount) pra serializar no summary_json. */
+/** Lightweight module (without symbolCount) for serializing into summary_json. */
 export interface RefinedModuleSnapshot {
   id: string;
   paths: string[];
 }
 
-/** Shape completo do `livewiki batch status --json`. */
+/** Complete shape of `livewiki batch status --json`. */
 export interface BatchStatusReport {
   run: {
     id: number;
@@ -320,9 +320,9 @@ export interface BatchStatusReport {
     finishedAt: number | null;
     startedBy: string;
     /**
-     * Summary agregado gravado em batch_runs.summary_json (módulos refinados +
-     * totais por stage). Null se o run ainda está em andamento OU se o
-     * summary_json foi corrompido por uma versão antiga do livewiki.
+     * Aggregated summary written to batch_runs.summary_json (refined modules +
+     * totals per stage). Null if the run is still in progress OR if the
+     * summary_json was corrupted by an old version of livewiki.
      */
     summary: BatchRunSummary | null;
   };
@@ -335,8 +335,8 @@ export interface BatchStatusReport {
 }
 
 /**
- * `pendingBatch` dentro do .manifest.json — habilita handoff cross-máquina
- * de batch interrompido. null quando não há batch em andamento.
+ * `pendingBatch` inside .manifest.json — enables cross-machine handoff of an
+ * interrupted batch. null when there is no batch in progress.
  */
 export interface PendingBatchRef {
   runId: number;

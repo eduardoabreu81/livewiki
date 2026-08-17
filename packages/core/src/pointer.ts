@@ -1,57 +1,58 @@
 /**
  * pointer — opt-in append de bloco "livewiki:start/end" em AGENTS.md / CLAUDE.md.
  *
- * SPEC §"Regras invioláveis" #2:
- *   "Pointer em AGENTS.md/CLAUDE.md: só com flag explícita
- *    (`--write-pointer`) ou confirmação interativa. Nunca automático.
- *    Modificação é append de bloco delimitado
- *    (`<!-- livewiki:start -->` ... `<!-- livewiki:end -->`), idempotente."
+ * SPEC §"Inviolable rules" #2:
+ *   "Pointer in AGENTS.md/CLAUDE.md: only with an explicit flag
+ *    (`--write-pointer`) or interactive confirmation. Never automatic.
+ *    The modification is an append of a delimited block
+ *    (`<!-- livewiki:start -->` ... `<!-- livewiki:end -->`), idempotent."
  *
- * Esta exceção NÃO vive em `safe-io.ts` — fica em módulo separado (este).
- * safe-io só conhece os dois diretórios "seguros" (livewiki/ + .livewiki/).
- * O pointer é a única exceção e está aqui, consciente, com allowPointer opt-in.
+ * This exception does NOT live in `safe-io.ts` — it stays in a separate module
+ * (this one). safe-io only knows the two "safe" directories (livewiki/ +
+ * .livewiki/). The pointer is the only exception and is here, deliberately, with
+ * allowPointer opt-in.
  *
- * Comportamento:
- *   - `insertPointer(repoRoot, opts)`: insere/substitui o bloco em AGENTS.md
- *     (default) ou CLAUDE.md (`opts.file`). Idempotente.
- *   - `removePointer(repoRoot, opts)`: remove o bloco se existir.
- *   - `findPointerBlock(content)`: parser puro do bloco (testável sem disco).
- *   - `buildPointerBlock()`: gera o conteúdo do bloco (1 parágrafo + 1 link).
+ * Behavior:
+ *   - `insertPointer(repoRoot, opts)`: inserts/replaces the block in AGENTS.md
+ *     (default) or CLAUDE.md (`opts.file`). Idempotent.
+ *   - `removePointer(repoRoot, opts)`: removes the block if it exists.
+ *   - `findPointerBlock(content)`: pure parser of the block (testable without disk).
+ *   - `buildPointerBlock()`: generates the block content (1 paragraph + 1 link).
  *
- * O conteúdo do bloco é deliberadamente CURTO — 1 parágrafo apontando pro
- * quickstart.md. Agentes/HUMANOS que lerem AGENTS.md veem o pointer e sabem
- * que existe uma wiki. Nenhum conteúdo da wiki é duplicado aqui.
+ * The block content is deliberately SHORT — 1 paragraph pointing to
+ * quickstart.md. Agents/HUMANS who read AGENTS.md see the pointer and know
+ * that a wiki exists. No wiki content is duplicated here.
  */
 
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
 
-/** Marcadores do bloco — devem ser estáveis (parsers externos podem depender). */
+/** Block markers — must be stable (external parsers may depend on them). */
 export const POINTER_START = "<!-- livewiki:start -->";
 export const POINTER_END = "<!-- livewiki:end -->";
 
-/** Arquivos permitidos para o pointer (regra #2 fala "no AGENTS.md/CLAUDE.md"). */
+/** Files allowed for the pointer (rule #2 says "in AGENTS.md/CLAUDE.md"). */
 export const POINTER_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
 export type PointerFile = (typeof POINTER_FILES)[number];
 
-/** Decisão automática do arquivo alvo. */
+/** Automatic decision of the target file. */
 export function pickPointerFile(
   hasAgentsMd: boolean,
   hasClaudeMd: boolean,
   requested?: PointerFile,
 ): PointerFile {
   if (requested) return requested;
-  // Preferência: AGENTS.md se existir (mais comum), senão CLAUDE.md, senão cria AGENTS.md
+  // Preference: AGENTS.md if it exists (most common), else CLAUDE.md, else creates AGENTS.md
   if (hasAgentsMd) return "AGENTS.md";
   if (hasClaudeMd) return "CLAUDE.md";
   return "AGENTS.md";
 }
 
 export interface PointerInsertOptions {
-  /** Qual arquivo alvo. Default: pickPointerFile() */
+  /** Which target file. Default: pickPointerFile() */
   file?: PointerFile;
-  /** Conteúdo customizado do bloco. Default: buildPointerBlock(). */
+  /** Custom block content. Default: buildPointerBlock(). */
   block?: string;
 }
 
@@ -60,35 +61,36 @@ export type PointerAction = "inserted" | "replaced" | "unchanged";
 export interface PointerInsertResult {
   file: PointerFile;
   action: PointerAction;
-  /** Bytes escritos (0 se 'unchanged'). */
+  /** Bytes written (0 if 'unchanged'). */
   bytesWritten: number;
 }
 
-/** Conteúdo padrão do bloco. Curto e direto. */
+/** Default block content. Short and direct. */
 export function buildPointerBlock(): string {
-  // Idiomático: 1 parágrafo em PT-BR (idioma principal do projeto) + 1 link.
-  // Mantém concisão — quem quiser mais contexto, clica no link.
+  // Idiomatic: 1 paragraph + 1 link.
+  // Keeps it concise — whoever wants more context clicks the link.
   return [
     POINTER_START,
     "",
-    "> Este repositório tem uma [livewiki](./livewiki/quickstart.md) — ",
-    "> documentação viva, ancorada em símbolos do código e verificável. ",
-    "> Comece pelo quickstart (baixo token) e use `livewiki status --json` ",
-    "> para ver dívida de documentação aberta.",
+    "> This repository has a [livewiki](./livewiki/quickstart.md) — ",
+    "> live documentation, anchored to code symbols and verifiable. ",
+    "> Start with the quickstart (low token) and use `livewiki status --json` ",
+    "> to see open documentation debt.",
     "",
     POINTER_END,
   ].join("\n");
 }
 
 /**
- * Encontra o bloco livewiki no conteúdo markdown. Retorna os índices (start, end)
- * incluindo os marcadores, ou null se não existir. Pura — não toca em disco.
+ * Finds the livewiki block in the markdown content. Returns the indices (start,
+ * end) including the markers, or null if it does not exist. Pure — does not touch
+ * disk.
  *
- * Busca é tolerante:
- *   - Ignora leading whitespace antes do start marker (defesa contra CRLF/BOM)
- *   - Aceita end marker mesmo que tenha espaços em volta
- *   - Retorna primeiro match (não múltiplos — insertPointer é idempotente e
- *     sempre substitui o primeiro/único bloco existente)
+ * The search is tolerant:
+ *   - Ignores leading whitespace before the start marker (defense against CRLF/BOM)
+ *   - Accepts the end marker even if it has spaces around it
+ *   - Returns the first match (not multiple — insertPointer is idempotent and
+ *     always replaces the first/only existing block)
  */
 export function findPointerBlock(
   content: string,
@@ -99,7 +101,7 @@ export function findPointerBlock(
   if (!startMatch) return null;
   const endMatch = endRegex.exec(content);
   if (!endMatch) {
-    // Bloco truncado (sem end marker) — trata como ausente. Evita corromper o doc.
+    // Truncated block (no end marker) — treat as absent. Avoids corrupting the doc.
     return null;
   }
   const startIdx = startMatch.index;
@@ -109,8 +111,8 @@ export function findPointerBlock(
 }
 
 /**
- * Substitui o bloco existente pelo novo, OU anexa se não existir.
- * Pura — opera só em string.
+ * Replaces the existing block with the new one, OR appends it if it does not
+ * exist. Pure — operates only on a string.
  */
 export function applyPointerReplace(
   content: string,
@@ -118,7 +120,7 @@ export function applyPointerReplace(
 ): { content: string; action: PointerAction } {
   const found = findPointerBlock(content);
   if (!found) {
-    // Append no fim, com 1 linha em branco separadora (se conteúdo não-vazio)
+    // Append at the end, with 1 separating blank line (if the content is non-empty)
     const sep = content.length > 0 && !content.endsWith("\n") ? "\n\n" : "\n";
     const appended = content.length > 0
       ? content + sep + newBlock + "\n"
@@ -129,13 +131,13 @@ export function applyPointerReplace(
     content.slice(0, found.startIdx) +
     newBlock +
     content.slice(found.endIdx);
-  // Mesma string após normalização = unchanged (defesa contra no-op writes)
+  // Same string after normalization = unchanged (defense against no-op writes)
   if (replaced === content) return { content, action: "unchanged" };
   return { content: replaced, action: "replaced" };
 }
 
 /**
- * Remove o bloco do conteúdo se existir. Pura.
+ * Removes the block from the content if it exists. Pure.
  */
 export function applyPointerRemove(content: string): {
   content: string;
@@ -143,14 +145,14 @@ export function applyPointerRemove(content: string): {
 } {
   const found = findPointerBlock(content);
   if (!found) return { content, removed: false };
-  // Remove o bloco + whitespace adjacente (newline depois do end marker)
+  // Removes the block + adjacent whitespace (newline after the end marker)
   let before = content.slice(0, found.startIdx);
   let after = content.slice(found.endIdx);
-  // Trim trailing newline do 'before' se 'after' começa com blank
+  // Trim trailing newline from 'before' if 'after' starts with a blank line
   if (before.endsWith("\n\n") && after.startsWith("\n")) {
     before = before.slice(0, -1);
   } else if (before.endsWith("\n") && after.startsWith("\n")) {
-    // já tem separador suficiente, não duplica
+    // already has enough separator, do not duplicate
     after = after.replace(/^\n+/, "");
   }
   const merged = before + after;
@@ -158,11 +160,11 @@ export function applyPointerRemove(content: string): {
 }
 
 /**
- * Insere/substitui o pointer no arquivo alvo. Idempotente.
+ * Inserts/replaces the pointer in the target file. Idempotent.
  *
- * Usa safe-io com allowPointer=true (única exceção à regra #1, documentada
- * aqui). Lança PathOutsideAllowlistError se opts.file não for AGENTS.md
- * ou CLAUDE.md (defesa contra path injection).
+ * Uses safe-io with allowPointer=true (the only exception to rule #1,
+ * documented here). Throws PathOutsideAllowlistError if opts.file is not
+ * AGENTS.md or CLAUDE.md (defense against path injection).
  */
 export async function insertPointer(
   repoRoot: string,
@@ -170,28 +172,28 @@ export async function insertPointer(
 ): Promise<PointerInsertResult> {
   const absRoot = nodePath.resolve(repoRoot);
 
-  // Decide arquivo alvo
+  // Decides the target file
   const agentsExists = await safeIo.exists(absRoot, "AGENTS.md").catch(() => false);
   const claudeExists = await safeIo.exists(absRoot, "CLAUDE.md").catch(() => false);
   const file = pickPointerFile(agentsExists, claudeExists, opts.file);
 
-  // Validação dupla: só AGENTS.md ou CLAUDE.md, mesmo se safe-io aceitar
-  // (defesa em profundidade — safe-io já valida, mas custa nada)
+  // Double validation: only AGENTS.md or CLAUDE.md, even if safe-io accepts it
+  // (defense in depth — safe-io already validates, but it costs nothing)
   if (!POINTER_FILES.includes(file)) {
     throw new Error(`Invalid pointer file: ${file}`);
   }
 
-  // Lê conteúdo atual (se existir) — usa safe-io com allowPointer
+  // Reads current content (if it exists) — uses safe-io with allowPointer
   let current = "";
   if (await safeIo.exists(absRoot, file, { allowPointer: true })) {
     current = await safeIo.readText(absRoot, file, { allowPointer: true });
   }
 
-  // Calcula novo conteúdo
+  // Calculates the new content
   const block = opts.block ?? buildPointerBlock();
   const { content: newContent, action } = applyPointerReplace(current, block);
 
-  // Só escreve se mudou (idempotência em disco — evita no-op git diff)
+  // Only writes if it changed (on-disk idempotency — avoids no-op git diff)
   if (action === "unchanged") {
     return { file, action, bytesWritten: 0 };
   }
@@ -201,7 +203,7 @@ export async function insertPointer(
 }
 
 /**
- * Remove o pointer do arquivo alvo. No-op se bloco não existir.
+ * Removes the pointer from the target file. No-op if the block does not exist.
  */
 export async function removePointer(
   repoRoot: string,
@@ -229,8 +231,8 @@ export async function removePointer(
 }
 
 /**
- * Lê o arquivo alvo e retorna o status do pointer (presente, ação recente, etc).
- * Útil pro CLI reportar ao usuário.
+ * Reads the target file and returns the pointer status (present, recent action,
+ * etc). Useful for the CLI to report to the user.
  */
 export async function readPointerStatus(
   repoRoot: string,
@@ -242,7 +244,7 @@ export async function readPointerStatus(
 }> {
   const absRoot = nodePath.resolve(repoRoot);
 
-  // Se file foi passado, verifica só esse; senão checa AMBOS (qualquer um com bloco = presente)
+  // If file was passed, checks only that one; otherwise checks BOTH (any one with a block = present)
   if (opts.file) {
     const exists = await safeIo.exists(absRoot, opts.file, { allowPointer: true }).catch(() => false);
     if (!exists) return { file: opts.file, present: false };
@@ -266,9 +268,10 @@ export async function readPointerStatus(
 }
 
 /**
- * Helper de baixo nível: cria AGENTS.md/CLAUDE.md vazio se não existir.
- * Exposto pra testes e pra casos onde o caller quer garantir que o arquivo
- * existe antes de chamar insertPointer (mas insertPointer já trata isso).
+ * Low-level helper: creates an empty AGENTS.md/CLAUDE.md if it does not exist.
+ * Exposed for tests and for cases where the caller wants to guarantee that the
+ * file exists before calling insertPointer (but insertPointer already handles
+ * that).
  */
 export async function ensurePointerFile(
   repoRoot: string,
@@ -284,5 +287,5 @@ export async function ensurePointerFile(
   }
 }
 
-// Re-export pra que node:fs seja usado só internamente
+// Re-export so that node:fs is used only internally
 export const _internal = { nodeFs };

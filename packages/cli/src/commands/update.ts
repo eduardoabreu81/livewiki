@@ -9,14 +9,14 @@ interface UpdateOptions {
   json?: boolean;
   repo?: string;
   /**
-   * `--record-write <tokens>`: registra doc escrita de volta (chamado pelo
-   * agente/HUMANO depois de editar a wiki). Token estimate do que escreveu.
-   * Hoje via flag; num skill automatizado, o próprio skill chamaria.
+   * `--record-write <tokens>`: records doc written back (called by the
+   * agent/HUMAN after editing the wiki). Token estimate of what it wrote.
+   * Today via flag; in an automated skill, the skill itself would call it.
    */
   recordWrite?: string;
-  /** `--llm`: chama API configurada pra pagar dívida (delegado pro batch.ts) */
+  /** `--llm`: calls the configured API to pay debt (delegated to batch.ts) */
   llm?: boolean;
-  /** Janela do snippet em linhas (default 20). */
+  /** Snippet window in lines (default 20). */
   snippetWindow?: string;
 }
 

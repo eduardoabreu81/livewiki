@@ -20,7 +20,7 @@
  *     usage: { input_tokens, output_tokens }
  *   }
  *
- * Normalização: input_tokens → inputTokens, output_tokens → outputTokens.
+ * Normalization: input_tokens → inputTokens, output_tokens → outputTokens.
  */
 
 import type { LlmClient } from "./index.js";

@@ -1,8 +1,8 @@
 /**
- * config — load/save do `.livewiki/config.json` (config local do repo).
+ * config — load/save of `.livewiki/config.json` (the repo-local config).
  *
- * SPEC §"Layout gerado no repo-alvo" (commit b272907): `.livewiki/config.json`
- * guarda provider, linguagens, ignores, language e (Fase 3) pricing override.
+ * SPEC §"Layout generated in the target repo" (commit b272907): `.livewiki/config.json`
+ * stores provider, languages, ignores, language and (Phase 3) the pricing override.
  *
  * **No hard-coded default model** (commit 3894f6e). If `provider` or `model`
  * is absent when an LLM batch starts, `validateConfigForBatch()` throws
@@ -19,49 +19,49 @@ import type { PricingOverride } from "./pricing.js";
 import type { FlowSignalConfig, PathRoleConfig } from "./modules.js";
 import { isKnownPreset, resolvePreset, resolveProviderConfig, type PresetName } from "./presets.js";
 
-/** Provideres suportados pelo client LLM (Fase 3). */
+/** Providers supported by the LLM client (Phase 3). */
 export type LlmProvider = "anthropic" | "openai-compat";
 
 /**
- * Schema do `.livewiki/config.json`. Todos os campos são opcionais —
- * defaults são aplicados na hora de usar. `language` é o ÚNICO com default
- * explícito (`"en"`); os outros são deliberadamente indefinidos pra forçar
- * o usuário a escolher (sem fallback silencioso).
+ * Schema of `.livewiki/config.json`. Every field is optional —
+ * defaults are applied at use time. `language` is the ONLY one with an
+ * explicit default (`"en"`); the others are deliberately undefined to force
+ * the user to choose (no silent fallback).
  *
- * Fase 5 step 5 adicionou `preset` — nome do preset da tabela embutida
- * (anthropic, openai, openrouter, ...). Se set, expande em provider +
- * baseUrl + envVar + pricing (cada um pode ser sobrescrito).
+ * Phase 5 step 5 added `preset` — the preset name from the embedded table
+ * (anthropic, openai, openrouter, ...). When set, it expands into provider +
+ * baseUrl + envVar + pricing (each one can be overridden).
  */
 export interface LivewikiConfig {
   /**
-   * Provider LLM (legacy, Fase 3). Sem default. Equivalente a setar
-   * `preset: "anthropic"` (adapter=anthropic, defaults) ou `preset: "openai"`
-   * (adapter=openai-compat). Mantido pra back-compat.
+   * LLM provider (legacy, Phase 3). No default. Equivalent to setting
+   * `preset: "anthropic"` (adapter=anthropic, defaults) or `preset: "openai"`
+   * (adapter=openai-compat). Kept for back-compat.
    */
   provider?: LlmProvider;
   /**
-   * Modelo dentro do provider. Sem default — idem.
+   * Model within the provider. No default — same rule.
    */
   model?: string;
   /**
-   * Preset de provider (Fase 5 step 5). Nome da tabela embutida
+   * Provider preset (Phase 5 step 5). Name from the embedded table
    * (`anthropic`, `openai`, `openrouter`, `deepseek`, `kimi`, `minimax`,
-   * `gemini`, `nvidia`, `ollama`, `lmstudio`). Se set, sobrescreve
-   * `provider` (adapter derivado do preset). Qualquer campo
-   * (`baseUrl`, `pricing`) pode ser sobrescrito individualmente.
+   * `gemini`, `nvidia`, `ollama`, `lmstudio`). When set, it overrides
+   * `provider` (the adapter is derived from the preset). Any field
+   * (`baseUrl`, `pricing`) can be overridden individually.
    *
-   * Ver `packages/core/src/presets.ts` pra tabela.
+   * See `packages/core/src/presets.ts` for the table.
    */
   preset?: PresetName;
-  /** Idioma da doc gerada (1 por repo). Default "en". Não afeta chaves/âncoras/diagramas. */
+  /** Language of the generated doc (1 per repo). Default "en". Does not affect keys/anchors/diagrams. */
   language?: string;
-  /** Base URL customizada (OpenRouter, LiteLLM, Ollama cloud). Opcional. */
+  /** Custom base URL (OpenRouter, LiteLLM, Ollama cloud). Optional. */
   baseUrl?: string;
-  /** Override de pricing por modelo (USD/1M tokens). Opcional. */
+  /** Per-model pricing override (USD/1M tokens). Optional. */
   pricing?: PricingOverride;
-  /** Linguagens aceitas no walker. Default ["ts","tsx","js","jsx","py"]. */
+  /** Languages accepted by the walker. Default ["ts","tsx","js","jsx","py"]. */
   languages?: string[];
-  /** Patterns extra pra ignorar (além de .gitignore). Default []. */
+  /** Extra patterns to ignore (beyond .gitignore). Default []. */
   ignores?: string[];
   /**
    * Phase-5 plan (X): number of corrective calls allowed per stage-4 task
@@ -182,18 +182,18 @@ export interface LivewikiConfig {
   topicMaxOutputTokens?: number;
   /**
    * Maximum characters of the rationale evidence block injected into
-   * stage-4 and topic prompts (Etapa 2b). Carved inside the existing
+   * stage-4 and topic prompts (Step 2b). Carved inside the existing
    * stage-4 char budget. Default 4,000; 0 disables the block.
    */
   rationaleMaxChars?: number;
   /**
-   * Risk-weighted debt prioritization in `status`/`update` (Etapa 2c).
+   * Risk-weighted debt prioritization in `status`/`update` (Step 2c).
    * Default true; set false to keep the chronological ordering and omit
    * the additive `risk` field from debt items.
    */
   riskAnalysis?: boolean;
   /**
-   * Git history window (commits) for the churn risk factor (Etapa 2c).
+   * Git history window (commits) for the churn risk factor (Step 2c).
    * Default 500; 0 disables the `git log` spawn entirely (churn factor 0).
    * Must be an integer 0..10000.
    */
@@ -372,9 +372,9 @@ export const CONFIG_DEFAULTS = {
   topicMaxSourceChars: 40_000,
   /** Same ceiling-under-dynamic-strategy semantics as `stage4MaxOutputTokens`. */
   topicMaxOutputTokens: 32_768,
-  /** Bounded rationale evidence block in stage-4/topic prompts (Etapa 2b). */
+  /** Bounded rationale evidence block in stage-4/topic prompts (Step 2b). */
   rationaleMaxChars: 4_000,
-  /** Risk-weighted debt ordering in status/update (Etapa 2c). */
+  /** Risk-weighted debt ordering in status/update (Step 2c). */
   riskAnalysis: true,
   /** Git churn window for the risk score; 0 disables the git spawn. */
   riskChurnCommits: 500,
@@ -417,10 +417,10 @@ export class MissingProviderConfigError extends Error {
 const CONFIG_REL_PATH = ".livewiki/config.json";
 
 /**
- * Carrega `.livewiki/config.json`. Se não existir, retorna config VAZIO
- * (sem defaults — exceto language="en" no caller, via applyDefaults).
+ * Loads `.livewiki/config.json`. If it does not exist, returns an EMPTY config
+ * (no defaults — except language="en" in the caller, via applyDefaults).
  *
- * Falha fechado em JSON malformado.
+ * Fails closed on malformed JSON.
  */
 export async function loadConfig(repoRoot: string): Promise<LivewikiConfig> {
   const exists = await safeIo.exists(repoRoot, CONFIG_REL_PATH).catch(() => false);
@@ -439,10 +439,10 @@ export async function loadConfig(repoRoot: string): Promise<LivewikiConfig> {
 }
 
 /**
- * Helper: dado o config carregado, retorna a config PROVIDER final
- * (preset expandido, overrides aplicados). Usado pelo LLM client factory.
+ * Helper: given the loaded config, returns the final PROVIDER config
+ * (preset expanded, overrides applied). Used by the LLM client factory.
  *
- * NÃO valida "model ausente" — isso fica em validateConfigForBatch.
+ * Does NOT validate "missing model" — that lives in validateConfigForBatch.
  */
 export function resolveProviderFromConfig(
   config: LivewikiConfig,
@@ -455,7 +455,7 @@ export function resolveProviderFromConfig(
   });
 }
 
-/** Grava config no disco via safe-io (allowlist). */
+/** Writes the config to disk via safe-io (allowlist). */
 export async function saveConfig(
   repoRoot: string,
   config: LivewikiConfig,
@@ -464,7 +464,7 @@ export async function saveConfig(
   await safeIo.writeText(repoRoot, CONFIG_REL_PATH, json);
 }
 
-/** Aplica defaults em runtime. Não muta o objeto original. */
+/** Applies defaults at runtime. Does not mutate the original object. */
 export function applyDefaults(config: LivewikiConfig): LivewikiConfig {
   return {
     language: CONFIG_DEFAULTS.language,
@@ -529,10 +529,10 @@ export function resolveExtraIgnores(config: LivewikiConfig): readonly string[] {
 }
 
 /**
- * Valida que config tem provider + model ANTES de criar LLM client. Lança
- * `MissingProviderConfigError` se faltar algum.
+ * Validates that the config has provider + model BEFORE creating the LLM client. Throws
+ * `MissingProviderConfigError` if either is missing.
  *
- * NÃO escolhe default — força o usuário a ser explícito.
+ * Does NOT pick a default — it forces the user to be explicit.
  */
 export function validateConfigForBatch(repoRoot: string, config: LivewikiConfig): void {
   const missing: Array<"provider" | "model"> = [];
@@ -550,21 +550,21 @@ export function validateConfigForBatch(repoRoot: string, config: LivewikiConfig)
   }
 }
 
-/** Resolve a base URL final (config sobrescreve default por provider). */
+/** Resolves the final base URL (config overrides the per-provider default). */
 export function resolveBaseUrl(config: LivewikiConfig): string {
   if (config.baseUrl) return config.baseUrl;
-  // Se preset set: usa a baseUrl do preset
+  // If preset is set: use the preset's baseUrl
   if (config.preset) {
     return resolvePreset(config.preset).baseUrl;
   }
-  // Só acessível se provider estiver set; caller garante isso via validateConfigForBatch
+  // Only reachable when provider is set; the caller guarantees that via validateConfigForBatch
   const provider = config.provider as LlmProvider;
   return CONFIG_DEFAULTS.baseUrls[provider];
 }
 
 /**
- * Validação rasa do shape — protege contra chaves desconhecidas e tipos errados.
- * Não substitui validação de "config completa pra batch" (que é validateConfigForBatch).
+ * Shallow shape validation — guards against unknown keys and wrong types.
+ * Does not replace "config complete for batch" validation (which is validateConfigForBatch).
  */
 function validateConfigShape(parsed: unknown): LivewikiConfig {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -760,7 +760,7 @@ function validateConfigShape(parsed: unknown): LivewikiConfig {
     }
     out.rationaleMaxChars = v;
   }
-  // Etapa 2c risk-prioritization knobs: strict types, rejected instead of
+  // Step 2c risk-prioritization knobs: strict types, rejected instead of
   // silently falling back to the defaults.
   if (obj["riskAnalysis"] !== undefined) {
     const v = obj["riskAnalysis"];

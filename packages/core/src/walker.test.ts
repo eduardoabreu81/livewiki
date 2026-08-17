@@ -31,7 +31,7 @@ describe("EXTENSION_LANG", () => {
 });
 
 describe("walkRepo", () => {
-  it("retorna arquivos indexáveis com lang correta", async () => {
+  it("returns indexable files with the correct lang", async () => {
     await write("src/foo.ts", "export const x = 1");
     await write("src/bar.py", "def f(): pass");
     await write("README.md", "# readme");
@@ -46,17 +46,17 @@ describe("walkRepo", () => {
     expect(result.find((r) => r.path === "README.md")?.lang).toBe("md");
   });
 
-  it("ignora node_modules/ por default (defesa em profundidade)", async () => {
+  it("ignores node_modules/ by default (defense in depth)", async () => {
     await write("src/foo.ts");
     await write("node_modules/lib/index.js");
-    await write("node_modules/lib/types.d.ts"); // arquivos irrelevantes tb
+    await write("node_modules/lib/types.d.ts"); // irrelevant files too
 
     const result = await walkRepo(repoRoot);
     const paths = result.map((r) => r.path);
     expect(paths).toEqual(["src/foo.ts"]);
   });
 
-  it("ignora .git/ por default", async () => {
+  it("ignores .git/ by default", async () => {
     await write("src/foo.ts");
     await write(".git/HEAD", "ref: refs/heads/main");
 
@@ -64,7 +64,7 @@ describe("walkRepo", () => {
     expect(result.map((r) => r.path)).toEqual(["src/foo.ts"]);
   });
 
-  it("ignora dist/ e coverage/ por default", async () => {
+  it("ignores dist/ and coverage/ by default", async () => {
     await write("src/foo.ts");
     await write("dist/bundle.js");
     await write("coverage/lcov.info");
@@ -73,11 +73,11 @@ describe("walkRepo", () => {
     expect(result.map((r) => r.path)).toEqual(["src/foo.ts"]);
   });
 
-  it("respeita .gitignore do repo", async () => {
+  it("respects the repo .gitignore", async () => {
     await write("src/foo.ts");
     await write("src/skipme.ts");
     await write("build/output.js");
-    await write("node_modules/x.js", ""); // ignorado pelo default tb
+    await write("node_modules/x.js", ""); // ignored by default too
     await write(".gitignore", "src/skipme.ts\nbuild/\n");
 
     const result = await walkRepo(repoRoot);
@@ -85,24 +85,24 @@ describe("walkRepo", () => {
     expect(paths).toEqual(["src/foo.ts"]);
   });
 
-  it("extraIgnores sobrepõe ao .gitignore", async () => {
+  it("extraIgnores stacks on top of .gitignore", async () => {
     await write("src/foo.ts");
     await write("src/special.ts");
     await write(".gitignore", "src/special.ts\n");
 
     const result = await walkRepo(repoRoot, { extraIgnores: ["src/special.ts"] });
-    // src/special.ts já é ignorado pelo .gitignore; foo.ts deveria passar
+    // src/special.ts is already ignored by .gitignore; foo.ts should pass
     expect(result.map((r) => r.path)).toEqual(["src/foo.ts"]);
   });
 
-  it("retorna paths relativos com forward slashes (cross-platform)", async () => {
+  it("returns relative paths with forward slashes (cross-platform)", async () => {
     await write("src/sub/deep/file.ts");
     const result = await walkRepo(repoRoot);
     expect(result[0]?.path).toBe("src/sub/deep/file.ts");
     expect(result[0]?.path).not.toContain("\\");
   });
 
-  it("ordem é estável (ordenado por path)", async () => {
+  it("ordering is stable (sorted by path)", async () => {
     await write("z.ts");
     await write("a.ts");
     await write("m.ts");
@@ -203,9 +203,9 @@ describe("walkRepo", () => {
     expect(result.map((r) => r.path)).toEqual(["foo.ts"]);
   });
 
-  it("walk funciona sem .gitignore (repo fresco)", async () => {
+  it("walk works without .gitignore (fresh repo)", async () => {
     await write("src/foo.ts");
-    await write("node_modules/x.js"); // ainda ignorado pelos defaults
+    await write("node_modules/x.js"); // still ignored by defaults
     const result = await walkRepo(repoRoot);
     expect(result.map((r) => r.path)).toEqual(["src/foo.ts"]);
   });

@@ -1,21 +1,21 @@
 /**
- * symbols — extrai SymbolRecords do tree-sitter AST.
+ * symbols — extracts SymbolRecords from the tree-sitter AST.
  *
- * SPEC §"Fase 1 — Indexador": "extração de símbolos (funções, classes,
- * métodos, exports)".
+ * SPEC §"Phase 1 — Indexer": "symbol extraction (functions, classes, methods,
+ * exports)".
  *
- * Cobertura por linguagem:
+ * Coverage by language:
  *   TypeScript / TSX / JavaScript:
  *     - function_declaration         → kind: "function"
  *     - generator_function_declaration → kind: "function"
  *     - class_declaration            → kind: "class"
  *     - method_definition            → kind: "method" (parent = class)
- *     - arrow_function (com nome)    → kind: "function" (atribuída a const)
- *     - export_statement             → kind: "export" (cobre re-exports)
+ *     - arrow_function (named)       → kind: "function" (assigned to a const)
+ *     - export_statement             → kind: "export" (covers re-exports)
  *   Python:
  *     - function_definition          → kind: "function"
  *     - class_definition             → kind: "class"
- *     - decorated_definition         → kind: decorador envolve fn/classe
+ *     - decorated_definition         → kind: decorator wraps fn/class
  *   Go (roadmap item 19 — pilot tier-1 extension):
  *     - function_declaration         → kind: "function" (same node type as TS)
  *     - method_declaration           → kind: "method" (parent = receiver type,
@@ -72,26 +72,25 @@
  *     - annotation_type_declaration  → NOT extracted v1 (rare; no kind
  *                                      assigned)
  *
- * Chave do símbolo (SPEC §"Frontmatter"):
- *   - top-level: `caminho/relativo.ext#Nome`
- *   - método:    `caminho/relativo.ext#Classe.metodo`
- *   - decorador Python: `caminho/relativo.py#decorated_fn`
+ * Symbol key (SPEC §"Frontmatter"):
+ *   - top-level: `relative/path.ext#Name`
+ *   - method:    `relative/path.ext#Class.method`
+ *   - Python decorator: `relative/path.py#decorated_fn`
  *
- * A extração é "honesta" — só emitimos o que o código realmente declara.
- * Funções anônimas (arrow sem nome, IIFE) são puladas: a SPEC §"Conceitos-
- * chave" fala em "símbolos do código" e chave de símbolo precisa ser
- * referenciável. Anônimas não são.
+ * The extraction is "honest" — we only emit what the code actually declares.
+ * Anonymous functions (nameless arrow, IIFE) are skipped: SPEC §"Key concepts"
+ * talks about "code symbols" and a symbol key must be referenceable. Anonymous
+ * ones are not.
  *
- * Classes declaradas DENTRO do corpo de uma função/método (ex.: um mock
- * `class FakeThing:` local a um teste) também são puladas — são detalhe de
- * implementação local, não um símbolo de módulo citável. O nome de uma
- * classe local costuma se repetir entre métodos irmãos (um Fake* por
- * variante testada); extraí-las colidiria todas na mesma chave
- * `path#Nome`, descartando silenciosamente todas menos a primeira (ver
- * dedup em `extractSymbols`) enquanto a LLM, vendo o source bruto com
- * definições genuinamente repetidas, insiste em citar a chave compartilhada
- * em vários pontos — root cause confirmado de um `duplicate_anchor`
- * recorrente (2026-07-23).
+ * Classes declared INSIDE the body of a function/method (e.g. a mock
+ * `class FakeThing:` local to a test) are also skipped — they are a local
+ * implementation detail, not a citable module symbol. A local class's name
+ * often repeats among sibling methods (one Fake* per tested variant);
+ * extracting them would collide all onto the same `path#Name` key, silently
+ * discarding all but the first (see dedup in `extractSymbols`) while the LLM,
+ * seeing the raw source with genuinely repeated definitions, insists on citing
+ * the shared key at several points — a confirmed root cause of a recurring
+ * `duplicate_anchor` (2026-07-23).
  */
 
 import type { Tree, Node } from "web-tree-sitter";
@@ -100,12 +99,12 @@ import { sha256, sha256Slice } from "./hashes.js";
 export type SymbolKind = "function" | "class" | "method" | "export" | "interface";
 
 export interface SymbolRecord {
-  /** Chave completa (path#name ou path#parent.name). UNIQUE por arquivo+path. */
+  /** Full key (path#name or path#parent.name). UNIQUE per file+path. */
   key: string;
-  /** Nome curto (último segmento). */
+  /** Short name (last segment). */
   name: string;
   kind: SymbolKind;
-  /** Trecho representativo — header ou primeira linha — pra uso em âncoras. */
+  /** Representative slice — header or first line — for use in anchors. */
   signature: string | null;
   start_line: number;
   end_line: number;
@@ -126,8 +125,8 @@ export interface SymbolRange {
 }
 
 /**
- * Extrai todos os símbolos de uma árvore. `relPath` é o path relativo ao
- * repoRoot com forward slashes (já vindo do walker).
+ * Extracts all symbols from a tree. `relPath` is the path relative to repoRoot
+ * with forward slashes (already coming from the walker).
  */
 export function extractSymbols(
   tree: Tree,
@@ -213,17 +212,17 @@ function walkNode(
 
     case "class_declaration":
     case "class": {
-      // TS usa "class_declaration"; Python usa "class_definition" (tratado abaixo).
+      // TS uses "class_declaration"; Python uses "class_definition" (handled below).
       if (insideFunctionBody) return;
       const name = node.childForFieldName("name")?.text;
       if (name) {
         out.push(makeRecord(node, source, relPath, name, "class"));
-        // Desce nos method_definition com parentClassName = name.
+        // Descends into method_definition with parentClassName = name.
         for (let i = 0; i < node.namedChildCount; i++) {
           const child = node.namedChild(i);
           if (child) walkNode(child, source, relPath, name, out, insideFunctionBody);
         }
-        return; // já descemos manualmente
+        return; // already descended manually
       }
       break;
     }
@@ -233,38 +232,38 @@ function walkNode(
       if (name && parentClassName) {
         out.push(makeRecord(node, source, relPath, `${parentClassName}.${name}`, "method"));
       } else if (name) {
-        // método fora de classe (raro mas possível) — emite sem qualificação
+        // method outside a class (rare but possible) — emits without qualification
         out.push(makeRecord(node, source, relPath, name, "method"));
       }
       break;
     }
 
     case "export_statement": {
-      // `export class Foo` / `export function bar` — emite UMA entrada
-      // (kind=class ou function, NÃO export). Evita duplicar com a class/function
-      // interna. Para `export const`, emite o identificador (kind=export).
+      // `export class Foo` / `export function bar` — emits ONE entry
+      // (kind=class or function, NOT export). Avoids duplicating with the inner
+      // class/function. For `export const`, emits the identifier (kind=export).
       const decl = node.firstNamedChild;
       if (decl && (decl.type === "function_declaration" || decl.type === "generator_function_declaration")) {
         const name = decl.childForFieldName("name")?.text;
         if (name) {
           out.push(makeRecord(node, source, relPath, name, "function"));
         }
-        return; // NÃO descer — a function interna emitiria duplicado
+        return; // do NOT descend — the inner function would emit a duplicate
       } else if (decl?.type === "class_declaration") {
         if (insideFunctionBody) return;
         const name = decl.childForFieldName("name")?.text;
         if (name) {
           out.push(makeRecord(node, source, relPath, name, "class"));
-          // Desce nos methods (igual ao caso class_declaration sem export)
+          // Descends into methods (same as the class_declaration case without export)
           for (let i = 0; i < decl.namedChildCount; i++) {
             const child = decl.namedChild(i);
             if (child) walkNode(child, source, relPath, name, out, insideFunctionBody);
           }
-          return; // já descemos manualmente
+          return; // already descended manually
         }
         return;
       } else if (decl?.type === "lexical_declaration" || decl?.type === "variable_statement") {
-        // export const foo = ... — emite o identificador
+        // export const foo = ... — emits the identifier
         for (let i = 0; i < decl.namedChildCount; i++) {
           const child = decl.namedChild(i);
           if (child?.type === "variable_declarator") {
@@ -279,8 +278,8 @@ function walkNode(
     }
 
     case "function_definition": {
-      // Python. Se está dentro de class_definition, qualifica como
-      // `Class.method`. Caso contrário é top-level.
+      // Python. If inside a class_definition, qualifies as `Class.method`.
+      // Otherwise it is top-level.
       const name = node.childForFieldName("name")?.text;
       if (name) {
         const qualified = parentClassName ? `${parentClassName}.${name}` : name;
@@ -296,7 +295,7 @@ function walkNode(
       const name = node.childForFieldName("name")?.text;
       if (name) {
         out.push(makeRecord(node, source, relPath, name, "class"));
-        // Desce nos 'block' da classe para encontrar métodos
+        // Descends into the class 'block' to find methods
         const block = node.childForFieldName("body");
         if (block) {
           for (let i = 0; i < block.namedChildCount; i++) {
@@ -310,7 +309,7 @@ function walkNode(
     }
 
     case "decorated_definition": {
-      // Python — @decorator sobre function ou class. Pega o filho interno.
+      // Python — @decorator on function or class. Takes the inner child.
       for (let i = 0; i < node.namedChildCount; i++) {
         const child = node.namedChild(i);
         if (child && (child.type === "function_definition" || child.type === "class_definition")) {
@@ -486,7 +485,7 @@ function walkNode(
     }
   }
 
-  // Default: desce nos filhos (exceto quando já tratamos acima).
+  // Default: descend into the children (except where we already handled them above).
   for (let i = 0; i < node.namedChildCount; i++) {
     const child = node.namedChild(i);
     if (child) walkNode(child, source, relPath, parentClassName, out, childInsideFunctionBody);
@@ -500,7 +499,7 @@ function makeRecord(
   name: string,
   kind: SymbolKind,
 ): ExtractedSymbol {
-  const startLine = node.startPosition.row + 1; // tree-sitter é 0-based
+  const startLine = node.startPosition.row + 1; // tree-sitter is 0-based
   const endLine = node.endPosition.row + 1;
   const startByte = node.startIndex;
   const endByte = node.endIndex;
@@ -844,17 +843,17 @@ function extractCalleeName(node: Node | null): { name: string; confidence: CallC
 }
 
 function signatureFor(node: Node, source: string): string | null {
-  // Pega a primeira linha não-vazia do nó — útil pra âncoras no Fase 2.
+  // Takes the first non-empty line of the node — useful for Phase 2 anchors.
   const startByte = node.startIndex;
   const endByte = Math.min(node.endIndex, startByte + 200);
   const slice = source.slice(startByte, endByte);
   const firstLine = slice.split("\n", 1)[0]?.trim();
   if (!firstLine) return null;
-  // Limita tamanho pra não estourar o banco
+  // Caps the length so it doesn't blow up the database
   return firstLine.length > 200 ? firstLine.slice(0, 200) + "…" : firstLine;
 }
 
-// === Etapa 2b: rationale extraction (intent evidence from comments/docstrings) ===
+// === Step 2b: rationale extraction (intent evidence from comments/docstrings) ===
 
 export type RationaleKind = "why" | "note" | "hack" | "todo" | "fixme" | "docstring";
 

@@ -1,22 +1,22 @@
 /**
- * update-metrics — contabilidade incremental (SPEC §"Contabilidade de tokens
- * (Fase 3)", parte de `update`).
+ * update-metrics — incremental accounting (SPEC §"Token accounting
+ * (Phase 3)", part of `update`).
  *
- * Decisão de design: arquivo JSON em `.livewiki/update_metrics.json` em vez
- * de tabela SQLite. Razões:
- *   1. Não mexe em schema v4 — contabilidade é incremental, não precisa
- *      do poder do SQL (queries são "último valor" e "soma por tipo").
- *   2. Reconstruível: deletou .livewiki/? a próxima `update` recomeça do
- *      zero (regra #3 da SPEC: o banco é derivado; tudo importante vive
- *      em markdown/manifest versionados — métricas podem se perder).
- *   3. Append-only é mais simples que gerenciar migrations.
+ * Design decision: a JSON file at `.livewiki/update_metrics.json` instead
+ * of a SQLite table. Reasons:
+ *   1. Does not touch schema v4 — accounting is incremental, it does not
+ *      need SQL's power (queries are "last value" and "sum by type").
+ *   2. Rebuildable: deleted .livewiki/? the next `update` starts over from
+ *      scratch (SPEC rule #3: the DB is derived; everything important lives
+ *      in versioned markdown/manifest — metrics may be lost).
+ *   3. Append-only is simpler than managing migrations.
  *
- * Shape de cada entry:
+ * Shape of each entry:
  *   { kind, timestamp, ... }
  *
- *   - kind: "package_emitted" — emitido pelo loadWorkPackage (SPEC §tese)
- *   - kind: "write_received"  — emitido quando o agente/HUMANO devolve
- *     doc escrita (skill document-as-you-go ou CLI pós-edição manual)
+ *   - kind: "package_emitted" — emitted by loadWorkPackage (SPEC §thesis)
+ *   - kind: "write_received"  — emitted when the agent/HUMAN returns the
+ *     written doc (document-as-you-go skill or CLI after a manual edit)
  *   - kind: "debt_resolved"   — debt paid via MCP/CLI (roadmap item 14)
  *   - kind: "batch_run"       — one batch run's token totals, mirrored from
  *     finalizeRun (roadmap item 14: in-session cost accounting)
@@ -24,9 +24,9 @@
  * Backward compat: v1 files containing only the two original kinds keep
  * parsing — the new kinds are additive to the union and to the snapshot.
  *
- * A tese do produto ("800 tokens em vez de reler o repo") mora aqui:
- * a razão `packageEmittedTokens / writeReceivedTokens` mostra quantas
- * linhas de código o agente processou para cada linha de doc gerada.
+ * The product thesis ("800 tokens instead of re-reading the repo") lives here:
+ * the `packageEmittedTokens / writeReceivedTokens` ratio shows how many
+ * lines of code the agent processed for each line of generated doc.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -36,8 +36,8 @@ import * as safeIo from "./safe-io.js";
 const METRICS_REL_PATH = ".livewiki/update_metrics.json";
 
 /**
- * Discriminated union — facilita a query "último pacote emitido" e a
- * agregação "total escrito de volta".
+ * Discriminated union — makes the "last package emitted" query and the
+ * "total written back" aggregation easy.
  */
 export type UpdateMetric =
   | {
@@ -76,25 +76,25 @@ export type UpdateMetric =
     };
 
 export interface UpdateMetricsFile {
-  /** Versão do schema (pra upgrades futuros). */
+  /** Schema version (for future upgrades). */
   version: 1;
-  /** Append-only — entries mais novas no fim. */
+  /** Append-only — newest entries at the end. */
   entries: UpdateMetric[];
 }
 
-/** Path absoluto do arquivo de métricas dentro do repo. */
+/** Absolute path of the metrics file inside the repo. */
 async function metricsPath(repoRoot: string): Promise<string> {
   return await safeIo.resolveAndValidate(repoRoot, METRICS_REL_PATH);
 }
 
-/** Lê o arquivo de métricas (ou cria vazio se não existir). */
+/** Reads the metrics file (or creates an empty one if it does not exist). */
 async function readMetrics(repoRoot: string): Promise<UpdateMetricsFile> {
   const absPath = await metricsPath(repoRoot);
   try {
     const raw = await nodeFs.readFile(absPath, "utf8");
     const parsed = JSON.parse(raw) as UpdateMetricsFile;
     if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
-      // Corrompido — recomeça do zero (regra #3: tudo importante está versionado).
+      // Corrupted — start over from scratch (rule #3: everything important is versioned).
       return { version: 1, entries: [] };
     }
     return parsed;
@@ -103,14 +103,14 @@ async function readMetrics(repoRoot: string): Promise<UpdateMetricsFile> {
   }
 }
 
-/** Persiste o arquivo. Idempotente no sentido de "último estado coerente". */
+/** Persists the file. Idempotent in the sense of "last coherent state". */
 async function writeMetrics(repoRoot: string, file: UpdateMetricsFile): Promise<void> {
   await safeIo.writeText(repoRoot, METRICS_REL_PATH, JSON.stringify(file, null, 2) + "\n");
 }
 
 /**
- * Append de uma métrica. Função fire-and-forget — quem chama não precisa
- * esperar, e um erro aqui NÃO deve quebrar o fluxo principal de `update`.
+ * Appends a metric. Fire-and-forget function — the caller does not need to
+ * wait, and an error here must NOT break the main `update` flow.
  */
 export async function recordUpdateMetric(
   repoRoot: string,
@@ -121,27 +121,27 @@ export async function recordUpdateMetric(
     file.entries.push(metric);
     await writeMetrics(repoRoot, file);
   } catch {
-    // best-effort: contabilidade nunca bloqueia a operação principal
+    // best-effort: accounting never blocks the main operation
   }
 }
 
 /**
- * Snapshot agregado das métricas — usado pelo `status --json` pra expor
- * a tese do produto. Pode ser computado em tempo real (poucos entries).
+ * Aggregated snapshot of the metrics — used by `status --json` to expose
+ * the product thesis. Can be computed in real time (few entries).
  */
 export interface UpdateMetricsSnapshot {
-  /** Total de pacotes emitidos até agora. */
+  /** Total packages emitted so far. */
   packagesEmitted: number;
-  /** Soma de tokens estimados de TODOS os pacotes emitidos. */
+  /** Sum of estimated tokens of ALL emitted packages. */
   totalPackageTokens: number;
-  /** Total de writes recebidos (agente ou humano) até agora. */
+  /** Total writes received (agent or human) so far. */
   writesReceived: number;
-  /** Soma de tokens estimados de TODOS os writes recebidos. */
+  /** Sum of estimated tokens of ALL received writes. */
   totalWriteTokens: number;
-  /** Razão write/package — quão "econômica" foi a doc (proxy). */
-  /** < 1.0 = agente escreveu menos do que leu (bom); > 1.0 = escreveu mais. */
+  /** write/package ratio — how "economical" the doc was (proxy). */
+  /** < 1.0 = the agent wrote less than it read (good); > 1.0 = wrote more. */
   efficiencyRatio: number | null;
-  /** Última métrica de cada kind (debug). */
+  /** Last metric of each kind (debug). */
   lastPackage: UpdateMetric | null;
   lastWrite: UpdateMetric | null;
   /** Sum of `count` across all `debt_resolved` entries (roadmap item 14). */
@@ -222,8 +222,8 @@ export async function listUpdateMetrics(repoRoot: string): Promise<UpdateMetric[
 }
 
 /**
- * Helper exposto pra tests: limpa as métricas (útil em setup).
- * NUNCA chamar em código de produção — destrutivo.
+ * Helper exposed for tests: clears the metrics (useful in setup).
+ * NEVER call it in production code — destructive.
  */
 export async function clearMetricsForTests(repoRoot: string): Promise<void> {
   const absRoot = nodePath.resolve(repoRoot);

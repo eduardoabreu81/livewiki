@@ -1,23 +1,23 @@
 /**
- * CLI E2E Fase 3 — pipeline completo init --batch com stub HTTP server.
+ * CLI E2E Phase 3 — full init --batch pipeline with a stub HTTP server.
  *
- * Usa um mini server HTTP local (Node http nativo) que simula a API Anthropic.
- * Zero chamada real — tudo mockado em process-localhost.
+ * Uses a mini local HTTP server (native Node http) that simulates the Anthropic API.
+ * Zero real calls — everything mocked on process-localhost.
  *
- * Cenários cobertos:
- *   1. `init --batch` end-to-end → quickstart + diagramas + manifest + pages + status report
- *   2. Resume: interrompe após 1 task, resume continua da task certa
- *   3. --only: re-roda 1 task, usageHistory acumula
- *   4. Circuit breaker: mock que falha 3x → abort
+ * Covered scenarios:
+ *   1. `init --batch` end-to-end → quickstart + diagrams + manifest + pages + status report
+ *   2. Resume: interrupts after 1 task, resume continues from the right task
+ *   3. --only: re-runs 1 task, usageHistory accumulates
+ *   4. Circuit breaker: mock that fails 3x → abort
  *
- * Estratégia: stub server recebe request, valida shape (system prompt inclui
- * regra "NEVER invent key", user prompt inclui lista fechada), responde com
- * Markdown válido. Validações E2E:
- *   - arquivos de output existem
- *   - manifest tem snapshotHash
- *   - batch_tasks tem usageHistory populado
- *   - status report tem totals/byStage/byModule
- *   - key-leak: nenhuma string da chave (vinda de env var) aparece em nenhum output
+ * Strategy: the stub server receives the request, validates shape (system prompt
+ * includes the "NEVER invent key" rule, user prompt includes the closed list),
+ * responds with valid Markdown. E2E validations:
+ *   - output files exist
+ *   - manifest has snapshotHash
+ *   - batch_tasks has populated usageHistory
+ *   - status report has totals/byStage/byModule
+ *   - key-leak: no string of the key (from env var) appears in any output
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
@@ -30,7 +30,7 @@ import * as nodeFs from "node:fs/promises";
 interface StubServer {
   url: string;
   close: () => Promise<void>;
-  /** Customize o handler por request (# de chamadas, falhar N vezes, etc) */
+  /** Customize the handler per request (# of calls, fail N times, etc) */
   setHandler: (h: (req: { system: string; user: string }) => StubResponse | null) => void;
   callCount: () => number;
 }
@@ -93,7 +93,7 @@ async function startStubServer(): Promise<StubServer> {
   };
 }
 
-/** Default handler: gera doc Markdown válido pra qualquer módulo. */
+/** Default handler: generates valid Markdown doc for any module. */
 /** Extract closed-list keys from the stage-4 / repair user prompt. */
 function closedKeysFromPrompt(user: string, fallbackModuleId: string): string[] {
   const keys: string[] = [];
@@ -292,9 +292,9 @@ async function writeConfig(provider: string, model: string, baseUrl: string, ext
   );
 }
 
-describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
-  it("init --batch gera quickstart + diagramas + manifest + pages + status", async () => {
-    // Repo: 2 arquivos em 2 módulos
+describe("CLI E2E Phase 3 — init --batch pipeline with Anthropic stub", () => {
+  it("init --batch generates quickstart + diagrams + manifest + pages + status", async () => {
+    // Repo: 2 files in 2 modules
     await writeCode("src/auth/login.ts", "export function login() { return 'auth'; }");
     await writeCode("src/utils/helper.ts", "export function help() { return 'utils'; }");
 
@@ -303,12 +303,12 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     await writeConfig("anthropic", "claude-test-mock", stub.url);
     process.env["ANTHROPIC_API_KEY"] = "test-canary-DONOTLEAK";
     try {
-      // Init com --batch
+      // Init with --batch
       const r = runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
       const result = await r;
-      expect(result.status, `init falhou: ${result.stderr}`).toBe(0);
+      expect(result.status, `init failed: ${result.stderr}`).toBe(0);
 
-      // Wiki pages geradas (#29: file page + folder page per directory)
+      // Wiki pages generated (#29: file page + folder page per directory)
       expect(
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/auth/login.md"), "utf8"),
       ).toMatch(/title: login/);
@@ -322,7 +322,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/utils/index.md"), "utf8"),
       ).toContain("owner: generated");
 
-      // Diagramas
+      // Diagrams
       expect(
         await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/structure.mmd"), "utf8"),
       ).toContain("graph LR");
@@ -379,19 +379,19 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       // Status report
       const statusR = runCli(["--json", "--repo", repoRoot, "batch"]);
       const status = await statusR;
-      expect(status.status, `batch falhou: ${status.stderr}`).toBe(0);
+      expect(status.status, `batch failed: ${status.stderr}`).toBe(0);
       const report = JSON.parse(status.stdout);
       expect(report.totals.inputTokens).toBeGreaterThan(0);
       expect(report.byModule.length).toBeGreaterThanOrEqual(2);
       expect(report.run.status).toBe("completed");
 
-      // (Q) Verify limpo: exit 0 + zero issues de qualquer severity.
-      // Antes do fix, overview emitia [page](../auth.md) que verify normalizava
-      // pra "livewiki/../auth.md" → broken_internal_link warning. Critério
-      // ampliado: "batch completo" = verify 100% limpo (incluindo warnings).
+      // (Q) Clean verify: exit 0 + zero issues of any severity.
+      // Before the fix, overview emitted [page](../auth.md) which verify
+      // normalized to "livewiki/../auth.md" → broken_internal_link warning.
+      // Widened criterion: "complete batch" = verify 100% clean (including warnings).
       const verifyR = runCli(["--json", "--repo", repoRoot, "verify"]);
       const verify = await verifyR;
-      expect(verify.status, `verify falhou: ${verify.stderr}`).toBe(0);
+      expect(verify.status, `verify failed: ${verify.stderr}`).toBe(0);
       const verifyReport = JSON.parse(verify.stdout);
       expect(
         verifyReport.issues.length,
@@ -399,7 +399,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       ).toBe(0);
       expect(verifyReport.ok).toBe(true);
 
-      // Key-leak: NENHUMA string da chave aparece em nenhum arquivo gerado
+      // Key-leak: NO string of the key appears in any generated file
       const allFiles = [
         "livewiki/auth/login.md",
         "livewiki/auth/index.md",
@@ -417,7 +417,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         const content = await nodeFs.readFile(nodePath.join(repoRoot, f), "utf8");
         expect(content, `key leaked in ${f}`).not.toContain("test-canary-DONOTLEAK");
       }
-      // Status stdout também não
+      // Status stdout either
       expect(status.stdout).not.toContain("test-canary-DONOTLEAK");
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
@@ -575,13 +575,13 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   });
 
-  it("--only <module> re-roda 1 task: usageHistory acumula", async () => {
+  it("--only <module> re-runs 1 task: usageHistory accumulates", async () => {
     await writeCode("src/auth/login.ts", "export function login() { return 1; }");
     stub.setHandler((req) => defaultHandler(req));
     await writeConfig("anthropic", "claude-test-mock", stub.url);
     process.env["ANTHROPIC_API_KEY"] = "test-canary-2";
     try {
-      // Init --batch inicial
+      // Initial init --batch
       const r1 = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
       expect(r1.status, r1.stderr).toBe(0);
       const callsAfterInit = stub.callCount();
@@ -599,10 +599,10 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       ]);
       expect(rerun.status, rerun.stderr).toBe(0);
 
-      // Pelo menos 1 chamada extra pro mock LLM
+      // At least 1 extra call to the mock LLM
       expect(stub.callCount()).toBeGreaterThan(callsAfterInit);
 
-      // Status mostra attempt >= 2 na task 'auth/login'
+      // Status shows attempt >= 2 on the 'auth/login' task
       const status = await runCli(["--json", "--repo", repoRoot, "batch", "status"]);
       const report = JSON.parse(status.stdout);
       const authTask = report.tasks.find(
@@ -617,7 +617,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     // suite default.
   });
 
-  it("--only <module> SEM runId posicional re-executa a task (não cai no status)", async () => {
+  it("--only <module> WITHOUT positional runId re-runs the task (does not fall into status)", async () => {
     // Regression (2026-08-04): `batch --only <target>` without a positional
     // runId silently printed `batch status` — the early no-args branch ran
     // first and the flag was ignored; three "rehearsal" invocations in a
@@ -648,10 +648,10 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   });
 
-  it("circuit breaker: falha 3x seguidas → abort", async () => {
+  it("circuit breaker: fails 3x in a row → abort", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
-    // Configura 3 módulos separados — mas só temos 1 arquivo. Pra ter 3+,
-    // espalhamos arquivos em 3 dirs diferentes.
+    // Set up 3 separate modules — but we only have 1 file. To have 3+,
+    // we spread files across 3 different dirs.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
     await writeCode("src/api/y.ts", "export function c() {}");
@@ -666,7 +666,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     process.env["ANTHROPIC_API_KEY"] = "test-canary-3";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
-      // init retorna { ok, filesWritten, batchSummary: { runId, status, ... } }
+      // init returns { ok, filesWritten, batchSummary: { runId, status, ... } }
       const report = JSON.parse(r.stdout);
       expect(report.batchSummary).toBeDefined();
       expect(report.batchSummary.status).toBe("aborted");
@@ -696,10 +696,10 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   }, 60_000);
 
-  it("(O) init --batch aborted → exit code 2 (sem --json)", async () => {
-    // Antes do fix (O), init --batch SEMPRE retornava 0 mesmo quando o batch
-    // tinha aborted (circuit breaker) — escondia falha sistêmica do orquestrador.
-    // Aqui usamos SEM --json pra capturar o exit code real do processo.
+  it("(O) init --batch aborted → exit code 2 (without --json)", async () => {
+    // Before fix (O), init --batch ALWAYS returned 0 even when the batch
+    // had aborted (circuit breaker) — hiding the orchestrator's systemic
+    // failure. Here we use WITHOUT --json to capture the real process exit code.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
     await writeCode("src/api/y.ts", "export function c() {}");
@@ -709,24 +709,24 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     process.env["ANTHROPIC_API_KEY"] = "test-canary-exit-aborted";
     try {
       const r = await runCli(["--repo", repoRoot, "init", "--batch"]);
-      expect(r.status, `init --batch aborted deveria exit 2; stderr=${r.stderr}`).toBe(2);
+      expect(r.status, `init --batch aborted should exit 2; stderr=${r.stderr}`).toBe(2);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
     }
   }, 60_000);
 
-  it("(O) init --batch completed_with_failures → exit code 1 (sem --json)", async () => {
-    // Cenário: 3 file units, falha só no 1º da etapa 4 → circuit breaker não
-    // dispara (1 < 3 consecutivas, < 50%), mas o run termina com N-1 done + 1
-    // failed → status=completed_with_failures → exit 1.
-    // #29: etapa 2 é o planner determinístico (sem LLM); diferenciamos a
-    // etapa 4 pelo marker do prompt de file unit: `# File: <repoPath>`.
+  it("(O) init --batch completed_with_failures → exit code 1 (without --json)", async () => {
+    // Scenario: 3 file units, only the 1st of stage 4 fails → the circuit
+    // breaker does not trigger (1 < 3 consecutive, < 50%), but the run ends
+    // with N-1 done + 1 failed → status=completed_with_failures → exit 1.
+    // #29: stage 2 is the deterministic planner (no LLM); we tell stage 4
+    // apart by the file-unit prompt marker: `# File: <repoPath>`.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
     await writeCode("src/api/y.ts", "export function c() {}");
 
     stub.setHandler((req) => {
-      // Falha apenas na task do file unit auth/login (initial + repairs).
+      // Fails only on the auth/login file-unit task (initial + repairs).
       if (req.user.includes("# File: src/auth/login.ts")) {
         return { status: 500, body: { error: "simulated transient failure" } };
       }
@@ -738,9 +738,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       const r = await runCli(["--repo", repoRoot, "init", "--batch"]);
       expect(
         r.status,
-        `init --batch completed_with_failures deveria exit 1; stderr=${r.stderr}; stdout=${r.stdout}`,
+        `init --batch completed_with_failures should exit 1; stderr=${r.stderr}; stdout=${r.stdout}`,
       ).toBe(1);
-      // O output sem --json é humano; confirmamos que menciona o run id e exit code
+      // The output without --json is human; we confirm it mentions the run id and exit code
       expect(r.stdout).toMatch(/run #\d+: completed_with_failures/);
       expect(r.stdout).toMatch(/exit code: 1/);
     } finally {
@@ -748,14 +748,14 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   }, 60_000);
 
-  it("(O) init --batch completed → exit code 0 (sanity do caminho feliz)", async () => {
+  it("(O) init --batch completed → exit code 0 (happy-path sanity)", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
     stub.setHandler((req) => defaultHandler(req));
     await writeConfig("anthropic", "claude-test-mock", stub.url);
     process.env["ANTHROPIC_API_KEY"] = "test-canary-exit-completed";
     try {
       const r = await runCli(["--repo", repoRoot, "init", "--batch"]);
-      expect(r.status, `init --batch completed deveria exit 0; stderr=${r.stderr}`).toBe(0);
+      expect(r.status, `init --batch completed should exit 0; stderr=${r.stderr}`).toBe(0);
       expect(r.stdout).toMatch(/run #\d+: completed/);
       expect(r.stdout).toMatch(/exit code: 0/);
     } finally {
@@ -763,9 +763,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     }
   }, 60_000);
 
-  it("(O) init --batch --json sempre exit 0 (output estruturado)", async () => {
-    // Convenção batch CLI (setExitCode em packages/cli/src/commands/batch.ts):
-    // --json → exit 0 sempre, mesmo em failure. Mantém consistência.
+  it("(O) init --batch --json always exit 0 (structured output)", async () => {
+    // Batch CLI convention (setExitCode in packages/cli/src/commands/batch.ts):
+    // --json → always exit 0, even on failure. Keeps consistency.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
     await writeCode("src/api/y.ts", "export function c() {}");
@@ -778,7 +778,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       expect(r.status, r.stderr).toBe(0);
       const report = JSON.parse(r.stdout);
       expect(report.batchSummary.status).toBe("aborted");
-      // batchExitCode também é exposto no JSON para consumers
+      // batchExitCode is also exposed in JSON for consumers
       expect(report.batchExitCode).toBe(2);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
@@ -786,14 +786,14 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
   }, 60_000);
 
   it("(P) init generates overview cards with display titles and stable module IDs", async () => {
-    // Sem --batch: overview é gerado em init base com módulos heurísticos.
+    // Without --batch: overview is generated in base init with heuristic modules.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
 
     const r = await runCli(["--json", "--repo", repoRoot, "init"]);
     expect(r.status, r.stderr).toBe(0);
 
-    // Arquivo existe
+    // File exists
     const overviewPath = nodePath.join(repoRoot, "livewiki/architecture/overview.md");
     const overview = await nodeFs.readFile(overviewPath, "utf8");
     expect(overview).toMatch(/^---$/m);
@@ -810,14 +810,14 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     // so the overview must not link to a nonexistent artifact.
     expect(overview).not.toMatch(/\[class diagram\]\(\.\.\/diagrams\/auth\.classes\.mmd\)/);
     expect(overview).not.toMatch(/\[class diagram\]\(\.\.\/diagrams\/utils\.classes\.mmd\)/);
-    // Diagramas embedados (mermaid code fence)
+    // Embedded diagrams (mermaid code fence)
     expect(overview).toMatch(/```mermaid/);
     expect(overview).toMatch(/%% livewiki\/architecture\/structure\.mmd/);
     expect(overview).toMatch(/%% livewiki\/architecture\/modules\.mmd/);
   });
 
   it("(P) init --batch regenerates overview cards with existing module-page links", async () => {
-    // Com --batch: overview é gerado junto com as pages geradas pelo LLM.
+    // With --batch: overview is generated alongside the LLM-generated pages.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
     stub.setHandler((req) => defaultHandler(req));
@@ -923,26 +923,26 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(humanRun.stdout).toContain("livewiki/auxiliary/index.md");
   });
 
-  it("init --plan funciona SEM config LLM (correção #5)", async () => {
+  it("init --plan works WITHOUT LLM config (fix #5)", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
-    // SEM .livewiki/config.json — --plan não pode exigir LLM
+    // WITHOUT .livewiki/config.json — --plan cannot require LLM
     const r = await runCli(["--json", "--repo", repoRoot, "init", "--plan"]);
     expect(r.status, r.stderr).toBe(0);
     const report = JSON.parse(r.stdout);
     expect(report.plan).toBeDefined();
     expect(report.plan.modules.length).toBeGreaterThan(0);
-    // Não tocou na file page do unit (--plan é só plano). #29: o unit de
-    // `src/foo.ts` é `src/foo` → `livewiki/src/foo.md`.
+    // Did not touch the unit's file page (--plan is plan only). #29: the unit
+    // of `src/foo.ts` is `src/foo` → `livewiki/src/foo.md`.
     await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/src/foo.md"))).rejects.toThrow();
   });
 
-  it("init sem --batch funciona SEM config LLM (sem LLM calls)", async () => {
+  it("init without --batch works WITHOUT LLM config (no LLM calls)", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     const callsBeforeInit = stub.callCount();
-    // SEM .livewiki/config.json
+    // WITHOUT .livewiki/config.json
     const r = await runCli(["--json", "--repo", repoRoot, "init"]);
     expect(r.status, r.stderr).toBe(0);
-    // Gera layout determinístico
+    // Generates deterministic layout
     expect(
       await nodeFs.readFile(nodePath.join(repoRoot, "livewiki/architecture/structure.mmd"), "utf8"),
     ).toContain("graph LR");
@@ -959,20 +959,20 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     const verify = await runCli(["--json", "--repo", repoRoot, "verify"]);
     expect(verify.status, verify.stderr).toBe(0);
     expect(JSON.parse(verify.stdout).issues).toEqual([]);
-    // Sem file/folder pages (não chamou LLM). #29: o unit de `src/foo.ts`
-    // seria `src/foo` → `livewiki/src/foo.md`; a folder page seria
-    // `livewiki/src/index.md`.
+    // No file/folder pages (did not call the LLM). #29: the unit of
+    // `src/foo.ts` would be `src/foo` → `livewiki/src/foo.md`; the folder
+    // page would be `livewiki/src/index.md`.
     await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/src/foo.md"))).rejects.toThrow();
     await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/src/index.md"))).rejects.toThrow();
   });
 
-  it("init --batch SEM config LLM falha com mensagem clara apontando pro config", async () => {
+  it("init --batch WITHOUT LLM config fails with a clear message pointing at the config", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     // No .livewiki/config.json and no environment credential.
     const prevKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
-    expect(r.status).toBe(1); // erro
+    expect(r.status).toBe(1); // error
     // The remediation points to the interactive configuration flow.
     expect(r.stderr).toMatch(/Cannot run LLM batch/);
     expect(r.stderr).toMatch(/missing provider/);
@@ -980,7 +980,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(r.stderr).toMatch(/ANTHROPIC_API_KEY/);
   });
 
-  it("idempotência: dois init seguidos sem mudança = manifest byte-idêntico", async () => {
+  it("idempotence: two consecutive inits without change = byte-identical manifest", async () => {
     await writeCode("src/auth/login.ts", "export function login() {}");
     stub.setHandler((req) => defaultHandler(req));
     await writeConfig("anthropic", "claude-test-mock", stub.url);
@@ -991,13 +991,13 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
         nodePath.join(repoRoot, "livewiki/.manifest.json"),
         "utf8",
       );
-      // 2º init sem mudança no repo
+      // 2nd init without repo change
       await runCli(["--json", "--repo", repoRoot, "init"]);
       const manifest2 = await nodeFs.readFile(
         nodePath.join(repoRoot, "livewiki/.manifest.json"),
         "utf8",
       );
-      // snapshotHash tem que ser igual (conteúdo de livewiki/ não mudou)
+      // snapshotHash must be equal (livewiki/ content did not change)
       const m1 = JSON.parse(manifest1);
       const m2 = JSON.parse(manifest2);
       expect(m1.snapshotHash).toBe(m2.snapshotHash);
@@ -1069,16 +1069,16 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     expect(JSON.parse(verify.stdout).issues).toEqual([]);
   });
 
-  it("(Q) critério 'batch completo' = verify exit 0 + zero issues (incluindo warnings)", async () => {
-    // Achado Q (revisão Fase 4): o P gerou overview.md mas os links internos
-    // ([page](../<modulo>.md)) eram normalizados pelo verify como
-    // "livewiki/../<modulo>.md" → broken_internal_link. 3 WARNs no verify
-    // após run completo. Critério ampliado: "batch completo" exige verify
-    // 100% limpo (zero issues de qualquer severity, não só errors).
+  it("(Q) 'complete batch' criterion = verify exit 0 + zero issues (including warnings)", async () => {
+    // Finding Q (Phase 4 review): P generated overview.md but the internal
+    // links ([page](../<module>.md)) were normalized by verify as
+    // "livewiki/../<module>.md" → broken_internal_link. 3 WARNs in verify
+    // after a complete run. Widened criterion: "complete batch" requires
+    // verify 100% clean (zero issues of any severity, not just errors).
     //
-    // Cenário do repro: 3 módulos (auth/utils/api) com pages geradas.
-    // Overview emite [page](../auth.md), [page](../utils.md), [page](../api.md).
-    // Sem o fix, cada um vira "livewiki/../X.md" → 3 broken_internal_link.
+    // Repro scenario: 3 modules (auth/utils/api) with generated pages.
+    // Overview emits [page](../auth.md), [page](../utils.md), [page](../api.md).
+    // Without the fix, each becomes "livewiki/../X.md" → 3 broken_internal_link.
     await writeCode("src/auth/login.ts", "export function a() {}");
     await writeCode("src/utils/x.ts", "export function b() {}");
     await writeCode("src/api/y.ts", "export function c() {}");
@@ -1086,13 +1086,13 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     await writeConfig("anthropic", "claude-test-mock", stub.url);
     process.env["ANTHROPIC_API_KEY"] = "test-canary-Q";
     try {
-      // 1. Batch completo
+      // 1. Complete batch
       const initR = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
-      expect(initR.status, `init --batch falhou: ${initR.stderr}`).toBe(0);
+      expect(initR.status, `init --batch failed: ${initR.stderr}`).toBe(0);
       const initReport = JSON.parse(initR.stdout);
       expect(initReport.batchSummary.status).toBe("completed");
 
-      // 2. Overview.md existe com os links emitidos (#29: folder pages)
+      // 2. Overview.md exists with the emitted links (#29: folder pages)
       const overview = await nodeFs.readFile(
         nodePath.join(repoRoot, "livewiki/architecture/overview.md"),
         "utf8",
@@ -1101,9 +1101,9 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
       expect(overview).toMatch(/\[folder page\]\(\.\.\/utils\/index\.md\)/);
       expect(overview).toMatch(/\[folder page\]\(\.\.\/api\/index\.md\)/);
 
-      // 3. Verify limpo: exit 0 + zero issues
+      // 3. Clean verify: exit 0 + zero issues
       const verifyR = await runCli(["--json", "--repo", repoRoot, "verify"]);
-      expect(verifyR.status, `verify falhou: ${verifyR.stderr}`).toBe(0);
+      expect(verifyR.status, `verify failed: ${verifyR.stderr}`).toBe(0);
       const verifyReport = JSON.parse(verifyR.stdout);
       const broken = verifyReport.issues.filter(
         (i: { code: string }) => i.code === "broken_internal_link",
@@ -1175,7 +1175,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
     process.env["ANTHROPIC_API_KEY"] = "test-canary-DONOTLEAK";
     try {
       const r = await runCli(["--json", "--repo", repoRoot, "init", "--batch"]);
-      expect(r.status, `init falhou: ${r.stderr}`).toBe(0);
+      expect(r.status, `init failed: ${r.stderr}`).toBe(0);
 
       // No batch task for an ignored module.
       const tasksDir = nodePath.join(repoRoot, "livewiki");
@@ -1189,7 +1189,7 @@ describe("CLI E2E Fase 3 — pipeline init --batch com stub Anthropic", () => {
 
       // Verify passes clean — no broken_internal_link / broken_anchor.
       const verR = await runCli(["--json", "--repo", repoRoot, "verify"]);
-      expect(verR.status, `verify falhou: ${verR.stderr}`).toBe(0);
+      expect(verR.status, `verify failed: ${verR.stderr}`).toBe(0);
       const verReport = JSON.parse(verR.stdout) as { ok: boolean; issues: unknown[] };
       expect(verReport.issues).toEqual([]);
       expect(verReport.ok).toBe(true);

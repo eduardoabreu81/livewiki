@@ -1,16 +1,16 @@
 /**
- * search — indexação e busca full-text via SQLite FTS5.
+ * search — full-text indexing and search via SQLite FTS5.
  *
- * SPEC §"MCP tools" (Fase 4): livewiki_search usa SQLite FTS5 para busca
- * full-text na wiki.
+ * SPEC §"MCP tools" (Phase 4): livewiki_search uses SQLite FTS5 for full-text
+ * search over the wiki.
  *
- * Decisão de design: banco separado `.livewiki/search.db` em vez de virtual
- * table em `.livewiki/index.db`. Razões:
- *   1. `.livewiki/index.db` já está em schema v4 com migrations cuidadosas.
- *      Adicionar FTS5 virtual table seria schema v5 + migration function.
- *   2. search.db é reconstruível a partir da wiki (fonte da verdade) — se
- *      corromper, `livewiki_search` reindexa e segue.
- *   3. Mantém `core` sem dependência de FTS5 — só o MCP server precisa.
+ * Design decision: a separate `.livewiki/search.db` database instead of a virtual
+ * table in `.livewiki/index.db`. Reasons:
+ *   1. `.livewiki/index.db` is already at schema v4 with careful migrations.
+ *      Adding an FTS5 virtual table would be schema v5 + a migration function.
+ *   2. search.db is rebuildable from the wiki (source of truth) — if it
+ *      corrupts, `livewiki_search` reindexes and carries on.
+ *   3. Keeps `core` free of an FTS5 dependency — only the MCP server needs it.
  *
  * Tokenizer: FTS5 default (unicode61 — no `tokenize=` option is set, so
  * tokens are matched whole, without stemming). The tokenizer treats
@@ -29,9 +29,9 @@
  * on startup, so the second table needs no migration — old files upgrade
  * in place via CREATE IF NOT EXISTS + full reindex.
  *
- * Estratégia de indexação: rebuild completo em cada startup (rápido —
- * uma repo de 1000 páginas indexa em <1s). Idempotente. Após startup,
- * write_doc atualiza incrementalmente via indexPage.
+ * Indexing strategy: full rebuild on every startup (fast —
+ * a 1000-page repo indexes in <1s). Idempotent. After startup,
+ * write_doc updates incrementally via indexPage.
  */
 
 import Database from "better-sqlite3";
@@ -46,12 +46,12 @@ const IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9_]*/g;
 
 export interface SearchHit {
   wikiPath: string;
-  /** Trecho relevante do conteúdo (snippet em torno do match) */
+  /** Relevant excerpt of the content (snippet around the match) */
   snippet: string;
 }
 
 export interface SearchOptions {
-  /** Limite de resultados (default 20) */
+  /** Result limit (default 20) */
   limit?: number;
 }
 
@@ -90,17 +90,17 @@ export function splitIdentifiers(text: string): string {
 }
 
 /**
- * Abre (ou cria) o índice FTS5 em `.livewiki/search.db` e reindexa todas as
- * páginas da wiki. Retorna handle com o db aberto.
+ * Opens (or creates) the FTS5 index at `.livewiki/search.db` and reindexes all
+ * wiki pages. Returns a handle with the db open.
  *
- * NÃO valida o path — caller (server.ts) já passou pelo safe-io.
+ * Does NOT validate the path — the caller (server.ts) already went through safe-io.
  */
 export async function openAndIndex(
   repoRoot: string,
 ): Promise<SearchIndex> {
   const absRoot = nodePath.resolve(repoRoot);
   const dbPath = await safeIo.resolveAndValidate(absRoot, SEARCH_DB_REL);
-  // Garante que o .livewiki/ existe
+  // Ensures .livewiki/ exists
   await safeIo.mkdir(absRoot, ".livewiki");
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
@@ -119,8 +119,8 @@ export async function openAndIndex(
 }
 
 /**
- * Reindexa todas as páginas markdown de `livewiki/` no índice FTS5.
- * Idempotente — limpa o índice antes pra evitar páginas órfãs.
+ * Reindexes all markdown pages from `livewiki/` into the FTS5 index.
+ * Idempotent — clears the index first to avoid orphan pages.
  *
  * Dual insert: original text into `wiki_search`, split form into
  * `wiki_search_tokens` (same transaction).
@@ -162,7 +162,7 @@ async function collectMarkdownFiles(dir: string): Promise<string[]> {
     try {
       entries = await nodeFs.readdir(d, { withFileTypes: true });
     } catch {
-      return; // dir não existe — wiki vazia
+      return; // dir doesn't exist — empty wiki
     }
     for (const e of entries) {
       const p = nodePath.join(d, e.name);
@@ -188,13 +188,13 @@ export async function reindexAllPages(idx: SearchIndex, repoRoot: string): Promi
 }
 
 /**
- * Indexa (ou atualiza) uma página individual. Chamado por write_doc.
+ * Indexes (or updates) a single page. Called by write_doc.
  *
  * Both tables are updated in a single transaction: original text into
  * `wiki_search`, split form into `wiki_search_tokens`.
  */
 export function indexPage(idx: SearchIndex, wikiPath: string, content: string): void {
-  // FTS5 não tem UPSERT nativo — usa DELETE + INSERT em transação.
+  // FTS5 has no native UPSERT — uses DELETE + INSERT in a transaction.
   const tx = idx.db.transaction(() => {
     idx.db.prepare("DELETE FROM wiki_search WHERE wiki_path = ?").run(wikiPath);
     idx.db.prepare("DELETE FROM wiki_search_tokens WHERE wiki_path = ?").run(wikiPath);
@@ -210,7 +210,7 @@ export function indexPage(idx: SearchIndex, wikiPath: string, content: string): 
 }
 
 /**
- * Remove uma página do índice. Idempotente.
+ * Removes a page from the index. Idempotent.
  */
 export function removePage(idx: SearchIndex, wikiPath: string): void {
   idx.db.prepare("DELETE FROM wiki_search WHERE wiki_path = ?").run(wikiPath);
@@ -257,8 +257,8 @@ function snippetAround(content: string, terms: string[]): string {
 }
 
 /**
- * Busca full-text. Query é expressão FTS5 (suporta prefixo `term*`, AND/OR,
- * frases `"exact phrase"`). Limite default 20.
+ * Full-text search. The query is an FTS5 expression (supports the `term*` prefix, AND/OR,
+ * `"exact phrase"` phrases). Default limit 20.
  *
  * Two-table merge: hits from `wiki_search` (raw query, porter semantics
  * unchanged) come first, ordered by rank; then unique extras from
@@ -266,7 +266,7 @@ function snippetAround(content: string, terms: string[]): string {
  * rank, deduped by wiki_path, up to the limit. Snippets ALWAYS come from
  * `wiki_search` (original text) — the split content is match-only.
  *
- * Retorna array de hits com snippet (trecho ao redor do primeiro match).
+ * Returns an array of hits with a snippet (excerpt around the first match).
  */
 export function search(
   idx: SearchIndex,
@@ -274,7 +274,7 @@ export function search(
   opts: SearchOptions = {},
 ): SearchHit[] {
   const limit = opts.limit ?? 20;
-  // Sanitiza query: FTS5 syntax errors quebram a query. Captura e retorna [].
+  // Sanitizes the query: FTS5 syntax errors break the query. Catches and returns [].
   // Covers both the raw and the split query.
   try {
     const rows = idx.db
@@ -318,7 +318,7 @@ export function search(
 }
 
 /**
- * Fecha o índice. Caller é responsável por chamar isso no shutdown.
+ * Closes the index. The caller is responsible for calling this on shutdown.
  */
 export function close(idx: SearchIndex): void {
   idx.db.close();

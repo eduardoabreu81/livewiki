@@ -1,25 +1,25 @@
 /**
- * batch — orquestra o pipeline de documentação completa (Fase 3, etapa 4).
+ * batch — orchestrates the full documentation pipeline (Phase 3, stage 4).
  *
- * SPEC §"Pipeline batch (4 etapas, resumível)":
- *   1. Varredura: index completo + snapshot de símbolos
- *   2. Identificação de módulos: heurística (sempre) + LLM refine (opt-in)
- *   3. Priorização: centralidade + tamanho (sem LLM)
- *   4. Documentação coordenada: 1 task por módulo (LLM)
+ * SPEC §"Batch pipeline (4 stages, resumable)":
+ *   1. Scan: full index + symbol snapshot
+ *   2. Module identification: heuristic (always) + LLM refine (opt-in)
+ *   3. Prioritization: centrality + size (no LLM)
+ *   4. Coordinated documentation: 1 task per module (LLM)
  *
- * Política de falha (commit d274dd9):
- *   - Task que falha → marca 'failed' com motivo no checkpoint, SEGUE.
- *   - Circuit breaker: 3 falhas consecutivas OU >50% de falha → abort run.
- *   - Run com falhas = status 'completed_with_failures', exit ≠ 0.
- *   - Reporte lista failed + comando de retry pronto.
+ * Failure policy (commit d274dd9):
+ *   - Failing task → marks 'failed' with reason in checkpoint, PROCEEDS.
+ *   - Circuit breaker: 3 consecutive failures OR >50% failure rate → abort run.
+ *   - Run with failures = status 'completed_with_failures', exit ≠ 0.
+ *   - Report lists failed + ready retry command.
  *
  * --only (commit fb6807d):
- *   - Re-roda 1 task (mesma interface que modo em-sessão usará na Fase 5).
- *   - Preserva lw:manual byte-a-byte, recusa owner: human.
+ *   - Re-runs 1 task (same interface that in-session mode will use in Phase 5).
+ *   - Preserves lw:manual byte-for-byte, refuses owner: human.
  *   - Retry adds new usage to the checkpoint (usageHistory, attempt++).
  *
  * Manifest (fix #3):
- *   - manifest.ts grava .livewiki/.manifest.json com snapshotHash.
+ *   - manifest.ts writes .livewiki/.manifest.json with snapshotHash.
  *   - pendingBatch inside the manifest allows cross-machine handoff.
  *
  * Phase-5 plan (U, V, W, X): stage 4 accepts a normalized artifact, not
@@ -374,15 +374,15 @@ export interface BatchRunResult {
 }
 
 /**
- * Entry point principal. Roda o pipeline completo do zero (run novo).
+ * Main entry point. Runs the full pipeline from scratch (new run).
  */
 export async function runBatch(opts: BatchOptions): Promise<BatchRunResult> {
   return orchestrate({ ...opts, mode: "run" });
 }
 
 /**
- * Resume um run interrompido. Pega o último run com status='running' e
- * continua de onde parou (tasks pending/failed).
+ * Resumes an interrupted run. Takes the latest run with status='running' and
+ * continues from where it stopped (tasks pending/failed).
  */
 export async function resumeBatch(opts: BatchOptions): Promise<BatchRunResult> {
   return orchestrate({ ...opts, mode: "resume" });
@@ -416,7 +416,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
   const db = openIndex(dbPath);
 
   try {
-    // Carrega config se não injetado
+    // Loads config if not injected
     const config = await loadConfig(absRoot);
     const resolvedConfig = applyDefaults(config);
     const language: Language = opts.language ?? resolvedConfig.language ?? "en";
@@ -534,7 +534,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
       opts.mode === "resume" ||
       !opts.noRefine;
     if (needsLlm && !llmClient) {
-      // Valida config e cria client. Falha clara se ausente.
+      // Validates config and creates client. Clear failure if absent.
       validateConfigForBatch(absRoot, resolvedConfig);
       llmClient = createLlmClient(absRoot, resolvedConfig);
       // Preflight (2026-08-16): one bounded probe before any paid generation.
@@ -569,7 +569,7 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         .run(Date.now(), configJson);
       runId = Number(res.lastInsertRowid);
     } else {
-      // resume / only: pega o último run
+      // resume / only: gets the latest run
       const last = db
         .prepare("SELECT id FROM batch_runs ORDER BY id DESC LIMIT 1")
         .get() as { id: number } | undefined;
@@ -2804,8 +2804,8 @@ async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
         // cumulative consecutive-failure count and done/fail totals, so an
         // unrelated module or flow failure earlier in the run could trip
         // (or silently push toward) the topic stage's abort threshold —
-        // "falhas auxiliares e de flow bloqueando toda a camada de
-        // tópicos" (R11-A E2E v21). Topics are an independent, additive
+        // "auxiliary and flow failures blocking the entire topic
+        // layer" (R11-A E2E v21). Topics are an independent, additive
         // layer; their own failures should decide their own abort, not
         // failures from a different stage.
         initialConsecutiveFailures: 0,
@@ -4872,7 +4872,7 @@ interface WriteResult {
   issues?: VerifyIssue[];
   /** The write/verify step threw; the page was rolled back. Terminal for the task. */
   exception?: { message: string };
-  /** True se o verify rejeitou E o rollback subsequente falhou. Terminal. */
+  /** True if verify rejected AND the subsequent rollback failed. Terminal. */
   rollbackFailed?: { reason: string };
 }
 
@@ -5439,7 +5439,7 @@ interface AttemptOpts {
   absRoot: string;
   /**
    * Review finding #5: pricing override preserved in ALL calls
-   * (incluindo repairs). Sem isso, repair cost seria calculado com a
+   * (including repairs). Without this, repair cost would be computed with the
    * embedded table, losing the user's override in `config.json`.
    */
   pricing: import("./pricing.js").PricingOverride | undefined;
@@ -5478,7 +5478,7 @@ interface AttemptOpts {
 /**
  * Phase-5 plan (X): ONE LLM call. Loads context (symbols, source)
  * from the DB / filesystem, builds the prompt (initial or repair), calls the LLM,
- * registra usage real e normaliza/valida o artifact.
+ * records real usage, and normalizes/validates the artifact.
  *
  * The caller orchestrates the bounded loop; this function is "one turn of the loop".
  */
@@ -5882,7 +5882,7 @@ async function attemptStage4Generation(
 
   // Cost — review finding #5: uses the config's pricing override so that
   // repairs are also calculated in the user's table (not just the
-  // tabela embutida).
+  // embedded table).
   const cost = computeCostFromUsage(usage, opts.pricing);
   const usageEntry: UsageAttempt = {
     attempt: opts.attemptNumber,
@@ -6402,8 +6402,8 @@ export type { BatchStatusReport, BatchRunSummary };
  *   completed_with_failures → 1
  *   aborted                 → 2
  *
- * Fonte: AGENTS.md §"Convenções adicionais" e batch.ts CLI (setExitCode
- * existente). Exportado aqui para que init --batch propague o mesmo exit
+ * Source: AGENTS.md §"Additional conventions" and batch.ts CLI (existing
+ * setExitCode). Exported here so that init --batch propagates the same exit
  * code that `batch status/resume/--only` already propagate — before fix (O),
  * init --batch always returned 0 even on completed_with_failures/aborted,
  * hiding systemic orchestrator failure behind an exit success.

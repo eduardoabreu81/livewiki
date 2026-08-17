@@ -1,11 +1,11 @@
 /**
- * batch-status — agrega batch_runs + batch_tasks em BatchStatusReport.
+ * batch-status — aggregates batch_runs + batch_tasks into a BatchStatusReport.
  *
- * SPEC §"Comandos CLI" + §"Contabilidade de tokens (Fase 3)":
- * `livewiki batch <run>` reporta por módulo e acumulado, com custo estimado.
- * Reporte granularidade: stage 2 (refine) + stage 4 (doc) + total.
+ * SPEC §"CLI commands" + §"Token accounting (Phase 3)":
+ * `livewiki batch <run>` reports by module and cumulative, with estimated cost.
+ * Report granularity: stage 2 (refine) + stage 4 (doc) + total.
  *
- * Saída: BatchStatusReport (definido em batch-state.ts).
+ * Output: BatchStatusReport (defined in batch-state.ts).
  */
 
 import * as nodePath from "node:path";
@@ -40,9 +40,9 @@ interface RunRow {
 }
 
 /**
- * Gera o BatchStatusReport pra um run específico. Lê batch_runs + batch_tasks.
+ * Generates the BatchStatusReport for a specific run. Reads batch_runs + batch_tasks.
  *
- * Se `runId` for null, usa o último run (run mais recente).
+ * If `runId` is null, uses the latest run (most recent run).
  */
 export async function buildStatusReport(
   repoRoot: string,
@@ -154,8 +154,8 @@ export async function buildStatusReport(
         startedAt: run.started_at,
         finishedAt: run.finished_at,
         startedBy: run.started_by,
-        // FIX J (rev2): expõe summary_json (com modulesRefined) no reporte.
-        // Tolerante a null/JSON inválido — report nunca quebra por causa disso.
+        // FIX J (rev2): exposes summary_json (with modulesRefined) in the report.
+        // Tolerant of null/invalid JSON — report never breaks because of this.
         summary: parseRunSummary(run.summary_json),
       },
       totals,
@@ -171,7 +171,7 @@ export async function buildStatusReport(
 }
 
 /**
- * Lista todos os runs (summário).
+ * Lists all runs (summary).
  */
 export async function listRuns(repoRoot: string): Promise<Array<{
   id: number;
@@ -298,8 +298,8 @@ function safeJsonParse<T>(s: string): T | null {
 }
 
 /**
- * Parse tolerante do `summary_json` de um run. Retorna null se ausente ou
- * corrompido — o reporte NUNCA quebra por causa disso (achado J da rev2).
+ * Tolerant parse of a run's `summary_json`. Returns null if absent or
+ * corrupted — reporting NEVER breaks because of this (rev2 finding J).
  */
 function parseRunSummary(raw: string | null): BatchRunSummary | null {
   if (!raw) return null;

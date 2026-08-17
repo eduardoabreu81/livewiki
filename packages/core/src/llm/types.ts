@@ -1,19 +1,19 @@
 /**
- * llm/types — tipos compartilhados pelo LLM client e adapters.
+ * llm/types — types shared by the LLM client and the adapters.
  *
- * Step 3 do plano da Fase 3 vai popular os adapters. Aqui só o shape canônico
- * usado por batch-state.ts e demais módulos que dependem de usage normalizado.
+ * Step 3 of the Phase 3 plan will populate the adapters. Here, only the canonical shape
+ * used by batch-state.ts and the other modules that depend on normalized usage.
  */
 
 /**
- * Usage normalizado — único formato que o resto do código aceita.
- * Adapters traduzem do formato bruto do provider:
+ * Normalized usage — the only format the rest of the code accepts.
+ * Adapters translate from the provider's raw format:
  *   - Anthropic: { input_tokens, output_tokens } → { inputTokens, outputTokens }
  *   - OpenAI-compat: { prompt_tokens, completion_tokens } → { inputTokens, outputTokens }
  *
- * `model` é o que o provider devolveu (não o que pedimos) — pode divergir
- * em fallbacks ou aliases, e o reporte precisa do valor real pra cálculo de
- * custo.
+ * `model` is what the provider returned (not what we asked for) — it can diverge
+ * on fallbacks or aliases, and the report needs the real value for cost
+ * computation.
  */
 export interface LlmUsage {
   inputTokens: number;
@@ -36,7 +36,7 @@ export interface LlmUsage {
  */
 export type ThinkingMode = "disabled" | "adaptive" | "omit";
 
-/** Request canônica — única forma que adapters aceitam. */
+/** Canonical request — the only shape adapters accept. */
 export interface GenerateRequest {
   system: string;
   user: string;
@@ -68,7 +68,7 @@ export interface GenerateRequest {
  */
 export type StopReason = "complete" | "length" | "incomplete" | "unknown";
 
-/** Response canônica — única forma que adapters retornam. */
+/** Canonical response — the only shape adapters return. */
 export interface GenerateResult {
   content: string;
   usage: LlmUsage;

@@ -1,21 +1,21 @@
 /**
- * verify — valida a wiki contra o índice de código.
+ * verify — validates the wiki against the code index.
  *
- * SPEC §"Comandos CLI" (commit 6183214 — Fix C): "Parseia a wiki fresca do
- * disco — âncora em página nunca indexada TEM que ser pega (é a promessa
- * anti-alucinação: doc recém-escrita por LLM é validável sem rodar `index`
- * antes)".
+ * SPEC §"CLI commands" (commit 6183214 — Fix C): "Parses the wiki fresh from
+ * disk — an anchor in a never-indexed page MUST be caught (it is the
+ * anti-hallucination promise: a doc freshly written by an LLM is validatable
+ * without running `index` first)".
  *
- * Verificações:
- *   - âncoras (página e seção) apontam para símbolos existentes no índice?
- *   - manual blocks byte-a-byte preservados (regra #6)?
- *   - links internos entre páginas da wiki válidos?
+ * Checks:
+ *   - anchors (page and section) point to existing symbols in the index?
+ *   - manual blocks preserved byte-for-byte (rule #6)?
+ *   - internal links between wiki pages valid?
  *
- * Exit code != 0 em error (CI-friendly). O DB é aberto só pra consultar
- * symbols ativos e manual blocks baseline (para o check de regra #6).
+ * Exit code != 0 on error (CI-friendly). The DB is opened only to query
+ * active symbols and the manual-blocks baseline (for the rule #6 check).
  *
- * Walk da wiki é SEMPRE do disco — não dependemos do `doc_pages` do banco
- * pra detectar páginas "fantasma" (criadas após o último index).
+ * The wiki walk is ALWAYS from disk — we do not depend on the database's
+ * `doc_pages` to detect "ghost" pages (created after the last index).
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -36,11 +36,11 @@ import {
 export type IssueSeverity = "error" | "warning";
 
 export type IssueCode =
-  | "broken_anchor"        // anchor referencia symbol que não existe
-  | "broken_internal_link" // [text](page.md) ou [text](page.md#section) pra página inexistente
+  | "broken_anchor"        // anchor references a symbol that does not exist
+  | "broken_internal_link" // [text](page.md) or [text](page.md#section) for a nonexistent page
   | "invalid_mermaid_diagram"
-  | "manual_block_altered"  // bloco <!-- lw:manual -->...<!-- /lw:manual --> com hash divergente
-  | "missing_wiki_path"     // doc_page do banco sumiu da wiki
+  | "manual_block_altered"  // block <!-- lw:manual -->...<!-- /lw:manual --> with a diverging hash
+  | "missing_wiki_path"     // a doc_page from the database vanished from the wiki
   | "unsupported_baseline_algorithm"
   | "invalid_documentation_baseline"
   | "baseline_entry_without_anchor"
@@ -68,7 +68,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
   const issues: VerifyIssue[] = [];
 
   try {
-    // Mapa de symbols ativos (precisamos pra broken_anchor)
+    // Map of active symbols (needed for broken_anchor)
     const activeSymbols = new Map<string, SymbolRow>();
     for (const row of db
       .prepare("SELECT * FROM symbols WHERE status = 'active'")
@@ -76,8 +76,8 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
       activeSymbols.set(row.key, row);
     }
 
-    // Mapa de manual blocks por wiki_path (regra #6, baseline do banco).
-    // wiki_path é o caminho do doc_page (livewiki/foo.md).
+    // Map of manual blocks by wiki_path (rule #6, database baseline).
+    // wiki_path is the doc_page path (livewiki/foo.md).
     interface ManualBlockRow {
       id: number;
       doc_page_id: number;
@@ -105,7 +105,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
       manualBlocksByPath.set(path, arr);
     }
 
-    // Walk wiki do disco (Fix C) — não depende de doc_pages do banco.
+    // Wiki walk from disk (Fix C) — does not depend on the database's doc_pages.
     const wikiPages = await collectWikiPages(absRoot);
     // The existence set used for link resolution
     // includes non-.md wiki artifacts (currently `.mmd` diagrams) — a link
@@ -113,7 +113,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
     // (no anchors/manual-blocks/section-scan of their own).
     const existingArtifactPaths = await collectWikiArtifactPaths(absRoot);
 
-    // Mapa de section_slug por wiki_path (pra links internos)
+    // Map of section_slug by wiki_path (for internal links)
     const sectionSlugsByPath = new Map<string, Set<string>>();
     for (const page of wikiPages) {
       sectionSlugsByPath.set(page.relPath, await collectSectionSlugs(absRoot, page.relPath));
@@ -133,7 +133,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
         continue;
       }
 
-      // Anchors do disco: cada symbol_key deve existir como symbol ativo
+      // Anchors from disk: each symbol_key must exist as an active symbol
       const allAnchorsFromDisk = [
         ...extracted.pageAnchors.map((sk) => ({ key: sk, sectionSlug: null as string | null })),
         ...extracted.sectionAnchors.flatMap((sa) =>
@@ -143,13 +143,13 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
 
       for (const a of allAnchorsFromDisk) {
         if (!activeSymbols.has(a.key)) {
-          // SPEC Fix C: âncora fantasma em página nova — erro, mesmo sem
-          // index prévio. É a promessa anti-alucinação.
+          // SPEC Fix C: ghost anchor in a new page — error, even without a
+          // prior index. It is the anti-hallucination promise.
           issues.push({
             severity: "error",
             code: "broken_anchor",
             wikiPath: page.relPath,
-            detail: `âncora ${a.key} (${a.sectionSlug ?? "página"}) referencia símbolo inexistente`,
+            detail: `anchor ${a.key} (${a.sectionSlug ?? "page"}) references nonexistent symbol`,
           });
         }
       }
@@ -193,7 +193,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
         });
       }
 
-      // Links internos — entre páginas da wiki (lidos do disco)
+      // Internal links — between wiki pages (read from disk)
       // Links inside fenced code blocks or inline code are NOT navigable —
       // they are syntax examples, not real references. Mask that content
       // BEFORE running the link regex (does not mutate `source`; used only
@@ -207,30 +207,30 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
         const linkPathRaw = m[2];
         if (!linkPathRaw) continue;
         const linkSection = m[4];
-        // Resolve o link contra o diretório da página wiki atual.
-        // 3 casos (Q — fix):
-        //   1. "livewiki/foo.md" ou "livewiki/" prefixo  → absoluto no namespace, usa como está
-        //   2. "/foo.md"                                 → absoluto a partir da raiz do repo
-        //   3. "./foo.md", "../foo.md", "foo.md"         → relativo ao diretório da página
+        // Resolve the link against the current wiki page's directory.
+        // 3 cases (Q — fix):
+        //   1. "livewiki/foo.md" or "livewiki/" prefix  → absolute in the namespace, use as-is
+        //   2. "/foo.md"                               → absolute from the repo root
+        //   3. "./foo.md", "../foo.md", "foo.md"       → relative to the page's directory
         //
-        // Antes do fix, o caso (3) era tratado como (1) com prepend "livewiki/"
-        // — o que quebrava QUALQUER link com "..". Ex.: architecture/overview.md
-        // emite "[page](../auth.md)" que virava "livewiki/../auth.md" = fora.
+        // Before the fix, case (3) was treated as (1) with a "livewiki/" prepend
+        // — which broke ANY link with "..". E.g. architecture/overview.md
+        // emits "[page](../auth.md)" which became "livewiki/../auth.md" = outside.
         const resolved = resolveWikiLink(page.relPath, linkPathRaw);
         if (!resolved) {
-          // Link malformado (não é wiki-path válido) — pula silenciosamente.
-          // Pode ser link externo ou absolute-path falso. Não bloqueia.
+          // Malformed link (not a valid wiki-path) — skips silently.
+          // May be an external link or a fake absolute-path. Does not block.
           continue;
         }
         if (!isInsideWiki(resolved)) {
-          // Resolveu pra fora do namespace livewiki/ (ex.: "../../etc/passwd"
-          // → "../etc/passwd"). verify é só leitura — não bloqueia escrita, só
-          // reporta (mesma filosofia do teste legado).
+          // Resolved to outside the livewiki/ namespace (e.g. "../../etc/passwd"
+          // → "../etc/passwd"). verify is read-only — does not block writes, only
+          // reports (same philosophy as the legacy test).
           issues.push({
             severity: "warning",
             code: "broken_internal_link",
             wikiPath: page.relPath,
-            detail: `link para ${resolved}${linkSection ? `#${linkSection}` : ""} aponta para fora de livewiki/`,
+            detail: `link to ${resolved}${linkSection ? `#${linkSection}` : ""} points outside of livewiki/`,
           });
           continue;
         }
@@ -241,7 +241,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
             severity: "warning",
             code: "broken_internal_link",
             wikiPath: page.relPath,
-            detail: `link para ${resolved}${linkSection ? `#${linkSection}` : ""} aponta para página inexistente`,
+            detail: `link to ${resolved}${linkSection ? `#${linkSection}` : ""} points to nonexistent page`,
           });
           continue;
         }
@@ -252,7 +252,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
               severity: "warning",
               code: "broken_internal_link",
               wikiPath: page.relPath,
-              detail: `link para ${resolved}#${linkSection} — seção não existe`,
+              detail: `link to ${resolved}#${linkSection} — section does not exist`,
             });
           }
         }
@@ -275,7 +275,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
       }
     }
 
-    // Doc_pages do banco que sumiram da wiki (página deletada).
+    // Doc_pages from the database that vanished from the wiki (deleted page).
     const seenPaths = new Set(wikiPages.map((p) => p.relPath));
     for (const [_, wikiPath] of docPages) {
       if (!seenPaths.has(wikiPath)) {
@@ -283,7 +283,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
           severity: "warning",
           code: "missing_wiki_path",
           wikiPath,
-          detail: "página sumiu da wiki",
+          detail: "page disappeared from the wiki",
         });
       }
     }
@@ -413,46 +413,46 @@ async function collectSectionSlugs(
 }
 
 /**
- * Resolve um link markdown para um wiki-path (relativo a repoRoot) ou
- * retorna null se o link não é wiki-válido (ex.: externo).
+ * Resolves a markdown link to a wiki-path (relative to repoRoot) or returns
+ * null if the link is not wiki-valid (e.g. external).
  *
- * Três formas aceitas:
- *   1. "livewiki/foo.md" → "livewiki/foo.md" (absoluto no namespace — usa como está)
- *   2. "/foo.md"        → "foo.md" (absoluto a partir da raiz do repo)
- *   3. "foo.md" | "./foo.md" | "../foo.md" → relativo ao diretório de fromRelPath
+ * Three accepted forms:
+ *   1. "livewiki/foo.md" → "livewiki/foo.md" (absolute in the namespace — used as-is)
+ *   2. "/foo.md"        → "foo.md" (absolute from the repo root)
+ *   3. "foo.md" | "./foo.md" | "../foo.md" → relative to fromRelPath's directory
  *
- * Não valida se o alvo existe — só resolve o path. Use `isInsideWiki()`
- * pra checar se ficou dentro do namespace `livewiki/` (segurança contra
- * `..` malicioso que escapa da wiki).
+ * Does not validate whether the target exists — only resolves the path. Use
+ * `isInsideWiki()` to check whether it stayed inside the `livewiki/` namespace
+ * (safety against a malicious `..` that escapes the wiki).
  *
  * Exported for the Phase 7 viewer (`view.ts`), which rewrites internal
  * links with exactly the same resolution rules.
  */
 export function resolveWikiLink(fromRelPath: string, linkRaw: string): string | null {
-  // Strip do prefixo "./" (equivalente a nome puro no mesmo dir)
+  // Strip the "./" prefix (equivalent to a bare name in the same dir)
   const cleaned = linkRaw.replace(/^\.\//, "");
   if (cleaned.length === 0) return null;
 
-  // (1) Já é absoluto no namespace livewiki/
+  // (1) Already absolute in the livewiki/ namespace
   if (cleaned === "livewiki" || cleaned.startsWith("livewiki/")) {
     return cleaned;
   }
 
-  // (2) Absoluto a partir da raiz do repo
+  // (2) Absolute from the repo root
   if (cleaned.startsWith("/")) {
     return cleaned.replace(/^\/+/, "");
   }
 
-  // (3) Relativo ao diretório da página wiki atual
+  // (3) Relative to the current wiki page's directory
   const fromDir = nodePath.posix.dirname(fromRelPath);
   return nodePath.posix.normalize(nodePath.posix.join(fromDir, cleaned));
 }
 
 /**
- * True se o wiki-path está dentro do namespace `livewiki/` (a wiki) ou
- * é exatamente `livewiki` (sem trailing). Usado como barreira de segurança
- * após resolver links relativos — evita que `../../etc/passwd` (ou
- * similar) seja interpretado como link válido pra fora.
+ * True if the wiki-path is inside the `livewiki/` namespace (the wiki) or is
+ * exactly `livewiki` (without trailing). Used as a safety barrier after
+ * resolving relative links — prevents `../../etc/passwd` (or similar) from being
+ * interpreted as a valid outward link.
  *
  * Exported together with `resolveWikiLink` for the Phase 7 viewer.
  */

@@ -1,15 +1,15 @@
 /**
- * imports — extrai imports de um arquivo via tree-sitter.
+ * imports — extracts a file's imports via tree-sitter.
  *
- * SPEC §"Pipeline batch (etapa 2)": "agrupamento por diretório + grafo de
- * imports (heurística determinística; LLM pode refinar nomes/limites dos
- * módulos — 1 chamada)".
+ * SPEC §"Batch pipeline (stage 2)": "grouping by directory + import
+ * graph (deterministic heuristic; the LLM may refine module names/boundaries
+ * — 1 call)".
  *
- * Saída: Set<string> com as strings literais dos imports (path como aparece
- * no source). Resolução de path (./foo → src/auth/foo.ts) acontece depois,
- * em modules.ts, quando temos o mapa de arquivos.
+ * Output: Set<string> with the literal import strings (the path as it appears
+ * in the source). Path resolution (./foo → src/auth/foo.ts) happens later,
+ * in modules.ts, once we have the file map.
  *
- * Cobertura:
+ * Coverage:
  *   - TypeScript/JavaScript: import_statement, export_statement (re-exports)
  *   - Python: import_statement, import_from_statement
  *   - Go (roadmap item 19): import_declaration → import_spec(s), both the
@@ -27,9 +27,9 @@
  *     wildcard `import a.b.*;` (the `*` is an asterisk child; the recorded
  *     path is `a.b`).
  *
- * Limitação: NÃO resolve imports dinâmicos (require() variável, import() com
- * expressão). Esses viram "unknown" no grafo. Aceitável pro MVP — LLM pode
- * inferir do contexto.
+ * Limitation: does NOT resolve dynamic imports (variable require(), import() with
+ * an expression). Those become "unknown" in the graph. Acceptable for the MVP — the LLM
+ * can infer from context.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -48,16 +48,16 @@ export type ImportKind =
   | "java-import";
 
 export interface ExtractedImport {
-  /** String literal do source (ex: "./auth", "express", "../utils") */
+  /** Literal string from the source (e.g. "./auth", "express", "../utils") */
   source: string;
   kind: ImportKind;
-  /** Para py-from: lista de nomes importados ("bar", "*") */
+  /** For py-from: list of imported names ("bar", "*") */
   names?: string[];
 }
 
 /**
- * Extrai imports de um source. Sem I/O — só parse. Útil em testes que já
- * têm o tree. Pra chamada completa (file path), use `collectImports`.
+ * Extracts imports from a source. No I/O — parse only. Useful in tests that
+ * already have the tree. For the full call (file path), use `collectImports`.
  */
 export function extractImportsFromTree(tree: Tree, lang: string): ExtractedImport[] {
   const out: ExtractedImport[] = [];
@@ -67,15 +67,15 @@ export function extractImportsFromTree(tree: Tree, lang: string): ExtractedImpor
     const node = cursor.currentNode;
     switch (node.type) {
       case "import_statement": {
-        // TS: `import x from "y"` (tem source field com string)
-        // Python: `import os` ou `import os.path` (tem dotted_name children)
+        // TS: `import x from "y"` (has a source field with a string)
+        // Python: `import os` or `import os.path` (has dotted_name children)
         const src = node.childForFieldName("source")?.text;
         if (src) {
           // TS: strip surrounding quotes
           const cleaned = src.replace(/^['"]|['"]$/g, "");
           out.push({ source: cleaned, kind: "ts-import" });
         } else {
-          // Python: `import foo` — coleta dotted_names
+          // Python: `import foo` — collects dotted_names
           for (let i = 0; i < node.namedChildCount; i++) {
             const child = node.namedChild(i);
             if (child?.type === "dotted_name") {
@@ -235,8 +235,8 @@ function pushRustUsePath(argument: Node | null, out: ExtractedImport[]): void {
 }
 
 /**
- * High-level: extrai imports de um arquivo dado path relativo + conteúdo.
- * Inicializa o parser uma vez (cached).
+ * High-level: extracts a file's imports given a relative path + content.
+ * Initializes the parser once (cached).
  */
 export async function collectImports(
   relPath: string,
@@ -248,7 +248,7 @@ export async function collectImports(
   try {
     tree = await parseSource("." + ext, content);
   } catch {
-    return []; // arquivo não-parseável: retorna vazio (graceful degradation)
+    return []; // unparseable file: returns empty (graceful degradation)
   }
   const lang = ext === "py" ? "python" : "ts";
   return extractImportsFromTree(tree, lang);
@@ -257,7 +257,7 @@ export async function collectImports(
 /**
  * Reads each repo-relative file from disk and extracts its imports, returning
  * the per-file map. Hoisted from the former private `collectAllImports` in
- * batch.ts so the status risk analysis (Etapa 2c) recomputes the SAME
+ * batch.ts so the status risk analysis (Step 2c) recomputes the SAME
  * on-demand map — imports are never persisted (plan option A). Unreadable
  * or unparseable files are skipped.
  */

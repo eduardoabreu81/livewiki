@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 describe("db.openIndex", () => {
-  it("cria o banco e seta schema_version na primeira abertura", () => {
+  it("creates the database and sets schema_version on first open", () => {
     const db = openIndex(dbPath);
     try {
       const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
@@ -33,7 +33,7 @@ describe("db.openIndex", () => {
     }
   });
 
-  it("cria todas as tabelas esperadas", () => {
+  it("creates all expected tables", () => {
     const db = openIndex(dbPath);
     try {
       const tables = (db.prepare(
@@ -43,7 +43,7 @@ describe("db.openIndex", () => {
       expect(tables).toContain("files");
       expect(tables).toContain("symbols");
       expect(tables).toContain("meta");
-      // Tabelas de Fase 2/3 já criadas vazias (schema_version atual)
+      // Phase 2/3 tables already created empty (current schema_version)
       expect(tables).toContain("anchors");
       expect(tables).toContain("debt");
       expect(tables).toContain("undocumented");
@@ -57,7 +57,7 @@ describe("db.openIndex", () => {
     }
   });
 
-  it("idempotente: rodar 2x não duplica tabelas", () => {
+  it("idempotent: running 2x does not duplicate tables", () => {
     openIndex(dbPath).close();
     const db = openIndex(dbPath);
     try {
@@ -72,7 +72,7 @@ describe("db.openIndex", () => {
     }
   });
 
-  it("journal_mode = WAL e foreign_keys = ON", () => {
+  it("journal_mode = WAL and foreign_keys = ON", () => {
     const db = openIndex(dbPath);
     try {
       const jm = db.pragma("journal_mode", { simple: true });
@@ -84,10 +84,10 @@ describe("db.openIndex", () => {
     }
   });
 
-  it("WAL gera arquivos -wal e -shm ao lado do .db", () => {
+  it("WAL generates -wal and -shm files next to the .db", () => {
     const db = openIndex(dbPath);
     try {
-      // Forçar write pra materializar o WAL
+      // Force a write to materialize the WAL
       db.prepare("INSERT INTO meta (key, value) VALUES ('probe', '1')").run();
       db.pragma("wal_checkpoint(PASSIVE)");
     } finally {
@@ -95,10 +95,10 @@ describe("db.openIndex", () => {
     }
   });
 
-  it("atualiza schema_version se CURRENT_SCHEMA_VERSION mudou (migration leve)", () => {
-    // Simula DB com schema v2 (sem a coluna symbol_key em debt, sem partial
-    // unique index em symbols, sem idx_debt_open). openIndex deve aplicar
-    // a migração v2→v3.
+  it("updates schema_version if CURRENT_SCHEMA_VERSION changed (light migration)", () => {
+    // Simulates a DB with schema v2 (no symbol_key column in debt, no partial
+    // unique index on symbols, no idx_debt_open). openIndex must apply the
+    // v2→v3 migration.
     const Database = require("better-sqlite3");
     const legacyDb = new Database(dbPath);
     legacyDb.exec(`
@@ -130,23 +130,23 @@ describe("db.openIndex", () => {
 
     const db = openIndex(dbPath);
     try {
-      // schema_version atualizado
+      // schema_version updated
       const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
         | { value: string }
         | undefined;
       expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
 
-      // Migração v3 aplicada: debt.symbol_key existe
+      // Migration v3 applied: debt.symbol_key exists
       const debtCols = db.prepare("PRAGMA table_info(debt)").all() as Array<{ name: string }>;
       expect(debtCols.some((c) => c.name === "symbol_key")).toBe(true);
 
-      // idx_debt_open existe
+      // idx_debt_open exists
       const indexes = db
         .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_debt_open'")
         .all() as Array<{ name: string }>;
       expect(indexes.length).toBe(1);
 
-      // idx_symbols_active_key existe
+      // idx_symbols_active_key exists
       const symIdx = db
         .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbols_active_key'")
         .all() as Array<{ name: string }>;
@@ -156,8 +156,8 @@ describe("db.openIndex", () => {
     }
   });
 
-  it("migra v3 → v4: batch_runs ganha finished_at, started_by, summary_json + índices", () => {
-    // Simula DB com schema v3 — batch_runs SEM as colunas novas.
+  it("migrates v3 → v4: batch_runs gains finished_at, started_by, summary_json + indexes", () => {
+    // Simulates a DB with schema v3 — batch_runs WITHOUT the new columns.
     const Database = require("better-sqlite3");
     const legacyDb = new Database(dbPath);
     legacyDb.exec(`
@@ -175,20 +175,20 @@ describe("db.openIndex", () => {
 
     const db = openIndex(dbPath);
     try {
-      // schema_version atualizado pra v4
+      // schema_version updated to v4
       const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
         | { value: string }
         | undefined;
       expect(row?.value).toBe(String(CURRENT_SCHEMA_VERSION));
 
-      // Colunas novas em batch_runs
+      // New columns in batch_runs
       const cols = db.prepare("PRAGMA table_info(batch_runs)").all() as Array<{ name: string }>;
       const colNames = cols.map((c) => c.name);
       expect(colNames).toContain("finished_at");
       expect(colNames).toContain("started_by");
       expect(colNames).toContain("summary_json");
 
-      // Índices novos
+      // New indexes
       const idx = db
         .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_batch_%' ORDER BY name")
         .all() as Array<{ name: string }>;
@@ -201,8 +201,8 @@ describe("db.openIndex", () => {
     }
   });
 
-  it("migra v4 → v5: cria a tabela calls + índices", () => {
-    // Simula DB com schema v4 — sem a tabela calls.
+  it("migrates v4 → v5: creates the calls table + indexes", () => {
+    // Simulates a DB with schema v4 — without the calls table.
     const Database = require("better-sqlite3");
     const legacyDb = new Database(dbPath);
     legacyDb.exec(`
@@ -410,9 +410,9 @@ describe("db.openIndex", () => {
     }
   });
 
-  it("migra v7 → v8: debt ganha doc_page_id, com backfill a partir dos anchors", () => {
-    // Simula DB v7: debt SEM doc_page_id, mas com um anchor ligando a debt
-    // a uma doc_page. O backfill deve preencher a referência durável.
+  it("migrates v7 → v8: debt gains doc_page_id, with backfill from the anchors", () => {
+    // Simulates a v7 DB: debt WITHOUT doc_page_id, but with an anchor linking the
+    // debt to a doc_page. The backfill must fill the durable reference.
     const Database = require("better-sqlite3");
     const legacyDb = new Database(dbPath);
     legacyDb.exec(`

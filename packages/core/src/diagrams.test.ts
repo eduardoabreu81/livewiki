@@ -10,40 +10,40 @@ import type { SymbolRow } from "./db.js";
 import type { Module } from "./modules.js";
 
 describe("diagrams.moduleSlug", () => {
-  it("lowercase + alfanum + hífen", () => {
+  it("lowercase + alphanumeric + hyphen", () => {
     expect(moduleSlug("Auth Service")).toBe("auth-service");
   });
 
-  it("remove diacríticos (acentos)", () => {
+  it("removes diacritics (accents)", () => {
     expect(moduleSlug("autenticação")).toBe("autenticacao");
   });
 
-  it("colapsa múltiplos separadores", () => {
+  it("collapses multiple separators", () => {
     expect(moduleSlug("foo___bar")).toBe("foo-bar");
   });
 
-  it("trim de hífens nas pontas", () => {
+  it("trims hyphens at the ends", () => {
     expect(moduleSlug("---foo---")).toBe("foo");
   });
 });
 
 describe("diagrams.generateStructure", () => {
-  it("gera graph LR com edges parent→child", () => {
+  it("generates graph LR with parent→child edges", () => {
     const out = generateStructure(["src/auth/login.ts", "src/utils/x.ts"]);
     expect(out).toContain("graph LR");
     expect(out).toContain("-->");
   });
 
-  it("lida com lista vazia", () => {
+  it("handles empty list", () => {
     const out = generateStructure([]);
     expect(out.trim()).toBe("graph LR");
   });
 
-  it("labels não contêm aspas cruas (Mermaid quebraria)", () => {
-    // Aspas dentro do label devem ser escapadas (ou o Mermaid quebra).
+  it("labels do not contain raw quotes (Mermaid would break)", () => {
+    // Quotes inside the label must be escaped (or Mermaid breaks).
     const out = generateStructure(['src/has"quote.ts']);
-    // Deve ter escapado as aspas — busca pelo padrão problemático
-    expect(out).not.toContain('["src/has"quote.ts"]'); // aspas raw quebrariam
+    // It must have escaped the quotes — search for the problematic pattern
+    expect(out).not.toContain('["src/has"quote.ts"]'); // raw quotes would break
   });
 
   it("emits each shared directory edge only once", () => {
@@ -82,7 +82,7 @@ describe("diagrams.generateStructure", () => {
 });
 
 describe("diagrams.generateModulesGraph", () => {
-  it("gera graph LR com edges from→to", () => {
+  it("generates graph LR with from→to edges", () => {
     const out = generateModulesGraph([
       { from: "auth", to: "session" },
       { from: "auth", to: "utils" },
@@ -92,7 +92,7 @@ describe("diagrams.generateModulesGraph", () => {
     expect(out).toContain("auth --> utils");
   });
 
-  it("lida com lista vazia (mostra 'no edges' marker)", () => {
+  it("handles empty list (shows 'no edges' marker)", () => {
     const out = generateModulesGraph([]);
     expect(out).toContain("No cross-folder imports detected");
   });
@@ -131,7 +131,7 @@ describe("diagrams.generateModulesGraph", () => {
 });
 
 describe("diagrams.generateClassDiagram", () => {
-  it("retorna string vazia quando módulo não tem classes", () => {
+  it("returns empty string when the module has no classes", () => {
     const module: Module = { id: "auth", paths: ["src/auth/foo.ts"], symbolCount: 1 };
     const symbols: SymbolRow[] = [
       {
@@ -150,7 +150,7 @@ describe("diagrams.generateClassDiagram", () => {
     expect(generateClassDiagram(module, symbols)).toBe("");
   });
 
-  it("gera classDiagram com classe + métodos", () => {
+  it("generates classDiagram with class + methods", () => {
     const module: Module = { id: "auth", paths: ["src/auth/foo.ts"], symbolCount: 2 };
     const symbols: SymbolRow[] = [
       {
@@ -269,7 +269,7 @@ describe("diagrams.generateClassDiagram", () => {
     expect(out).not.toContain("~~~");
   });
 
-  it("ignora classes de outros módulos", () => {
+  it("ignores classes from other modules", () => {
     const module: Module = { id: "auth", paths: ["src/auth/foo.ts"], symbolCount: 1 };
     const symbols: SymbolRow[] = [
       {

@@ -16,8 +16,8 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       exclude: ["src/**/*.test.ts", "src/index.ts"],
       thresholds: {
-        // SPEC regra #5: cobertura mínima 80% no core. safe-io é o módulo
-        // crítico da Fase 0 e está coberto pelos testes em safe-io.test.ts.
+        // SPEC rule #5: minimum 80% coverage in core. safe-io is the critical
+        // Phase 0 module and is covered by the tests in safe-io.test.ts.
         lines: 80,
         functions: 80,
         statements: 80,

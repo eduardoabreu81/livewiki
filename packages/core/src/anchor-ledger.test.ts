@@ -1,13 +1,13 @@
 /**
- * Testes exaustivos do anchor-ledger. Esta fase é o produto — revisão rigorosa.
+ * Exhaustive tests for the anchor-ledger. This phase is the product — rigorous review.
  *
- * Critérios da Fase 2:
- *   - editar função ancorada gera dívida `changed`
- *   - mover gera `moved`
- *   - verify pega âncora quebrada
+ * Phase 2 criteria:
+ *   - editing an anchored function generates `changed` debt
+ *   - moving generates `moved`
+ *   - verify catches a broken anchor
  *
- * Setup: cada teste cria repo + wiki + DB isolados em tmpdir, executa o indexer
- * (cria files+symbols), depois o ledger. Asserts sobre debt gerado.
+ * Setup: each test creates an isolated repo + wiki + DB in tmpdir, runs the
+ * indexer (creates files+symbols), then the ledger. Asserts on generated debt.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -34,22 +34,22 @@ afterEach(async () => {
   await nodeFs.rm(repoRoot, { recursive: true, force: true });
 });
 
-/** Helper: cria arquivo de código indexável. */
+/** Helper: creates an indexable code file. */
 async function writeCode(rel: string, content: string): Promise<void> {
   const abs = nodePath.join(repoRoot, rel);
   await nodeFs.mkdir(nodePath.dirname(abs), { recursive: true });
   await nodeFs.writeFile(abs, content);
 }
 
-/** Helper: cria página da wiki. */
+/** Helper: creates a wiki page. */
 async function writeWiki(rel: string, content: string): Promise<void> {
   const abs = nodePath.join(repoRoot, rel);
   await nodeFs.mkdir(nodePath.dirname(abs), { recursive: true });
   await nodeFs.writeFile(abs, content);
 }
 
-describe("anchor-ledger — sem wiki", () => {
-  it("roda sem wiki (zero páginas processadas)", async () => {
+describe("anchor-ledger — no wiki", () => {
+  it("runs without a wiki (zero pages processed)", async () => {
     await writeCode("src/foo.ts", "export function bar() { return 1; }");
     await runIndexer(repoRoot, { quiet: true });
     const result = await runLedger(repoRoot, { quiet: true });
@@ -88,8 +88,8 @@ Docs.
   });
 });
 
-describe("anchor-ledger — primeira run", () => {
-  it("upsert anchors sem gerar debt (estado inicial)", async () => {
+describe("anchor-ledger — first run", () => {
+  it("upserts anchors without creating debt (initial state)", async () => {
     await writeCode("src/auth.ts", "export function validate() { return true; }");
     await writeWiki("livewiki/auth.md", `---
 title: Auth
@@ -98,7 +98,7 @@ anchors:
   - src/auth.ts#validate
 ---
 
-Doc da auth.
+Auth doc.
 `);
 
     await runIndexer(repoRoot, { quiet: true });
@@ -106,10 +106,10 @@ Doc da auth.
 
     expect(result.pagesProcessed).toBe(1);
     expect(result.anchorsUpserted).toBe(1);
-    expect(result.debtCreated).toBe(0); // primeira run = baseline
+    expect(result.debtCreated).toBe(0); // first run = baseline
   });
 
-  it("section anchors viram rows separadas de page anchors", async () => {
+  it("section anchors become separate rows from page anchors", async () => {
     await writeCode(
       "src/auth.ts",
       "export class S { login() {} logout() {} }",
@@ -134,8 +134,8 @@ owner: generated
   });
 });
 
-describe("anchor-ledger — CRITÉRIO: changed", () => {
-  it("editar função ancorada gera dívida 'changed' (assignee=agent)", async () => {
+describe("anchor-ledger — CRITERION: changed", () => {
+  it("editing an anchored function generates 'changed' debt (assignee=agent)", async () => {
     await writeCode("src/auth.ts", "export function validate() { return true; }");
     await writeWiki("livewiki/auth.md", `---
 title: Auth
@@ -147,14 +147,14 @@ anchors:
 Doc.
 `);
 
-    // Run 1: indexa + ledger (baseline)
+    // Run 1: indexes + ledger (baseline)
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Edita a função (muda o content_hash do symbol)
+    // Edits the function (changes the symbol's content_hash)
     await writeCode("src/auth.ts", "export function validate(): boolean { return false; }");
 
-    // Run 2: re-index detecta mudança, ledger gera changed
+    // Run 2: re-index detects the change, ledger generates changed
     await runIndexer(repoRoot, { quiet: true });
     const r2 = await runLedger(repoRoot, { quiet: true });
 
@@ -162,12 +162,12 @@ Doc.
     expect(r2.debtByEvent.moved).toBe(0);
     expect(r2.debtByEvent.deleted).toBe(0);
 
-    // Verifica no DB: assignee = agent (owner=generated)
+    // Verifies in the DB: assignee = agent (owner=generated)
     const debts = nodeSqliteQuery(repoRoot, "SELECT event, assignee FROM debt");
     expect(debts).toContainEqual({ event: "changed", assignee: "agent" });
   });
 
-  it("anchor em owner=human gera changed com assignee=human", async () => {
+  it("anchor with owner=human generates changed with assignee=human", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -293,7 +293,7 @@ anchors:
     ).toEqual([{ event: "changed", assignee: "human" }]);
   });
 
-  it("section anchor também gera changed ao editar função ancorada", async () => {
+  it("section anchor also generates changed when editing an anchored function", async () => {
     await writeCode("src/foo.ts", "export function bar() { return 1; }");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -313,8 +313,8 @@ title: Foo
   });
 });
 
-describe("anchor-ledger — CRITÉRIO: moved", () => {
-  it("mover função ancorada para outro arquivo gera 'moved' e atualiza anchor", async () => {
+describe("anchor-ledger — CRITERION: moved", () => {
+  it("moving an anchored function to another file generates 'moved' and updates the anchor", async () => {
     await writeCode("src/auth.ts", "export function validate() { return true; }");
     await writeWiki("livewiki/auth.md", `---
 title: Auth
@@ -327,7 +327,7 @@ anchors:
     const r1 = await runLedger(repoRoot, { quiet: true });
     expect(r1.debtByEvent.moved).toBe(0);
 
-    // Move validate para src/session.ts (mesmo content_hash — só muda path)
+    // Moves validate to src/session.ts (same content_hash — only the path changes)
     await nodeFs.rm(nodePath.join(repoRoot, "src/auth.ts"));
     await writeCode("src/session.ts", "export function validate() { return true; }");
 
@@ -340,13 +340,13 @@ anchors:
       to: "src/session.ts#validate",
     });
 
-    // O anchor no DB agora aponta para o novo path
+    // The anchor in the DB now points to the new path
     const anchors = nodeSqliteQuery(repoRoot, "SELECT symbol_key FROM anchors");
     expect(anchors).toContainEqual({ symbol_key: "src/session.ts#validate" });
   });
 
-  it("moved por nome+signature iguais em arquivo diferente (fallback)", async () => {
-    // Mesmo nome + signature mas content_hash diferente (corpo mudou junto com path)
+  it("moved by equal name+signature in a different file (fallback)", async () => {
+    // Same name + signature but different content_hash (body changed along with path)
     await writeCode("src/old.ts", "export function bar() { return 1; }");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -358,15 +358,15 @@ anchors:
     await runLedger(repoRoot, { quiet: true });
 
     await nodeFs.rm(nodePath.join(repoRoot, "src/old.ts"));
-    // assinatura textualmente igual mas em arquivo novo (content_hash diferente)
+    // textually equal signature but in a new file (different content_hash)
     await writeCode("src/new.ts", "export function bar() { return 1; }");
 
     await runIndexer(repoRoot, { quiet: true });
     const r = await runLedger(repoRoot, { quiet: true });
 
-    // bar no old.ts sumiu (deleted). bar no new.ts é novo.
-    // Detectado como moved por content_hash? Vamos ver.
-    // Como o source literal é igual, content_hash É igual, vai dar match.
+    // bar in old.ts vanished (deleted). bar in new.ts is new.
+    // Detected as moved by content_hash? Let's see.
+    // Since the literal source is equal, content_hash IS equal, so it will match.
     expect(r.debtByEvent.moved + r.debtByEvent.deleted).toBeGreaterThanOrEqual(1);
   });
 });
@@ -447,8 +447,8 @@ describe("anchor-ledger — versioned baseline authority", () => {
   });
 });
 
-describe("anchor-ledger — deleted (âncora quebrada)", () => {
-  it("deletar função ancorada gera 'deleted'", async () => {
+describe("anchor-ledger — deleted (broken anchor)", () => {
+  it("deleting an anchored function generates 'deleted'", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -467,12 +467,12 @@ anchors:
     expect(r.debtByEvent.deleted).toBe(1);
   });
 
-  it("anchor que referencia symbol inexistente desde o início gera deleted", async () => {
+  it("anchor referencing a symbol that never existed generates deleted", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
 anchors:
-  - src/foo.ts#ghost  # symbol não existe
+  - src/foo.ts#ghost  # symbol does not exist
 ---
 `);
     await runIndexer(repoRoot, { quiet: true });
@@ -481,7 +481,7 @@ anchors:
     expect(r.debtByEvent.deleted).toBe(1);
   });
 
-  it("anchor para arquivo inexistente gera deleted", async () => {
+  it("anchor for a nonexistent file generates deleted", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -496,10 +496,10 @@ anchors:
   });
 });
 
-describe("anchor-ledger — manual blocks (regra #6)", () => {
-  it("anchor dentro de manual block NÃO é modificado pelo ledger", async () => {
-    // Regra #6: ledger NUNCA escreve na wiki. Aqui testamos que anchor dentro
-    // de bloco manual é preservada com flag in_manual_block=1.
+describe("anchor-ledger — manual blocks (rule #6)", () => {
+  it("anchor inside a manual block is NOT modified by the ledger", async () => {
+    // Rule #6: the ledger NEVER writes to the wiki. Here we test that an anchor
+    // inside a manual block is preserved with flag in_manual_block=1.
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -526,7 +526,7 @@ Texto manual que ninguém mexe.
 });
 
 describe("anchor-ledger — undocumented", () => {
-  it("symbol sem anchor vai pra tabela undocumented", async () => {
+  it("symbol without an anchor goes to the undocumented table", async () => {
     await writeCode("src/foo.ts", "export function documented() {} export function undoc() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -543,8 +543,8 @@ anchors:
   });
 });
 
-describe("anchor-ledger — idempotência", () => {
-  it("rodar ledger 2x sem mudanças: 0 debt criado", async () => {
+describe("anchor-ledger — idempotency", () => {
+  it("running the ledger 2x with no changes: 0 debt created", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -560,8 +560,8 @@ anchors:
   });
 });
 
-describe("anchor-ledger — dedup de dívida (Fix B)", () => {
-  it("deletar função 3x seguidas: gera apenas 1 deleted", async () => {
+describe("anchor-ledger — debt dedup (Fix B)", () => {
+  it("deleting a function 3x in a row: generates only 1 deleted", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -572,8 +572,8 @@ anchors:
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Deleta o código 3x (cada vez roda index+ledger). As iterações 2 e 3
-    // têm rm que falha (foo.ts já não existe) — esperado.
+    // Deletes the code 3x (each time runs index+ledger). Iterations 2 and 3
+    // have an rm that fails (foo.ts no longer exists) — expected.
     for (let i = 0; i < 3; i++) {
       await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts")).catch(() => {});
       await runIndexer(repoRoot, { quiet: true });
@@ -584,15 +584,15 @@ anchors:
       repoRoot,
       "SELECT event, COUNT(*) as n FROM debt WHERE resolved_at IS NULL GROUP BY event",
     );
-    // Apenas 1 dívida deleted, não 3 (dedup via hasOpenDebt).
+    // Only 1 deleted debt, not 3 (dedup via hasOpenDebt).
     expect(debts).toEqual([{ event: "deleted", n: 1 }]);
   });
 
-  it("editar função 3x: dedup mantém 1 changed aberta até ser resolvida", async () => {
-    // Mudanças consecutivas do mesmo símbolo (sem a doc ter sido atualizada)
-    // resultam em UMA única dívida "changed" aberta — Fix B dedup via hasOpenDebt.
-    // Resolução só acontece quando o author da wiki atualiza o anchor (manual ou
-    // via livewiki_write_doc na Fase 4).
+  it("editing a function 3x: dedup keeps 1 changed open until it is resolved", async () => {
+    // Consecutive changes to the same symbol (without the doc being updated)
+    // result in ONE single open "changed" debt — Fix B dedup via hasOpenDebt.
+    // Resolution only happens when the wiki author updates the anchor (manual or
+    // via livewiki_write_doc in Phase 4).
     await writeCode("src/foo.ts", "export function bar() { return 1; }");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -615,7 +615,7 @@ anchors:
       repoRoot,
       "SELECT event, COUNT(*) as n FROM debt WHERE resolved_at IS NULL GROUP BY event",
     );
-    // 3 edições consecutivas, mesma anchor, sem resolução → 1 changed aberta.
+    // 3 consecutive edits, same anchor, no resolution → 1 open changed.
     expect(debts).toEqual([{ event: "changed", n: 1 }]);
   });
 
@@ -755,12 +755,13 @@ anchors:
   });
 });
 
-describe("anchor-ledger — F (achado revisao Fase 2): falso-positivo de moved + expurgo de dead rows", () => {
-  it("F1: editar 1 de N símbolos NÃO gera falso moved pros inalterados", async () => {
-    // Cenário: arquivo com 3 símbolos. Edito SÓ o primeiro (muda content_hash dele).
-    // Os outros 2 são soft-deletados e re-inseridos com mesma key + mesmo hash.
-    // Sem o guard `match.key === oldKey`, detectMoves casaria os pares
-    // (deleted, active) com mesmo hash e geraria moved from==to espúrio.
+describe("anchor-ledger — F (Phase 2 review finding): moved false-positive + dead-row purge", () => {
+  it("F1: editing 1 of N symbols does NOT generate a false moved for the unchanged ones", async () => {
+    // Scenario: a file with 3 symbols. I edit ONLY the first one (changes its content_hash).
+    // The other 2 are soft-deleted and re-inserted with the same key + same hash.
+    // Without the `match.key === oldKey` guard, detectMoves would match the
+    // (deleted, active) pairs with the same hash and generate a spurious moved
+    // with from==to.
     await writeCode(
       "src/multi.ts",
       "export function a() { return 1; }\nexport function b() { return 2; }\nexport function c() { return 3; }",
@@ -774,13 +775,13 @@ anchors:
 ---
 `);
 
-    // Baseline: index + ledger. 0 dívida.
+    // Baseline: index + ledger. 0 debt.
     await runIndexer(repoRoot, { quiet: true });
     const r1 = await runLedger(repoRoot, { quiet: true });
     expect(r1.debtByEvent.moved).toBe(0);
     expect(r1.debtByEvent.changed).toBe(0);
 
-    // Edit SÓ o `a`. b e c ficam inalterados.
+    // Edit ONLY `a`. b and c stay unchanged.
     await writeCode(
       "src/multi.ts",
       "export function a() { return 999; }\nexport function b() { return 2; }\nexport function c() { return 3; }",
@@ -788,13 +789,13 @@ anchors:
     await runIndexer(repoRoot, { quiet: true });
     const r2 = await runLedger(repoRoot, { quiet: true });
 
-    // Esperado: 1 changed (a), 0 moved.
-    // Sem F1: teríamos 1 changed + 2 moved (b→b e c→c, falsos).
+    // Expected: 1 changed (a), 0 moved.
+    // Without F1: we would have 1 changed + 2 moved (b→b and c→c, false).
     expect(r2.debtByEvent.changed).toBe(1);
     expect(r2.debtByEvent.moved).toBe(0);
     expect(r2.movedPairs).toEqual([]);
 
-    // Confirma no DB: 1 changed aberta, nenhuma moved.
+    // Confirms in the DB: 1 open changed, no moved.
     const debts = nodeSqliteQuery(
       repoRoot,
       "SELECT event, COUNT(*) as n FROM debt WHERE resolved_at IS NULL GROUP BY event",
@@ -802,10 +803,10 @@ anchors:
     expect(debts).toEqual([{ event: "changed", n: 1 }]);
   });
 
-  it("F2: dead rows com replacement ativo são expurgadas após o ledger", async () => {
-    // Cada edit a um arquivo soft-deleta seus symbols e reinsere com mesma key.
-    // Sem o cleanup no fim do ledger, a tabela `symbols` cresce com rows mortas.
-    // Aqui: edit + ledger, depois conta active vs deleted por key.
+  it("F2: dead rows with an active replacement are purged after the ledger", async () => {
+    // Each edit to a file soft-deletes its symbols and reinserts them with the same key.
+    // Without the cleanup at the end of the ledger, the `symbols` table grows with dead rows.
+    // Here: edit + ledger, then count active vs deleted by key.
     await writeCode("src/foo.ts", "export function bar() { return 1; }");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -814,7 +815,7 @@ anchors:
 ---
 `);
 
-    // 3 edits consecutivos — cada um soft-deleta + reinsere `bar`.
+    // 3 consecutive edits — each one soft-deletes + reinserts `bar`.
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
     await writeCode("src/foo.ts", "export function bar() { return 2; }");
@@ -824,8 +825,8 @@ anchors:
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Após o último ledger, deve haver APENAS 1 row active para `src/foo.ts#bar`.
-    // As rows deleted (que tinham mesma key) foram expurgadas (F2).
+    // After the last ledger, there must be ONLY 1 active row for `src/foo.ts#bar`.
+    // The deleted rows (which had the same key) were purged (F2).
     const rows = nodeSqliteQuery(
       repoRoot,
       "SELECT status, COUNT(*) as n FROM symbols WHERE key = 'src/foo.ts#bar' GROUP BY status",
@@ -833,16 +834,16 @@ anchors:
     const byStatus: Record<string, number> = {};
     for (const r of rows) byStatus[String(r.status)] = Number(r.n);
     expect(byStatus.active).toBe(1);
-    expect(byStatus.deleted ?? 0).toBe(0); // expurgadas
+    expect(byStatus.deleted ?? 0).toBe(0); // purged
 
-    // Idempotência: re-rodar ledger não cria nova dívida (F1 cobre falsos moved).
+    // Idempotency: re-running the ledger does not create new debt (F1 covers false moves).
     const r2 = await runLedger(repoRoot, { quiet: true });
     expect(r2.debtByEvent.moved).toBe(0);
   });
 
-  it("F2: dead rows SEM replacement ativo são preservadas (audit/history)", async () => {
-    // Quando o símbolo é realmente deletado do código, a row dead fica — não
-    // expurgamos porque pode ser útil pra auditoria/histórico.
+  it("F2: dead rows WITHOUT an active replacement are preserved (audit/history)", async () => {
+    // When the symbol is truly deleted from the code, the dead row stays — we do
+    // not purge it because it may be useful for audit/history.
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -854,12 +855,12 @@ anchors:
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Deleta o código de verdade
+    // Truly deletes the code
     await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Deve haver exatamente 1 row deleted (sem replacement). NÃO foi expurgada.
+    // There must be exactly 1 deleted row (without a replacement). It was NOT purged.
     const rows = nodeSqliteQuery(
       repoRoot,
       "SELECT status, COUNT(*) as n FROM symbols WHERE key = 'src/foo.ts#bar' GROUP BY status",
@@ -871,8 +872,8 @@ anchors:
   });
 });
 
-describe("anchor-ledger — G (achado revisao Fase 2): rewrite de anchor no markdown", () => {
-  it("G1: moved em anchor de página (frontmatter) reescreve o .md no disco", async () => {
+describe("anchor-ledger — G (Phase 2 review finding): anchor rewrite in the markdown", () => {
+  it("G1: moved in a page anchor (frontmatter) rewrites the .md on disk", async () => {
     await writeCode("src/foo.ts", "export function bar() { return 42; }");
     const wikiRel = "livewiki/foo.md";
     await writeWiki(
@@ -888,20 +889,20 @@ anchors:
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Move: foo.ts → baz.ts (mesmo body, mesmo hash).
+    // Move: foo.ts → baz.ts (same body, same hash).
     await nodeFs.rm(nodePath.join(repoRoot, "src/foo.ts"));
     await writeCode("src/baz.ts", "export function bar() { return 42; }");
 
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Markdown no disco TEM que ter a chave nova (regra #3: markdown é fonte da verdade).
+    // The Markdown on disk MUST have the new key (rule #3: markdown is the source of truth).
     const mdAfter = await nodeFs.readFile(nodePath.join(repoRoot, wikiRel), "utf8");
     expect(mdAfter).toMatch(/src\/baz\.ts#bar/);
     expect(mdAfter).not.toMatch(/src\/foo\.ts#bar/);
   });
 
-  it("G1: moved em section anchor (lw:anchors marker) reescreve o .md no disco", async () => {
+  it("G1: moved in a section anchor (lw:anchors marker) rewrites the .md on disk", async () => {
     await writeCode("src/foo.ts", "export function bar() { return 42; }");
     const wikiRel = "livewiki/foo.md";
     await writeWiki(
@@ -930,7 +931,7 @@ Texto.
     expect(mdAfter).not.toMatch(/src\/foo\.ts#bar/);
   });
 
-  it("G2: anchor dentro de bloco lw:manual NÃO é reescrita (regra #6)", async () => {
+  it("G2: anchor inside an lw:manual block is NOT rewritten (rule #6)", async () => {
     await writeCode("src/foo.ts", "export function bar() { return 42; }");
     const wikiRel = "livewiki/foo.md";
     const mdOriginal = `---
@@ -954,13 +955,13 @@ Texto manual.
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Markdown intocado (regra #6: conteúdo humano nunca modificado por escrita auto).
+    // Markdown untouched (rule #6: human content never modified by automated writes).
     const mdAfter = await nodeFs.readFile(nodePath.join(repoRoot, wikiRel), "utf8");
     expect(mdAfter).toBe(mdOriginal);
-    expect(mdAfter).toMatch(/src\/foo\.ts#bar/); // chave antiga preservada
+    expect(mdAfter).toMatch(/src\/foo\.ts#bar/); // old key preserved
     expect(mdAfter).not.toMatch(/src\/baz\.ts#bar/);
 
-    // Mas a dívida existe — assignee=human (regra #6).
+    // But the debt exists — assignee=human (rule #6).
     const debts = nodeSqliteQuery(
       repoRoot,
       "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
@@ -989,7 +990,7 @@ Texto manual.
     expect(movedDebts).toEqual([{ n: 1 }]);
   });
 
-  it("G2: anchor em página owner=human NÃO é reescrita (regra #6)", async () => {
+  it("G2: anchor on an owner=human page is NOT rewritten (rule #6)", async () => {
     await writeCode("src/foo.ts", "export function bar() { return 42; }");
     const wikiRel = "livewiki/foo.md";
     const mdOriginal = `---
@@ -1010,11 +1011,11 @@ anchors:
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Markdown intocado.
+    // Markdown untouched.
     const mdAfter = await nodeFs.readFile(nodePath.join(repoRoot, wikiRel), "utf8");
     expect(mdAfter).toBe(mdOriginal);
 
-    // Dívida: assignee=human.
+    // Debt: assignee=human.
     const debts = nodeSqliteQuery(
       repoRoot,
       "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
@@ -1096,7 +1097,7 @@ Texto manual.
     // The DB has exactly one anchor row for the manual block (the
     // stale generated row was removed by reconciliation), and the
     // manual row was updated to newKey as part of the standard move
-    // handling. The Markdown still references oldKey (regra #6), so
+    // handling. The Markdown still references oldKey (rule #6), so
     // there is exactly one open moved debt with assignee=human.
     const anchors = nodeSqliteQuery(
       repoRoot,
@@ -1240,13 +1241,13 @@ anchors:
       "  - src/foo.ts#bar",
       "---   ",
       "",
-      "## Detalhes",
+      "## Details",
       "<!-- lw:anchors src/foo.ts#bar -->",
-      "Texto da seção.",
+      "Section text.",
       "",
-      "- src/foo.ts#bar  # nota em prosa",
+      "- src/foo.ts#bar  # prose note",
       "",
-      "## Exemplo",
+      "## Example",
       "```markdown",
       "<!-- lw:anchors src/foo.ts#bar -->",
       "```",
@@ -1254,7 +1255,7 @@ anchors:
       "## Manual",
       "<!-- lw:manual -->",
       "<!-- lw:anchors src/foo.ts#bar -->",
-      "- src/foo.ts#bar  # linha manual",
+      "- src/foo.ts#bar  # manual line",
       "<!-- /lw:manual -->",
       "",
     ].join("\r\n");
@@ -1327,7 +1328,7 @@ anchors:
     expect(fmRelatedAfter).toMatch(/^[ \t]*-[ \t]+src\/foo\.ts#bar\r?$/m);
     expect(fmRelatedAfter).not.toMatch(/src\/longer-name\.ts#bar/);
     //   - the ordinary body bullet keeps oldKey
-    expect(mdAfter).toMatch(/- src\/foo\.ts#bar  # nota em prosa\r\n/);
+    expect(mdAfter).toMatch(/- src\/foo\.ts#bar  # prose note\r\n/);
     //   - the fenced code example content is byte-identical
     const fenceRe = /```markdown\r?\n([\s\S]*?)\r?\n```/;
     const originalFence = mdOriginal.match(fenceRe)?.[0] ?? "";
@@ -1362,7 +1363,7 @@ anchors:
     );
     expect(anchors).toEqual([
       { symbol_key: "src/longer-name.ts#bar", section_slug: null, in_manual_block: 0 },
-      { symbol_key: "src/longer-name.ts#bar", section_slug: "detalhes", in_manual_block: 0 },
+      { symbol_key: "src/longer-name.ts#bar", section_slug: "details", in_manual_block: 0 },
       { symbol_key: "src/longer-name.ts#bar", section_slug: "manual", in_manual_block: 1 },
     ]);
 
@@ -1427,7 +1428,7 @@ anchors:
 });
 
 describe("anchor-ledger — debt.symbol_key (Fix E)", () => {
-  it("dívida carrega symbol_key mesmo depois do anchor ser removida", async () => {
+  it("debt carries symbol_key even after the anchor is removed", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -1442,18 +1443,18 @@ anchors:
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Agora remove a página da wiki — anchor órfã some
+    // Now removes the wiki page — the orphan anchor vanishes
     await nodeFs.rm(nodePath.join(repoRoot, "livewiki/foo.md"));
     await runLedger(repoRoot, { quiet: true });
 
     const debts = nodeSqliteQuery(repoRoot, "SELECT event, symbol_key FROM debt");
-    // symbol_key preservado mesmo sem anchor (evita órfão sem referência)
+    // symbol_key preserved even without an anchor (avoids an orphan with no reference)
     expect(debts).toContainEqual({ event: "deleted", symbol_key: "src/foo.ts#bar" });
   });
 });
 
 describe("anchor-ledger — in_manual_block → assignee=human (Fix D)", () => {
-  it("anchor dentro de lw:manual em página generated: assignee=human", async () => {
+  it("anchor inside lw:manual on a generated page: assignee=human", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -1469,10 +1470,10 @@ texto manual
     await runIndexer(repoRoot, { quiet: true });
     const r = await runLedger(repoRoot, { quiet: true });
 
-    // Sem mudança no código, não gera debt.
+    // With no code change, it generates no debt.
     expect(r.debtCreated).toBe(0);
 
-    // Edita o código — anchor dentro de manual block gera debt com assignee=human
+    // Edits the code — an anchor inside a manual block generates debt with assignee=human
     await writeCode("src/foo.ts", "export function bar(): void {}");
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
@@ -1484,7 +1485,7 @@ texto manual
     expect(debts).toContainEqual({ event: "changed", assignee: "human" });
   });
 
-  it("anchor fora de manual block em página mixed: assignee=agent", async () => {
+  it("anchor outside a manual block on a mixed page: assignee=agent", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -1493,7 +1494,7 @@ owner: mixed
 
 ## Section
 <!-- lw:anchors src/foo.ts#bar -->
-Fora do bloco manual.
+Outside of the manual block.
 `);
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
@@ -1506,13 +1507,13 @@ Fora do bloco manual.
       repoRoot,
       "SELECT event, assignee FROM debt WHERE resolved_at IS NULL",
     );
-    // owner=mixed mas fora de manual block → assignee=agent
+    // owner=mixed but outside a manual block → assignee=agent
     expect(debts).toContainEqual({ event: "changed", assignee: "agent" });
   });
 });
 
-describe("anchor-ledger — página sumida da wiki", () => {
-  it("remove anchors órfãos", async () => {
+describe("anchor-ledger — page vanished from the wiki", () => {
+  it("removes orphan anchors", async () => {
     await writeCode("src/foo.ts", "export function bar() {}");
     await writeWiki("livewiki/foo.md", `---
 title: Foo
@@ -1523,7 +1524,7 @@ anchors:
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Remove página da wiki
+    // Removes the wiki page
     await nodeFs.rm(nodePath.join(repoRoot, "livewiki/foo.md"));
 
     await runLedger(repoRoot, { quiet: true });
@@ -2103,7 +2104,7 @@ anchors:
 });
 
 function nodeSqliteQuery(repoRoot: string, sql: string): Array<Record<string, unknown>> {
-  // Import dinâmico evita ciclo
+  // Dynamic import avoids a cycle
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const Database = require("better-sqlite3") as typeof import("better-sqlite3");
   const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });

@@ -2,15 +2,15 @@ import { describe, it, expect } from "vitest";
 import { extractAnchors, slugify } from "./anchors.js";
 
 describe("slugify", () => {
-  it("lowercase + hífens + sem acentos", () => {
+  it("lowercase + hyphens + no accents", () => {
     expect(slugify("Fluxo de validação")).toBe("fluxo-de-validacao");
   });
 
-  it("remove pontuação", () => {
+  it("removes punctuation", () => {
     expect(slugify("Auth — login & sessão")).toBe("auth-login-sessao");
   });
 
-  it("colapsa múltiplos espaços", () => {
+  it("collapses multiple spaces", () => {
     expect(slugify("a   b  c")).toBe("a-b-c");
   });
 
@@ -18,13 +18,13 @@ describe("slugify", () => {
     expect(slugify("  foo  ")).toBe("foo");
   });
 
-  it("preserva dígitos", () => {
+  it("preserves digits", () => {
     expect(slugify("Step 1: init")).toBe("step-1-init");
   });
 });
 
 describe("extractAnchors", () => {
-  it("página sem frontmatter: vazio", () => {
+  it("page without frontmatter: empty", () => {
     const r = extractAnchors("# Apenas um título\n\nbody");
     expect(r.pageAnchors).toEqual([]);
     expect(r.sectionAnchors).toEqual([]);
@@ -32,7 +32,7 @@ describe("extractAnchors", () => {
     expect(r.owner).toBe("generated");
   });
 
-  it("página com frontmatter: extrai pageAnchors e owner", () => {
+  it("page with frontmatter: extracts pageAnchors and owner", () => {
     const src = `---
 title: Auth
 owner: human
@@ -52,7 +52,7 @@ texto`;
     expect(r.owner).toBe("human");
   });
 
-  it("extrai section anchors de <!-- lw:anchors ... --> após heading", () => {
+  it("extracts section anchors from <!-- lw:anchors ... --> after a heading", () => {
     const src = `---
 title: Auth
 ---
@@ -82,10 +82,10 @@ Descrição do refresh.
     expect(refresh.sectionSlug).toBe("refresh");
   });
 
-  it("sectionSlug é único por heading (deduplicação por slug)", () => {
-    // SPEC §"Granularidade de âncora por seção vs por página" — Fase 2
-    // implementa ambas. Se duas seções têm mesmo heading text, slug é igual.
-    // Não há problema — DB tem (wiki_path, section_slug) UNIQUE.
+  it("sectionSlug is unique per heading (deduplication by slug)", () => {
+    // SPEC §"Anchor granularity: per section vs per page" — Phase 2
+    // implements both. If two sections have the same heading text, the slug is equal.
+    // That is not a problem — the DB has (wiki_path, section_slug) UNIQUE.
     const src = `---
 title: T
 ---
@@ -102,7 +102,7 @@ title: T
     expect(r.sectionAnchors[1]!.sectionSlug).toBe("foo");
   });
 
-  it("extrai manual blocks com start/end corretos", () => {
+  it("extracts manual blocks with correct start/end", () => {
     const src = `---
 title: T
 ---
@@ -120,7 +120,7 @@ Mais texto normal.
     expect(src.slice(r.manualBlocks[0]!.end)).toMatch(/<!-- \/lw:manual -->/);
   });
 
-  it("section anchor dentro de manual block é flagada com inManualBlock=true", () => {
+  it("section anchor inside a manual block is flagged with inManualBlock=true", () => {
     const src = `---
 title: T
 ---
@@ -136,7 +136,7 @@ Texto manual.
     expect(r.sectionAnchors[0]!.inManualBlock).toBe(true);
   });
 
-  it("section anchor FORA de manual block tem inManualBlock=false", () => {
+  it("section anchor OUTSIDE a manual block has inManualBlock=false", () => {
     const src = `---
 title: T
 ---
@@ -156,7 +156,7 @@ Texto.
     expect(r.sectionAnchors[1]!.inManualBlock).toBe(true);
   });
 
-  it("anchor sem heading anterior é ignorado (página malformada)", () => {
+  it("anchor with no preceding heading is ignored (malformed page)", () => {
     const src = `---
 title: T
 ---
@@ -168,7 +168,7 @@ Texto sem heading.
     expect(r.sectionAnchors).toEqual([]);
   });
 
-  it("múltiplos manual blocks: cada um vira um entry separado", () => {
+  it("multiple manual blocks: each one becomes a separate entry", () => {
     const src = `---
 title: T
 ---
@@ -187,7 +187,7 @@ B1
     expect(r.manualBlocks.length).toBe(2);
   });
 
-  it("manual block malformado (end sem start) é ignorado", () => {
+  it("malformed manual block (end without start) is ignored", () => {
     const src = `---
 title: T
 ---
@@ -199,7 +199,7 @@ Texto.
     expect(r.manualBlocks).toEqual([]);
   });
 
-  it("heading de níveis diferentes (## e ###) ambos extraídos", () => {
+  it("headings of different levels (## and ###) both extracted", () => {
     const src = `---
 title: T
 ---
@@ -216,7 +216,7 @@ title: T
     expect(r.sectionAnchors[1]!.sectionSlug).toBe("sub");
   });
 
-  it("anchor com múltiplos espaços entre keys é parseado corretamente", () => {
+  it("anchor with multiple spaces between keys is parsed correctly", () => {
     const src = `---
 title: T
 ---
@@ -228,7 +228,7 @@ title: T
     expect(r.sectionAnchors[0]!.symbolKeys).toEqual(["a#x", "b#y", "c#z"]);
   });
 
-  it("anchor com single key e espaços extras não inclui string vazia", () => {
+  it("anchor with a single key and extra spaces does not include an empty string", () => {
     const src = `---
 title: T
 ---

@@ -1,20 +1,20 @@
 /**
- * manifest — escrita do `.livewiki/.manifest.json` (correção #3 da revisão).
+ * manifest — writing of `.livewiki/.manifest.json` (review fix #3).
  *
- * SPEC §"Layout gerado no repo-alvo" + SPEC §"Pipeline batch": `.manifest.json`
- * é versionado — é o que faz handoff cross-máquina. Inclui:
+ * SPEC §"Layout generated in the target repo" + SPEC §"Batch pipeline":
+ * `.manifest.json` is versioned — it enables cross-machine handoff. Includes:
  *   - version: manifest schema (current 2; v1 remains readable)
- *   - lastDocumentedCommit: SHA do último commit documentado
+ *   - lastDocumentedCommit: SHA of the last documented commit
  *   - snapshotHash: sha256 of rendered livewiki content, excluding the
  *     manifest and versioned baseline audit state
- *     (OpenWiki convention — só regrava se mudou, anti-loop em CI)
+ *     (OpenWiki convention — only rewrites if changed, anti-loop in CI)
  *   - updatedAt: ISO 8601
  *   - pendingBatch: compact progress presentation
  *   - artifactReceipts: deterministic proof for contract-bound tasks whose
  *     completion cannot be reconstructed from symbol baseline entries alone.
  *
- * Grava via safe-io (livewiki/ está na allowlist). Só regrava se mudou —
- * mantém `git diff` limpo em CI.
+ * Writes via safe-io (livewiki/ is on the allowlist). Only rewrites if it
+ * changed — keeps `git diff` clean in CI.
  */
 
 import * as nodeFs from "node:fs/promises";
@@ -50,8 +50,8 @@ export interface LivewikiManifest {
 }
 
 /**
- * Lê o manifest do disco (ou null se não existir / corrupto).
- * Tolerante a corrupção — retorna null em vez de throw (CI-friendly).
+ * Reads the manifest from disk (or null if it does not exist / is corrupt).
+ * Tolerant of corruption — returns null instead of throwing (CI-friendly).
  */
 export async function readManifest(repoRoot: string): Promise<LivewikiManifest | null> {
   const exists = await safeIo.exists(repoRoot, MANIFEST_REL_PATH).catch(() => false);
@@ -68,10 +68,10 @@ export async function readManifest(repoRoot: string): Promise<LivewikiManifest |
  * Computes the rendered-wiki snapshot, excluding `.manifest.json` and
  * `.baseline.json`. The latter is audit state, not rendered documentation.
  *
- * Implementação: pra cada arquivo em `livewiki/` (recursivo), calcula
- * sha256 do conteúdo e concatena tudo num buffer, depois sha256 do buffer.
- * Determinístico porque a ordem de walk é alfabética (nodeFs.readdir
- * retorna ordem não-garantida — usamos sort pra garantir).
+ * Implementation: for each file in `livewiki/` (recursive), computes the
+ * sha256 of the content and concatenates it all into a buffer, then sha256 of
+ * the buffer. Deterministic because the walk order is alphabetical
+ * (nodeFs.readdir returns an unguaranteed order — we sort to guarantee it).
  */
 export async function computeSnapshotHash(repoRoot: string): Promise<string> {
   const livewikiDir = nodePath.join(repoRoot, "livewiki");
@@ -82,11 +82,11 @@ export async function computeSnapshotHash(repoRoot: string): Promise<string> {
       !file.startsWith(`${MANIFEST_REL_PATH.split("/").pop()!}.tmp-`) &&
       !file.startsWith(`${BASELINE_AUDIT_FILENAME}.tmp-`),
   );
-  // Sort pra determinismo
+  // Sort for determinism
   filtered.sort();
 
   const h = sha256; // alias
-  // Combina: pra cada arquivo, "relpath\n<sha256(conteudo)>\n"
+  // Combines: for each file, "relpath\n<sha256(content)>\n"
   const concat = await Promise.all(
     filtered.map(async (rel) => {
       const abs = nodePath.join(livewikiDir, rel);
@@ -122,10 +122,10 @@ async function listFiles(dir: string): Promise<string[]> {
 }
 
 /**
- * Escreve o manifest NO DISCO via safe-io. SÓ regrava se o conteúdo mudou
- * (compara snapshotHash + pendingBatch + updatedAt). Idempotente.
+ * Writes the manifest TO DISK via safe-io. ONLY rewrites if the content
+ * changed (compares snapshotHash + pendingBatch + updatedAt). Idempotent.
  *
- * Retorna true se escreveu, false se já estava igual (anti-loop CI).
+ * Returns true if it wrote, false if it was already equal (CI anti-loop).
  */
 export async function writeManifestIfChanged(
   repoRoot: string,
@@ -299,9 +299,9 @@ export async function refreshArtifactReceiptHashes(
 }
 
 function manifestsEqual(a: LivewikiManifest, b: LivewikiManifest): boolean {
-  // updatedAt é timestamp, não conteúdo — ignorado na comparação.
-  // Caso contrário, cada chamada geraria updatedAt novo e regravaria sempre,
-  // quebrando o anti-loop de CI (git diff mostraria mudança todo commit).
+  // updatedAt is a timestamp, not content — ignored in the comparison.
+  // Otherwise, each call would generate a new updatedAt and always rewrite,
+  // breaking the CI anti-loop (git diff would show a change every commit).
   return (
     a.version === b.version &&
     a.snapshotHash === b.snapshotHash &&
@@ -317,7 +317,7 @@ function pendingBatchEqual(a: PendingBatchRef | null, b: PendingBatchRef | null)
   return a.runId === b.runId && a.stage === b.stage && a.done === b.done && a.total === b.total;
 }
 
-/** Helper pra criar manifest novo a partir do estado atual. */
+/** Helper to create a new manifest from the current state. */
 export function buildManifest(args: {
   lastDocumentedCommit: string | null;
   snapshotHash: string;

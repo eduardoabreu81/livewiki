@@ -31,13 +31,13 @@ async function activeSymbolsForKey(key: string): Promise<ActiveSymbolRow[]> {
 }
 
 beforeEach(async () => {
-  // Resolve do CWD do test runner (packages/core/) — robusto.
+  // Robust CWD resolution from the test runner (packages/core/).
   sampleRepo = nodePath.resolve(process.cwd(), "test/fixtures/sample-ts-repo");
   repoRoot = await nodeFs.mkdtemp(
     nodePath.join(nodeOs.tmpdir(), "livewiki-indexer-"),
   );
-  // Copia só os arquivos esperados (sem .livewiki da fixture contaminada).
-  // node:fs.cp com recursive traria .livewiki junto se existir na fixture.
+  // Copies only the expected files (without the contaminated fixture's .livewiki).
+  // node:fs.cp with recursive would bring .livewiki along if it existed in the fixture.
   await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
   await nodeFs.mkdir(nodePath.join(repoRoot, "lib"), { recursive: true });
   await nodeFs.copyFile(
@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 describe("indexer end-to-end", () => {
-  it("primeiro run: cria .livewiki/ + indexa 2 arquivos + extrai 6 symbols", async () => {
+  it("first run: creates .livewiki/ + indexes 2 files + extracts 6 symbols", async () => {
     const result = await runIndexer(repoRoot, { quiet: true });
     expect(result.filesScanned).toBe(2);
     expect(result.filesAdded).toBe(2);
@@ -64,12 +64,12 @@ describe("indexer end-to-end", () => {
     expect(result.filesUnchanged).toBe(0);
     expect(result.symbolsAdded).toBe(6);
 
-    // .livewiki/index.db deve existir
+    // .livewiki/index.db must exist
     const dbPath = nodePath.join(repoRoot, ".livewiki", "index.db");
     expect(await nodeFs.stat(dbPath)).toBeTruthy();
   });
 
-  it("segundo run sem mudanças: tudo inalterado (idempotente)", async () => {
+  it("second run without changes: everything unchanged (idempotent)", async () => {
     await runIndexer(repoRoot, { quiet: true });
     const r2 = await runIndexer(repoRoot, { quiet: true });
     expect(r2.filesScanned).toBe(2);
@@ -79,7 +79,7 @@ describe("indexer end-to-end", () => {
     expect(r2.symbolsAdded).toBe(0);
   });
 
-  it("arquivo modificado: marca como updated e re-extrai símbolos", async () => {
+  it("modified file: marks as updated and re-extracts symbols", async () => {
     await runIndexer(repoRoot, { quiet: true });
     const authPath = nodePath.join(repoRoot, "src", "auth.ts");
     const before = await nodeFs.readFile(authPath, "utf8");
@@ -88,20 +88,20 @@ describe("indexer end-to-end", () => {
     const r = await runIndexer(repoRoot, { quiet: true });
     expect(r.filesUpdated).toBe(1);
     expect(r.filesUnchanged).toBe(1);
-    expect(r.symbolsAdded).toBe(7); // 6 antigos + 1 nova função
+    expect(r.symbolsAdded).toBe(7); // 6 old + 1 new function
   });
 
-  it("arquivo deletado: marca como removido e symbols como deleted", async () => {
+  it("deleted file: marks as removed and symbols as deleted", async () => {
     await runIndexer(repoRoot, { quiet: true });
     await nodeFs.rm(nodePath.join(repoRoot, "src", "auth.ts"));
 
     const r = await runIndexer(repoRoot, { quiet: true });
     expect(r.filesDeleted).toBe(1);
-    expect(r.symbolsDeleted).toBe(6); // 6 símbolos do auth.ts marcados deleted
+    expect(r.symbolsDeleted).toBe(6); // 6 symbols from auth.ts marked deleted
   });
 
-  it("auto-cria .livewiki/ sem aviso", async () => {
-    // Garante que .livewiki não existe antes
+  it("auto-creates .livewiki/ without notice", async () => {
+    // Ensures .livewiki does not exist before
     await nodeFs.rm(nodePath.join(repoRoot, ".livewiki"), { recursive: true, force: true });
 
     const result = await runIndexer(repoRoot, { quiet: true });
@@ -111,7 +111,7 @@ describe("indexer end-to-end", () => {
     ).toBeTruthy();
   });
 
-  it("status reflete o que foi indexado", async () => {
+  it("status reflects what was indexed", async () => {
     await runIndexer(repoRoot, { quiet: true });
     const report = await runStatus(repoRoot);
     expect(report.files.total).toBe(2);

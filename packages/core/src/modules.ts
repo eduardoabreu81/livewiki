@@ -25,11 +25,11 @@ import { resolveImportEdges, type ResolvedImportEdge } from "./import-resolution
 import { sha256 } from "./hashes.js";
 
 export interface Module {
-  /** Slug único do módulo (ex: "auth", "session"). */
+  /** Unique module slug (e.g. "auth", "session"). */
   id: string;
-  /** Paths relativos dos arquivos que compõem o módulo. */
+  /** Relative paths of the files that make up the module. */
   paths: string[];
-  /** Quantos símbolos ativos tem no módulo (heurística de priorização). */
+  /** How many active symbols the module has (prioritization heuristic). */
   symbolCount: number;
   /** Optional presentation-only title suggested by stage 2. Never identity. */
   displayTitle?: string;
@@ -101,8 +101,8 @@ export function assertExactPathPartition(
 }
 
 /**
- * Resolve imports pra edges no grafo de módulos. Apenas edges entre módulos
- * DIFERENTES (self-loops são descartados).
+ * Resolve imports into edges in the module graph. Only edges between
+ * DIFFERENT modules (self-loops are discarded).
  *
  * R10.1 (J): implemented ON TOP of the single file-level resolver
  * (`resolveImportEdges` in import-resolution.ts) — there is no second
@@ -119,7 +119,7 @@ export function resolveModuleEdges(
   knownFiles: Set<string>,
   resolvedEdges?: ResolvedImportEdge[],
 ): ModuleGraphEdge[] {
-  // Mapa path → moduleId
+  // path → moduleId map
   const fileToModule = new Map<string, string>();
   for (const m of modules) {
     for (const p of m.paths) {
@@ -131,7 +131,7 @@ export function resolveModuleEdges(
     resolvedEdges ??
     resolveImportEdges({ importsByFile, knownFiles, workspacePackages: [] });
 
-  const edges = new Map<string, ModuleGraphEdge>(); // dedup por "from→to"
+  const edges = new Map<string, ModuleGraphEdge>(); // dedup by "from→to"
   for (const fileEdge of fileEdges) {
     const fromModule = fileToModule.get(fileEdge.fromFile);
     if (!fromModule) continue;
@@ -148,16 +148,16 @@ export function resolveModuleEdges(
 }
 
 /**
- * Resolve "./foo" ou "../bar" relativo a `fromFile` pra um path absoluto
- * (forward-slash). Retorna null se não achar em knownFiles.
+ * Resolve "./foo" or "../bar" relative to `fromFile` into an absolute path
+ * (forward-slash). Returns null when it is not found in knownFiles.
  *
- * FIX K (rev2): NodeNext (e bundlers em geral) obrigam imports com extensão
- * explícita: `import x from "../utils/crypto.js"` resolve pra `crypto.ts`
- * (ou `.tsx`, `.js`, etc). O resolver antigo tentava `../utils/crypto.js`
- * + sufixos colados (`../utils/crypto.js.ts`), o que nunca batia.
+ * FIX K (rev2): NodeNext (and bundlers in general) require imports with an
+ * explicit extension: `import x from "../utils/crypto.js"` resolves to `crypto.ts`
+ * (or `.tsx`, `.js`, etc). The old resolver tried `../utils/crypto.js`
+ * + appended suffixes (`../utils/crypto.js.ts`), which never matched.
  *
- * Agora strip da extensão `.js`/`.jsx` ANTES de gerar os candidatos, e também
- * trata `index.js` → `index.ts/tsx/js/jsx` (mapeamento de barrels).
+ * Now the `.js`/`.jsx` extension is stripped BEFORE the candidates are generated, and it also
+ * handles `index.js` → `index.ts/tsx/js/jsx` (barrel mapping).
  *
  * Exported for the single import resolver (import-resolution.ts, R10.1 J) —
  * relative-specifier resolution must not be duplicated.
@@ -177,9 +177,9 @@ export function resolveRelativeImport(
     }
     parts.push(seg);
   }
-  // Strip de extensões NodeNext-style pra achar o source real.
-  // "../utils/crypto.js" → "../utils/crypto" (depois testamos .ts/.tsx/...)
-  // "../utils/index.js"  → "../utils/index" (e testamos como barrel)
+  // Strip NodeNext-style extensions to find the real source.
+  // "../utils/crypto.js" → "../utils/crypto" (then we test .ts/.tsx/...)
+  // "../utils/index.js"  → "../utils/index" (and we test it as a barrel)
   const joined = parts.join("/");
   const base = stripNodeNextExtension(joined);
   const candidates = [
@@ -189,7 +189,7 @@ export function resolveRelativeImport(
     `${base}.js`,
     `${base}.jsx`,
     `${base}.py`,
-    // Barrels: o base já é "index" se import era ".../index.js" ou ".../index"
+    // Barrels: base is already "index" if the import was ".../index.js" or ".../index"
     `${base}/index.ts`,
     `${base}/index.tsx`,
     `${base}/index.js`,
@@ -203,14 +203,14 @@ export function resolveRelativeImport(
 }
 
 /**
- * Remove extensão NodeNext-style do final de um path: ".js" ou ".jsx" ou
- * ".mjs"/".cjs". Se o basename for `index.{js,jsx,...}`, também strip
- * (tratado como barrel — o caller vai testar `${base}/index.*`).
+ * Removes a NodeNext-style extension from the end of a path: ".js" or ".jsx" or
+ * ".mjs"/".cjs". If the basename is `index.{js,jsx,...}`, it is stripped too
+ * (treated as a barrel — the caller will test `${base}/index.*`).
  *
  * "src/utils/crypto.js"  → "src/utils/crypto"
  * "src/utils/index.js"   → "src/utils/index"
- * "src/foo.ts"           → "src/foo"  (idempotente, mas só roda se terminar em .js/.jsx/etc)
- * "src/bar"              → "src/bar"  (sem extensão, no-op)
+ * "src/foo.ts"           → "src/foo"  (idempotent, but only runs when it ends in .js/.jsx/etc)
+ * "src/bar"              → "src/bar"  (no extension, no-op)
  */
 function stripNodeNextExtension(p: string): string {
   const idx = p.lastIndexOf("/");
@@ -384,9 +384,9 @@ export function classifyModuleRole(module: Module, config?: PathRoleConfig): Pat
 }
 
 /**
- * Ordena módulos pra etapa 4 por centralidade (quantos outros dependem)
- * e tamanho (symbolCount). Centralidade maior primeiro; empate vai pro
- * maior symbolCount.
+ * Orders modules for stage 4 by centrality (how many others depend on them)
+ * and size (symbolCount). Higher centrality first; a tie goes to the
+ * larger symbolCount.
  *
  * `"product"` modules always rank above fixture/tooling/docs
  * modules, regardless of centrality — a heavily-imported test fixture
@@ -574,8 +574,8 @@ function candidateIdSequence(m: Module): string[] {
 
 /**
  * Path segments of the module (left-to-right, without the file basename).
- * Para path "packages/core/src/auth.ts" → ["packages", "core", "src"].
- * Para path "index.ts" (raiz) → [].
+ * For path "packages/core/src/auth.ts" → ["packages", "core", "src"].
+ * For path "index.ts" (root) → [].
  */
 function pathSegmentsFor(m: Module): string[] {
   const first = m.paths[0] ?? m.id;

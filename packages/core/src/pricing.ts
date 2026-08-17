@@ -1,29 +1,29 @@
 /**
- * pricing — tabela de preços embutida + lookup com override do config.
+ * pricing — built-in price table + lookup with config override.
  *
- * SPEC §"Contabilidade de tokens (Fase 3)": "Economia é tese central do
- * produto — então é medida, não estimada". O reporte `livewiki batch <run>`
- * mostra custo estimado em USD POR USO REAL DA API (não estimativa), usando
- * a tabela abaixo como fallback.
+ * SPEC §"Token accounting (Phase 3)": "Savings are the product's central
+ * thesis — so they are measured, not estimated". The `livewiki batch <run>`
+ * report shows estimated cost in USD FROM REAL API USAGE (not an estimate),
+ * using the table below as fallback.
  *
- * Política:
- *   - Tabela EMBUTIDA no core (best-effort, com data de referência) — funciona
- *     out-of-the-box para os modelos populares.
- *   - Usuário pode SOBRESCREVER por modelo via `.livewiki/config.json`:
+ * Policy:
+ *   - Table BUILT INTO the core (best-effort, with a reference date) — works
+ *     out-of-the-box for the popular models.
+ *   - The user can OVERRIDE per model via `.livewiki/config.json`:
  *       "pricing": { "claude-opus-4-5": { "input": 12, "output": 60 } }
- *     Útil quando o preço muda antes da tabela ser atualizada.
- *   - Modelo não encontrado → reporte mostra tokens sem USD, NUNCA inventa.
+ *     Useful when the price changes before the table is updated.
+ *   - Model not found → report shows tokens without USD, NEVER invents one.
  *
- * IMPORTANTE: estes preços são best-effort. Devem ser revisados a cada release.
- * A constante `PRICING_REFERENCE_DATE` indica quando foram compilados pela
- * última vez. Todo reporte de custo carrega essa data — usuário sabe se está
- * olhando preço fresco ou stale.
+ * IMPORTANT: these prices are best-effort. They must be reviewed each release.
+ * The `PRICING_REFERENCE_DATE` constant indicates when they were compiled for
+ * the last time. Every cost report carries that date — the user knows whether
+ * they are looking at a fresh or stale price.
  */
 
-/** Data em que a tabela embutida foi compilada. Atualizar a cada release. */
+/** Date on which the built-in table was compiled. Update each release. */
 export const PRICING_REFERENCE_DATE = "2026-08-13";
 
-/** USD por 1M tokens. Source: páginas públicas de pricing dos providers. */
+/** USD per 1M tokens. Source: the providers' public pricing pages. */
 export interface ModelPrice {
   input: number;
   output: number;
@@ -32,12 +32,12 @@ export interface ModelPrice {
 export type PricingTable = Record<string, ModelPrice>;
 
 /**
- * Tabela embutida. Cobre os modelos populares do MVP (Anthropic Claude 4.5+
- * + OpenAI-compat mais usados). Se o provider/modelo do usuário não está aqui,
- * ele pode adicionar via `.livewiki/config.json` ou aceitar reporte sem USD.
+ * Built-in table. Covers the MVP's popular models (Anthropic Claude 4.5+
+ * + the most used OpenAI-compat). If the user's provider/model is not here,
+ * they can add it via `.livewiki/config.json` or accept a report without USD.
  *
- * Mantida curta de propósito — preços mudam, tabela stale é pior do que
- * reporte transparente. Usuário que precisa de precisão usa o override.
+ * Kept short on purpose — prices change, and a stale table is worse than a
+ * transparent report. A user who needs precision uses the override.
  */
 export const PRICING_TABLE: PricingTable = {
   // Anthropic Claude family. Sonnet 5 uses introductory pricing through
@@ -46,29 +46,29 @@ export const PRICING_TABLE: PricingTable = {
   "claude-sonnet-5": { input: 2, output: 10 },
   "claude-haiku-4-5": { input: 1, output: 5 },
 
-  // OpenAI-compat (pra OpenRouter, LiteLLM, Ollama cloud, etc.)
+  // OpenAI-compat (for OpenRouter, LiteLLM, Ollama cloud, etc.)
   "gpt-4o": { input: 2.5, output: 10 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
 };
 
-/** Override shape em `.livewiki/config.json`. */
+/** Override shape in `.livewiki/config.json`. */
 export interface PricingOverride {
   [model: string]: ModelPrice;
 }
 
 /**
- * Resultado do lookup. Quando o modelo não tem preço, retorna `tokensOnly: true`
- * — o reporte mostra tokens sem inventar USD.
+ * Lookup result. When the model has no price, returns `tokensOnly: true`
+ * — the report shows tokens without inventing USD.
  */
 export type PricingLookup =
   | { tokensOnly: false; inputUsd: number; outputUsd: number; refDate: string }
   | { tokensOnly: true };
 
 /**
- * Procura o preço de um modelo. Ordem de prioridade:
- *   1. Override do config (do usuário — sempre vence)
- *   2. Tabela embutida
- *   3. tokensOnly (modelo desconhecido — reporte sem USD)
+ * Looks up a model's price. Priority order:
+ *   1. Config override (the user's — always wins)
+ *   2. Built-in table
+ *   3. tokensOnly (unknown model — report without USD)
  */
 export function lookupPricing(model: string, override?: PricingOverride): PricingLookup {
   const fromOverride = override?.[model];
@@ -86,8 +86,8 @@ export function lookupPricing(model: string, override?: PricingOverride): Pricin
 }
 
 /**
- * Calcula o custo em USD de UMA chamada LLM. Retorna null se o modelo não
- * tem preço (reporte sem USD é melhor que número inventado).
+ * Calculates the USD cost of ONE LLM call. Returns null if the model has no
+ * price (a report without USD is better than an invented number).
  */
 export function calculateCostUsd(
   inputTokens: number,
@@ -97,7 +97,7 @@ export function calculateCostUsd(
 ): { input: number; output: number; total: number; refDate: string } | null {
   const lookup = lookupPricing(model, override);
   if (lookup.tokensOnly) return null;
-  // price é por 1M tokens; divide por 1e6
+  // price is per 1M tokens; divide by 1e6
   const input = (inputTokens * lookup.inputUsd) / 1_000_000;
   const output = (outputTokens * lookup.outputUsd) / 1_000_000;
   return {

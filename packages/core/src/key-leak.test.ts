@@ -1,19 +1,19 @@
 /**
- * key-leak — regressão CRÍTICA: API key NUNCA pode aparecer em nenhum output.
+ * key-leak — CRITICAL regression: the API key can NEVER appear in any output.
  *
  * Credentials may come from the environment or the global credential store,
  * but never from repo config, checkpoint_json, logs, or errors.
  *
- * Este teste simula todos os call sites do LLM + config + batch-state com
- * uma chave fake identificável ("KEY-LEAK-CANARY-DONOTUSE-7f3a") e verifica
- * que ela NÃO vaza em:
- *   - Mensagens de erro (LlmRequestError, MissingApiKeyError, etc.)
- *   - JSON serializado de checkpoint_json / config / summary_json
- *   - Logs de console (capturados via spy)
- *   - Mensagens de MissingProviderConfigError
+ * This test simulates every LLM + config + batch-state call site with
+ * an identifiable fake key ("KEY-LEAK-CANARY-DONOTUSE-7f3a") and verifies
+ * that it does NOT leak in:
+ *   - Error messages (LlmRequestError, MissingApiKeyError, etc.)
+ *   - Serialized JSON of checkpoint_json / config / summary_json
+ *   - Console logs (captured via spy)
+ *   - MissingProviderConfigError messages
  *
- * Se este teste falhar, NÃO comite — significa que algum caminho de erro
- * está expondo credencial.
+ * If this test fails, do NOT commit — it means some error path
+ * is exposing a credential.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -23,7 +23,7 @@ import * as nodeFs from "node:fs/promises";
 
 const CANARY_KEY = "KEY-LEAK-CANARY-DONOTUSE-7f3a";
 
-describe("key-leak — API key nunca vaza", () => {
+describe("key-leak — the API key never leaks", () => {
   let repoRoot: string;
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;
   let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
@@ -54,7 +54,7 @@ describe("key-leak — API key nunca vaza", () => {
     }
   }
 
-  it("MissingApiKeyError NÃO contém o valor da key (apenas nome do env var)", async () => {
+  it("MissingApiKeyError does NOT contain the key value (only the env var name)", async () => {
     const prevAnthropic = process.env.ANTHROPIC_API_KEY;
     const prevOpenai = process.env.OPENAI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
@@ -75,21 +75,21 @@ describe("key-leak — API key nunca vaza", () => {
     }
   });
 
-  it("MissingProviderConfigError NÃO contém key (só mensagem com exemplo de modelo)", async () => {
+  it("MissingProviderConfigError does NOT contain the key (only a message with a model example)", async () => {
     const { MissingProviderConfigError } = await import("./config.js");
     try {
       new MissingProviderConfigError(repoRoot, ["provider", "model"]);
     } catch (err) {
-      // Não throw aqui — só instanciamos
+      // No throw here — we only instantiate
     }
     const err = new (await import("./config.js")).MissingProviderConfigError(repoRoot, ["provider"]);
     assertCanaryNotPresent(err.message, "MissingProviderConfigError.message");
     assertCanaryNotPresent(err.stack ?? "", "MissingProviderConfigError.stack");
   });
 
-  it("LlmRequestError NÃO carrega a key mesmo quando o body do provider vem", async () => {
-    // Simula provider devolvendo erro 500 com body que menciona a key (worst case).
-    // O adapter NÃO deve incluir esse body na mensagem — só status + summary truncado.
+  it("LlmRequestError does NOT carry the key even when the provider body comes back", async () => {
+    // Simulates the provider returning a 500 error with a body that mentions the key (worst case).
+    // The adapter must NOT include that body in the message — only status + truncated summary.
     const fakeBody = `{"error":"internal","leak":"${CANARY_KEY}"}`;
     const fetchImpl = vi.fn(async () =>
       new Response(fakeBody, { status: 500 }),
@@ -100,7 +100,7 @@ describe("key-leak — API key nunca vaza", () => {
       baseUrl: "https://api.anthropic.com",
       model: "claude-sonnet-5",
       fetchImpl,
-      maxRetries: 1, // 1 tentativa só — não loop no teste
+      maxRetries: 1, // only 1 attempt — no loop in the test
       timeoutMs: 1000,
     });
     try {
@@ -112,7 +112,7 @@ describe("key-leak — API key nunca vaza", () => {
     }
   });
 
-  it("config.json gravado via saveConfig() NÃO contém key", async () => {
+  it("config.json written via saveConfig() does NOT contain the key", async () => {
     const { saveConfig, loadConfig } = await import("./config.js");
     await saveConfig(repoRoot, {
       provider: "anthropic",
@@ -166,8 +166,8 @@ describe("key-leak — API key nunca vaza", () => {
     }
   });
 
-  it("checkpoint_json com usageHistory NÃO vaza key em nenhum item", async () => {
-    // Simula checkpoint típico do batch (sem precisar do orchestrator ainda).
+  it("checkpoint_json with usageHistory does NOT leak the key in any item", async () => {
+    // Simulates a typical batch checkpoint (without needing the orchestrator yet).
     const checkpoint = {
       stage: 4,
       status: "done",
@@ -188,7 +188,7 @@ describe("key-leak — API key nunca vaza", () => {
     assertCanaryNotPresent(json, "checkpoint_json serialized");
   });
 
-  it("adapter headers carregam a key (correto) mas NUNCA logs/erros", async () => {
+  it("adapter headers carry the key (correct) but NEVER logs/errors", async () => {
     let capturedHeaders: Record<string, string> = {};
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       capturedHeaders = init.headers as Record<string, string>;
@@ -210,10 +210,10 @@ describe("key-leak — API key nunca vaza", () => {
       fetchImpl,
     });
     await adapter.generate({ system: "s", user: "u" });
-    // A key ESTÁ nos headers (precisa estar) — isso é correto.
+    // The key IS in the headers (it needs to be) — that is correct.
     expect(capturedHeaders["x-api-key"]).toBe(CANARY_KEY);
 
-    // Mas NÃO pode ter vazado em logs capturados
+    // But it must NOT have leaked into the captured logs
     for (const call of consoleLogSpy.mock.calls) {
       for (const arg of call) {
         assertCanaryNotPresent(String(arg), "console.log output");
@@ -221,8 +221,8 @@ describe("key-leak — API key nunca vaza", () => {
     }
   });
 
-  it("console.error/warn não contém a key em nenhum path", async () => {
-    // Dispara erro real e checa logs capturados
+  it("console.error/warn does not contain the key in any path", async () => {
+    // Triggers a real error and checks the captured logs
     const prevAnthropic = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     try {
@@ -230,7 +230,7 @@ describe("key-leak — API key nunca vaza", () => {
       try {
         createLlmClient(repoRoot, { provider: "anthropic", model: "claude-sonnet-5" });
       } catch (err) {
-        // Esperado. Erro NÃO deve logar sozinho (vamos logar manualmente aqui).
+        // Expected. The error must NOT log by itself (we log manually here).
         console.error("Failed to create LLM client:", err);
       }
     } finally {
@@ -247,8 +247,8 @@ describe("key-leak — API key nunca vaza", () => {
     }
   });
 
-  it("manifest.ts equivalente não vai conter a key (checkpoint_summary JSON)", async () => {
-    // Simula summary_json de batch_run — sem key em lugar nenhum
+  it("manifest.ts equivalent will not contain the key (checkpoint_summary JSON)", async () => {
+    // Simulates batch_run's summary_json — no key anywhere
     const summary = {
       totals: { inputTokens: 1000, outputTokens: 500, costUsd: 0.005, models: ["claude-sonnet-5"] },
       byStage: {

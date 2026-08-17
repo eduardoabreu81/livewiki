@@ -8,7 +8,7 @@ import { resolveRepoRoot } from "../cli.js";
 interface BatchOptions {
   json?: boolean;
   repo?: string;
-  /** --only <target>: re-roda 1 task */
+  /** --only <target>: re-runs 1 task */
   only?: string;
   /**
    * Commander maps `--no-refine` → `refine === false` (not `noRefine`).

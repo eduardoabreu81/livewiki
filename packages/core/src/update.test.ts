@@ -1,25 +1,25 @@
 /**
- * update — testes do modo incremental (Fase 5).
+ * update — incremental-mode tests (Phase 5).
  *
- * Cobre o coração do produto: loadWorkPackage emite pacote focado
- * (debt + snippets + validAnchors + tokens estimados). Tese: pacote
- * pequeno (~800 tokens) vs reler repo inteiro (~12.5k tokens).
+ * Covers the product's heart: loadWorkPackage emits a focused package
+ * (debt + snippets + validAnchors + estimated tokens). Thesis: a small
+ * package (~800 tokens) vs rereading the whole repo (~12.5k tokens).
  *
- * Critério de aceite (SPEC §Fase 5):
- *   "fluxo de ponta a ponta — agente altera código, hook detecta, agente
- *    paga a dívida via MCP, verify passa, manifest atualizado."
+ * Acceptance criterion (SPEC §Phase 5):
+ *   "end-to-end flow — agent changes code, hook detects, agent pays the
+ *    debt via MCP, verify passes, manifest updated."
  *
- * Aqui cobrimos o "agente recebe pacote + paga dívida via write_doc":
- *   - loadWorkPackage retorna debt correta (changed/moved/deleted)
- *   - snippets têm source real do arquivo
- *   - validAnchors são symbols ativos
- *   - tokensEstimated > 0 e razoável
- *   - status --json expõe metrics com a eficiência (write/package)
- *   - recordDocWrittenBack atualiza efficiencyRatio
+ * Here we cover the "agent receives package + pays debt via write_doc":
+ *   - loadWorkPackage returns the correct debt (changed/moved/deleted)
+ *   - snippets have real file source
+ *   - validAnchors are active symbols
+ *   - tokensEstimated > 0 and reasonable
+ *   - status --json exposes metrics with the efficiency (write/package)
+ *   - recordDocWrittenBack updates efficiencyRatio
  *
- * Helpers: setup que inclui uma página wiki com anchor — sem isso,
- * o ledger não gera debt (regra: debt = anchor mudou; sem anchor,
- * nada para detectar).
+ * Helpers: a setup that includes a wiki page with an anchor — without it,
+ * the ledger generates no debt (rule: debt = anchor changed; without an
+ * anchor, nothing to detect).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -66,8 +66,8 @@ async function writeWiki(rel: string, content: string): Promise<void> {
 }
 
 /**
- * Setup que coloca uma página wiki com anchor pra foo.ts#bar — sem isso,
- * o anchor-ledger não detecta mudança (regra: debt = anchor mudou).
+ * Setup that places a wiki page with an anchor for foo.ts#bar — without it,
+ * the anchor-ledger does not detect a change (rule: debt = anchor changed).
  */
 async function setupWithAnchor(): Promise<void> {
   await writeCode("src/foo.ts", "export function bar() { return 1; }");
@@ -91,8 +91,8 @@ Documentation.
   await runLedger(repoRoot, { quiet: true });
 }
 
-describe("update.loadWorkPackage — Fase 5 (modo incremental)", () => {
-  it("pacote inclui manifest quando livewiki foi inicializado", async () => {
+describe("update.loadWorkPackage — Phase 5 (incremental mode)", () => {
+  it("package includes manifest when livewiki was initialized", async () => {
     await setupWithAnchor();
     await runInit({ repoRoot, quiet: true });
     const pkg = await loadWorkPackage(repoRoot);
@@ -100,8 +100,8 @@ describe("update.loadWorkPackage — Fase 5 (modo incremental)", () => {
     expect(pkg.bytes).toBeGreaterThan(0);
   });
 
-  it("pacote sem manifest se repo nunca foi inicializado", async () => {
-    // Sem setupWithAnchor e sem runInit — manifest nunca foi gravado
+  it("package without manifest if repo was never initialized", async () => {
+    // Without setupWithAnchor and without runInit — manifest was never written
     await writeCode("src/foo.ts", "export function bar() {}");
     await runIndexer(repoRoot, { quiet: true });
     const pkg = await loadWorkPackage(repoRoot);
@@ -109,11 +109,11 @@ describe("update.loadWorkPackage — Fase 5 (modo incremental)", () => {
     expect(pkg.bytes).toBeGreaterThan(0);
   });
 
-  it("detecta changed quando source é modificado (anchor existente)", async () => {
+  it("detects changed when the source is modified (existing anchor)", async () => {
     await setupWithAnchor();
     await writeCode(
       "src/foo.ts",
-      "export function bar() { return 2; /* mudou */ }",
+      "export function bar() { return 2; /* changed */ }",
     );
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
@@ -124,17 +124,17 @@ describe("update.loadWorkPackage — Fase 5 (modo incremental)", () => {
     expect(changed.some((d) => d.symbol_key === "src/foo.ts#bar")).toBe(true);
   });
 
-  it("snippets têm source real do arquivo (janela em torno do symbol)", async () => {
+  it("snippets have real file source (window around the symbol)", async () => {
     await setupWithAnchor();
     await writeCode(
       "src/foo.ts",
       [
-        "// linha 0",
-        "// linha 1",
-        "// linha 2",
-        "export function bar() { return 999; /* mudou */ }",
-        "// linha 4",
-        "// linha 5",
+        "// line 0",
+        "// line 1",
+        "// line 2",
+        "export function bar() { return 999; /* changed */ }",
+        "// line 4",
+        "// line 5",
       ].join("\n"),
     );
     await runIndexer(repoRoot, { quiet: true });
@@ -144,13 +144,13 @@ describe("update.loadWorkPackage — Fase 5 (modo incremental)", () => {
     const snippet = pkg.snippets.find((s) => s.symbolKey === "src/foo.ts#bar");
     expect(snippet).toBeDefined();
     expect(snippet?.filePath).toBe("src/foo.ts");
-    // Snippet inclui o source modificado (return 999)
+    // Snippet includes the modified source (return 999)
     expect(snippet?.snippet).toMatch(/return 999/);
-    // E linhas de contexto
-    expect(snippet?.snippet).toMatch(/linha/);
+    // And context lines
+    expect(snippet?.snippet).toMatch(/line/);
   });
 
-  it("tokensEstimated > 0 quando há dívida", async () => {
+  it("tokensEstimated > 0 when there is debt", async () => {
     await setupWithAnchor();
     await writeCode("src/foo.ts", "export function bar() { return 2; }");
     await runIndexer(repoRoot, { quiet: true });
@@ -158,10 +158,10 @@ describe("update.loadWorkPackage — Fase 5 (modo incremental)", () => {
 
     const pkg = await loadWorkPackage(repoRoot);
     expect(pkg.tokensEstimated).toBeGreaterThan(0);
-    expect(pkg.tokensEstimated).toBeLessThan(10000); // ~800 esperado, sanidade
+    expect(pkg.tokensEstimated).toBeLessThan(10000); // ~800 expected, sanity
   });
 
-  it("validAnchors = symbols ativos do debt", async () => {
+  it("validAnchors = active symbols from the debt", async () => {
     await setupWithAnchor();
     await writeCode("src/foo.ts", "export function bar() { return 2; }");
     await runIndexer(repoRoot, { quiet: true });
@@ -171,8 +171,8 @@ describe("update.loadWorkPackage — Fase 5 (modo incremental)", () => {
     expect(pkg.validAnchors).toContain("src/foo.ts#bar");
   });
 
-  it("respeita maxSnippets (defesa contra dívida gigante)", async () => {
-    // 5 arquivos com anchor cada
+  it("respects maxSnippets (defense against a huge debt)", async () => {
+    // 5 files each with an anchor
     for (let i = 0; i < 5; i++) {
       await writeCode(`src/file${i}.ts`, `export function fn${i}() { return 1; }`);
       await writeWiki(
@@ -198,11 +198,11 @@ anchors:
     expect(pkg.snippets.length).toBeLessThanOrEqual(2);
   });
 
-  it("respeita snippetWindow (custom)", async () => {
+  it("respects snippetWindow (custom)", async () => {
     await setupWithAnchor();
     await writeCode(
       "src/foo.ts",
-      Array.from({ length: 50 }, (_, i) => `// linha ${i}`).join("\n") +
+      Array.from({ length: 50 }, (_, i) => `// line ${i}`).join("\n") +
         "\nexport function bar() { return 2; }",
     );
     await runIndexer(repoRoot, { quiet: true });
@@ -211,25 +211,25 @@ anchors:
     const pkg = await loadWorkPackage(repoRoot, { snippetWindow: 5 });
     const snippet = pkg.snippets.find((s) => s.symbolKey === "src/foo.ts#bar");
     expect(snippet).toBeDefined();
-    // snippetWindow=5 + 3 linhas de contexto antes/depois = ~11 linhas
+    // snippetWindow=5 + 3 context lines before/after = ~11 lines
     const lines = snippet?.snippet.split("\n") ?? [];
     expect(lines.length).toBeLessThanOrEqual(15);
   });
 });
 
-describe("update — contabilidade (SPEC §Contabilidade)", () => {
-  it("recordDocWrittenBack atualiza efficiencyRatio", async () => {
+describe("update — accounting (SPEC §Accounting)", () => {
+  it("recordDocWrittenBack updates efficiencyRatio", async () => {
     await setupWithAnchor();
     await writeCode("src/foo.ts", "export function bar() { return 2; }");
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
 
-    // Emite pacote
+    // Emits the package
     await loadWorkPackage(repoRoot);
     const snap1 = await snapshotMetrics(repoRoot);
     expect(snap1?.packagesEmitted).toBeGreaterThanOrEqual(1);
 
-    // Agente escreve doc (write de 100 tokens)
+    // Agent writes the doc (a 100-token write)
     await recordDocWrittenBack(repoRoot, {
       wikiPath: "livewiki/foo.md",
       bytes: 400,
@@ -238,12 +238,12 @@ describe("update — contabilidade (SPEC §Contabilidade)", () => {
 
     const snap2 = await snapshotMetrics(repoRoot);
     expect(snap2?.writesReceived).toBe(1);
-    // efficiencyRatio = writes/packages. Pode ser < 1 ou > 1 dependendo
-    // do tamanho do pacote — o teste só verifica que atualiza.
+    // efficiencyRatio = writes/packages. It may be < 1 or > 1 depending
+    // on the package size — the test only verifies that it updates.
     expect(snap2?.efficiencyRatio).not.toBeNull();
   });
 
-  it("snapshot é null-efficiency quando nunca houve update", async () => {
+  it("snapshot is null-efficiency when update never happened", async () => {
     await setupWithAnchor();
     const snap = await snapshotMetrics(repoRoot);
     expect(snap?.packagesEmitted).toBe(0);
@@ -251,7 +251,7 @@ describe("update — contabilidade (SPEC §Contabilidade)", () => {
     expect(snap?.efficiencyRatio).toBeNull();
   });
 
-  it("status --json inclui metrics (expostos via SPEC §Contabilidade)", async () => {
+  it("status --json includes metrics (exposed via SPEC §Accounting)", async () => {
     await setupWithAnchor();
     await writeCode("src/foo.ts", "export function bar() { return 2; }");
     await runIndexer(repoRoot, { quiet: true });
@@ -265,13 +265,13 @@ describe("update — contabilidade (SPEC §Contabilidade)", () => {
   });
 });
 
-describe("update — economia (tese do produto)", () => {
-  it("pacote é menor que 'reler repo inteiro' (~12.5k tokens)", async () => {
-    // Cria 20 arquivos cada com anchor próprio
+describe("update — savings (the product's thesis)", () => {
+  it("package is smaller than 'rereading the whole repo' (~12.5k tokens)", async () => {
+    // Creates 20 files each with its own anchor
     for (let i = 0; i < 20; i++) {
       await writeCode(
         `src/file${i}.ts`,
-        Array.from({ length: 50 }, (_, j) => `// linha ${j}`).join("\n") +
+        Array.from({ length: 50 }, (_, j) => `// line ${j}`).join("\n") +
           `\nexport function fn${i}() { return ${i}; }`,
       );
       await writeWiki(
@@ -285,11 +285,11 @@ anchors: [src/file${i}.ts#fn${i}]
     }
     await runIndexer(repoRoot, { quiet: true });
     await runLedger(repoRoot, { quiet: true });
-    // Modifica todos (gera 20 changed)
+    // Modifies all of them (generates 20 changed)
     for (let i = 0; i < 20; i++) {
       await writeCode(
         `src/file${i}.ts`,
-        Array.from({ length: 50 }, (_, j) => `// linha ${j}`).join("\n") +
+        Array.from({ length: 50 }, (_, j) => `// line ${j}`).join("\n") +
           `\nexport function fn${i}() { return ${i + 100}; }`,
       );
     }
@@ -297,14 +297,14 @@ anchors: [src/file${i}.ts#fn${i}]
     await runLedger(repoRoot, { quiet: true });
 
     const pkg = await loadWorkPackage(repoRoot);
-    // Tese: pacote bem menor que os 12.5k estimados de "reler repo inteiro".
+    // Thesis: the package is far smaller than the estimated 12.5k of "rereading the whole repo".
     expect(pkg.tokensEstimated).toBeLessThan(12500);
     expect(pkg.tokensEstimated).toBeGreaterThan(0);
   });
 });
 
-describe("update — CHARS_PER_TOKEN (heurística)", () => {
-  it("constante é 4 (heurística padrão GPT/code)", () => {
+describe("update — CHARS_PER_TOKEN (heuristic)", () => {
+  it("constant is 4 (standard GPT/code heuristic)", () => {
     expect(CHARS_PER_TOKEN).toBe(4);
   });
 });
@@ -367,8 +367,8 @@ Documentation.
   });
 });
 
-describe("update — files persistidos", () => {
-  it("update_metrics.json é criado em .livewiki/", async () => {
+describe("update — persisted files", () => {
+  it("update_metrics.json is created in .livewiki/", async () => {
     await setupWithAnchor();
     await writeCode("src/foo.ts", "export function bar() { return 2; }");
     await runIndexer(repoRoot, { quiet: true });

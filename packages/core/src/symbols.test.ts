@@ -12,7 +12,7 @@ async function parse(ext: string, src: string) {
 }
 
 describe("symbols — EOL-insensitive hashing (roadmap item 12)", () => {
-  it("content_hash do símbolo é igual para LF e CRLF (source normalizado)", async () => {
+  it("symbol content_hash is the same for LF and CRLF (normalized source)", async () => {
     // Mirrors the indexer contract: the file text is normalizeEol'd ONCE
     // before parse + extraction, so both line-ending variants yield the
     // same symbol keys, byte ranges, and content hashes.
@@ -32,7 +32,7 @@ describe("symbols — EOL-insensitive hashing (roadmap item 12)", () => {
 });
 
 describe("symbols — TypeScript", () => {
-  it("extrai function_declaration top-level", async () => {
+  it("extracts top-level function_declaration", async () => {
     const tree = await parse(".ts", "function foo() { return 1; }");
     const symbols = extractSymbols(tree, "x.ts", "function foo() { return 1; }");
     expect(symbols.map((s) => s.name)).toEqual(["foo"]);
@@ -41,7 +41,7 @@ describe("symbols — TypeScript", () => {
     expect(symbols[0]?.start_line).toBe(1);
   });
 
-  it("extrai class + methods com qualificação", async () => {
+  it("extracts class + methods with qualification", async () => {
     const src = `class Foo {
   bar() { return 1; }
   baz() { return 2; }
@@ -56,7 +56,7 @@ describe("symbols — TypeScript", () => {
     expect(symbols.find((s) => s.name === "Foo.bar")?.kind).toBe("method");
   });
 
-  it("NÃO extrai uma classe declarada dentro do corpo de uma função top-level", async () => {
+  it("does NOT extract a class declared inside the body of a top-level function", async () => {
     const src = `function makeFake() {
   class FakeThing {
     run() { return 1; }
@@ -71,7 +71,7 @@ describe("symbols — TypeScript", () => {
     expect(names).not.toContain("FakeThing.run");
   });
 
-  it("NÃO extrai uma classe declarada dentro do corpo de um método", async () => {
+  it("does NOT extract a class declared inside the body of a method", async () => {
     const src = `class TestSuite {
   testOllama() {
     class FakeClient {
@@ -88,7 +88,7 @@ describe("symbols — TypeScript", () => {
     expect(names).not.toContain("FakeClient.call");
   });
 
-  it("extrai generator_function_declaration", async () => {
+  it("extracts generator_function_declaration", async () => {
     const src = "function* gen() { yield 1; }";
     const tree = await parse(".ts", src);
     const symbols = extractSymbols(tree, "x.ts", src);
@@ -96,7 +96,7 @@ describe("symbols — TypeScript", () => {
     expect(symbols[0]?.kind).toBe("function");
   });
 
-  it("extrai export class SEM duplicar (kind=class, não export)", async () => {
+  it("extracts export class WITHOUT duplicating (kind=class, not export)", async () => {
     const src = "export class Foo {}";
     const tree = await parse(".ts", src);
     const symbols = extractSymbols(tree, "x.ts", src);
@@ -105,7 +105,7 @@ describe("symbols — TypeScript", () => {
     expect(fooSymbols[0]?.kind).toBe("class");
   });
 
-  it("extrai export function SEM duplicar (kind=function, não export)", async () => {
+  it("extracts export function WITHOUT duplicating (kind=function, not export)", async () => {
     const src = "export function bar() {}";
     const tree = await parse(".ts", src);
     const symbols = extractSymbols(tree, "x.ts", src);
@@ -114,7 +114,7 @@ describe("symbols — TypeScript", () => {
     expect(barSymbols[0]?.kind).toBe("function");
   });
 
-  it("extrai export const como kind=export", async () => {
+  it("extracts export const as kind=export", async () => {
     const src = "export const VERSION = '1.0';";
     const tree = await parse(".ts", src);
     const symbols = extractSymbols(tree, "x.ts", src);
@@ -122,31 +122,31 @@ describe("symbols — TypeScript", () => {
     expect(v?.kind).toBe("export");
   });
 
-  it("signature captura primeira linha do nó", async () => {
+  it("signature captures the first line of the node", async () => {
     const src = "function multiLine(\n  a: number,\n  b: string,\n): boolean { return true; }";
     const tree = await parse(".ts", src);
     const symbols = extractSymbols(tree, "x.ts", src);
     expect(symbols[0]?.signature).toContain("function multiLine");
   });
 
-  it("content_hash reflete o slice do nó (muda se o corpo muda)", async () => {
+  it("content_hash reflects the node slice (changes if the body changes)", async () => {
     const src1 = "function foo() { return 1; }";
-    const src2 = "function foo() { return 999; }"; // corpo diferente
+    const src2 = "function foo() { return 999; }"; // different body
     const tree1 = await parse(".ts", src1);
     const tree2 = await parse(".ts", src2);
     const s1 = extractSymbols(tree1, "x.ts", src1);
     const s2 = extractSymbols(tree2, "x.ts", src2);
-    // Mesmo nome mas slice diferente → hash diferente
+    // Same name but different slice → different hash
     expect(s1[0]?.content_hash).not.toBe(s2[0]?.content_hash);
 
-    // Nomes diferentes → slice diferente → hash diferente
+    // Different names → different slice → different hash
     const src3 = "function bar() { return 1; }";
     const tree3 = await parse(".ts", src3);
     const s3 = extractSymbols(tree3, "x.ts", src3);
     expect(s1[0]?.content_hash).not.toBe(s3[0]?.content_hash);
   });
 
-  it("content_hash é determinístico (mesmo input → mesmo hash)", async () => {
+  it("content_hash is deterministic (same input → same hash)", async () => {
     const src = "function foo() { return 1; }";
     const tree1 = await parse(".ts", src);
     const tree2 = await parse(".ts", src);
@@ -204,7 +204,7 @@ const secondStub = {
 });
 
 describe("symbols — Python", () => {
-  it("extrai function_definition", async () => {
+  it("extracts function_definition", async () => {
     const src = "def greet(name):\n    return name";
     const tree = await parse(".py", src);
     const symbols = extractSymbols(tree, "x.py", src);
@@ -212,7 +212,7 @@ describe("symbols — Python", () => {
     expect(symbols[0]?.kind).toBe("function");
   });
 
-  it("extrai class + methods qualificados", async () => {
+  it("extracts class + qualified methods", async () => {
     const src = `class Calculator:
     def add(self, a, b):
         return a + b
@@ -226,14 +226,14 @@ describe("symbols — Python", () => {
     expect(names).toContain("Calculator.sub");
   });
 
-  it("extrai decorated_definition (decorator Python)", async () => {
+  it("extracts decorated_definition (Python decorator)", async () => {
     const src = "@property\ndef name(self):\n    return self._name";
     const tree = await parse(".py", src);
     const symbols = extractSymbols(tree, "x.py", src);
     expect(symbols.map((s) => s.name)).toContain("name");
   });
 
-  it("NÃO extrai uma classe declarada dentro do corpo de uma função top-level", async () => {
+  it("does NOT extract a class declared inside the body of a top-level function", async () => {
     const src = `def test_thing():
     class FakeCompletions:
         def create(self):
@@ -247,7 +247,7 @@ describe("symbols — Python", () => {
     expect(names).not.toContain("FakeCompletions.create");
   });
 
-  it("NÃO extrai uma classe declarada dentro do corpo de um método de classe", async () => {
+  it("does NOT extract a class declared inside the body of a class method", async () => {
     const src = `class TestLLMProvider:
     def test_ollama(self):
         class FakeCompletions:
@@ -267,7 +267,7 @@ describe("symbols — Python", () => {
     expect(names).not.toContain("FakeCompletions.create");
   });
 
-  it("ainda extrai uma classe top-level normalmente, mesmo com uma função top-level antes dela", async () => {
+  it("still extracts a top-level class normally, even with a top-level function before it", async () => {
     const src = `def helper():
     return 1
 
@@ -282,7 +282,7 @@ class RealModel:
 });
 
 describe("symbols — Go (roadmap item 19)", () => {
-  it("extrai function_declaration top-level", async () => {
+  it("extracts top-level function_declaration", async () => {
     const src = "package main\n\nfunc greet(name string) string {\n\treturn name\n}\n";
     const tree = await parse(".go", src);
     const symbols = extractSymbols(tree, "x.go", src);
@@ -292,7 +292,7 @@ describe("symbols — Go (roadmap item 19)", () => {
     expect(symbols[0]?.start_line).toBe(3);
   });
 
-  it("extrai struct como kind=class", async () => {
+  it("extracts struct as kind=class", async () => {
     const src = "package server\n\ntype Server struct {\n\tPort int\n}\n";
     const tree = await parse(".go", src);
     const symbols = extractSymbols(tree, "x.go", src);
@@ -301,7 +301,7 @@ describe("symbols — Go (roadmap item 19)", () => {
     expect(symbols[0]?.key).toBe("x.go#Server");
   });
 
-  it("extrai interface como kind=interface", async () => {
+  it("extracts interface as kind=interface", async () => {
     const src = "package server\n\ntype Runner interface {\n\tStart() error\n}\n";
     const tree = await parse(".go", src);
     const symbols = extractSymbols(tree, "x.go", src);
@@ -309,7 +309,7 @@ describe("symbols — Go (roadmap item 19)", () => {
     expect(symbols[0]?.kind).toBe("interface");
   });
 
-  it("extrai type declaration agrupada (type ( ... )) com um símbolo por spec", async () => {
+  it("extracts grouped type declaration (type ( ... )) with one symbol per spec", async () => {
     const src = "package server\n\ntype (\n\tServer struct {\n\t\tPort int\n\t}\n\tRunner interface {\n\t\tStart() error\n\t}\n)\n";
     const tree = await parse(".go", src);
     const symbols = extractSymbols(tree, "x.go", src);
@@ -319,14 +319,14 @@ describe("symbols — Go (roadmap item 19)", () => {
     ]);
   });
 
-  it("ignora type alias para tipo não-struct/interface", async () => {
+  it("ignores type alias to a non-struct/interface type", async () => {
     const src = "package server\n\ntype Port = int\n";
     const tree = await parse(".go", src);
     const symbols = extractSymbols(tree, "x.go", src);
     expect(symbols).toEqual([]);
   });
 
-  it("extrai método com receiver por valor qualificado Type.method", async () => {
+  it("extracts method with value receiver qualified as Type.method", async () => {
     const src = "package server\n\nfunc (s Server) Start() error {\n\treturn nil\n}\n";
     const tree = await parse(".go", src);
     const symbols = extractSymbols(tree, "x.go", src);
@@ -335,7 +335,7 @@ describe("symbols — Go (roadmap item 19)", () => {
     expect(symbols[0]?.key).toBe("x.go#Server.Start");
   });
 
-  it("extrai método com receiver ponteiro — *T colapsa para a mesma chave T.method", async () => {
+  it("extracts method with pointer receiver — *T collapses to the same key T.method", async () => {
     const src = "package server\n\nfunc (s *Server) Addr() string {\n\treturn \"\"\n}\n";
     const tree = await parse(".go", src);
     const symbols = extractSymbols(tree, "x.go", src);
@@ -343,7 +343,7 @@ describe("symbols — Go (roadmap item 19)", () => {
     expect(symbols[0]?.kind).toBe("method");
   });
 
-  it("receiver por valor e por ponteiro do mesmo método NÃO duplicam a chave", async () => {
+  it("value and pointer receivers of the same method do NOT duplicate the key", async () => {
     // Go forbids both, but the extractor must be robust on invalid input.
     const src = "package server\n\nfunc (s Server) Start() error {\n\treturn nil\n}\n\nfunc (s *Server) Start() error {\n\treturn nil\n}\n";
     const tree = await parse(".go", src);
@@ -351,7 +351,7 @@ describe("symbols — Go (roadmap item 19)", () => {
     expect(symbols.filter((s) => s.key === "x.go#Server.Start")).toHaveLength(1);
   });
 
-  it("NÃO extrai type declaration local dentro de função", async () => {
+  it("does NOT extract a local type declaration inside a function", async () => {
     const src = "package main\n\nfunc run() {\n\ttype local struct {\n\t\tx int\n\t}\n\t_ = local{}\n}\n";
     const tree = await parse(".go", src);
     const symbols = extractSymbols(tree, "x.go", src);
@@ -360,7 +360,7 @@ describe("symbols — Go (roadmap item 19)", () => {
 });
 
 describe("symbols — Rust (roadmap item 20)", () => {
-  it("extrai function_item top-level", async () => {
+  it("extracts top-level function_item", async () => {
     const src = "fn greet(name: &str) -> &str {\n    name\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
@@ -370,7 +370,7 @@ describe("symbols — Rust (roadmap item 20)", () => {
     expect(symbols[0]?.start_line).toBe(1);
   });
 
-  it("extrai struct como kind=class", async () => {
+  it("extracts struct as kind=class", async () => {
     const src = "pub struct Server {\n    port: u16,\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
@@ -379,7 +379,7 @@ describe("symbols — Rust (roadmap item 20)", () => {
     expect(symbols[0]?.key).toBe("x.rs#Server");
   });
 
-  it("extrai enum como kind=class", async () => {
+  it("extracts enum as kind=class", async () => {
     const src = "pub enum Mode {\n    Fast,\n    Slow,\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
@@ -387,7 +387,7 @@ describe("symbols — Rust (roadmap item 20)", () => {
     expect(symbols[0]?.kind).toBe("class");
   });
 
-  it("extrai trait como kind=interface e NÃO extrai suas assinaturas", async () => {
+  it("extracts trait as kind=interface and does NOT extract its signatures", async () => {
     const src = "pub trait Runner {\n    fn start(&self) -> Result<(), String>;\n    fn stop(&self) {}\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
@@ -396,7 +396,7 @@ describe("symbols — Rust (roadmap item 20)", () => {
     expect(symbols[0]?.key).toBe("x.rs#Runner");
   });
 
-  it("extrai métodos de impl block qualificados Type.method", async () => {
+  it("extracts impl block methods qualified as Type.method", async () => {
     const src = "struct Server;\n\nimpl Server {\n    pub fn new() -> Self {\n        Server\n    }\n\n    fn addr(&self) -> String {\n        String::new()\n    }\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
@@ -408,7 +408,7 @@ describe("symbols — Rust (roadmap item 20)", () => {
     expect(symbols[1]?.key).toBe("x.rs#Server.new");
   });
 
-  it("impl Trait for T qualifica os membros sob T (decisão: são chamáveis em T)", async () => {
+  it("impl Trait for T qualifies the members under T (decision: they are callable on T)", async () => {
     const src = "struct Server;\n\ntrait Runner {\n    fn start(&self);\n}\n\nimpl Runner for Server {\n    fn start(&self) {}\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
@@ -417,28 +417,28 @@ describe("symbols — Rust (roadmap item 20)", () => {
     expect(start[0]?.kind).toBe("method");
   });
 
-  it("impl de tipo genérico usa o tipo base (impl<T> Vec<T> → Vec.push)", async () => {
+  it("impl of a generic type uses the base type (impl<T> Vec<T> → Vec.push)", async () => {
     const src = "struct Vec<T> {\n    items: std::vec::Vec<T>,\n}\n\nimpl<T> Vec<T> {\n    fn push(&mut self, v: T) {\n        self.items.push(v);\n    }\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
     expect(symbols.map((s) => s.name)).toEqual(["Vec", "Vec.push"]);
   });
 
-  it("impl de tipo com path (impl a::B) usa o nome mais à direita", async () => {
+  it("impl of a path type (impl a::B) uses the rightmost name", async () => {
     const src = "impl a::B {\n    fn m(&self) {}\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
     expect(symbols.map((s) => s.name)).toEqual(["B.m"]);
   });
 
-  it("NÃO extrai struct/trait/enum/impl locais dentro de função", async () => {
+  it("does NOT extract local struct/trait/enum/impl inside a function", async () => {
     const src = "fn run() {\n    struct Local {\n        x: u32,\n    }\n    let _ = Local { x: 1 };\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
     expect(symbols.map((s) => s.name)).toEqual(["run"]);
   });
 
-  it("extrai fn aninhada com chave simples (mesma política do TS)", async () => {
+  it("extracts nested fn with a simple key (same policy as TS)", async () => {
     const src = "fn outer() {\n    fn inner() {}\n    inner();\n}\n";
     const tree = await parse(".rs", src);
     const symbols = extractSymbols(tree, "x.rs", src);
@@ -447,7 +447,7 @@ describe("symbols — Rust (roadmap item 20)", () => {
 });
 
 describe("symbols — Java (roadmap item 21)", () => {
-  it("extrai class_declaration como kind=class", async () => {
+  it("extracts class_declaration as kind=class", async () => {
     const src = "public class Server {\n    private int port;\n}\n";
     const tree = await parse(".java", src);
     const symbols = extractSymbols(tree, "x.java", src);
@@ -456,7 +456,7 @@ describe("symbols — Java (roadmap item 21)", () => {
     expect(symbols[0]?.key).toBe("x.java#Server");
   });
 
-  it("extrai métodos e construtor qualificados Type.name / Type.Type", async () => {
+  it("extracts methods and constructor qualified as Type.name / Type.Type", async () => {
     const src =
       "class Server {\n" +
       "    Server(int port) {}\n" +
@@ -474,7 +474,7 @@ describe("symbols — Java (roadmap item 21)", () => {
     expect(symbols[1]?.key).toBe("x.java#Server.Server");
   });
 
-  it("extrai interface_declaration como kind=interface e extrai suas assinaturas (delta vs Go/Rust)", async () => {
+  it("extracts interface_declaration as kind=interface and extracts its signatures (delta vs Go/Rust)", async () => {
     const src =
       "interface Handler {\n" +
       "    void handle(String item);\n" +
@@ -490,7 +490,7 @@ describe("symbols — Java (roadmap item 21)", () => {
     expect(symbols[0]?.key).toBe("x.java#Handler");
   });
 
-  it("extrai enum_declaration como kind=class (espelha a decisão do Rust)", async () => {
+  it("extracts enum_declaration as kind=class (mirrors the Rust decision)", async () => {
     const src = "enum Mode {\n    FAST,\n    SLOW\n}\n";
     const tree = await parse(".java", src);
     const symbols = extractSymbols(tree, "x.java", src);
@@ -498,7 +498,7 @@ describe("symbols — Java (roadmap item 21)", () => {
     expect(symbols[0]?.kind).toBe("class");
   });
 
-  it("extrai record_declaration como kind=class e membros qualificados", async () => {
+  it("extracts record_declaration as kind=class and qualified members", async () => {
     const src =
       "record Item(String name, int qty) {\n" +
       "    public String describe() { return name; }\n" +
@@ -511,7 +511,7 @@ describe("symbols — Java (roadmap item 21)", () => {
     ]);
   });
 
-  it("tipo aninhado usa o tipo MAIS INTERNO como qualificador", async () => {
+  it("nested type uses the INNERMOST type as the qualifier", async () => {
     const src =
       "class Outer {\n" +
       "    void outerMethod() {}\n" +
@@ -529,7 +529,7 @@ describe("symbols — Java (roadmap item 21)", () => {
     ]);
   });
 
-  it("enum com corpo de métodos qualifica os membros sob o enum", async () => {
+  it("enum with a method body qualifies the members under the enum", async () => {
     const src =
       "enum Mode {\n" +
       "    FAST,\n" +
@@ -541,7 +541,7 @@ describe("symbols — Java (roadmap item 21)", () => {
     expect(symbols.map((s) => s.name)).toEqual(["Mode", "Mode.label"]);
   });
 
-  it("NÃO extrai classe local dentro de método", async () => {
+  it("does NOT extract a local class inside a method", async () => {
     const src =
       "class Server {\n" +
       "    void run() {\n" +
@@ -555,7 +555,7 @@ describe("symbols — Java (roadmap item 21)", () => {
     expect(symbols.map((s) => s.name)).toEqual(["Server", "Server.run"]);
   });
 
-  it("guarda de colisão: interface/enum do TS NÃO são extraídos (o caso é Java-only)", async () => {
+  it("collision guard: TS interface/enum are NOT extracted (the case is Java-only)", async () => {
     const src = "interface Handler {\n    handle(): void;\n}\n\nenum Mode {\n    Fast,\n    Slow,\n}\n";
     const tree = await parse(".ts", src);
     const symbols = extractSymbols(tree, "x.ts", src);
@@ -563,7 +563,7 @@ describe("symbols — Java (roadmap item 21)", () => {
   });
 });
 
-// === Etapa 2b: rationale extraction (intent evidence) ===
+// === Step 2b: rationale extraction (intent evidence) ===
 
 describe("extractRationales — tagged comments", () => {
   it("captures all five tags, case-insensitive, with kind = lowercased tag", async () => {

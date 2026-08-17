@@ -1,16 +1,16 @@
 /**
- * llm/index — interface pública do LLM client + factory.
+ * llm/index — public interface of the LLM client + factory.
  *
- * SPEC §"Stack": "cliente HTTP fino próprio, providers: Anthropic +
- * OpenAI-compatível (base URL configurável cobre OpenRouter/LiteLLM/Ollama).
- * Sem framework de agentes."
+ * SPEC §"Stack": "our own thin HTTP client, providers: Anthropic +
+ * OpenAI-compatible (a configurable base URL covers OpenRouter/LiteLLM/Ollama).
+ * No agent framework."
  *
- * **Sem SDK**: usa fetch nativo do Node 20+. Mantém deps mínimas e permite
- * controle total do shape normalizado do usage.
+ * **No SDK**: uses Node 20+ native fetch. Keeps deps minimal and allows
+ * full control over the normalized usage shape.
  *
- * **Sem modelo default**: `createLlmClient` chama `validateConfigForBatch`
- * (delegando pro config.ts). Se provider ou model ausentes, lança
- * MissingProviderConfigError com mensagem clara.
+ * **No default model**: `createLlmClient` calls `validateConfigForBatch`
+ * (delegating to config.ts). If provider or model is missing, it throws
+ * MissingProviderConfigError with a clear message.
  *
  * **Credential resolution**: the process environment takes precedence over
  * the global credential store. Keys are NEVER read from config.json,
@@ -29,7 +29,7 @@ import { AnthropicAdapter } from "./anthropic.js";
 import { OpenAiCompatAdapter } from "./openai-compat.js";
 import { resolveCredentialSync } from "../credentials.js";
 
-/** Interface pública do client. Só o que `batch.ts` (e outros) precisam. */
+/** Public interface of the client. Only what `batch.ts` (and others) need. */
 export interface LlmClient {
   readonly provider: LlmProvider;
   readonly model: string;
@@ -39,27 +39,27 @@ export interface LlmClient {
 /**
  * Creates the LLM client from validated repo config and a resolved credential.
  *
- * Resolução do provider:
- *   1. config.preset (Fase 5 step 5) → expande em adapter/baseUrl/envVar/pricing
- *   2. config.provider (Fase 3 legacy) → adapter + baseUrl default + envVar default
- *   3. Sem nenhum → MissingProviderConfigError (validateConfigForBatch)
+ * Provider resolution:
+ *   1. config.preset (Phase 5 step 5) → expands into adapter/baseUrl/envVar/pricing
+ *   2. config.provider (Phase 3 legacy) → adapter + default baseUrl + default envVar
+ *   3. Neither → MissingProviderConfigError (validateConfigForBatch)
  *
  * Env var name:
- *   - preset set: vem do preset (ex.: "minimax" → "MiniMax_API_KEY")
- *   - provider set, sem preset: ANTHROPIC_API_KEY / OPENAI_API_KEY
+ *   - preset set: comes from the preset (e.g. "minimax" → "MiniMax_API_KEY")
+ *   - provider set, no preset: ANTHROPIC_API_KEY / OPENAI_API_KEY
  *
  * Throw chain:
- *   - config.provider/preset ausente (validateConfigForBatch)
- *   - config.model ausente (validateConfigForBatch)
+ *   - config.provider/preset missing (validateConfigForBatch)
+ *   - config.model missing (validateConfigForBatch)
  *   - credential absent from both environment and global store
  */
 export function createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient {
   // Validates provider/model and timeoutMs (even when not from loadConfig).
   validateConfigForBatch(repoRoot, config);
-  // Após validateConfigForBatch, provider/preset e model são garantidos string.
+  // After validateConfigForBatch, provider/preset and model are guaranteed to be strings.
   const resolved = resolveProviderFromConfig(config);
   const model = config.model as string;
-  // baseUrl: prefer config explícita, senão preset baseUrl, senão default por provider
+  // baseUrl: prefer explicit config, otherwise preset baseUrl, otherwise provider default
   const baseUrl = resolved.baseUrl || resolveBaseUrl(config);
 
   const credential = resolveCredentialSync(resolved.envVar).value;
@@ -107,16 +107,16 @@ export class MissingApiKeyError extends Error {
 }
 
 /**
- * Erro de chamada LLM — quando o provider retorna erro ou a request falha.
- * A mensagem carrega o `errorBody` do provider (limitado), mas NUNCA os
- * headers (que contêm a key). Coberto por key-leak.test.ts.
+ * LLM call error — when the provider returns an error or the request fails.
+ * The message carries the provider's `errorBody` (limited), but NEVER the
+ * headers (which contain the key). Covered by key-leak.test.ts.
  */
 export class LlmRequestError extends Error {
   public readonly status: number;
   public readonly provider: LlmProvider;
   public readonly errorBody: string;
   constructor(provider: LlmProvider, status: number, errorBody: string) {
-    // Trunca body pra não despejar JSON gigante em mensagens
+    // Truncates body to avoid dumping huge JSON in messages
     const truncated = errorBody.length > 500 ? errorBody.slice(0, 500) + "..." : errorBody;
     super(`LLM ${provider} request failed (status ${status}): ${truncated}`);
     this.name = "LlmRequestError";

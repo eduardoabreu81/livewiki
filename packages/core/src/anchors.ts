@@ -1,31 +1,31 @@
 /**
- * anchors — extrai anchors e manual blocks de uma página markdown da wiki.
+ * anchors — extracts anchors and manual blocks from a wiki markdown page.
  *
- * Formato reconhecido (SPEC §"Frontmatter das páginas de doc"):
+ * Recognized format (SPEC §"Doc page frontmatter"):
  *
  *   ---
- *   title: Auth — login e sessão
+ *   title: Auth — login and session
  *   owner: generated
  *   anchors:
- *     - src/auth/login.ts            # âncora de PÁGINA
+ *     - src/auth/login.ts            # PAGE anchor
  *     - src/auth/login.ts#validateToken
  *   ---
  *
- *   ## Fluxo de validação
+ *   ## Validation flow
  *   <!-- lw:anchors src/auth/login.ts#validateToken src/auth/session.ts#refresh -->
- *   O token é validado por `validateToken(...)`, que ...
+ *   The token is validated by `validateToken(...)`, which ...
  *
- *   ## Notas manuais
+ *   ## Manual notes
  *   <!-- lw:manual -->
- *   Bloco que o agente NUNCA pode reescrever (regra inviolável #6).
+ *   Block the agent may NEVER rewrite (inviolable rule #6).
  *   <!-- /lw:manual -->
  *
- * Saída: anchors de página (frontmatter) + anchors de seção (marcadores) +
- * ranges de manual blocks (para verify byte-a-byte).
+ * Output: page anchors (frontmatter) + section anchors (markers) +
+ * manual block ranges (for byte-by-byte verify).
  *
- * `inManualBlock` é derivado: anchor que cai dentro de um manualBlock é
- * flagada — verify usa pra distinguir "âncora inválida por código mudou"
- * vs "âncora em zona protegida por humano".
+ * `inManualBlock` is derived: an anchor that falls inside a manualBlock is
+ * flagged — verify uses it to distinguish "anchor invalid because the code changed"
+ * from "anchor in a human-protected zone".
  */
 
 import { parseFrontmatter, getAnchors, getOwner, type Frontmatter } from "./frontmatter.js";
@@ -34,45 +34,45 @@ import { maskCodeSpansPreservingLength } from "./markdown-mask.js";
 export type Owner = "generated" | "human" | "mixed";
 
 export interface SectionAnchor {
-  /** Slug gerado do heading anterior (ex: "fluxo-de-validacao"). */
+  /** Slug generated from the preceding heading (e.g. "fluxo-de-validacao"). */
   sectionSlug: string;
-  /** Texto do heading (ex: "Fluxo de validação"). */
+  /** Heading text (e.g. "Fluxo de validação"). */
   headingText: string;
-  /** Símbolos ancorados por esta seção. */
+  /** Symbols anchored by this section. */
   symbolKeys: string[];
-  /** Byte offset do <!-- lw:anchors ... --> no source. */
+  /** Byte offset of the <!-- lw:anchors ... --> in the source. */
   anchorMarkerOffset: number;
-  /** Se a anchor cai dentro de um bloco <!-- lw:manual -->...<!-- /lw:manual -->. */
+  /** Whether the anchor falls inside a <!-- lw:manual -->...<!-- /lw:manual --> block. */
   inManualBlock: boolean;
 }
 
 export interface ManualBlock {
-  /** Byte offset do <!-- lw:manual --> (inclusive). */
+  /** Byte offset of the <!-- lw:manual --> (inclusive). */
   start: number;
-  /** Byte offset do <!-- /lw:manual --> (exclusive). */
+  /** Byte offset of the <!-- /lw:manual --> (exclusive). */
   end: number;
 }
 
 export interface ExtractedAnchors {
-  /** Anchors do frontmatter (cobre a página inteira). */
+  /** Frontmatter anchors (cover the whole page). */
   pageAnchors: string[];
-  /** Anchors de marcadores `<!-- lw:anchors ... -->` em seções. */
+  /** Anchors from `<!-- lw:anchors ... -->` markers in sections. */
   sectionAnchors: SectionAnchor[];
-  /** Ranges dos blocos `<!-- lw:manual -->...<!-- /lw:manual -->`. */
+  /** Ranges of the `<!-- lw:manual -->...<!-- /lw:manual -->` blocks. */
   manualBlocks: ManualBlock[];
-  /** Frontmatter parseado (null se ausente). */
+  /** Parsed frontmatter (null if absent). */
   frontmatter: Frontmatter | null;
-  /** Owner declarado (default: generated). */
+  /** Declared owner (default: generated). */
   owner: Owner;
-  /** Body markdown (sem o frontmatter). */
+  /** Markdown body (without the frontmatter). */
   body: string;
 }
 
-/** Marcador de início de anchor de seção. */
+/** Start marker of a section anchor. */
 const LW_ANCHORS_RE = /<!--\s*lw:anchors\s+([^\s>][^>]*?)\s*-->/g;
-/** Marcador de início de bloco manual. */
+/** Start marker of a manual block. */
 const LW_MANUAL_START_RE = /<!--\s*lw:manual\s*-->/g;
-/** Marcador de fim de bloco manual. */
+/** End marker of a manual block. */
 const LW_MANUAL_END_RE = /<!--\s*\/lw:manual\s*-->/g;
 
 export function extractAnchors(source: string): ExtractedAnchors {
@@ -87,8 +87,8 @@ export function extractAnchors(source: string): ExtractedAnchors {
   const sectionAnchors: SectionAnchor[] = [];
   const manualBlocks: ManualBlock[] = [];
 
-  // 1. Coleta ranges de manual blocks no body
-  //    Estado simples: toggle por start/end. Não suporta nested (não precisamos).
+  // 1. Collects manual block ranges in the body
+  //    Simple state: toggle on start/end. Doesn't support nesting (we don't need it).
   let cursor = 0;
   const events: Array<{ offset: number; kind: "start" | "end" }> = [];
   for (const m of body.matchAll(LW_MANUAL_START_RE)) {
@@ -105,8 +105,8 @@ export function extractAnchors(source: string): ExtractedAnchors {
   for (const ev of events) {
     if (ev.kind === "start") {
       if (openAt !== null) {
-        // nested start sem end — ignora silenciosamente (não geramos erro;
-        // verify depois aponta como "bloco manual malformado" se for grave)
+        // nested start without end — silently ignored (we don't raise an error;
+        // verify later flags it as "malformed manual block" if it's serious)
         continue;
       }
       openAt = ev.offset;
@@ -117,13 +117,13 @@ export function extractAnchors(source: string): ExtractedAnchors {
     }
   }
 
-  // 2. Encontra marcadores lw:anchors e associa ao heading anterior
+  // 2. Finds lw:anchors markers and associates them with the preceding heading
   let lastHeading: { text: string; slug: string; offset: number } | null = null;
-  // Regex pra heading markdown (## ou ### — Fase 2 só precisa dos 2 níveis)
+  // Regex for markdown headings (## or ### — Phase 2 only needs the 2 levels)
   const headingRe = /^(#{1,6})\s+(.+?)\s*$/gm;
 
-  // Caminha o body em ordem, identificando headings e anchors intercalados.
-  // Para simplicidade, varrar duas vezes: headings primeiro, depois anchors.
+  // Walks the body in order, identifying interleaved headings and anchors.
+  // For simplicity, scan twice: headings first, then anchors.
   const headingMatches: Array<{ text: string; slug: string; offset: number }> = [];
   for (const m of markerScanBody.matchAll(headingRe)) {
     if (m.index === undefined) continue;
@@ -139,14 +139,14 @@ export function extractAnchors(source: string): ExtractedAnchors {
     const anchorOffset = m.index;
     const anchorEnd = m.index + m[0].length;
 
-    // Heading anterior: o último heading com offset < anchorOffset
+    // Preceding heading: the last heading with offset < anchorOffset
     let preceding: { text: string; slug: string; offset: number } | null = null;
     for (const h of headingMatches) {
       if (h.offset < anchorOffset) preceding = h;
       else break;
     }
     if (!preceding) {
-      // anchor sem heading anterior — pula (página malformada)
+      // anchor with no preceding heading — skipped (malformed page)
       continue;
     }
 
@@ -174,15 +174,15 @@ export function extractAnchors(source: string): ExtractedAnchors {
 }
 
 /**
- * Slug de heading: lowercase, remove não-alfanumérico (mantém acentos pra PT),
- * hífens entre palavras. "Fluxo de validação" → "fluxo-de-validacao".
+ * Heading slug: lowercase, strips non-alphanumerics (keeps accents for PT),
+ * hyphens between words. "Fluxo de validação" → "fluxo-de-validacao".
  */
 export function slugify(heading: string): string {
   return heading
     .toLowerCase()
-    .normalize("NFD") // separa diacríticos
-    .replace(/[\u0300-\u036f]/g, "") // remove diacríticos
-    .replace(/[^\w\s-]/g, "") // remove pontuação
+    .normalize("NFD") // separates diacritics
+    .replace(/[\u0300-\u036f]/g, "") // strips diacritics
+    .replace(/[^\w\s-]/g, "") // strips punctuation
     .trim()
     .replace(/\s+/g, "-");
 }

@@ -40,26 +40,26 @@ const sampleModule: Module = {
   symbolCount: 5,
 };
 
-describe("prompts — todos em inglês (templates)", () => {
-  it("stage 4 system prompt é em inglês (não muda com language)", () => {
+describe("prompts — all in English (templates)", () => {
+  it("stage 4 system prompt is in English (does not change with language)", () => {
     const en = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "sym", "code", "en");
     const pt = buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "sym", "code", "pt-BR");
-    // System prompt é o mesmo — language aparece como instrução mas texto base é inglês
+    // System prompt is the same — language appears as an instruction but the base text is English
     expect(en.system).toBe(pt.system);
     expect(en.system).toMatch(/technical documentation generator/);
   });
 
-  it("language aparece no user prompt como instrução explícita", () => {
+  it("language appears in the user prompt as an explicit instruction", () => {
     const r = buildStage4Prompt(sampleModule, ["k"], "sym", "code", "es");
     expect(r.user).toMatch(/es/);
   });
 
-  it("language default é 'en'", () => {
+  it("language default is 'en'", () => {
     const r = buildStage4Prompt(sampleModule, ["k"], "sym", "code");
     expect(r.user).toMatch(/en/);
   });
 
-  it("lista fechada de chaves canônicas aparece verbatim no user prompt", () => {
+  it("closed list of canonical keys appears verbatim in the user prompt", () => {
     const closedKeys = ["src/auth.ts#login", "src/auth.ts#session", "src/auth.ts#logout"];
     const r = buildStage4Prompt(sampleModule, closedKeys, "sym", "code");
     for (const k of closedKeys) {
@@ -67,7 +67,7 @@ describe("prompts — todos em inglês (templates)", () => {
     }
   });
 
-  it("regra 'NEVER invent' presente no system prompt", () => {
+  it("'NEVER invent' rule present in the system prompt", () => {
     const r = buildStage4Prompt(sampleModule, ["k"], "sym", "code");
     expect(r.system).toMatch(/NEVER invent/);
   });
@@ -864,15 +864,15 @@ describe("prompts — Lot N page opening and factual precision", () => {
 });
 
 describe("prompts — constants", () => {
-  it("tem budgets default razoáveis", () => {
+  it("has reasonable default budgets", () => {
     expect(DEFAULT_CONTEXT_TOKEN_BUDGET).toBeGreaterThan(0);
     expect(DEFAULT_OUTPUT_TOKEN_BUDGET).toBeGreaterThan(0);
     expect(DEFAULT_CONTEXT_TOKEN_BUDGET).toBeGreaterThan(DEFAULT_OUTPUT_TOKEN_BUDGET);
   });
 });
 
-describe("prompts — cobertura language", () => {
-  it("aceita language em vários formatos BCP-47", () => {
+describe("prompts — language coverage", () => {
+  it("accepts language in several BCP-47 formats", () => {
     for (const lang of ["en", "pt-BR", "es", "fr", "ja", "zh-CN"]) {
       const r = buildStage4Prompt(sampleModule, ["k"], "sym", "code", lang);
       expect(r.user).toContain(lang);
@@ -1843,7 +1843,7 @@ describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)",
   });
 
   it("stage-5 repair prompt carries the hub rule and the broken_internal_link bare-target ACTION (final and non-final)", () => {
-    // Etapa 2a: the verify-code split preserves the real issue code — the
+    // Step 2a: the verify-code split preserves the real issue code — the
     // bare-target ACTION now hangs on `broken_internal_link` itself, while
     // legacy `verify_failed` keeps only a generic directive.
     const errors: ReadonlyArray<ArtifactValidationError> = [
@@ -1948,9 +1948,9 @@ describe("prompts — buildTopicRefinePrompt (Workstream B)", () => {
   });
 });
 
-// === Etapa 2b: rationale evidence block ===
+// === Step 2b: rationale evidence block ===
 
-describe("prompts — rationale evidence block (Etapa 2b)", () => {
+describe("prompts — rationale evidence block (Step 2b)", () => {
   const rationale =
     "- [why] src/auth.ts:3 (src/auth.ts#login): WHY: tokens rotate to limit replay windows\n" +
     "- [todo] src/auth.ts:9 (file-level): TODO: audit refresh path";

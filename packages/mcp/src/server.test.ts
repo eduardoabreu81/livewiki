@@ -1,26 +1,26 @@
 /**
- * E2E Fase 4 — MCP server com InMemoryTransport (não precisa de stdio real).
+ * E2E Phase 4 — MCP server with InMemoryTransport (no real stdio needed).
  *
- * Conecta um McpServer (livewiki) com um Client (mock agent) via par de
- * InMemoryTransport. Valida:
+ * Connects an McpServer (livewiki) with a Client (mock agent) via a pair of
+ * InMemoryTransport. Validates:
  *   - handshake (initialize)
- *   - tools/list retorna as 6 tools
- *   - tools/call pra cada uma com input válido
- *   - write_doc rejeita path fora de livewiki/ (regra #1 SPEC)
- *   - write_doc rejeita conteúdo com broken_anchor (verify pós-escrita)
- *   - read retorna páginas
- *   - quickstart retorna o arquivo
- *   - search retorna hits FTS5
- *   - debt retorna relatório do status
- *   - resolve_debt fecha dívidas
+ *   - tools/list returns the 6 tools
+ *   - tools/call for each one with valid input
+ *   - write_doc rejects a path outside livewiki/ (SPEC rule #1)
+ *   - write_doc rejects content with broken_anchor (post-write verify)
+ *   - read returns pages
+ *   - quickstart returns the file
+ *   - search returns FTS5 hits
+ *   - debt returns the status report
+ *   - resolve_debt closes debts
  *
- * Critério de aceite (SPEC §"Fase 4"): conectado a um client MCP real,
- * write_doc rejeita path fora de livewiki/ e conteúdo que não passa no verify.
+ * Acceptance criterion (SPEC §"Phase 4"): connected to a real MCP client,
+ * write_doc rejects paths outside livewiki/ and content that doesn't pass verify.
  *
- * IMPORTANTE — Windows file locking: better-sqlite3 abre o search.db com
- * WAL (search.db-shm / search.db-wal). O afterEach roda nodeFs.rm
- * recursivo, que pode falhar com EBUSY se o DB ainda estiver aberto.
- * Por isso cada teste fecha server + client no finally.
+ * IMPORTANT — Windows file locking: better-sqlite3 opens search.db with
+ * WAL (search.db-shm / search.db-wal). The afterEach runs a recursive nodeFs.rm,
+ * which can fail with EBUSY if the DB is still open.
+ * That's why each test closes server + client in a finally.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -48,7 +48,7 @@ beforeEach(async () => {
     nodePath.join(repoRoot, "src/utils/helper.ts"),
     "export function help() { return 'utils'; }\n",
   );
-  // Init programático (não passa pelo CLI pra ser mais rápido/controlado)
+  // Programmatic init (doesn't go through the CLI to be faster/controlled)
   const { runInit } = await import("@livewiki/core/init");
   await runInit({ repoRoot, quiet: true });
 });
@@ -62,8 +62,8 @@ interface Connected {
   server: McpServer;
 }
 
-/** Helper: conecta server + client via InMemoryTransport.
- *  Retorna ambos pra fechar antes do afterEach (libera FTS5 no Windows). */
+/** Helper: connects server + client via InMemoryTransport.
+ *  Returns both so they can be closed before afterEach (releases FTS5 on Windows). */
 async function connect(opts: Omit<CreateServerOptions, "repoRoot"> = {}): Promise<Connected> {
   const server = await createServer({ repoRoot, ...opts });
   const client = new Client({ name: "test-agent", version: "0.0.0" }, { capabilities: {} });
@@ -87,7 +87,7 @@ function git(args: string[]): void {
   expect(r.status, `git ${args.join(" ")} failed: ${r.stderr}`).toBe(0);
 }
 
-describe("MCP server — Fase 4", () => {
+describe("MCP server — Phase 4", () => {
   it("tools/list returns the 8 tools, including the agent bootstrap queue", async () => {
     const c = await connect();
     try {
@@ -108,7 +108,7 @@ describe("MCP server — Fase 4", () => {
     }
   });
 
-  it("livewiki_quickstart retorna o conteúdo do arquivo", async () => {
+  it("livewiki_quickstart returns the file content", async () => {
     const c = await connect();
     try {
       const r = await c.client.callTool({ name: "livewiki_quickstart", arguments: {} });
@@ -119,7 +119,7 @@ describe("MCP server — Fase 4", () => {
     }
   });
 
-  it("livewiki_read lê uma página da wiki", async () => {
+  it("livewiki_read reads a wiki page", async () => {
     const c = await connect();
     try {
       const r = await c.client.callTool({
@@ -133,11 +133,11 @@ describe("MCP server — Fase 4", () => {
     }
   });
 
-  it("livewiki_read rejeita path fora de livewiki/ (regra #1 da SPEC)", async () => {
+  it("livewiki_read rejects a path outside livewiki/ (SPEC rule #1)", async () => {
     const c = await connect();
     try {
-      // Server retorna isError=true (não throw) com mensagem clara — mais
-      // útil para o client MCP que um stack trace de McpError.
+      // The server returns isError=true (no throw) with a clear message — more
+      // useful to the MCP client than an McpError stack trace.
       const r = await c.client.callTool({
         name: "livewiki_read",
         arguments: { path: "src/auth/login.ts" },
@@ -150,7 +150,7 @@ describe("MCP server — Fase 4", () => {
     }
   });
 
-  it("livewiki_search retorna hits via FTS5", async () => {
+  it("livewiki_search returns hits via FTS5", async () => {
     const c = await connect();
     try {
       const r = await c.client.callTool({
@@ -165,7 +165,7 @@ describe("MCP server — Fase 4", () => {
     }
   });
 
-  it("livewiki_debt retorna o status JSON do repo", async () => {
+  it("livewiki_debt returns the repo's JSON status", async () => {
     const c = await connect();
     try {
       const r = await c.client.callTool({ name: "livewiki_debt", arguments: {} });
@@ -286,10 +286,10 @@ describe("MCP server — Fase 4", () => {
     }
   });
 
-  it("livewiki_write_doc aceita conteúdo válido e atualiza índice FTS5", async () => {
+  it("livewiki_write_doc accepts valid content and updates the FTS5 index", async () => {
     const c = await connect();
     try {
-      // Página sem anchor = verify OK (sem broken_anchor)
+      // Page without an anchor = verify OK (no broken_anchor)
       const content = `---
 title: scratch
 owner: generated
@@ -315,20 +315,20 @@ Notes aqui.
     }
   });
 
-  it("livewiki_write_doc rejeita path fora de livewiki/ (regra #1)", async () => {
+  it("livewiki_write_doc rejects a path outside livewiki/ (rule #1)", async () => {
     const c = await connect();
     try {
       const r = await c.client.callTool({
         name: "livewiki_write_doc",
         arguments: { path: "src/evil.ts", content: "export {}" },
       });
-      // Server retorna isError=true com McpError InvalidParams (path fora
-      // da allowlist é input inválido do ponto de vista do MCP).
-      // O client SDK pode envelopar como throw OU retornar isError —
-      // aceitamos os dois, mas o resultado precisa sinalizar rejeição.
+      // The server returns isError=true with an InvalidParams McpError (a path outside
+      // the allowlist is invalid input from the MCP's point of view).
+      // The client SDK may wrap it as a throw OR return isError —
+      // we accept both, but the result must signal rejection.
       const rejected = r.isError === true;
       if (!rejected) {
-        // Fallback: tentar detectar via thrown McpError
+        // Fallback: try to detect via a thrown McpError
         let threw = false;
         try {
           await c.client.callTool({
@@ -338,9 +338,9 @@ Notes aqui.
         } catch {
           threw = true;
         }
-        expect(threw, "write_doc deveria rejeitar path fora de livewiki/").toBe(true);
+        expect(threw, "write_doc should reject a path outside livewiki/").toBe(true);
       }
-      // Garante que o arquivo NÃO foi criado
+      // Ensures the file was NOT created
       await expect(
         nodeFs.access(nodePath.join(repoRoot, "src/evil.ts")),
       ).rejects.toThrow();
@@ -349,10 +349,10 @@ Notes aqui.
     }
   });
 
-  it("livewiki_write_doc rejeita conteúdo com anchor quebrada (verify)", async () => {
+  it("livewiki_write_doc rejects content with a broken anchor (verify)", async () => {
     const c = await connect();
     try {
-      // Anchor pra um symbol que NÃO existe no índice
+      // Anchor for a symbol that does NOT exist in the index
       const broken = `---
 title: broken
 owner: generated
@@ -362,21 +362,21 @@ anchors:
 
 # broken
 
-Referencia um symbol que nao existe.
+References a symbol that does not exist.
 
 <!-- lw:anchors src/auth/login.ts#symbolQueNaoExiste -->
 
-Conteudo.
+Content.
 `;
       const r = await c.client.callTool({
         name: "livewiki_write_doc",
         arguments: { path: "livewiki/broken.md", content: broken },
       });
-      // Resultado vem com isError=true (não joga, mas marca erro)
+      // The result comes with isError=true (doesn't throw, but marks an error)
       expect(r.isError).toBe(true);
       const text = extractText(r);
       expect(text).toMatch(/verify rejected/);
-      // Garante que o arquivo NÃO foi escrito (rollback)
+      // Ensures the file was NOT written (rollback)
       await expect(
         nodeFs.access(nodePath.join(repoRoot, "livewiki/broken.md")),
       ).rejects.toThrow();
@@ -443,7 +443,7 @@ Conteudo.
     }
   });
 
-  it("livewiki_write_doc aceita com skipVerify=true (escape documentado)", async () => {
+  it("livewiki_write_doc accepts with skipVerify=true (documented escape hatch)", async () => {
     const c = await connect();
     try {
       const content = `# skip verify ok\n`;
@@ -498,7 +498,7 @@ Conteudo.
     }
   });
 
-  it("search_db é criado em .livewiki/search.db (FTS5 schema)", async () => {
+  it("search_db is created at .livewiki/search.db (FTS5 schema)", async () => {
     const c = await connect();
     try {
       const exists = await nodeFs
@@ -627,11 +627,11 @@ Content here.
 });
 
 /**
- * Etapa 2d — workflow-adjacency hints (capability backlog item 4).
+ * Step 2d — workflow-adjacency hints (capability backlog item 4).
  * Every SUCCESS tool response must carry a static `_hints` block suggesting
  * the next most useful tool calls; error responses carry no hints.
  */
-describe("MCP server — workflow-adjacency hints (Etapa 2d)", () => {
+describe("MCP server — workflow-adjacency hints (Step 2d)", () => {
   it("livewiki_quickstart suggests search and read", async () => {
     const c = await connect();
     try {
@@ -881,9 +881,9 @@ function assertWellFormedHints(r: unknown): void {
   }
 }
 
-/** Extrai texto do resultado MCP. callTool retorna tipo discriminado;
- *  aqui aceitamos qualquer objeto com `content: Array<{type, text?}>` e
- *  juntamos os blocos text. */
+/** Extracts text from an MCP result. callTool returns a discriminated type;
+ *  here we accept any object with `content: Array<{type, text?}>` and
+ *  we join the text blocks. */
 function extractText(r: unknown): string {
   if (typeof r !== "object" || r === null) return "";
   const content = (r as { content?: unknown }).content;

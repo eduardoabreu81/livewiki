@@ -37,7 +37,7 @@ async function writeLivewikiFile(relPath: string, content: string): Promise<void
 }
 
 describe("manifest.computeSnapshotHash", () => {
-  it("retorna hash estável pra mesmo conteúdo (determinístico)", async () => {
+  it("returns a stable hash for the same content (deterministic)", async () => {
     await writeLivewikiFile("livewiki/auth.md", "auth doc");
     await writeLivewikiFile("livewiki/session.md", "session doc");
 
@@ -47,7 +47,7 @@ describe("manifest.computeSnapshotHash", () => {
     expect(h1).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("muda quando conteúdo de livewiki/ muda", async () => {
+  it("changes when livewiki/ content changes", async () => {
     await writeLivewikiFile("livewiki/auth.md", "v1");
     const h1 = await computeSnapshotHash(repoRoot);
     await writeLivewikiFile("livewiki/auth.md", "v2");
@@ -55,11 +55,11 @@ describe("manifest.computeSnapshotHash", () => {
     expect(h1).not.toBe(h2);
   });
 
-  it("EXCLUI o próprio .manifest.json do hash", async () => {
+  it("EXCLUDES .manifest.json itself from the hash", async () => {
     await writeLivewikiFile("livewiki/auth.md", "auth");
     const h1 = await computeSnapshotHash(repoRoot);
 
-    // Grava manifest — não deve mudar o hash
+    // Writes the manifest — must not change the hash
     await writeLivewikiFile(
       MANIFEST_REL_PATH,
       JSON.stringify({
@@ -81,14 +81,14 @@ describe("manifest.computeSnapshotHash", () => {
     expect(await computeSnapshotHash(repoRoot)).toBe(h1);
   });
 
-  it("ordem de walk é determinística (sort alfabético)", async () => {
-    // Cria em ordem não-alfabética
+  it("walk order is deterministic (alphabetical sort)", async () => {
+    // Creates in non-alphabetical order
     await writeLivewikiFile("livewiki/zzz.md", "z");
     await writeLivewikiFile("livewiki/aaa.md", "a");
     await writeLivewikiFile("livewiki/mmm.md", "m");
 
     const h1 = await computeSnapshotHash(repoRoot);
-    // Recria na mesma ordem — mesmo hash
+    // Recreates in the same order — same hash
     await nodeFs.rm(repoRoot, { recursive: true });
     await nodeFs.mkdir(repoRoot, { recursive: true });
     await writeLivewikiFile("livewiki/zzz.md", "z");
@@ -98,25 +98,25 @@ describe("manifest.computeSnapshotHash", () => {
     expect(h1).toBe(h2);
   });
 
-  it("lida com livewiki/ vazio (sem arquivos)", async () => {
+  it("handles an empty livewiki/ (no files)", async () => {
     await nodeFs.mkdir(nodePath.join(repoRoot, "livewiki"), { recursive: true });
     const h = await computeSnapshotHash(repoRoot);
     expect(h).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("lida com livewiki/ inexistente", async () => {
-    // Sem livewiki/ — deve retornar hash do vazio sem throw
+  it("handles a nonexistent livewiki/", async () => {
+    // Without livewiki/ — must return the hash of empty without throwing
     const h = await computeSnapshotHash(repoRoot);
     expect(h).toMatch(/^[a-f0-9]{64}$/);
   });
 });
 
 describe("manifest.readManifest", () => {
-  it("retorna null se manifest não existe", async () => {
+  it("returns null if the manifest does not exist", async () => {
     expect(await readManifest(repoRoot)).toBeNull();
   });
 
-  it("lê manifest válido", async () => {
+  it("reads a valid manifest", async () => {
     await writeLivewikiFile(
       MANIFEST_REL_PATH,
       JSON.stringify({
@@ -168,14 +168,14 @@ describe("manifest.readManifest", () => {
       .toEqual(["livewiki/topics/a.md", "livewiki/topics/z.md"]);
   });
 
-  it("retorna null pra manifest corrompido (tolerância)", async () => {
+  it("returns null for a corrupted manifest (tolerance)", async () => {
     await writeLivewikiFile(MANIFEST_REL_PATH, "{ broken json");
     expect(await readManifest(repoRoot)).toBeNull();
   });
 });
 
 describe("manifest.writeManifestIfChanged", () => {
-  it("grava se manifest não existe", async () => {
+  it("writes if the manifest does not exist", async () => {
     const m = buildManifest({
       lastDocumentedCommit: null,
       snapshotHash: "h1",
@@ -186,19 +186,19 @@ describe("manifest.writeManifestIfChanged", () => {
     expect(await readManifest(repoRoot)).toEqual(m);
   });
 
-  it("NÃO regrava se conteúdo é byte-idêntico (anti-loop CI)", async () => {
+  it("does NOT rewrite if the content is byte-identical (CI anti-loop)", async () => {
     const m = buildManifest({
       lastDocumentedCommit: null,
       snapshotHash: "h1",
       pendingBatch: null,
     });
     await writeManifestIfChanged(repoRoot, m);
-    // mtimes é irrelevante — o que conta é o CONTEÚDO
+    // mtimes are irrelevant — what counts is the CONTENT
     const wrote = await writeManifestIfChanged(repoRoot, m);
     expect(wrote).toBe(false);
   });
 
-  it("regrava se snapshotHash muda", async () => {
+  it("rewrites if snapshotHash changes", async () => {
     await writeManifestIfChanged(
       repoRoot,
       buildManifest({ lastDocumentedCommit: null, snapshotHash: "h1", pendingBatch: null }),
@@ -210,7 +210,7 @@ describe("manifest.writeManifestIfChanged", () => {
     expect(wrote).toBe(true);
   });
 
-  it("regrava se pendingBatch muda", async () => {
+  it("rewrites if pendingBatch changes", async () => {
     await writeManifestIfChanged(
       repoRoot,
       buildManifest({ lastDocumentedCommit: null, snapshotHash: "h", pendingBatch: null }),
@@ -226,7 +226,7 @@ describe("manifest.writeManifestIfChanged", () => {
     expect(wrote).toBe(true);
   });
 
-  it("regrava se lastDocumentedCommit muda", async () => {
+  it("rewrites if lastDocumentedCommit changes", async () => {
     await writeManifestIfChanged(
       repoRoot,
       buildManifest({ lastDocumentedCommit: "abc", snapshotHash: "h", pendingBatch: null }),
@@ -423,14 +423,14 @@ describe("manifest artifact receipts", () => {
   });
 });
 
-describe("manifest — idempotência end-to-end (correção #3)", () => {
-  it("dois init seguidos sem mudança = manifest byte-idêntico", async () => {
-    // Setup: wiki com 3 páginas + manifest inicial
+describe("manifest — end-to-end idempotence (fix #3)", () => {
+  it("two inits in a row with no change = byte-identical manifest", async () => {
+    // Setup: wiki with 3 pages + initial manifest
     await writeLivewikiFile("livewiki/auth.md", "auth doc");
     await writeLivewikiFile("livewiki/session.md", "session doc");
     await writeLivewikiFile("livewiki/quickstart.md", "qs");
 
-    // 1º "init": computa hash + grava manifest
+    // 1st "init": computes hash + writes manifest
     const hash1 = await computeSnapshotHash(repoRoot);
     const m1 = buildManifest({
       lastDocumentedCommit: null,
@@ -439,7 +439,7 @@ describe("manifest — idempotência end-to-end (correção #3)", () => {
     });
     await writeManifestIfChanged(repoRoot, m1);
 
-    // 2º "init" sem mudança: mesmo hash → NÃO regrava
+    // 2nd "init" with no change: same hash → does NOT rewrite
     const hash2 = await computeSnapshotHash(repoRoot);
     const m2 = buildManifest({
       lastDocumentedCommit: null,
@@ -447,13 +447,13 @@ describe("manifest — idempotência end-to-end (correção #3)", () => {
       pendingBatch: null,
     });
     const wrote = await writeManifestIfChanged(repoRoot, m2);
-    expect(wrote).toBe(false); // anti-loop CI funcionando
+    expect(wrote).toBe(false); // CI anti-loop working
 
-    // Hashes iguais (mesmo conteúdo de livewiki/ → mesmo hash)
+    // Equal hashes (same livewiki/ content → same hash)
     expect(hash1).toBe(hash2);
   });
 
-  it("mudança no conteúdo → manifest regrava", async () => {
+  it("content change → manifest rewrites", async () => {
     await writeLivewikiFile("livewiki/auth.md", "v1");
     const hash1 = await computeSnapshotHash(repoRoot);
     await writeManifestIfChanged(

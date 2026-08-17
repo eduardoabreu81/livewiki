@@ -1,39 +1,39 @@
 /**
- * safe-io — único módulo autorizado a escrever em disco.
+ * safe-io — the only module authorized to write to disk.
  *
- * Regra inviolável #1 da SPEC: toda escrita passa por aqui. Validação contra a
- * allowlist (livewiki/ + .livewiki/ dentro do repoRoot). Caminhos fora disso =
- * erro. Sem exceções, nem em testes.
+ * SPEC Inviolable Rule #1: all writes go through here. Validation against the
+ * allowlist (livewiki/ + .livewiki/ inside repoRoot). Paths outside this =
+ * error. No exceptions, not even in tests.
  *
- * Regra #2 (pointer em AGENTS.md/CLAUDE.md): opt-in via flag explícita. Esta
- * exceção NÃO mora aqui — fica em um módulo separado de Fase 5 (`pointer.ts`).
- * safe-io só conhece os dois diretórios "seguros".
+ * Rule #2 (pointer in AGENTS.md/CLAUDE.md): opt-in via explicit flag. This
+ * exception does NOT live here — it belongs in a separate Phase 5 module (`pointer.ts`).
+ * safe-io only knows the two "safe" directories.
  *
- * Defesa contra symlinks:
- *   Após validar que o path declarado está dentro da allowlist (rápido, falha
- *   cedo), caminhamos do alvo até o ancestral existente mais profundo, fazemos
- *   realpath dele, reconstituímos o path final, e REVALIDAMOS a allowlist. Isso
- *   fecha ataques do tipo:
- *     - `livewiki` é symlink para `/tmp/`        → realpath mostra /tmp, fora
- *     - `livewiki/sub` é symlink para `../src`   → realpath mostra src, fora
- *     - `livewiki/leaf` é symlink para `/etc/x`  → realpath mostra /etc, fora
+ * Symlink defense:
+ *   After validating that the declared path is within the allowlist (fast, fails
+ *   early), we walk from the target up to the deepest existing ancestor, resolve
+ *   its realpath, reconstruct the final path, and REVALIDATE the allowlist. This
+ *   closes attack vectors such as:
+ *     - `livewiki` is a symlink to `/tmp/`        → realpath shows /tmp, outside
+ *     - `livewiki/sub` is a symlink to `../src`   → realpath shows src, outside
+ *     - `livewiki/leaf` is a symlink to `/etc/x`  → realpath shows /etc, outside
  *
- *   Testado dos dois lados (ataque + caminho legítimo via symlink interno).
+ *   Tested from both sides (attack + legitimate path via internal symlink).
  */
 
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs/promises";
 import * as nodeFsSync from "node:fs";
 
-/** Diretórios dentro do repoRoot onde escrita é permitida. */
+/** Directories inside repoRoot where writing is allowed. */
 export const ALLOWED_DIRS = ["livewiki", ".livewiki"] as const;
 export type AllowedDir = (typeof ALLOWED_DIRS)[number];
 
 export interface SafeIoOptions {
   /**
-   * Quando true, aceita escrita em AGENTS.md / CLAUDE.md na raiz do repo.
-   * Implementado em Fase 5 (pointer). Mantido na interface para já forçar o
-   * caminho explícito: default false, opt-in consciente.
+   * When true, accepts writes to AGENTS.md / CLAUDE.md at the repo root.
+   * Implemented in Phase 5 (pointer). Kept in the interface to enforce the
+   * explicit path: default false, conscious opt-in.
    */
   allowPointer?: boolean;
   /**
@@ -103,28 +103,28 @@ function allowlistFor(opts: SafeIoOptions): readonly string[] {
 }
 
 /**
- * Caminho absoluto de um diretório permitido dentro do repoRoot.
- * Lança se repoRoot for inválido.
+ * Absolute path of an allowed directory inside repoRoot.
+ * Throws if repoRoot is invalid.
  */
 function allowedAbs(repoRoot: string, dir: AllowedDir): string {
   const absRoot = nodePath.resolve(repoRoot);
   const absDir = nodePath.resolve(absRoot, dir);
-  // Defesa em profundidade: o diretório permitido TEM que estar dentro de repoRoot.
+  // Defense in depth: the allowed directory MUST be inside repoRoot.
   const rel = nodePath.relative(absRoot, absDir);
   if (rel.startsWith("..") || nodePath.isAbsolute(rel)) {
-    // Não deveria acontecer — `dir` é literal controlada — mas falhamos fechado.
+    // Should not happen — `dir` is a controlled literal — but fail closed.
     throw new Error(`Internal: allowed dir ${dir} escapes repoRoot`);
   }
   return absDir;
 }
 
 /**
- * Decide se um path absoluto está dentro de algum diretório permitido.
- * Compara por prefixo + separador (não substring), para evitar que
- * `livewiki-evil` seja aceito como dentro de `livewiki/`.
+ * Decides whether an absolute path is inside any allowed directory.
+ * Compares by prefix + separator (not substring), to avoid
+ * `livewiki-evil` being accepted as inside `livewiki/`.
  *
- * Pura: não toca em disco. Usada tanto na validação inicial (rápida) quanto
- * na revalidação após realpath.
+ * Pure: does not touch disk. Used both in initial validation (fast)
+ * and in revalidation after realpath.
  */
 export function isInsideAllowlist(
   repoRoot: string,
@@ -133,9 +133,9 @@ export function isInsideAllowlist(
 ): boolean {
   const target = nodePath.resolve(absPath);
   if (opts.allowPointer) {
-    // AGENTS.md e CLAUDE.md na raiz do repoRoot. Validado por nome de arquivo,
-    // não por diretório, porque a regra #2 fala "no AGENTS.md/CLAUDE.md",
-    // não "num diretório".
+    // AGENTS.md and CLAUDE.md at the repoRoot root. Validated by file name,
+    // not by directory, because rule #2 states "in AGENTS.md/CLAUDE.md",
+    // not "in a directory".
     for (const filename of ["AGENTS.md", "CLAUDE.md"]) {
       const allowed = nodePath.resolve(repoRoot, filename);
       if (target === allowed) return true;
@@ -150,15 +150,15 @@ export function isInsideAllowlist(
   return ALLOWED_DIRS.some((dir) => {
     const allowed = allowedAbs(repoRoot, dir);
     const rel = nodePath.relative(allowed, target);
-    // Dentro se: relativo não começa com .., não é absoluto, e não é vazio
-    // (vazio = target === allowed, que é o próprio diretório, ok).
+    // Inside if: relative does not start with .., is not absolute, and is not empty
+    // (empty = target === allowed, which is the directory itself, ok).
     return !rel.startsWith("..") && !nodePath.isAbsolute(rel);
   });
 }
 
 /**
- * Valida o path declarado SEM considerar symlinks. Falha cedo em casos
- * óbvios (path absoluto, traversal, fora da allowlist no path declarado).
+ * Validates the declared path WITHOUT considering symlinks. Fails early on
+ * obvious cases (absolute path, traversal, outside the allowlist in declared path).
  */
 function validateDeclared(
   repoRoot: string,
@@ -181,15 +181,15 @@ function validateDeclared(
 }
 
 /**
- * Encontra o ancestral existente mais profundo começando de `from` e caminhando
- * em direção a `stopAt`. Retorna uma tupla [ancestral, sufixo]:
- *   - `ancestral`: o diretório (ou arquivo) mais profundo que existe
- *   - `sufixo`: a parte do path que NÃO existe ainda, a ser concatenada
+ * Finds the deepest existing ancestor starting from `from` and walking
+ * toward `stopAt`. Returns a tuple [ancestor, suffix]:
+ *   - `ancestor`: the deepest directory (or file) that exists
+ *   - `suffix`: the part of the path that does NOT exist yet, to be joined
  *
- * Se nada no caminho existe, retorna [stopAt, from-relativo-a-stopAt].
+ * If nothing along the path exists, returns [stopAt, from-relative-to-stopAt].
  *
- * Implementação síncrona porque `existsSync` é o que faz sentido no loop —
- * `realpath` é async mas só é chamado uma vez com o resultado.
+ * Synchronous implementation because `existsSync` is what makes sense in the loop —
+ * `realpath` is async but only called once with the result.
  */
 function findDeepestExisting(
   from: string,
@@ -203,8 +203,8 @@ function findDeepestExisting(
     }
     const parent = nodePath.dirname(cursor);
     if (parent === cursor) {
-      // Segurança: chegou na raiz do filesystem sem encontrar nem stopAt.
-      // Devolve stopAt com tudo como sufixo.
+      // Safety: reached filesystem root without finding even stopAt.
+      // Return stopAt with everything as suffix.
       return [stopAt, nodePath.relative(stopAt, from)] as const;
     }
     suffix = suffix
@@ -212,26 +212,26 @@ function findDeepestExisting(
       : nodePath.basename(cursor);
     cursor = parent;
   }
-  // cursor === stopAt. Se stopAt existe, retornamos ele com sufixo completo.
+  // cursor === stopAt. If stopAt exists, return it with the full suffix.
   return [stopAt, suffix] as const;
 }
 
 /**
- * Resolve o caminho, considerando symlinks, e revalida a allowlist.
+ * Resolves the path, considering symlinks, and revalidates the allowlist.
  *
- * Algoritmo:
- *   1. Validar o path declarado (rápido, falha cedo)
- *   2. Achar o ancestral existente mais profundo
- *   3. Realpath desse ancestral
- *   4. Reconstruir o path final = realpath(ancestral) + sufixo
- *   5. Revalidar a allowlist no path final (defesa contra symlink attack)
+ * Algorithm:
+ *   1. Validate declared path (fast, fails early)
+ *   2. Find deepest existing ancestor
+ *   3. Realpath of that ancestor
+ *   4. Reconstruct final path = realpath(ancestor) + suffix
+ *   5. Revalidate allowlist on the final path (defense against symlink attack)
  *
- * Retorna o caminho absoluto validado. Lança PathOutsideAllowlistError /
- * InvalidRelativePathError se qualquer validação falhar.
+ * Returns the validated absolute path. Throws PathOutsideAllowlistError /
+ * InvalidRelativePathError if any validation fails.
  *
- * Race condition: existe uma janela entre existsSync e realpath. Em prática,
- * symlinks são raramente criados/removidos em operação normal, e o caller
- * (writeText, etc.) já trata erros de I/O. Não é problema na Fase 0.
+ * Race condition: a window exists between existsSync and realpath. In practice,
+ * symlinks are rarely created/removed in normal operation, and the caller
+ * (writeText, etc.) already handles I/O errors. Not an issue in Phase 0.
  */
 export async function resolveAndValidate(
   repoRoot: string,
@@ -276,10 +276,10 @@ export async function resolveAndValidate(
       continue;
     }
 
-    // Reconstruir path final
+    // Reconstruct final path
     const finalAbs = suffix ? nodePath.join(realAncestor, suffix) : realAncestor;
 
-    // Revalidar: se um symlink no ancestral redireciona para fora, isso cai aqui.
+    // Revalidate: if a symlink in the ancestor redirects outside, it lands here.
     if (isInsideAllowlist(absRoot, finalAbs, opts)) {
       return finalAbs;
     }
@@ -299,8 +299,8 @@ function yieldResolveRetry(attempt: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.min(2 ** attempt, 8)));
 }
 
-// ── Operações de I/O ────────────────────────────────────────────────────────
-// Todas chamam resolveAndValidate antes de tocar em disco.
+// ── I/O Operations ──────────────────────────────────────────────────────────
+// All call resolveAndValidate before touching disk.
 
 export async function writeText(
   repoRoot: string,
@@ -421,8 +421,8 @@ export async function exists(
   relPath: string,
   opts: SafeIoOptions = {},
 ): Promise<boolean> {
-  // exists() lê metadados — mesmo assim valida a allowlist (com symlink check).
-  // Saber da existência de um arquivo fora de livewiki/ já é leak de informação.
+  // exists() reads metadata — still validates allowlist (with symlink check).
+  // Knowing the existence of a file outside livewiki/ is already an info leak.
   try {
     const abs = await resolveAndValidate(repoRoot, relPath, opts);
     await nodeFs.access(abs);

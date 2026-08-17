@@ -1,24 +1,24 @@
 /**
- * anchor-ledger — sincroniza âncoras da wiki com o índice de código e gera
- * dívida (changed/moved/deleted).
+ * anchor-ledger — syncs wiki anchors with the code index and generates
+ * debt (changed/moved/deleted).
  *
- * SPEC §"Fase 2 — Âncoras e dívida" + §"Schema do SQLite":
- *   - Lê cada página `.md` em `livewiki/`, extrai frontmatter + section anchors.
- *   - Upsert em `anchors` (UNIQUE por doc_page + section_slug).
- *   - Diff vs estado anterior: gera rows em `debt` (changed/moved/deleted).
- *   - Detecção de `moved` por content_hash (primário) ou nome+signature (fallback).
- *   - Atribui `assignee` baseado no `owner` da página (agent pra generated,
- *     human pra human). Página mixed vai pra agent (parte gerada vence).
+ * SPEC §"Phase 2 — Anchors and debt" + §"SQLite schema":
+ *   - Reads each `.md` page in `livewiki/`, extracts frontmatter + section anchors.
+ *   - Upserts into `anchors` (UNIQUE by doc_page + section_slug).
+ *   - Diff vs previous state: generates rows in `debt` (changed/moved/deleted).
+ *   - `moved` detection by content_hash (primary) or name+signature (fallback).
+ *   - Assigns `assignee` based on the page's `owner` (agent for generated,
+ *     human for human). A mixed page goes to agent (generated part wins).
  *
- * Regra inviolável #3 (rev. achados F+G): quando um símbolo é detectado como
- * `moved`, a rewrite da âncora acontece NO MARKDOWN (frontmatter e marcadores
- * `<!-- lw:anchors ... -->`) via safe-io — não basta atualizar o DB, porque
- * o markdown é fonte da verdade. Exceção (regra #6): âncora dentro de bloco
- * `<!-- lw:manual -->` ou em página `owner: human` NÃO é reescrita — só gera
- * dívida com assignee=human.
+ * Inviolable rule #3 (rev. findings F+G): when a symbol is detected as
+ * `moved`, the anchor rewrite happens IN THE MARKDOWN (frontmatter and
+ * `<!-- lw:anchors ... -->` markers) via safe-io — it is not enough to update
+ * the DB, because the markdown is the source of truth. Exception (rule #6):
+ * an anchor inside a `<!-- lw:manual -->` block or in an `owner: human` page
+ * is NOT rewritten — it only generates debt with assignee=human.
  *
- * Regra inviolável #6: páginas `owner: human` e blocos `lw:manual` JAMAIS
- * são modificados por escrita automatizada de rewrite de anchor.
+ * Inviolable rule #6: `owner: human` pages and `lw:manual` blocks are NEVER
+ * modified by automated anchor-rewrite writes.
  *
  * Conservative twin policy for `moved` (roadmap item 13): a disappeared
  * symbol is accepted as `moved` ONLY when its name is truly gone from the
@@ -61,7 +61,7 @@ export type DebtEvent = "changed" | "moved" | "deleted";
 export type Assignee = "agent" | "human";
 
 export interface LedgerOptions {
-  /** Quando true, suprime notas informativas (modo JSON). */
+  /** When true, suppresses informational notes (JSON mode). */
   quiet?: boolean;
 }
 
@@ -72,13 +72,13 @@ export interface LedgerResult {
   debtCreated: number;
   debtByEvent: { changed: number; moved: number; deleted: number };
   undocumentedSymbols: number;
-  /** Para telemetria/debug. */
+  /** For telemetry/debug. */
   movedPairs: Array<{ from: string; to: string }>;
 }
 
 export class AnchorParseError extends Error {
   constructor(wikiPath: string, cause: Error) {
-    super(`Falha ao parsear âncoras em ${wikiPath}: ${cause.message}`);
+    super(`Failed to parse anchors in ${wikiPath}: ${cause.message}`);
     this.name = "AnchorParseError";
   }
 }
@@ -89,7 +89,7 @@ export async function run(
 ): Promise<LedgerResult> {
   const absRoot = nodePath.resolve(repoRoot);
 
-  // Garante `.livewiki/` existe (cache derivado — auto-init).
+  // Ensures `.livewiki/` exists (derived cache — auto-init).
   await safeIo.mkdir(absRoot, ".livewiki");
   const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
   const db = openIndex(dbPath);
@@ -154,7 +154,7 @@ async function orchestrate(
     existingSymbols.set(row.key, row);
   }
 
-  // Symbols deletados (status='deleted'): usados pra detectar moved
+  // Deleted symbols (status='deleted'): used to detect moved
   const deletedSymbols = new Map<string, SymbolRow>();
   for (const row of db.prepare("SELECT * FROM symbols WHERE status = 'deleted'").all() as SymbolRow[]) {
     deletedSymbols.set(row.key, row);
@@ -533,14 +533,14 @@ async function orchestrate(
 
     if (!sym) {
       if (portableBaselineMode) continue;
-      // symbol sumiu do código (não está no índice)
-      // Se for o resultado de um moved, sym exists com novo nome — mas ca.symbolKey já foi atualizado
+      // symbol vanished from the code (not in the index)
+      // If it is the result of a moved, sym exists with a new name — but ca.symbolKey was already updated
       const anchorId = prev?.id ?? null;
       if (assignee === "human") {
         promoteOpenDebtToHuman(db, ca.symbolKey, ca.docPageId, "deleted");
       }
       if (hasOpenDebt(db, ca.symbolKey, ca.docPageId, "deleted")) {
-        // dedup — não recriar dívida já aberta
+        // dedup — do not recreate already-open debt
       } else {
         createDebt(db, anchorId, "deleted", assignee, null, ca.symbolKey, ca.docPageId);
         result.debtCreated++;
@@ -571,7 +571,7 @@ async function orchestrate(
         result.debtByEvent.changed++;
       }
     }
-    // atualiza hash pra próxima run
+    // update hash for the next run
     if (prev) {
       db.prepare("UPDATE anchors SET symbol_hash_at_doc = ? WHERE id = ?").run(
         sym.content_hash,
@@ -859,16 +859,16 @@ function upsertAnchor(
   const key = `${docPageId}|${sectionSlug ?? ""}|${symbolKey}`;
   const prev = existing.get(key);
   if (prev) {
-    // Atualiza: in_manual_block pode ter mudado se usuário editou o manual block
+    // Update: in_manual_block may have changed if the user edited the manual block
     db.prepare(
       "UPDATE anchors SET symbol_key = ?, in_manual_block = ? WHERE id = ?",
     ).run(symbolKey, inManualBlock ? 1 : 0, prev.id);
     existing.set(key, { ...prev, symbol_key: symbolKey, in_manual_block: inManualBlock ? 1 : 0 });
     return prev.id;
   }
-  // Inserir novo: já grava symbol_hash_at_doc com o hash atual do symbol.
-  // Isso evita o bug de "primeira run cria anchor com hash='' → segunda run
-  // não detecta mudança porque o guard !== '' é false".
+  // Insert new: already stores symbol_hash_at_doc with the symbol's current hash.
+  // This avoids the bug where "first run creates an anchor with hash='' → second run
+  // does not detect change because the guard !== '' is false".
   const res = db
     .prepare(
       "INSERT INTO anchors (doc_page_id, section_slug, symbol_key, symbol_hash_at_doc, in_manual_block, created_at) " +
@@ -901,11 +901,11 @@ function createDebt(
   symbolKey: string,
   docPageId: number | null,
 ): void {
-  // Fix E (achado revisão Fase 2): symbol_key gravado em coluna própria.
-  // Sobrevive ao anchor ser removida, evitando dívida órfã sem referência.
-  // Schema v8 (revisão externa 2026-08-03): doc_page_id é a referência de
-  // página igualmente durável — sem ela, as superfícies de dívida (CLI e
-  // MCP) perdiam symbol_key/wiki_path via LEFT JOIN assim que o anchor sumia.
+  // Fix E (Phase 2 review finding): symbol_key stored in its own column.
+  // Survives the anchor being removed, avoiding orphan debt without reference.
+  // Schema v8 (external review 2026-08-03): doc_page_id is the equally durable
+  // page reference — without it, the debt surfaces (CLI and MCP) lost
+  // symbol_key/wiki_path via LEFT JOIN as soon as the anchor disappeared.
   db.prepare(
     "INSERT INTO debt (anchor_id, event, assignee, symbol_key, detail, detected_at, doc_page_id) " +
       "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -913,7 +913,7 @@ function createDebt(
 }
 
 /**
- * Fix B (achado revisão Fase 2): dedup de dívida.
+ * Fix B (Phase 2 review finding): debt dedup.
  * Returns true when one open documentation work unit already exists for the
  * same symbol, page, and event. A page-level and a section-level anchor for
  * the same symbol are evidence for one page update, not two debts.
@@ -978,7 +978,7 @@ function detectMoves(
   movedMap: Map<string, string>,
   result: LedgerResult,
 ): void {
-  // Index por content_hash pra match rápido
+  // Index by content_hash for fast matching
   const activeByHash = new Map<string, SymbolRow>();
   for (const sym of activeSymbols.values()) {
     activeByHash.set(sym.content_hash, sym);
@@ -995,9 +995,9 @@ function detectMoves(
   }
 
   for (const [oldKey, deadSym] of deletedSymbols) {
-    // 1. Match exato por content_hash
+    // 1. Exact match by content_hash
     let match = activeByHash.get(deadSym.content_hash);
-    // 2. Fallback: nome + signature iguais em arquivo diferente
+    // 2. Fallback: same name + signature in a different file
     if (!match) {
       for (const candidate of activeSymbols.values()) {
         if (
@@ -1011,11 +1011,11 @@ function detectMoves(
       }
     }
     if (match && !movedMap.has(oldKey)) {
-      // Fix F (achado revisão Fase 2): pular pares oldKey === newKey — é
-      // supersessão de re-index (símbolo inalterado num arquivo editado: foi
-      // soft-deletado e re-inserido com mesma key + mesmo content_hash),
-      // não movimento real. Sem esse guard, todo edit gerava dívida moved
-      // espúria com from == to.
+      // Fix F (Phase 2 review finding): skip pairs where oldKey === newKey — it is
+      // a re-index supersession (unchanged symbol in an edited file: it was
+      // soft-deleted and re-inserted with the same key + same content_hash),
+      // not a real move. Without this guard, every edit generated spurious
+      // moved debt with from == to.
       if (match.key === oldKey) continue;
       // Item 13: a surviving same-name same-kind active symbol (other than
       // the match itself) means the name is NOT gone from the index — the
@@ -1037,7 +1037,7 @@ function upsertUndocumented(
   result: LedgerResult,
 ): void {
   const anchorKeys = new Set(anchors.map((a) => a.symbolKey));
-  // Limpa tabela pra refletir estado atual (não-histórico na Fase 2)
+  // Clear the table to reflect current state (non-historical in Phase 2)
   db.prepare("DELETE FROM undocumented").run();
 
   const insert = db.prepare(
@@ -1054,11 +1054,11 @@ function upsertUndocumented(
 }
 
 /**
- * Fix D (achado revisão Fase 2): assignee é derivado do owner E do bloco
- * manual. Anchor dentro de `<!-- lw:manual -->...<!-- /lw:manual -->` SEMPRE
- * vai pra humano — a regra #6 diz que LLMs não tocam nesses blocos. Mesmo
- * em página `generated` ou `mixed`, a porção dentro de manual block
- * precisa de revisão humana.
+ * Fix D (Phase 2 review finding): assignee is derived from the owner AND from
+ * the manual block. An anchor inside `<!-- lw:manual -->...<!-- /lw:manual -->`
+ * ALWAYS goes to human — rule #6 says LLMs do not touch those blocks. Even on
+ * a `generated` or `mixed` page, the portion inside a manual block needs human
+ * review.
  */
 function assigneeFor(owner: Owner, inManualBlock: boolean): Assignee {
   if (inManualBlock) return "human";
@@ -1074,7 +1074,7 @@ async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
     try {
       entries = await nodeFs.readdir(dir, { withFileTypes: true });
     } catch {
-      // Sem livewiki/ — ainda assim, ledger roda e gera debt de páginas ausentes
+      // Without livewiki/ — even so, the ledger runs and generates debt for missing pages
       continue;
     }
     for (const entry of entries) {
@@ -1096,7 +1096,7 @@ async function collectWikiPages(absRoot: string): Promise<{ relPath: string }[]>
 }
 
 /**
- * Fix G (achado revisão Fase 2): rewrites a specific symbol_key in the
+ * Fix G (Phase 2 review finding): rewrites a specific symbol_key in the
  * wiki markdown. Updates both the frontmatter `anchors:` list and the
  * `<!-- lw:anchors ... -->` markers in the body.
  *

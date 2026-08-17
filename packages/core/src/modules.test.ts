@@ -14,7 +14,7 @@ import type { ExtractedImport } from "./imports.js";
 import type { Module } from "./modules.js";
 
 describe("modules.resolveModuleEdges", () => {
-  it("gera edges entre módulos diferentes via imports relativos", () => {
+  it("generates edges between different modules via relative imports", () => {
     const mods: Module[] = [
       { id: "auth", paths: ["src/auth/login.ts", "src/auth/session.ts"], symbolCount: 2 },
       { id: "utils", paths: ["src/utils/helper.ts"], symbolCount: 1 },
@@ -34,7 +34,7 @@ describe("modules.resolveModuleEdges", () => {
     ]);
   });
 
-  it("ignora imports absolutos/node_modules (não viram edges internos)", () => {
+  it("ignores absolute/node_modules imports (they don't become internal edges)", () => {
     const mods: Module[] = [
       { id: "src", paths: ["src/foo.ts"], symbolCount: 1 },
       { id: "utils", paths: ["src/utils/bar.ts"], symbolCount: 1 },
@@ -46,7 +46,7 @@ describe("modules.resolveModuleEdges", () => {
     expect(resolveModuleEdges(mods, importsByFile, knownFiles)).toEqual([]);
   });
 
-  it("ignora self-loops (imports dentro do mesmo módulo)", () => {
+  it("ignores self-loops (imports inside the same module)", () => {
     const mods: Module[] = [
       { id: "auth", paths: ["src/auth/login.ts", "src/auth/session.ts"], symbolCount: 2 },
     ];
@@ -57,7 +57,7 @@ describe("modules.resolveModuleEdges", () => {
     expect(resolveModuleEdges(mods, importsByFile, knownFiles)).toEqual([]);
   });
 
-  it("dedup de edges paralelos (A→B aparece 1x mesmo com N imports)", () => {
+  it("deduplicates parallel edges (A→B appears 1x even with N imports)", () => {
     const mods: Module[] = [
       { id: "a", paths: ["src/a/x.ts"], symbolCount: 1 },
       { id: "b", paths: ["src/b/y.ts"], symbolCount: 1 },
@@ -79,7 +79,7 @@ describe("modules.resolveModuleEdges", () => {
 });
 
 describe("modules.prioritizeModules", () => {
-  it("ordena por centralidade (indegree) decrescente", () => {
+  it("sorts by descending centrality (indegree)", () => {
     const mods: Module[] = [
       { id: "a", paths: ["src/a/x.ts"], symbolCount: 1 },
       { id: "b", paths: ["src/b/y.ts"], symbolCount: 1 },
@@ -89,18 +89,18 @@ describe("modules.prioritizeModules", () => {
       { from: "a", to: "c" },
       { from: "b", to: "c" },
     ];
-    // c tem indegree 2, a e b tem 0. c primeiro.
+    // c has indegree 2, a and b have 0. c first.
     const ordered = prioritizeModules(mods, edges);
     expect(ordered[0]?.id).toBe("c");
   });
 
-  it("empate em centralidade: maior symbolCount primeiro", () => {
+  it("tie on centrality: largest symbolCount first", () => {
     const mods: Module[] = [
       { id: "big", paths: ["src/big/y.ts"], symbolCount: 100 },
       { id: "dep", paths: ["src/dep/z.ts"], symbolCount: 0 },
       { id: "small", paths: ["src/small/x.ts"], symbolCount: 1 },
     ];
-    // sem edges → todos centralidade 0; empate vai pro maior symbolCount
+    // no edges → all centrality 0; tie goes to largest symbolCount
     const ordered = prioritizeModules(mods, []);
     expect(ordered[0]?.id).toBe("big");
   });
@@ -110,7 +110,7 @@ describe("modules.prioritizeModules", () => {
       { id: "big-fixture", paths: ["test/fixtures/big-fixture/x.ts"], symbolCount: 1000 },
       { id: "small-product", paths: ["src/small-product/y.ts"], symbolCount: 1 },
     ];
-    // Sem edges (centralidade 0 pros dois) — fixture teria vencido por
+    // No edges (centrality 0 for both) — fixture would have won by
     // The fixture won by symbolCount before role-aware ranking.
     const ordered = prioritizeModules(mods, []);
     expect(ordered[0]?.paths[0]).toContain("src/small-product");
@@ -476,7 +476,7 @@ describe("modules W — path→id mapping table (revision #1)", () => {
     expect(byPath.get("packages/mcp/src/a.ts")).toBe("mcp-src");
     expect(byPath.get("tests/fixtures/fase2/src/a.ts")).toBe("fase2-src");
     expect(byPath.get("scripts/src/a.ts")).toBe("scripts-src");
-    // Nenhum id tem o leaf "src" sozinho
+    // No id has the leaf "src" alone
     for (const m of out) expect(m.id).not.toBe("src");
   });
 
