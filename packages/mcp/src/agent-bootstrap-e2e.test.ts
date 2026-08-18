@@ -365,6 +365,24 @@ describe("MCP agent bootstrap queue", () => {
         expect(task.sourcePaths.length).toBeGreaterThan(0);
         expect(new Set(task.closedKeys).size).toBe(task.closedKeys.length);
         expect(task.formatContract.system.length).toBeGreaterThan(100);
+        // No empty evidence heading may reach the executor: a heading with
+        // nothing under it reads as "the payload is incomplete" and sends the
+        // agent hunting through the codebase (benchmark 0.2.1).
+        for (const heading of [
+          "# Symbol table",
+          "# Source code (truncated",
+          "# Participating module pages digest",
+          "# Accepted module/flow digest",
+          "# Source evidence",
+          "# Closed evidence inventory",
+          "# Directory evidence",
+        ]) {
+          expect(task.formatContract.user).not.toContain(heading);
+        }
+        expect(task.formatContract.user).toContain(
+          "# Evidence retrieval (this payload carries NO inline evidence)",
+        );
+        expect(task.formatContract.user).toContain("`closedKeys`");
 
         const queueDb = openIndex(nodePath.join(repoRoot, ".livewiki", "index.db"));
         try {
@@ -381,20 +399,26 @@ describe("MCP agent bootstrap queue", () => {
           };
           expect(task.closedKeys).toEqual(checkpoint.agentTask.closedKeys);
           if (task.kind === "file-page" && !checkedStage4PromptReuse) {
-            expect(task.formatContract).toEqual(
-              prompts.buildStage4Prompt(
-                checkpoint.agentTask.module!,
-                checkpoint.agentTask.closedKeys,
-                "",
-                "",
-                "en",
-                checkpoint.agentTask.moduleRole,
-                undefined,
-                {
-                  moduleDiagrams: { maxNodes: 24, maxEdges: 32 },
-                  deepHierarchy: true,
-                },
-              ),
+            const builderContract = prompts.buildStage4Prompt(
+              checkpoint.agentTask.module!,
+              checkpoint.agentTask.closedKeys,
+              "",
+              "",
+              "en",
+              checkpoint.agentTask.moduleRole,
+              undefined,
+              {
+                moduleDiagrams: { maxNodes: 24, maxEdges: 32 },
+                deepHierarchy: true,
+              },
+            );
+            // The contract itself is the batch's, byte-for-byte. The payload
+            // then appends the evidence-retrieval block: agent mode ships no
+            // inline evidence, and that has to be stated, not implied.
+            expect(task.formatContract.system).toEqual(builderContract.system);
+            expect(task.formatContract.user.startsWith(builderContract.user)).toBe(true);
+            expect(task.formatContract.user).toContain(
+              "# Evidence retrieval (this payload carries NO inline evidence)",
             );
             checkedStage4PromptReuse = true;
           }

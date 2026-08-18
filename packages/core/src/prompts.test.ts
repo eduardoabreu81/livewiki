@@ -19,6 +19,8 @@ import {
   INVENTORY_AUTHORITY_PROMPT_RULE,
   BRANCH_PRECISION_PROMPT_RULE,
   FILE_NARRATIVE_PROMPT_RULES,
+  buildUnderstandingPrompt,
+  buildFolderPurposePrompt,
 } from "./prompts.js";
 import type { ArtifactValidationError } from "./prompts.js";
 import type { Module } from "./modules.js";
@@ -2312,5 +2314,77 @@ describe("FILE_NARRATIVE_PROMPT_RULES — manual-marker ban (2026-08-12)", () =>
     expect(joined).toContain("lw:manual");
     expect(joined).not.toContain("<!-- lw:manual -->");
     expect(joined).not.toContain("<!-- /lw:manual -->");
+  });
+});
+
+describe("prompts — evidence sections are omitted when there is no evidence", () => {
+  // Agent mode builds the format contract with no inline evidence on purpose
+  // (small context; the executor retrieves what it cites through the livewiki
+  // tools). An empty heading is a false lead — benchmark 0.2.1: the executor
+  // read the codebase looking for a contract the payload already carried.
+  const EVIDENCE_HEADINGS = [
+    "# Symbol table",
+    "# Source code (truncated",
+    "# Participating module pages digest",
+    "# Accepted module/flow digest",
+    "# Source evidence",
+    "# Closed evidence inventory",
+    "# Directory evidence",
+  ];
+  const flowCandidate: FlowCandidate = {
+    slug: "cli-to-core",
+    titleSeed: "Cli to Core",
+    moduleIds: ["cli", "core"],
+    seedKeys: ["src/cli.ts#run"],
+    entryKeys: ["src/cli.ts#run"],
+    boundaryKeys: [],
+    sinkKeys: [],
+    otherProductKeys: [],
+    auxiliaryKeys: [],
+    signals: { entry: ["cli"], persistence: [], external: [] },
+  };
+  const topicCandidate: TopicCandidate = {
+    title: "Auth lifecycle",
+    intent: "Explain how authentication state is created and refreshed",
+    modules: ["auth"],
+    flows: [],
+    groups: { contract: ["src/auth.ts#login"], state: [], output: [], failure: [] },
+    planOrder: 1,
+    evidenceHash: "abc123",
+    slug: "auth-lifecycle",
+    seedKeys: ["src/auth.ts#login"],
+  };
+
+  it.each([
+    ["stage 4 module page", () => buildStage4Prompt(sampleModule, ["src/auth.ts#login"], "", "")],
+    ["stage 5 flow page", () => buildStage5Prompt(flowCandidate, ["src/cli.ts#run"], "", "", "")],
+    ["semantic topic page", () => buildTopicPrompt(topicCandidate, "", "", "")],
+    ["understanding page", () => buildUnderstandingPrompt("")],
+    ["folder purpose", () => buildFolderPurposePrompt("")],
+  ])("%s: no evidence heading is emitted with an empty body", (_name, build) => {
+    const { user } = build();
+    for (const heading of EVIDENCE_HEADINGS) {
+      expect(user).not.toContain(heading);
+    }
+    // The task instruction still closes the message.
+    expect(user).toContain("# Output:");
+  });
+
+  it("keeps every evidence block when the evidence is actually supplied", () => {
+    const moduleUser = buildStage4Prompt(
+      sampleModule, ["src/auth.ts#login"], "- src/auth.ts#login", "export function login() {}",
+    ).user;
+    expect(moduleUser).toContain("# Symbol table:");
+    expect(moduleUser).toContain("- src/auth.ts#login");
+    expect(moduleUser).toContain("# Source code (truncated");
+    expect(moduleUser).toContain("export function login() {}");
+
+    const flowUser = buildStage5Prompt(
+      flowCandidate, ["src/cli.ts#run"], "digest", "- src/cli.ts#run", "export function run() {}",
+    ).user;
+    expect(flowUser).toContain("# Participating module pages digest");
+    expect(flowUser).toContain("digest");
+    expect(flowUser).toContain("# Symbol table:");
+    expect(flowUser).toContain("# Source code (truncated");
   });
 });

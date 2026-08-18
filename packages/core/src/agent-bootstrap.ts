@@ -1117,6 +1117,36 @@ function flowGroups(candidate: FlowCandidate): {
   };
 }
 
+/**
+ * The agent executor receives the format contract WITHOUT inline evidence:
+ * a batch run inlines the symbol table, the module digest and a truncated
+ * source excerpt, while the agent retrieves what it needs through the
+ * livewiki tools. That is deliberate — it is what keeps agent-mode context
+ * small — but it has to be SAID. Benchmark 0.2.1: the payload rendered
+ * empty evidence headings and the executor read the codebase looking for a
+ * contract it already had.
+ */
+function withEvidenceRetrievalGuidance(
+  contract: PromptPair,
+  task: PersistedAgentTask,
+): PromptPair {
+  const sourcePaths = task.sourcePaths.length > 0
+    ? task.sourcePaths.join(", ")
+    : "(none — this task documents no source file directly)";
+  return {
+    system: contract.system,
+    user: [
+      contract.user,
+      ``,
+      `# Evidence retrieval (this payload carries NO inline evidence)`,
+      `The format contract above is complete and authoritative. The evidence a batch run would inline is deliberately absent — you retrieve it yourself, so gather what you cite BEFORE writing:`,
+      `- \`closedKeys\` in this task is the authoritative anchor list. Never invent a key and never treat a symbol you find while reading as citable unless it is on that list.`,
+      `- \`sourcePaths\` names the source this task documents: ${sourcePaths}.`,
+      `- Use the livewiki tools (\`livewiki_search\` to locate a symbol, \`livewiki_read\` to read an existing wiki page) plus your own reads of those source paths.`,
+    ].join("\n"),
+  };
+}
+
 function taskPresentation(
   taskId: number,
   task: PersistedAgentTask,
@@ -1206,7 +1236,7 @@ function taskPresentation(
     targetPath: task.targetPath,
     closedKeys: [...task.closedKeys],
     sourcePaths: [...task.sourcePaths],
-    formatContract,
+    formatContract: withEvidenceRetrievalGuidance(formatContract, task),
     validation,
     attempts: { used: checkpoint.attempt, limit: state.maxAttempts },
   };
