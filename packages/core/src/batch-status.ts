@@ -10,7 +10,7 @@
 
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
-import { openIndex } from "./db.js";
+import { openIndexReadOnly } from "./db.js";
 import { PRICING_REFERENCE_DATE } from "./pricing.js";
 import type {
   BatchRunSummary,
@@ -50,7 +50,7 @@ export async function buildStatusReport(
 ): Promise<BatchStatusReport> {
   const absRoot = nodePath.resolve(repoRoot);
   const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
-  const db = openIndex(dbPath);
+  const db = openIndexReadOnly(dbPath);
 
   try {
     // 1. Resolve run
@@ -182,7 +182,7 @@ export async function listRuns(repoRoot: string): Promise<Array<{
 }>> {
   const absRoot = nodePath.resolve(repoRoot);
   const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
-  const db = openIndex(dbPath);
+  const db = openIndexReadOnly(dbPath);
   try {
     const rows = db
       .prepare(

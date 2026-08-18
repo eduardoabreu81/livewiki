@@ -21,7 +21,7 @@
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
-import { openIndex, type SymbolRow } from "./db.js";
+import { openIndexReadOnly, type SymbolRow } from "./db.js";
 import { extractAnchors, slugify } from "./anchors.js";
 import { sha256 } from "./hashes.js";
 import { maskCodeSpans } from "./markdown-mask.js";
@@ -64,7 +64,7 @@ export async function run(repoRoot: string): Promise<VerifyResult> {
   const absRoot = nodePath.resolve(repoRoot);
   await safeIo.mkdir(absRoot, ".livewiki");
   const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
-  const db = openIndex(dbPath);
+  const db = openIndexReadOnly(dbPath);
 
   const issues: VerifyIssue[] = [];
 

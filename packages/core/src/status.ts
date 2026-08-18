@@ -13,7 +13,13 @@
 import * as nodePath from "node:path";
 import * as nodeFs from "node:fs/promises";
 import * as safeIo from "./safe-io.js";
-import { openIndex, type FileRow, type SymbolRow } from "./db.js";
+import {
+  openIndex,
+  openIndexReadOnly,
+  SchemaAccessError,
+  type FileRow,
+  type SymbolRow,
+} from "./db.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { snapshotMetrics, type UpdateMetricsSnapshot, type UpdateMetric } from "./update-metrics.js";
 import { EXTENSION_LANG } from "./walker.js";
@@ -176,7 +182,21 @@ export async function run(
   const absRoot = nodePath.resolve(repoRoot);
   const dbPathRel = ".livewiki/index.db";
   const dbPath = await safeIo.resolveAndValidate(absRoot, dbPathRel);
-  const db = openIndex(dbPath);
+  let db;
+  try {
+    db = openIndexReadOnly(dbPath);
+  } catch (err) {
+    // A repository that was never indexed is a state `status` exists to
+    // report, not an error. Serve it from an empty in-memory index so the
+    // report keeps its exact shape — without creating .livewiki/index.db,
+    // which is precisely what the read-only path must never do. Every other
+    // schema problem (older, newer, missing version) still surfaces.
+    if (err instanceof SchemaAccessError && err.kind === "missing_database") {
+      db = openIndex(":memory:");
+    } else {
+      throw err;
+    }
+  }
   try {
     let config: LivewikiConfig;
     try {

@@ -13,11 +13,123 @@
  */
 
 import Database from "better-sqlite3";
+import * as nodeFsSync from "node:fs";
 import * as nodePath from "node:path";
 
 export const CURRENT_SCHEMA_VERSION = 10;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
+
+/**
+ * The index cannot be used as-is, and the fix is a human action rather than a
+ * retry. Each `kind` maps to one instruction, because "database is locked" or
+ * a raw SQLite error tells the user nothing about what to do.
+ */
+export type SchemaAccessProblem =
+  /** No `.livewiki/index.db` at all. */
+  | "missing_database"
+  /** The file exists but carries no `schema_version` row. */
+  | "missing_version"
+  /** Older than this build understands — a writer must migrate it. */
+  | "older_index"
+  /** Newer than this build understands — this build must be upgraded. */
+  | "newer_index";
+
+export class SchemaAccessError extends Error {
+  public readonly kind: SchemaAccessProblem;
+  public readonly stored: number | null;
+  public readonly current: number;
+
+  constructor(kind: SchemaAccessProblem, stored: number | null, dbPath: string) {
+    super(SchemaAccessError.describe(kind, stored, dbPath));
+    this.name = "SchemaAccessError";
+    this.kind = kind;
+    this.stored = stored;
+    this.current = CURRENT_SCHEMA_VERSION;
+  }
+
+  private static describe(
+    kind: SchemaAccessProblem,
+    stored: number | null,
+    dbPath: string,
+  ): string {
+    switch (kind) {
+      case "missing_database":
+        return (
+          `No index at ${dbPath}. Run \`livewiki index\` (or \`livewiki init\`) first — ` +
+          "read-only commands never create the index."
+        );
+      case "missing_version":
+        return (
+          `The index at ${dbPath} holds data but records no schema version, so which ` +
+          "migrations it has already been through cannot be determined. The index is " +
+          "derived data: delete it and run `livewiki index` to rebuild it."
+        );
+      case "older_index":
+        return (
+          `The index at ${dbPath} is schema v${stored}, older than the v${CURRENT_SCHEMA_VERSION} ` +
+          "this build expects. Run `livewiki index` to migrate it."
+        );
+      case "newer_index":
+        return (
+          `The index at ${dbPath} is schema v${stored}, newer than the v${CURRENT_SCHEMA_VERSION} ` +
+          "this build understands. It was created by a newer LiveWiki — update LiveWiki " +
+          "instead of running this version against it."
+        );
+    }
+  }
+}
+
+/**
+ * Decides whether an EXISTING index file may be initialised and migrated.
+ * Reads only — every probe is a SELECT, so a rejection leaves the file byte
+ * for byte as it was found.
+ *
+ * "Effectively empty" is defined strictly as **zero user objects in
+ * `sqlite_master`** (SQLite's own `sqlite_*` entries excluded). Such a file
+ * carries no state whose provenance could be in question and is treated like
+ * a brand-new one. The absence of `schema_version` is deliberately NOT used
+ * as that evidence: a file can hold a fully populated `debt` or `batch_runs`
+ * table and still have lost its version row, and stamping CURRENT there would
+ * declare migrations complete that never ran — `CREATE TABLE IF NOT EXISTS`
+ * adds missing tables but never adds missing COLUMNS to tables that exist.
+ */
+function assertExistingIndexIsUsable(db: Database.Database, dbPath: string): void {
+  const userObjects = db.prepare(
+    "SELECT COUNT(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\'",
+  ).get() as { n: number };
+  if (userObjects.n === 0) return; // indistinguishable from a fresh file
+
+  // Objects exist. From here the version must be readable, and a file with
+  // domain tables but no `meta` at all is exactly the unknown-provenance case.
+  const metaTable = db.prepare(
+    "SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+  ).get() as { hit: number } | undefined;
+  if (metaTable === undefined) {
+    db.close();
+    throw new SchemaAccessError("missing_version", null, dbPath);
+  }
+
+  const stored = readStoredVersion(db);
+  if (stored === null) {
+    db.close();
+    throw new SchemaAccessError("missing_version", null, dbPath);
+  }
+  if (stored > CURRENT_SCHEMA_VERSION) {
+    db.close();
+    throw new SchemaAccessError("newer_index", stored, dbPath);
+  }
+}
+
+/** Reads the recorded schema version without touching anything else. */
+function readStoredVersion(db: Database.Database): number | null {
+  const row = db
+    .prepare("SELECT value FROM meta WHERE key = ?")
+    .get(SCHEMA_VERSION_KEY) as { value: string } | undefined;
+  if (row === undefined) return null;
+  const parsed = Number.parseInt(row.value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
 
 /**
  * Idempotent statements — can run on a new or existing DB.
@@ -464,7 +576,21 @@ export function openIndex(dbPath: string): Database.Database {
   // The .livewiki/ directory was already created by the caller. Do not use
   // recursive mkdir here so it fails closed if it vanishes between the setup and
   // the open.
+  // Whether the file predates this call is the only way to tell a new index
+  // from an existing one: once better-sqlite3 opens it, the file exists either
+  // way. Captured before the handle, used by the gate below.
+  const existedBefore = nodeFsSync.existsSync(dbPath);
   const db = new Database(dbPath);
+
+  // Compatibility gate, FIRST — before journal_mode, before SCHEMA_SQL,
+  // before any index bootstrap, before any migration. A database this build
+  // must not touch has to leave this function exactly as it arrived: not
+  // re-journalled, no table or index recreated, no version stamped. Rejecting
+  // later still mutated the file, which is the opposite of failing closed.
+  if (existedBefore) {
+    assertExistingIndexIsUsable(db, dbPath);
+  }
+
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("synchronous = NORMAL");
@@ -498,6 +624,12 @@ export function openIndex(dbPath: string): Database.Database {
     ).run(SCHEMA_VERSION_KEY, String(CURRENT_SCHEMA_VERSION));
   } else {
     const stored = Number.parseInt(versionRow.value, 10);
+    // A newer database was already rejected by the compatibility gate at the
+    // top, so `stored` can only be lower here. That ordering is what keeps the
+    // rejection non-destructive; the migration lists are all `fromVersion < X`,
+    // so a higher version would otherwise select zero migrations and still
+    // rewrite schema_version DOWNWARDS, relabelling a v10 index as v9 without
+    // touching the tables it actually has.
     if (stored !== CURRENT_SCHEMA_VERSION) {
       // Applies pending migrations before continuing. `migrationsFor()` accepts
       // `string | ((db) => void)` — we discriminate by type because db.exec only
@@ -530,6 +662,53 @@ export function openIndex(dbPath: string): Database.Database {
   );
 
   return db;
+}
+
+/**
+ * Opens an EXISTING index for querying only.
+ *
+ * `openIndex` is the writer's entry point: it creates the file, runs
+ * SCHEMA_SQL, applies migrations and stamps `schema_version`. Commands that
+ * only read had no reason to do any of that, and doing it had two costs. A
+ * pending migration turned every read into a write that waits on the write
+ * lock — measurably `SQLITE_BUSY` after the full busy timeout while a writer
+ * held a transaction, where a plain read-only connection succeeded in 2ms.
+ * And a build with an older CURRENT_SCHEMA_VERSION would migrate — or, worse,
+ * relabel — a database belonging to a newer one.
+ *
+ * So this function creates nothing, runs no DDL, applies no migration, and
+ * never writes `schema_version`. It validates the version and refuses, with an
+ * instruction, when it cannot serve the query honestly.
+ *
+ * `readonly: true` is safe on a WAL database even with no `-wal`/`-shm`
+ * present (verified): SQLite materialises the shared-memory sidecars it needs
+ * without modifying the database itself.
+ */
+export function openIndexReadOnly(dbPath: string): Database.Database {
+  if (!nodeFsSync.existsSync(dbPath)) {
+    throw new SchemaAccessError("missing_database", null, dbPath);
+  }
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    // Session-scoped only. No journal_mode (it rewrites the header), no
+    // foreign_keys (meaningless without writes). busy_timeout merely governs
+    // how long this connection waits during a checkpoint.
+    db.pragma("busy_timeout = 5000");
+    const stored = readStoredVersion(db);
+    if (stored === null) {
+      throw new SchemaAccessError("missing_version", null, dbPath);
+    }
+    if (stored < CURRENT_SCHEMA_VERSION) {
+      throw new SchemaAccessError("older_index", stored, dbPath);
+    }
+    if (stored > CURRENT_SCHEMA_VERSION) {
+      throw new SchemaAccessError("newer_index", stored, dbPath);
+    }
+    return db;
+  } catch (err) {
+    db.close();
+    throw err;
+  }
 }
 
 export type FileRow = {

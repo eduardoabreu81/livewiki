@@ -98,7 +98,7 @@ import { z } from "zod";
 import * as safeIo from "@livewiki/core/safe-io";
 import { run as runStatus } from "@livewiki/core/status";
 import { run as runVerify } from "@livewiki/core/verify";
-import { openIndex } from "@livewiki/core/db";
+import { openIndexReadOnly } from "@livewiki/core/db";
 import { computeBlastRadius } from "@livewiki/core/blast-radius";
 import { computeChangeImpact } from "@livewiki/core/change-impact";
 import { recordUpdateMetric } from "@livewiki/core/update-metrics";
@@ -456,7 +456,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
           );
         }
         const dbPath = await safeIo.resolveAndValidate(repoRoot, ".livewiki/index.db");
-        const db = openIndex(dbPath);
+        const db = openIndexReadOnly(dbPath);
         try {
           const result = computeBlastRadius(db, symbolKey, {
             ...(maxDepth !== undefined ? { maxDepth } : {}),

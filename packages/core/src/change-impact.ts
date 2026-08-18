@@ -38,7 +38,7 @@
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
-import { openIndex, type FileRow } from "./db.js";
+import { openIndexReadOnly, type FileRow } from "./db.js";
 import { previewWorkingTreeDebt } from "./diff-preview.js";
 import { run as runStatus } from "./status.js";
 import { collectImportsForFiles } from "./imports.js";
@@ -288,7 +288,7 @@ async function computeDirectImporters(
   changedFiles: ReadonlySet<string>,
 ): Promise<string[]> {
   const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
-  const db = openIndex(dbPath);
+  const db = openIndexReadOnly(dbPath);
   try {
     const files = db
       .prepare("SELECT * FROM files WHERE status = 'active'")
