@@ -65,7 +65,7 @@ The write tool `livewiki_write_doc` is the critical one. When no `taskId` is giv
 
 When a `taskId` is present from `livewiki_next_task`, the flow changes: `skipVerify` is forbidden, `claimId` becomes mandatory (a `taskId` without it is rejected as `InvalidParams`), the content goes through `submitAgentBootstrapTask` which validates the claim before anything else and then checks the task's full page contract, and on success the server reindexes all pages so companion deterministic-hub changes are visible in search. A submission whose claim was replaced or whose lease lapsed comes back as `stale_claim` with nothing written.
 
-The `livewiki_resolve_debt` path also inspects the ledger outcome: when the reconciliation aborts because the wiki snapshot was unstable, it returns an error carrying `ledgerApplied: false` instead of reporting the debt as resolved — the baseline was accepted on disk, but the debt tables were not reconciled.
+The `livewiki_resolve_debt` path also inspects the ledger outcome: when the reconciliation aborts because the wiki snapshot was unstable, it returns an error carrying `ledgerApplied: false` instead of reporting the debt as resolved — the baseline was accepted on disk, but the debt tables were not reconciled. The `livewiki_impact` tool opens the index through `openIndexReadOnly`: a blast-radius query never creates, migrates or relabels the index, and an index that is missing or on a different schema fails with an actionable message instead of a raw SQLite error.
 
 A `livewiki_next_task` call can also come back with `status: "busy"` — every unfinished task is leased to another executor. The server treats that as "still running": it does not rebuild the search index, which it reserves for a genuinely finished run.
 

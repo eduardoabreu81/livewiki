@@ -42,7 +42,7 @@ This page produces a comprehensive snapshot of the wiki's state — indexed file
 
 <!-- lw:anchors packages/core/src/status.ts#run -->
 
-The main entry point is `run(repoRoot, opts)`, which resolves the repository root, opens the index database, and assembles the final `StatusReport`.
+The main entry point is `run(repoRoot, opts)`, which resolves the repository root, opens the index database, and assembles the final `StatusReport`. It opens the index through `openIndexReadOnly`, the read-only path: no schema creation, no migration, no DDL, and no `schema_version` write. An index that is missing, older, or newer than this build fails with an actionable `SchemaAccessError` rather than being migrated — or created — by a command that only reads. A repository that was never indexed is the one exception: status exists to report that state, so a `missing_database` error is served from an empty in-memory index, keeping the report shape identical without creating `.livewiki/index.db`.
 
 ```typescript
 export async function run(

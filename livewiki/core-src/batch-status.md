@@ -36,7 +36,7 @@ This module sits inside `packages/core/src/`, the shared core of the `livewiki` 
 
 <!-- lw:anchors packages/core/src/batch-status.ts#buildStatusReport packages/core/src/batch-status.ts#listRuns -->
 
-The two public entry points both begin by resolving the repository root to an absolute path, asking `safe-io` to validate `.livewiki/index.db` against that root, and opening the SQLite index. The `try/finally` around `db.close()` ensures the database handle is released even when the report throws mid-assembly.
+The two public entry points both begin by resolving the repository root to an absolute path, asking `safe-io` to validate `.livewiki/index.db` against that root, then opening it through `openIndexReadOnly` — reporting on a run never migrates or creates the index, and opening the SQLite index. The `try/finally` around `db.close()` ensures the database handle is released even when the report throws mid-assembly.
 
 `buildStatusReport` is the heavy lifter. It selects either the `batch_runs` row whose `id` matches `runId`, or — when `runId` is `null` — the most recent run (`ORDER BY id DESC LIMIT 1`). If neither yields a row, it throws: `run ${runId} not found` for an explicit id, `no batch runs found` for the latest-run path. This is the only visible failure branch in the excerpt: a missing run aborts the report.
 

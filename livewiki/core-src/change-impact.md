@@ -122,7 +122,7 @@ async function computeDirectImporters(
 ): Promise<string[]>
 ```
 
-`computeDirectImporters` takes an absolute repository root and the set of changed files, opens the existing index DB, collects imports for the anchored-tier files (using the same `EXTENSION_LANG` tier projection as `status.ts`), resolves the edges through `resolveImportEdges` with an empty `workspacePackages` list, and returns the distinct `fromFile` values for edges whose `toFile` is in the changed set — sorted, deduped, and ready for the section cap. The `try/finally` closes the DB even on any resolution error.
+`computeDirectImporters` takes an absolute repository root and the set of changed files, opens the existing index DB through `openIndexReadOnly` (read-only: no schema work, no migration, and it never creates the file), collects imports for the anchored-tier files (using the same `EXTENSION_LANG` tier projection as `status.ts`), resolves the edges through `resolveImportEdges` with an empty `workspacePackages` list, and returns the distinct `fromFile` values for edges whose `toFile` is in the changed set — sorted, deduped, and ready for the section cap. The `try/finally` closes the DB even on any resolution error.
 
 ## Tests
 
