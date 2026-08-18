@@ -44,6 +44,71 @@ const SEARCH_DB_REL = ".livewiki/search.db";
 /** Identifier runs: start with a letter, then letters/digits/underscore. */
 const IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9_]*/g;
 
+/**
+ * Raised when the search index itself is unusable — closed handle, corrupt
+ * file, missing table. Distinct from a malformed user query, which is not an
+ * error condition of the index at all.
+ */
+export class SearchIndexUnavailableError extends Error {
+  constructor(cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`search index is unavailable: ${detail}`);
+    this.name = "SearchIndexUnavailableError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * Column and table names THIS module's SQL writes. SQLite reports a filter on
+ * an unknown column in the user's FTS5 query and a drifted/rebuilt schema with
+ * the very same "no such column: X" message — the only thing that separates
+ * them is whether X is a name we chose. `-alpha` yields "no such column:
+ * alpha" (the user's text); a table missing our column yields "no such column:
+ * wiki_path" (broken index).
+ */
+const OWN_SQL_NAMES = new Set([
+  "wiki_path",
+  "content",
+  "wiki_search",
+  "wiki_search_tokens",
+  "rank",
+]);
+
+/**
+ * Messages SQLite/FTS5 produces for a malformed MATCH expression, measured
+ * against better-sqlite3 12.x rather than assumed:
+ *   'fts5: syntax error near "…"'  — the bulk of them (bad operators, unbalanced
+ *                                    parens, stray punctuation, empty query)
+ *   'unterminated string'          — an unclosed phrase quote
+ *   'unknown special query: …'     — a bare `*`-prefixed token
+ *   'expected integer, got "…"'    — NEAR() with a non-numeric argument
+ * 'no such column: X' is handled separately because it is ambiguous.
+ */
+const FTS_QUERY_ERROR_RE =
+  /^(fts5: syntax error|unterminated string|unknown special query|expected integer, got)/i;
+
+const NO_SUCH_COLUMN_RE = /^no such column:\s*(.+)$/i;
+
+/**
+ * True only for errors caused by the QUERY TEXT. Deliberately an allowlist:
+ * anything unrecognized is treated as an index failure and propagates, so a
+ * new SQLite error shape can never silently become an empty result set.
+ */
+export function isFtsQueryError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // A closed handle throws a plain TypeError, not a SqliteError.
+  const code = (err as { code?: unknown }).code;
+  if (code !== "SQLITE_ERROR") return false;
+
+  const message = err.message;
+  if (FTS_QUERY_ERROR_RE.test(message)) return true;
+
+  const column = NO_SUCH_COLUMN_RE.exec(message)?.[1]?.trim();
+  // Unknown column named by the user's query = bad query. One of ours = the
+  // index is not the shape this module built.
+  return column !== undefined && !OWN_SQL_NAMES.has(column);
+}
+
 export interface SearchHit {
   wikiPath: string;
   /** Relevant excerpt of the content (snippet around the match) */
@@ -267,6 +332,11 @@ function snippetAround(content: string, terms: string[]): string {
  * `wiki_search` (original text) — the split content is match-only.
  *
  * Returns an array of hits with a snippet (excerpt around the first match).
+ *
+ * A malformed FTS5 expression returns an empty array — a bad query is user
+ * input with no matches, not a failure. Every other SQLite error throws
+ * `SearchIndexUnavailableError`: a closed, corrupt, or reshaped index must not
+ * be reported to the caller as "nothing found".
  */
 export function search(
   idx: SearchIndex,
@@ -274,8 +344,10 @@ export function search(
   opts: SearchOptions = {},
 ): SearchHit[] {
   const limit = opts.limit ?? 20;
-  // Sanitizes the query: FTS5 syntax errors break the query. Catches and returns [].
-  // Covers both the raw and the split query.
+  // A malformed FTS5 expression is user input, not a fault: it yields no hits.
+  // Anything else — closed handle, corrupt file, missing table — is a real
+  // failure of the index and is rethrown, because answering "no results" there
+  // reports a healthy empty wiki when the truth is that search is broken.
   try {
     const rows = idx.db
       .prepare(
@@ -312,8 +384,9 @@ export function search(
       });
     }
     return hits;
-  } catch {
-    return [];
+  } catch (err) {
+    if (isFtsQueryError(err)) return [];
+    throw new SearchIndexUnavailableError(err);
   }
 }
 

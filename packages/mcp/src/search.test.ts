@@ -28,6 +28,8 @@ import {
   removePage,
   search,
   close,
+  isFtsQueryError,
+  SearchIndexUnavailableError,
   type SearchIndex,
 } from "./search.js";
 
@@ -92,6 +94,160 @@ describe("splitIdentifiers", () => {
     expect(splitIdentifiers("validate_configForBatch")).toBe(
       "validate_configForBatch validate config For Batch",
     );
+  });
+});
+
+/**
+ * The catch around the FTS5 query used to swallow every exception and answer
+ * `[]`, so a closed handle, a corrupt file, or a missing table reported the
+ * same thing as a healthy wiki with no matches. These tests pin the split
+ * between "your query was malformed" and "the index is broken".
+ *
+ * The error shapes asserted here were measured against better-sqlite3 12.x,
+ * not assumed: every FTS5 query fault arrives as SQLITE_ERROR, and so does
+ * `no such table` — which is why the classifier is an allowlist over the
+ * message rather than a check on the code alone.
+ */
+describe("search — SQLite failures are not empty results", () => {
+  async function fixture(): Promise<SearchIndex> {
+    await writePage(
+      "livewiki/a.md",
+      "---\ntitle: A\n---\n# A\n\nThe alpha token lives here with beta and gamma.\n",
+    );
+    idx = await openAndIndex(repoRoot);
+    return idx;
+  }
+
+  it("a valid search is unchanged", async () => {
+    const i = await fixture();
+    const hits = search(i, "alpha");
+    expect(hits.map((h) => h.wikiPath)).toEqual(["livewiki/a.md"]);
+    expect(hits[0]?.snippet).toContain("alpha");
+  });
+
+  // Every one of these is a real FTS5 parse failure, not a hypothetical.
+  it.each([
+    ['unbalanced quote', '"'],
+    ["bare operator", "AND"],
+    ["trailing operator", "alpha OR"],
+    ["unbalanced paren", "(alpha"],
+    ["empty expression", ""],
+    ["stray punctuation", "***"],
+    ["unknown column filter", "nope:alpha"],
+    ["malformed NEAR", "NEAR("],
+    ["non-numeric NEAR arg", "NEAR(alpha beta, x)"],
+    ["bare caret", "^"],
+    ["leading minus", "-alpha"],
+  ])("a malformed query (%s) still degrades to an empty result", async (_label, query) => {
+    const i = await fixture();
+    expect(search(i, query)).toEqual([]);
+  });
+
+  it("throws instead of returning [] when the database handle is closed", async () => {
+    const i = await fixture();
+    close(i);
+    idx = null; // afterEach must not double-close
+
+    expect(() => search(i, "alpha")).toThrow(SearchIndexUnavailableError);
+    // The distinction that matters: NOT an empty array.
+    let result: unknown = "not-called";
+    try {
+      result = search(i, "alpha");
+    } catch (err) {
+      result = err;
+    }
+    expect(result).not.toEqual([]);
+    expect((result as Error).message).toMatch(/search index is unavailable/i);
+  });
+
+  it("throws when the FTS table is gone (index reshaped underneath us)", async () => {
+    const i = await fixture();
+    i.db.exec("DROP TABLE wiki_search");
+
+    expect(() => search(i, "alpha")).toThrow(SearchIndexUnavailableError);
+  });
+
+  it("throws when our own column is missing, despite the message looking like a bad query", async () => {
+    const i = await fixture();
+    // "no such column: wiki_path" is byte-identical in shape to the message a
+    // user query like `-alpha` produces. Only the name tells them apart.
+    i.db.exec("DROP TABLE wiki_search");
+    i.db.exec("CREATE VIRTUAL TABLE wiki_search USING fts5(other_col, content)");
+
+    expect(() => search(i, "alpha")).toThrow(SearchIndexUnavailableError);
+  });
+
+  it("throws on a corrupt database file", async () => {
+    const dir = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "livewiki-corrupt-"));
+    const file = nodePath.join(dir, "corrupt.db");
+    try {
+      const seed = new Database(file);
+      seed.exec("CREATE VIRTUAL TABLE wiki_search USING fts5(wiki_path, content)");
+      seed.exec("CREATE VIRTUAL TABLE wiki_search_tokens USING fts5(wiki_path, content)");
+      seed.prepare("INSERT INTO wiki_search (wiki_path, content) VALUES (?, ?)")
+        .run("livewiki/a.md", "alpha");
+      seed.close();
+
+      const raw = await nodeFs.readFile(file);
+      raw.fill(0x41, 0, 64); // shred the SQLite header
+      await nodeFs.writeFile(file, raw);
+
+      const broken = new Database(file);
+      try {
+        expect(() => search({ db: broken } as SearchIndex, "alpha"))
+          .toThrow(SearchIndexUnavailableError);
+      } finally {
+        broken.close();
+      }
+    } finally {
+      await nodeFs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it("preserves the underlying error as the cause, so the real fault is reportable", async () => {
+    const i = await fixture();
+    i.db.exec("DROP TABLE wiki_search");
+
+    try {
+      search(i, "alpha");
+      expect.unreachable("search should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SearchIndexUnavailableError);
+      expect((err as Error).message).toMatch(/no such table/i);
+      expect((err as { cause?: unknown }).cause).toBeInstanceOf(Error);
+    }
+  });
+});
+
+describe("isFtsQueryError — classification is an allowlist", () => {
+  function sqliteError(message: string, code = "SQLITE_ERROR"): Error {
+    const err = new Error(message);
+    (err as unknown as { code: string }).code = code;
+    return err;
+  }
+
+  it.each([
+    'fts5: syntax error near "AND"',
+    "unterminated string",
+    "unknown special query: bogus*",
+    'expected integer, got "x"',
+    "no such column: alpha",
+  ])("treats %s as a query fault", (message) => {
+    expect(isFtsQueryError(sqliteError(message))).toBe(true);
+  });
+
+  it.each([
+    ["missing table", sqliteError("no such table: wiki_search")],
+    ["our column missing", sqliteError("no such column: wiki_path")],
+    ["our other column missing", sqliteError("no such column: content")],
+    ["corrupt", sqliteError("database disk image is malformed", "SQLITE_CORRUPT")],
+    ["not a database", sqliteError("file is not a database", "SQLITE_NOTADB")],
+    ["closed handle (plain TypeError)", new TypeError("The database connection is not open")],
+    ["disk I/O", sqliteError("disk I/O error", "SQLITE_IOERR")],
+    ["unknown future shape", sqliteError("something nobody has seen yet")],
+    ["not an Error at all", "a string" as unknown as Error],
+  ])("treats %s as an index failure", (_label, err) => {
+    expect(isFtsQueryError(err)).toBe(false);
   });
 });
 
