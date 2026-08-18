@@ -614,13 +614,15 @@ export function validateStage4Artifact(
     : null;
   const openingEnd = firstAnchoredHeading?.offset ?? firstSectionMarker?.index ?? markerScanBody.length;
   const relaxed = context?.relaxed === true;
-  const openingFailure =
+  // Every independent opening failure of this pass, in contract order: one
+  // per attempt made the retry budget play whack-a-mole (benchmark 0.2.1).
+  const openingFailures =
     pageKind === "flow"
       ? checkRequiredFlowOpening(markerScanBody, body, context?.expectedFlowDiagram, relaxed)
       : pageKind === "topic"
         ? checkRequiredTopicOpening(markerScanBody, context?.expectedTopicTitle, relaxed)
         : checkRequiredPageOpening(markerScanBody.slice(0, openingEnd), relaxed);
-  if (openingFailure !== null) {
+  for (const openingFailure of openingFailures) {
     errors.push(
       err(
         "missing_page_opening",
@@ -1286,24 +1288,36 @@ function validateExactTopicList(
   }
 }
 
-/** Structural-only check for the required page opening, in contract order. */
-function checkRequiredPageOpening(text: string, relaxed = false): PageOpeningFailure | null {
+/**
+ * Structural-only check for the required page opening, in contract order.
+ *
+ * Reports EVERY independent failure of one pass, in contract order — one
+ * defect per attempt turned the retry budget into whack-a-mole (benchmark
+ * 0.2.1). A defect that invalidates the cursor the later checks depend on
+ * (no H1, a missing required H2) still stops the pass: one real error beats
+ * a cascade of derived noise.
+ *
+ * The messages are consumed by regex in `repair-contract.ts` and
+ * `section-guard.ts` — they must stay byte-for-byte as they are.
+ */
+function checkRequiredPageOpening(text: string, relaxed = false): PageOpeningFailure[] {
   const lines = text.split("\n");
   while (lines.length > 0 && lines[0]!.trim() === "") lines.shift();
   while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+  const failures: PageOpeningFailure[] = [];
 
   const h1Index = lines.findIndex((line) => /^#\s+\S/.test(line.trim()));
   if (h1Index < 0) {
-    return {
+    return [{
       message: "required page opening H1 is missing",
       offending: "(absent)",
-    };
+    }];
   }
   if (h1Index > 0) {
-    return {
+    return [{
       message: "required page opening H1 appears after other content",
       offending: lines[h1Index]!.trim(),
-    };
+    }];
   }
 
   const whenIndex = findExactOpeningH2(lines, "When to use this page", 1);
@@ -1312,19 +1326,22 @@ function checkRequiredPageOpening(text: string, relaxed = false): PageOpeningFai
   const responsibilityEnd = firstPresentIndex(whenIndex, whenCandidateIndex, firstH2AfterH1, lines.length);
   const responsibilityFailure = proseBlockFailure(lines.slice(1, responsibilityEnd), true, false);
   if (responsibilityFailure !== null) {
-    return {
+    failures.push({
       message: responsibilityFailure === "(absent)"
         ? "page opening responsibility paragraph is missing"
         : "page opening responsibility block must be exactly one prose paragraph",
       offending: responsibilityFailure,
-    };
+    });
   }
 
   if (whenIndex < 0) {
-    return {
+    failures.push({
       message: 'required page opening H2 "When to use this page" is missing or malformed',
       offending: offendingHeading(lines, whenCandidateIndex, firstH2AfterH1),
-    };
+    });
+    // The remaining checks scan from this heading; without it they would
+    // report derived absences instead of real defects.
+    return failures;
   }
 
   const howIndex = findExactOpeningH2(lines, "How it fits", whenIndex + 1);
@@ -1339,23 +1356,24 @@ function checkRequiredPageOpening(text: string, relaxed = false): PageOpeningFai
   // Relaxed contract: bullets or prose, any count — only presence remains.
   if (relaxed) {
     if (taskLines.length === 0) {
-      return {
+      failures.push({
         message: 'page opening "When to use this page" must contain at least one task line (relaxed contract: bullets or prose, any count)',
         offending: "(absent)",
-      };
+      });
     }
   } else if (taskLines.length < 2 || taskLines.length > 4 || malformedTaskLine !== undefined) {
-    return {
+    failures.push({
       message: 'page opening "When to use this page" task list must contain only 2 to 4 non-empty Markdown bullets',
       offending: malformedTaskLine ?? openingSnippet(taskLines),
-    };
+    });
   }
 
   if (howIndex < 0) {
-    return {
+    failures.push({
       message: 'required page opening H2 "How it fits" is missing or malformed',
       offending: offendingHeading(lines, howCandidateIndex, firstH2AfterWhen),
-    };
+    });
+    return failures;
   }
 
   // Bound the How-it-fits prose block at the next implementation
@@ -1368,15 +1386,15 @@ function checkRequiredPageOpening(text: string, relaxed = false): PageOpeningFai
   // Relaxed contract: How-it-fits accepts bullets.
   const howFailure = proseBlockFailure(howBlockLines, false, true, relaxed);
   if (howFailure !== null) {
-    return {
+    failures.push({
       message: relaxed
         ? 'page opening "How it fits" must contain one or more prose paragraphs or bullets without headings or lw: markers'
         : 'page opening "How it fits" must contain one or more prose paragraphs without headings, bullets, or lw: markers',
       offending: howFailure,
-    };
+    });
   }
 
-  return null;
+  return failures;
 }
 
 /**
@@ -1393,15 +1411,16 @@ function checkRequiredPageOpening(text: string, relaxed = false): PageOpeningFai
  * they neither satisfy nor violate section content requirements; the dual
  * closed-key completeness rule governs their placement.
  */
-function checkRequiredTopicOpening(masked: string, expectedTitle?: string, relaxed = false): PageOpeningFailure | null {
+function checkRequiredTopicOpening(masked: string, expectedTitle?: string, relaxed = false): PageOpeningFailure[] {
   const lines = masked.split("\n");
   while (lines.length > 0 && lines[0]!.trim() === "") lines.shift();
   while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+  const failures: PageOpeningFailure[] = [];
   if (!/^#\s+\S/.test(lines[0]?.trim() ?? "")) {
-    return { message: "required topic H1 is missing or appears after other content", offending: lines[0]?.trim() || "(absent)" };
+    return [{ message: "required topic H1 is missing or appears after other content", offending: lines[0]?.trim() || "(absent)" }];
   }
   if (expectedTitle !== undefined && lines[0]!.trim().slice(2).trim() !== expectedTitle) {
-    return { message: `topic H1 must match the accepted title "${expectedTitle}"`, offending: lines[0]!.trim() };
+    failures.push({ message: `topic H1 must match the accepted title "${expectedTitle}"`, offending: lines[0]!.trim() });
   }
 
   // Relaxed contract: the required-section set reduces to Purpose,
@@ -1424,33 +1443,36 @@ function checkRequiredTopicOpening(masked: string, expectedTitle?: string, relax
   // longer limited to a single paragraph.
   const problemFailure = proseBlockFailure(lines.slice(1, problemEnd), !relaxed, false, relaxed);
   if (problemFailure !== null) {
-    return {
+    failures.push({
       message: relaxed
         ? "topic opening must contain a reader-problem block between H1 and Purpose (relaxed contract: prose or bullets)"
         : "topic opening must contain exactly one reader-problem sentence between H1 and Purpose",
       offending: problemFailure,
-    };
+    });
   }
 
   let cursor = 1;
   for (const title of required) {
     const index = findExactOpeningH2(lines, title, cursor);
     if (index < 0) {
-      return {
+      failures.push({
         message: `required topic H2 "${title}" is missing, malformed, or out of order`,
         offending: offendingHeading(lines, findOpeningHeadingCandidate(lines, title, cursor), findNextH2(lines, cursor)),
-      };
+      });
+      // The ordered scan cursor stops here: every later section would be
+      // reported "out of order" as a consequence of this one.
+      return failures;
     }
     const sectionFailure = flowSectionProseFailure(
       lines.slice(index + 1, flowSectionEnd(lines, index)),
       relaxed || title === "When to use this page" || title === "Change map" || title === "Related pages",
     );
     if (sectionFailure !== null) {
-      return { message: `topic section "${title}" must contain grounded prose, bullets, or links`, offending: sectionFailure };
+      failures.push({ message: `topic section "${title}" must contain grounded prose, bullets, or links`, offending: sectionFailure });
     }
     cursor = index + 1;
   }
-  return null;
+  return failures;
 }
 
 /**
@@ -1520,7 +1542,7 @@ function checkRequiredFlowOpening(
   raw: string,
   expectedFlowDiagram?: string,
   relaxed = false,
-): PageOpeningFailure | null {
+): PageOpeningFailure[] {
   const maskedLines = masked.split("\n");
   const rawLines = raw.split("\n");
   let start = 0;
@@ -1530,18 +1552,20 @@ function checkRequiredFlowOpening(
   const lines = maskedLines.slice(start, end);
   const rawSlice = rawLines.slice(start, end);
 
+  const failures: PageOpeningFailure[] = [];
+
   const h1Index = lines.findIndex((line) => /^#\s+\S/.test(line.trim()));
   if (h1Index < 0) {
-    return {
+    return [{
       message: "required page opening H1 is missing",
       offending: "(absent)",
-    };
+    }];
   }
   if (h1Index > 0) {
-    return {
+    return [{
       message: "required page opening H1 appears after other content",
       offending: lines[h1Index]!.trim(),
-    };
+    }];
   }
 
   const purposeIndex = findExactOpeningH2(lines, "Purpose", 1);
@@ -1550,31 +1574,36 @@ function checkRequiredFlowOpening(
   const responsibilityEnd = firstPresentIndex(purposeIndex, purposeCandidateIndex, firstH2AfterH1, lines.length);
   const responsibilityFailure = proseBlockFailure(lines.slice(1, responsibilityEnd), true, false);
   if (responsibilityFailure !== null) {
-    return {
+    failures.push({
       message: responsibilityFailure === "(absent)"
         ? "page opening responsibility paragraph is missing"
         : "page opening responsibility block must be exactly one prose paragraph",
       offending: responsibilityFailure,
-    };
+    });
   }
 
   if (purposeIndex < 0) {
-    return {
+    failures.push({
       message: 'required page opening H2 "Purpose" is missing or malformed',
       offending: offendingHeading(lines, purposeCandidateIndex, firstH2AfterH1),
-    };
+    });
+    // Every later section is located from this cursor.
+    return failures;
   }
 
   // Contract ordering: the opening (H1, responsibility paragraph, Purpose)
   // must appear before the first lw:anchors section marker, same rule as
   // module pages — markers live inside the contract sections, never before
   // the Purpose heading.
+  // Only when the responsibility block itself is clean: a marker sitting in
+  // that block already failed above, and reporting the same misplaced marker
+  // twice under two different messages is noise, not a second defect.
   const firstMarkerLine = lines.findIndex((line) => /<!--\s*lw:anchors\s/.test(line));
-  if (firstMarkerLine >= 0 && firstMarkerLine <= purposeIndex) {
-    return {
+  if (responsibilityFailure === null && firstMarkerLine >= 0 && firstMarkerLine <= purposeIndex) {
+    failures.push({
       message: 'page opening (H1, responsibility paragraph, "Purpose") must appear before the first lw:anchors section marker',
       offending: lines[firstMarkerLine]!.trim(),
-    };
+    });
   }
 
   // Relaxed contract: Purpose accepts bullets.
@@ -1583,44 +1612,46 @@ function checkRequiredFlowOpening(
     relaxed,
   );
   if (purposeFailure !== null) {
-    return {
+    failures.push({
       message: 'page opening "Purpose" must contain one or more prose paragraphs',
       offending: purposeFailure,
-    };
+    });
   }
 
   const orderedIndex = findExactOpeningH2(lines, "Ordered flow", purposeIndex + 1);
   if (orderedIndex < 0) {
-    return {
+    failures.push({
       message: 'required page opening H2 "Ordered flow" is missing or malformed',
       offending: offendingHeading(
         lines,
         findOpeningHeadingCandidate(lines, "Ordered flow", purposeIndex + 1),
         findNextH2(lines, purposeIndex + 1),
       ),
-    };
+    });
+    return failures;
   }
   const orderedContent = lines
     .slice(orderedIndex + 1, flowSectionEnd(lines, orderedIndex))
     .map((line) => line.trim())
     .filter(Boolean);
   if (!orderedContent.some((line) => /^\d+[.)]\s+\S/.test(line))) {
-    return {
+    failures.push({
       message: 'page opening "Ordered flow" must contain a numbered Markdown list with at least one item',
       offending: openingSnippet(orderedContent),
-    };
+    });
   }
 
   const diagramIndex = findExactOpeningH2(lines, "Diagram", orderedIndex + 1);
   if (diagramIndex < 0) {
-    return {
+    failures.push({
       message: 'required page opening H2 "Diagram" is missing or malformed',
       offending: offendingHeading(
         lines,
         findOpeningHeadingCandidate(lines, "Diagram", orderedIndex + 1),
         findNextH2(lines, orderedIndex + 1),
       ),
-    };
+    });
+    return failures;
   }
   const diagramRaw = rawSlice
     .slice(diagramIndex + 1, flowSectionEnd(lines, diagramIndex))
@@ -1631,18 +1662,17 @@ function checkRequiredFlowOpening(
     .map((line) => line.trim())
     .find((line) => /^%%\s*livewiki\/diagrams\/flow-\S+\.mmd$/.test(line));
   if (placeholderLine === undefined) {
-    return {
+    failures.push({
       message: 'page opening "Diagram" must contain a fenced mermaid code block holding a %% livewiki/diagrams/flow-<slug>.mmd placeholder line',
       offending: "(absent)",
-    };
-  }
-  if (expectedFlowDiagram !== undefined) {
+    });
+  } else if (expectedFlowDiagram !== undefined) {
     const actual = placeholderLine.replace(/^%%\s*/, "").trim();
     if (actual !== expectedFlowDiagram) {
-      return {
+      failures.push({
         message: `page opening "Diagram" placeholder must be exactly "%% ${expectedFlowDiagram}"`,
         offending: placeholderLine,
-      };
+      });
     }
   }
 
@@ -1653,14 +1683,16 @@ function checkRequiredFlowOpening(
   const invariantsIndex = findExactOpeningH2(lines, "Invariants", sectionCursor);
   if (invariantsIndex < 0) {
     if (!relaxed) {
-      return {
+      // Not a blocking defect: the sections after it are still located from
+      // the unchanged cursor, so their own defects surface in this pass.
+      failures.push({
         message: 'required page opening H2 "Invariants" is missing or malformed',
         offending: offendingHeading(
           lines,
           findOpeningHeadingCandidate(lines, "Invariants", sectionCursor),
           findNextH2(lines, sectionCursor),
         ),
-      };
+      });
     }
   } else {
     const invariantsFailure = flowSectionProseFailure(
@@ -1668,10 +1700,10 @@ function checkRequiredFlowOpening(
       true,
     );
     if (invariantsFailure !== null) {
-      return {
+      failures.push({
         message: 'page opening "Invariants" must contain prose or bullets',
         offending: invariantsFailure,
-      };
+      });
     }
     sectionCursor = invariantsIndex + 1;
   }
@@ -1679,14 +1711,14 @@ function checkRequiredFlowOpening(
   const failureIndex = findExactOpeningH2(lines, "Failure and recovery", sectionCursor);
   if (failureIndex < 0) {
     if (!relaxed) {
-      return {
+      failures.push({
         message: 'required page opening H2 "Failure and recovery" is missing or malformed',
         offending: offendingHeading(
           lines,
           findOpeningHeadingCandidate(lines, "Failure and recovery", sectionCursor),
           findNextH2(lines, sectionCursor),
         ),
-      };
+      });
     }
   } else {
     // Relaxed contract: Failure and recovery accepts bullets.
@@ -1695,39 +1727,40 @@ function checkRequiredFlowOpening(
       relaxed,
     );
     if (failureFailure !== null) {
-      return {
+      failures.push({
         message: relaxed
           ? 'page opening "Failure and recovery" must contain prose or bullets'
           : 'page opening "Failure and recovery" must contain one or more prose paragraphs',
         offending: failureFailure,
-      };
+      });
     }
     sectionCursor = failureIndex + 1;
   }
 
   const relatedIndex = findExactOpeningH2(lines, "Related pages", sectionCursor);
   if (relatedIndex < 0) {
-    return {
+    failures.push({
       message: 'required page opening H2 "Related pages" is missing or malformed',
       offending: offendingHeading(
         lines,
         findOpeningHeadingCandidate(lines, "Related pages", failureIndex + 1),
         findNextH2(lines, failureIndex + 1),
       ),
-    };
+    });
+    return failures;
   }
   const relatedContent = lines
     .slice(relatedIndex + 1, flowSectionEnd(lines, relatedIndex))
     .map((line) => line.trim())
     .filter(Boolean);
   if (!relatedContent.some((line) => /\[[^\]]+\]\([^)]*\)/.test(line))) {
-    return {
+    failures.push({
       message: 'page opening "Related pages" must contain at least one Markdown link',
       offending: openingSnippet(relatedContent),
-    };
+    });
   }
 
-  return null;
+  return failures;
 }
 
 /** End line index (exclusive) of a flow contract section: the next heading of any level. */

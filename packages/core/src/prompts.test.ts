@@ -1611,6 +1611,32 @@ describe("prompts — stage 5 flow placement and semantic key groups (R10.1 D)",
     expect(rules).toContain("entry/boundary/sink key groups");
   });
 
+  // Benchmark 0.2.1: bullets in `Purpose`/`Failure and recovery` caused most
+  // of the flow retries. The strict contract rejects them there and accepts
+  // them in `Invariants` — the prompt must say so where the model looks.
+  it("states where a bullet list is rejected, in the rules and in the rejection list", () => {
+    const initial = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
+    const repair = stage5Repair([]);
+    const rules = FLOW_PAGE_PROMPT_RULES.join("\n");
+
+    const purposeRule = FLOW_PAGE_PROMPT_RULES.find((rule) => rule.startsWith("- `Purpose`:"));
+    const failureRule = FLOW_PAGE_PROMPT_RULES.find((rule) =>
+      rule.startsWith("- `Failure and recovery`:"));
+    expect(purposeRule).toMatch(/bullet list in this section is REJECTED/);
+    expect(failureRule).toMatch(/bullet list in this section is REJECTED/);
+    // Invariants keeps accepting either shape.
+    expect(rules).toContain("`Invariants`: prose or bullets");
+
+    // The initial prompt also lists it under REJECTION CRITERIA (the repair
+    // prompt has no such list — it carries the shared rules plus per-error
+    // directives, and the rules above already reached it).
+    expect(initial.system).toContain(
+      "`Purpose` or `Failure and recovery` written as a bullet list instead of prose paragraphs",
+    );
+    expect(repair.system).toContain(purposeRule!);
+    expect(repair.system).toContain(failureRule!);
+  });
+
   it("carries the anti-meta rule and no excerpt hedge in both stage-5 prompts", () => {
     const initial = buildStage5Prompt(flowCandidate, flowClosedKeys, "openings", "symbols", "source");
     const repair = stage5Repair([]);

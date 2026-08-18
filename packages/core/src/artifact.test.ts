@@ -19,6 +19,8 @@ import {
   markDegradedArtifact,
   buildDegradedNotice,
 } from "./artifact.js";
+import { surgicalRepairTargetSections } from "./section-guard.js";
+import { renderActionDirective } from "./repair-contract.js";
 
 describe("artifact.normalizeStage4Artifact — strip + unwrap", () => {
   it("raw output (no think, no fence) is returned as-is", () => {
@@ -1760,6 +1762,61 @@ A failed task is marked and the run continues to the next task.`;
     const openingErrors = errors.filter((error) => error.code === "missing_page_opening");
     expect(openingErrors).toHaveLength(1);
     expect(openingErrors[0]).toMatchObject({ message, offending, location: "body" });
+  });
+
+  // Benchmark 0.2.1: one opening defect per attempt turned the 3-attempt
+  // budget into whack-a-mole — the flow task spent it discovering, one paid
+  // call at a time, defects a single pass could have listed together.
+  describe("independent opening defects surface in ONE pass", () => {
+    const PURPOSE_BULLETS = `## Purpose
+
+<!-- lw:anchors src/cli.ts#run -->
+
+- A batch run starts from the CLI.
+- It produces accepted module pages.`;
+    const FAILURE_BULLETS = `## Failure and recovery
+
+<!-- lw:anchors src/store.ts#persist -->
+
+- A failed task is marked.
+- The run continues to the next task.`;
+    const twoDefectBody = [
+      OPENING, PURPOSE_BULLETS, ORDERED, DIAGRAM, INVARIANTS, FAILURE_BULLETS, RELATED,
+    ].join("\n\n");
+
+    it("reports both bullet-shaped sections at once, in contract order", () => {
+      const errors = validateStage4Artifact(flowPage(twoDefectBody), flowKeys, flowContext).errors;
+
+      const openingErrors = errors.filter((error) => error.code === "missing_page_opening");
+      expect(openingErrors.map((error) => error.message)).toEqual([
+        'page opening "Purpose" must contain one or more prose paragraphs',
+        'page opening "Failure and recovery" must contain one or more prose paragraphs',
+      ]);
+    });
+
+    it("still reports a single error when the defect invalidates the scan cursor", () => {
+      const noH1 = [PURPOSE, ORDERED, DIAGRAM, INVARIANTS, FAILURE, RELATED].join("\n\n");
+      const errors = validateStage4Artifact(flowPage(noH1), flowKeys, flowContext).errors;
+
+      const openingErrors = errors.filter((error) => error.code === "missing_page_opening");
+      expect(openingErrors).toHaveLength(1);
+      expect(openingErrors[0]?.message).toBe("required page opening H1 is missing");
+    });
+
+    it("keeps both errors usable by the surgical-repair and repair-directive consumers", () => {
+      const errors = validateStage4Artifact(flowPage(twoDefectBody), flowKeys, flowContext).errors
+        .filter((error) => error.code === "missing_page_opening");
+
+      // section-guard resolves the section named in each message, so the
+      // surgical path now repairs BOTH sections in one call.
+      expect(surgicalRepairTargetSections(errors)).toEqual(["purpose", "failure-and-recovery"]);
+      // repair-contract still matches its section-level directive on the
+      // message text — proof the messages were not reworded.
+      for (const error of errors) {
+        const directive = renderActionDirective("flow", error, { messageSafe: error.message });
+        expect(directive).toMatch(/prose paragraph/i);
+      }
+    });
   });
 
   it("wrong diagram placeholder vs expectedFlowDiagram → missing_page_opening naming the expected placeholder", () => {
