@@ -61,6 +61,8 @@ Second, it calls `requestWithRetry` from `./base.js` with `POST`, the appropriat
 
 Third, it parses the JSON response into an `AnthropicResponse`. To extract the assistant text, it inspects `raw.content[0]`: if the first content block exists, has `type === "text"`, and carries a string `text` field, that text is used; otherwise the text is the empty string. The returned `GenerateResult` contains the text, a `usage` object that renames `input_tokens` to `inputTokens` and `output_tokens` to `outputTokens` (and keeps the real model name from `raw.model`), and a normalized stop reason. When `raw.stop_reason` is non-null, the raw value is also attached as `rawStopReason`; when it is `null`, that field is omitted.
 
+Usage is only reported when the body actually carries it. A response whose `usage` block is absent, `null`, or missing numeric token counts yields `usage: null` — unknown usage, never a fabricated `0/0`, and never a `TypeError` from reading the missing block. Callers propagate that null as `usageKnown: false`, the same contract the client-timeout path uses, so the run's cost report shows an incomplete total instead of claiming a free call.
+
 ## Stop reason normalization
 
 <!-- lw:anchors packages/core/src/llm/anthropic.ts#normalizeStopReason -->

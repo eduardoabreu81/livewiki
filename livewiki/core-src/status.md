@@ -91,7 +91,9 @@ async function applyVersionedBaseline(
 ): Promise<void>
 ```
 
-`applyVersionedBaseline` takes the database, the absolute repository root, and the partial report, and mutates the report's `debt` section in place. It loads the baseline file; if the baseline is `unavailable` or `incompatible`, it records that state (and any issues) and returns early. Otherwise it reads all active symbols, collects the baseline documentation inventory, and evaluates the baseline. The evaluation yields a health object with entries, moves, and removed anchors.
+`applyVersionedBaseline` takes the database, the absolute repository root, and the partial report, and mutates the report's `debt` section in place. It loads the baseline file; if the baseline is `unavailable` or `incompatible`, it records that state (and any issues) and returns early. Otherwise it reads all active symbols, collects the baseline documentation inventory, and evaluates the baseline. The evaluation yields a health object with entries, moves, removed anchors, and the pages the inventory could not read.
+
+A page whose frontmatter does not parse contributes no obligation at all, which would otherwise be indistinguishable from a page that owes nothing. Each one is surfaced as a `malformed_frontmatter` baseline issue naming the page and the parse failure, so the absence is visible in `status --json` instead of reading as a clean page.
 
 A set of removed identities prevents an anchor that vanished from being double-reported as a changed/deleted item — each such entry surfaces only under `removedAnchors`. Accepted entries whose state is `changed` become `changed` debt items; entries state `deleted` become `deleted` items unless they also appear as a move. Moves become their own items with a `detail` JSON describing the old-to-new key transition. The item list is sorted deterministically by wiki path, then symbol key, then event using `compareText`.
 

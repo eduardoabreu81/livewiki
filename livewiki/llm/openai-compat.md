@@ -50,7 +50,9 @@ Next it builds the request body. The system and user messages come straight from
 
 It then calls `resolveThinkingMode` to decide whether to send a `thinking` block in the body. If the resolved mode is `"disabled"`, it sends `{ type: "disabled" }`; if it is `"adaptive"`, it sends `{ type: "adaptive" }`. When the mode resolves to `"omit"`, no thinking field is sent at all.
 
-The request is dispatched through `requestWithRetry` with the provider name, the constructed URL, headers carrying the bearer token, and the stored `AdapterConfig`. After the response arrives, the method extracts the first choice's message content and the usage counters. It reports input tokens from `prompt_tokens`, output tokens from `completion_tokens`, the model name from the response, and reasoning tokens when the provider supplies them. Finally, it normalizes the raw `finish_reason` via `normalizeFinishReason` and preserves the raw value in `rawStopReason` when present.
+The request is dispatched through `requestWithRetry` with the provider name, the constructed URL, headers carrying the bearer token, and the stored `AdapterConfig`. After the response arrives, the method extracts the first choice's message content and normalizes the usage counters. It reports input tokens from `prompt_tokens`, output tokens from `completion_tokens`, the model name from the response, and reasoning tokens when the provider supplies them. Finally, it normalizes the raw `finish_reason` via `normalizeFinishReason` and preserves the raw value in `rawStopReason` when present.
+
+Usage normalization is fail-closed about what the provider did not say. An OpenAI-compatible proxy can answer `200` with no `usage` block at all, with `usage: null`, or with a block whose token counts are not finite numbers; each of those yields `usage: null` on the result — unknown usage, never a fabricated `0/0`. That distinction is load-bearing: zeros are indistinguishable from a genuinely free call and would silently understate the cost report, so callers propagate the null as `usageKnown: false` and flag the aggregate as incomplete instead.
 
 ## Thinking mode resolution
 
