@@ -34,6 +34,16 @@ to npm since 2026-08-12.
 > items follow. The earlier reconciliation notes moved to "Decision
 > history" below.
 
+### P1 — open (surfaced by the 2026-08-18 hardening round)
+
+1. **Concurrent `livewiki index` writers** — two or more `livewiki index`
+   processes can race over creating/updating rows in `files`. Observed
+   reproduction: 3 concurrent processes, 2 failed with `UNIQUE constraint
+   failed: files.path` and exited 1. Investigate and establish safe
+   serialization/convergence between writers. Deliberately NOT prescribing a
+   mutex, a retry, or any other fix before the investigation — the last two
+   rounds both showed the obvious remedy was aimed at the wrong layer.
+
 ### P2 — post-launch (decided, written, unscheduled)
 
 1. **#6 v2** — pay-variant: `update --llm` + draft PR on detected debt.
@@ -52,10 +62,43 @@ to npm since 2026-08-12.
    run row on baseline-gate throw, NFC/duplicate-receipt test gaps.
 7. **Onboarding leftovers** (from the hermes-agent comparison): preset
    that reads everything from env; standalone `livewiki doctor`.
-8. Housekeeping: `filesDeleted` recount guard, dependency modernization,
-   vitest parallelism cap + linter, `understanding.md` stale cleanup,
-   `docs-debt.yml` dogfood installing from npm instead of building
-   locally.
+8. Housekeeping: ~~`filesDeleted` recount guard~~ (DONE 2026-08-18,
+   `d28cc82` — the deletion loop skipped rows already marked deleted and
+   `filesDeleted` now counts only real active → deleted transitions),
+   dependency modernization, vitest parallelism cap + linter,
+   `understanding.md` stale cleanup, `docs-debt.yml` dogfood installing
+   from npm instead of building locally.
+9. **`openAndIndex` / `indexPage` unreadable-file visibility** — a page
+   that becomes unreadable during indexing can drop out of the search
+   index with no signal at all; the caller cannot tell "not indexed" from
+   "no such page". Investigate a fail-closed/degraded policy and how a
+   page recovers on a later run.
+10. **`SCHEMA_SQL` runs before migrations** (architecture debt) —
+    `SCHEMA_SQL` can reference columns that only a later migration adds,
+    so it assumes the final shape while running first. Already required
+    two point workarounds: the legacy `idx_debt_open` bridge and creating
+    `idx_batch_tasks_claim` after the migration step. Further reproduction
+    (2026-08-18): a v3-shaped database failed on `CREATE INDEX ... ON
+    calls(resolved_callee_key)` — fail-closed, but by accident rather than
+    by decision. Do NOT fold this into other work; it touches every
+    migration path.
+11. **`pagesSkipped` is vestigial** (cleanup) — still on `LedgerResult`
+    and in the JSON output, but always 0 since the atomic ledger
+    refactor: a page that cannot be read or parsed now invalidates the
+    whole plan instead of being skipped. Decide whether to remove it or
+    keep it as a compatibility field.
+
+### Dogfood / repository hygiene
+
+1. **`benchmarks/` and `scratch/` are indexed** — both currently enter the
+   index as ordinary repository content. Measured 2026-08-18: ~260 of ~507
+   active files come from them, including two nested git clones
+   (`benchmarks/run-livewiki/MoneyPrinterTurbo-Plus`,
+   `benchmarks/run-openwiki/…`). This inflates the undocumented count and
+   distorts every dogfood reading. Evaluate an ignore/default policy —
+   without assuming every user wants those directories excluded; a vendored
+   or benchmark tree may legitimately be documentation input for someone
+   else.
 
 ### P3 — candidates and watch-list (need evidence before promotion)
 
@@ -68,7 +111,16 @@ to npm since 2026-08-12.
 13. Git-pinned evidence verification.
 14. Optional: voice/subtitle false-claim frontier (`app-services-03`
     hotspot).
-15. **Unfiled, surfaced by the #29 rehearsal (2026-08-07)**: 35 of 90
+15. **`recordUpdateMetric` lost update** — the flow is read → append →
+    atomic write. `writeTextAtomic` serializes the write itself, but the
+    read-modify-write window stays open, so two concurrent writers can have
+    the second overwrite state read before the first landed. Atomicity
+    prevents a torn file, not a lost update. Evidence required BEFORE any
+    fix: prove whether a production path actually calls it concurrently —
+    `batch.ts` and the two MCP call sites are the candidates. If nothing
+    concurrent exists, this stays unfiled rather than becoming a
+    transaction nobody needed.
+16. **Unfiled, surfaced by the #29 rehearsal (2026-08-07)**: 35 of 90
     product files have no test at all. The tool discovers this
     deterministically at zero token cost and currently says nothing about
     it. Product feature (report coverage gaps) or noise — undecided, and
