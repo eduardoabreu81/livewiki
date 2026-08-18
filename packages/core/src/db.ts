@@ -495,6 +495,14 @@ export type FileRow = {
   size: number;
   mtime: number;
   indexed_at: number;
+  /**
+   * Soft-delete marker. A row leaves the walk (removed, renamed, newly
+   * ignored) as 'deleted' and keeps its history for move detection; it
+   * returns to 'active' when the file reappears. Consumers filter on this,
+   * so readers of a `SELECT *` row MUST honor it — omitting it here is what
+   * let the indexer treat status as write-only.
+   */
+  status: "active" | "deleted";
 };
 
 export type SymbolRow = {

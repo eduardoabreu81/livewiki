@@ -113,6 +113,11 @@ export interface IndexResult {
    *  stayed prose-tier with zero symbols. Counted separately from unchanged
    *  so the upgrade is visible, not silent. */
   filesReprocessedGrammar: number;
+  /** Rows that went from `status='deleted'` back to `'active'` because the
+   *  file returned to the walk (restored, renamed back, un-ignored). Counted
+   *  on its own axis: the file also lands in `filesUnchanged` or
+   *  `filesUpdated` depending on whether its bytes moved. */
+  filesReactivated: number;
   /** Skipped: NUL byte in the first 8 KiB (binary safety net — SPEC Phase 1). */
   filesSkippedBinary: number;
   /** Skipped: larger than 1 MiB (size cap — SPEC Phase 1). */
@@ -259,6 +264,10 @@ async function orchestrateIndex(
     /** True when the content is unchanged but the grammar set changed and
      *  the file had zero symbols (P1 directed re-parse). */
     grammarReprocess: boolean;
+    /** True when this file's row was `status='deleted'` and the file is back
+     *  in the walk. Orthogonal to the content buckets: the row transitions to
+     *  active regardless of whether the bytes also changed. */
+    reactivated: boolean;
     symbols: Array<SymbolRecord & SymbolRange>;
     calls: CallRecord[];
     rationales: RationaleRecord[];
@@ -304,8 +313,17 @@ async function orchestrateIndex(
     const content = normalizeEol(rawContent);
     const hash = sha256(content);
     const prev = existingFiles.get(entry.path);
+    // A row marked deleted whose file is back in the walk (restored, renamed
+    // back, un-ignored) must return to 'active' even when the content never
+    // changed. The unchanged fast path below only compares hashes, so it used
+    // to `continue` over exactly this case and leave the row — and its
+    // symbols — invisible to every consumer that filters status='active'.
+    // Falling through to the normal parse path is deliberate: it re-inserts
+    // only the symbols the file actually has today, instead of blanket-
+    // reviving rows that a previous generation of the same file soft-deleted.
+    const reactivated = prev !== undefined && prev.status !== "active";
     let grammarReprocess = false;
-    if (prev && prev.content_hash === hash) {
+    if (prev && prev.content_hash === hash && !reactivated) {
       // Directed re-parse: content unchanged, but the grammar state changed
       // since this file was indexed (see above). Fall through to the normal
       // parse path instead of skipping.
@@ -393,6 +411,7 @@ async function orchestrateIndex(
       hash,
       eolMigration,
       grammarReprocess,
+      reactivated,
       symbols,
       calls,
       rationales,
@@ -407,6 +426,7 @@ async function orchestrateIndex(
     filesUnchanged,
     filesDeleted: 0,
     filesReprocessedGrammar: 0,
+    filesReactivated: 0,
     symbolsAdded: 0,
     symbolsDeleted: 0,
   };
@@ -431,10 +451,9 @@ async function orchestrateIndex(
     const updateFile = db.prepare(
       "UPDATE files SET lang = ?, content_hash = ?, size = ?, mtime = ?, indexed_at = ?, status = 'active' WHERE id = ?",
     );
-    // Reactivate a file that was deleted: clear the old symbols and re-insert.
-    const reactivateFile = db.prepare(
-      "UPDATE files SET status = 'active', content_hash = ?, size = ?, mtime = ?, indexed_at = ? WHERE id = ?",
-    );
+    // NOTE: reactivation needs no statement of its own — `updateFile` above
+    // already sets status='active', and a returning file goes through the
+    // normal update path so its symbols are re-inserted as active.
     // SOFT-DELETE instead of hard delete (Fix A — Phase 2 review finding):
     // symbols that disappear from an UPDATED file need to keep their row with
     // the old content_hash, so the ledger can detect `moved` when that hash
@@ -497,9 +516,18 @@ async function orchestrateIndex(
           prev.id,
         );
         fileId = prev.id;
+        // `updateFile` above already flipped status back to 'active' and the
+        // symbol loop below re-inserts today's symbols as active, so the
+        // reactivation is complete here. It is counted on its own axis: the
+        // content bucket still reports whether the bytes moved.
+        if (plan.reactivated) {
+          result.filesReactivated++;
+          if (plan.hash === prev.content_hash) result.filesUnchanged++;
+          else result.filesUpdated++;
+        }
         // EOL migration is not a content change: the file counts as
         // unchanged and its re-inserted symbols are not "added".
-        if (plan.eolMigration) {
+        else if (plan.eolMigration) {
           result.filesUnchanged++;
         } else if (plan.grammarReprocess) {
           // Directed re-parse: not a content change either — counted
@@ -609,18 +637,23 @@ async function orchestrateIndex(
 // WITHOUT deleting the file row. This preserves history for moved detection in
 // Phase 2 (we need the deleted symbols with content_hash for matching).
     for (const [prevPath, prevRow] of existingFiles) {
-      if (!seenPaths.has(prevPath)) {
-        // Count BEFORE the UPDATE (otherwise the WHERE filters out what just changed).
-        const oldSyms = db
-          .prepare("SELECT id FROM symbols WHERE file_id = ? AND status = 'active'")
-          .all(prevRow.id) as { id: number }[];
-        markSymbolDeleted.run(prevRow.id);
-        result.symbolsDeleted += oldSyms.length;
-        markFileDeleted.run(prevRow.id);
-        deleteCallsForFile.run(prevRow.id);
-        deleteRationalesForFile.run(prevRow.id);
-        result.filesDeleted++;
-      }
+      if (seenPaths.has(prevPath)) continue;
+      // Already-deleted rows are left exactly as they are. Re-marking them
+      // wrote the same value back, re-counted the same history on every run
+      // (so `removed` never converged), and burned four statements per row
+      // for nothing. Their history is preserved, never removed — only the
+      // active → deleted transition is real work worth counting.
+      if (prevRow.status !== "active") continue;
+      // Count BEFORE the UPDATE (otherwise the WHERE filters out what just changed).
+      const oldSyms = db
+        .prepare("SELECT id FROM symbols WHERE file_id = ? AND status = 'active'")
+        .all(prevRow.id) as { id: number }[];
+      markSymbolDeleted.run(prevRow.id);
+      result.symbolsDeleted += oldSyms.length;
+      markFileDeleted.run(prevRow.id);
+      deleteCallsForFile.run(prevRow.id);
+      deleteRationalesForFile.run(prevRow.id);
+      result.filesDeleted++;
     }
 
     // Runs inside the same transaction as the symbol/call writes above so a
@@ -655,6 +688,7 @@ async function orchestrateIndex(
     filesDeleted: result.filesDeleted,
     filesUnchanged: result.filesUnchanged,
     filesReprocessedGrammar: result.filesReprocessedGrammar,
+    filesReactivated: result.filesReactivated,
     filesSkippedBinary,
     filesSkippedTooLarge,
     symbolsAdded: result.symbolsAdded,
@@ -698,6 +732,11 @@ export function formatHuman(result: IndexResult): string {
   if (result.filesReprocessedGrammar > 0) {
     lines.push(
       `  grammar upgrade: ${result.filesReprocessedGrammar} unchanged file(s) re-parsed (new grammar coverage)`,
+    );
+  }
+  if (result.filesReactivated > 0) {
+    lines.push(
+      `  reactivated: ${result.filesReactivated} previously removed file(s) back in the walk`,
     );
   }
   if (result.filesSkippedBinary > 0 || result.filesSkippedTooLarge > 0) {

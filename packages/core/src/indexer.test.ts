@@ -16,6 +16,38 @@ interface ActiveSymbolRow {
   start_line: number;
 }
 
+async function withIndexDb<T>(fn: (db: import("better-sqlite3").Database) => T): Promise<T> {
+  const Database = (await import("better-sqlite3")).default;
+  const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
+  try {
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
+/** `status` of one file row, or null when the row does not exist. */
+async function fileStatus(relPath: string): Promise<string | null> {
+  return withIndexDb((db) => {
+    const row = db.prepare("SELECT status FROM files WHERE path = ?").get(relPath) as
+      | { status: string }
+      | undefined;
+    return row?.status ?? null;
+  });
+}
+
+/** Every symbol of one file, keyed by symbol key → status. */
+async function symbolStatuses(relPath: string): Promise<Record<string, string>> {
+  return withIndexDb((db) => {
+    const rows = db
+      .prepare(
+        "SELECT s.key, s.status FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?",
+      )
+      .all(relPath) as Array<{ key: string; status: string }>;
+    return Object.fromEntries(rows.map((r) => [r.key, r.status]));
+  });
+}
+
 async function activeSymbolsForKey(key: string): Promise<ActiveSymbolRow[]> {
   const Database = (await import("better-sqlite3")).default;
   const db = new Database(nodePath.join(repoRoot, ".livewiki", "index.db"), { readonly: true });
@@ -98,6 +130,143 @@ describe("indexer end-to-end", () => {
     const r = await runIndexer(repoRoot, { quiet: true });
     expect(r.filesDeleted).toBe(1);
     expect(r.symbolsDeleted).toBe(6); // 6 symbols from auth.ts marked deleted
+  });
+
+  // The indexer used to treat `files.status` as write-only: it re-marked
+  // already-deleted rows on every run (so `removed` never converged) and the
+  // unchanged fast path skipped a returning file without restoring it.
+  describe("deleted-row state convergence and reactivation", () => {
+    const AUTH = "src/auth.ts";
+
+    async function deleteAuthAndIndex(): Promise<string> {
+      const authPath = nodePath.join(repoRoot, "src", "auth.ts");
+      const original = await nodeFs.readFile(authPath, "utf8");
+      await runIndexer(repoRoot, { quiet: true });
+      await nodeFs.rm(authPath);
+      await runIndexer(repoRoot, { quiet: true });
+      return original;
+    }
+
+    it("marks the row and its symbols deleted on the run that loses the file", async () => {
+      await deleteAuthAndIndex();
+
+      expect(await fileStatus(AUTH)).toBe("deleted");
+      expect(Object.values(await symbolStatuses(AUTH))).toEqual(
+        Array(6).fill("deleted"),
+      );
+    });
+
+    it("converges: a second run over the same deleted row reports nothing removed", async () => {
+      await deleteAuthAndIndex();
+
+      const second = await runIndexer(repoRoot, { quiet: true });
+      expect(second.filesDeleted).toBe(0);
+      expect(second.symbolsDeleted).toBe(0);
+      expect(second.filesReactivated).toBe(0);
+
+      // History is preserved, not purged: the row and its symbols stay.
+      expect(await fileStatus(AUTH)).toBe("deleted");
+      expect(Object.values(await symbolStatuses(AUTH))).toEqual(
+        Array(6).fill("deleted"),
+      );
+    });
+
+    it("stays converged across many runs and never reactivates a file still out of the walk", async () => {
+      await deleteAuthAndIndex();
+
+      for (let i = 0; i < 3; i++) {
+        const r = await runIndexer(repoRoot, { quiet: true });
+        expect(r.filesDeleted).toBe(0);
+        expect(r.filesReactivated).toBe(0);
+        expect(await fileStatus(AUTH)).toBe("deleted");
+      }
+    });
+
+    it("reactivates a returning file with the EXACT same content (byte-identical hash)", async () => {
+      const original = await deleteAuthAndIndex();
+      await nodeFs.writeFile(nodePath.join(repoRoot, "src", "auth.ts"), original);
+
+      const r = await runIndexer(repoRoot, { quiet: true });
+      expect(r.filesReactivated).toBe(1);
+      expect(r.filesDeleted).toBe(0);
+      // Bytes did not move, so the content bucket says unchanged, not updated.
+      expect(r.filesUpdated).toBe(0);
+      expect(r.filesUnchanged).toBe(2);
+
+      expect(await fileStatus(AUTH)).toBe("active");
+      expect(Object.values(await symbolStatuses(AUTH))).toEqual(
+        Array(6).fill("active"),
+      );
+    });
+
+    it("reactivating is idempotent: the next run is a plain unchanged run", async () => {
+      const original = await deleteAuthAndIndex();
+      await nodeFs.writeFile(nodePath.join(repoRoot, "src", "auth.ts"), original);
+      await runIndexer(repoRoot, { quiet: true });
+
+      const r = await runIndexer(repoRoot, { quiet: true });
+      expect(r.filesReactivated).toBe(0);
+      expect(r.filesDeleted).toBe(0);
+      expect(r.filesUnchanged).toBe(2);
+      expect(await fileStatus(AUTH)).toBe("active");
+    });
+
+    it("reactivates a returning file whose content ALSO changed, counting it as updated", async () => {
+      const original = await deleteAuthAndIndex();
+      await nodeFs.writeFile(
+        nodePath.join(repoRoot, "src", "auth.ts"),
+        original + "\nexport function extra() { return 42; }\n",
+      );
+
+      const r = await runIndexer(repoRoot, { quiet: true });
+      expect(r.filesReactivated).toBe(1);
+      expect(r.filesUpdated).toBe(1);
+      expect(await fileStatus(AUTH)).toBe("active");
+
+      const statuses = await symbolStatuses(AUTH);
+      expect(statuses["src/auth.ts#extra"]).toBe("active");
+    });
+
+    it("reactivation revives only today's symbols, never a past generation's", async () => {
+      const authPath = nodePath.join(repoRoot, "src", "auth.ts");
+      const original = await nodeFs.readFile(authPath, "utf8");
+      await runIndexer(repoRoot, { quiet: true });
+
+      // Generation 2: `gone()` exists, then is removed — it is soft-deleted
+      // while the file itself stays active.
+      await nodeFs.writeFile(authPath, original + "\nexport function gone() { return 1; }\n");
+      await runIndexer(repoRoot, { quiet: true });
+      await nodeFs.writeFile(authPath, original);
+      await runIndexer(repoRoot, { quiet: true });
+      expect((await symbolStatuses(AUTH))["src/auth.ts#gone"]).toBe("deleted");
+
+      // Now delete and restore the whole file byte-for-byte.
+      await nodeFs.rm(authPath);
+      await runIndexer(repoRoot, { quiet: true });
+      await nodeFs.writeFile(authPath, original);
+      const r = await runIndexer(repoRoot, { quiet: true });
+
+      expect(r.filesReactivated).toBe(1);
+      const statuses = await symbolStatuses(AUTH);
+      // The symbol that no longer exists in the file must STAY deleted.
+      expect(statuses["src/auth.ts#gone"]).toBe("deleted");
+      expect(statuses["src/auth.ts#makeAuth"]).toBe("active");
+    });
+
+    it("keeps status/debt clean across delete → converge → reactivate", async () => {
+      const original = await deleteAuthAndIndex();
+
+      const afterDelete = await runStatus(repoRoot);
+      expect(afterDelete.debt.total).toBe(0);
+
+      await nodeFs.writeFile(nodePath.join(repoRoot, "src", "auth.ts"), original);
+      await runIndexer(repoRoot, { quiet: true });
+
+      const afterReactivate = await runStatus(repoRoot);
+      expect(afterReactivate.debt.total).toBe(0);
+      // The reactivated file's symbols are visible to consumers again.
+      expect(await activeSymbolsForKey("src/auth.ts#makeAuth")).toHaveLength(1);
+    });
   });
 
   it("auto-creates .livewiki/ without notice", async () => {
