@@ -719,7 +719,25 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
           ...(symbols !== undefined ? { symbols } : {}),
           ...(all !== undefined ? { all } : {}),
         });
-        await runLedger(repoRoot, { quiet: true });
+        const ledger = await runLedger(repoRoot, { quiet: true });
+        if (ledger.status === "aborted") {
+          // The baseline was accepted on disk but the debt tables were NOT
+          // reconciled. Saying "resolved" here would be a lie the caller
+          // cannot detect.
+          return errorResult(
+            JSON.stringify(
+              {
+                page: accepted.page,
+                accepted: accepted.accepted,
+                ledgerApplied: false,
+                error: ledger.reason ?? "the ledger did not apply",
+                hint: "the baseline was updated; re-run to reconcile once the wiki is stable",
+              },
+              null,
+              2,
+            ),
+          );
+        }
         const ts = Date.now();
         await recordUpdateMetric(repoRoot, {
           kind: "debt_resolved",

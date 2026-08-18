@@ -65,6 +65,9 @@ export function registerIndex(program: Command): void {
           ledgerResult = await runLedger(repoRoot, { quiet: json || quiet });
         }
         emit(json, quiet, indexResult, ledgerResult);
+        // An aborted ledger wrote nothing; reporting exit 0 would tell a
+        // script the wiki is reconciled when it is not.
+        if (ledgerResult?.status === "aborted") process.exitCode = 1;
       } catch (err) {
         process.stderr.write(`livewiki index: error — ${(err as Error).message}\n`);
         // Let Node drain pending stderr I/O before exiting.
@@ -100,7 +103,18 @@ function emit(
 
 function formatLedgerHuman(r: LedgerResult): string {
   const lines: string[] = [];
-  lines.push(`livewiki ledger: OK`);
+  // A ledger that did not apply must never print OK: the whole point of the
+  // abort is that the wiki snapshot could not be trusted, so the tables were
+  // deliberately left alone.
+  if (r.status === "aborted") {
+    return `livewiki ledger: NOT APPLIED — ${r.reason ?? "unstable wiki snapshot"}`;
+  }
+  if (r.status === "applied_with_pending_rewrites") {
+    lines.push("livewiki ledger: applied, with pending markdown rewrites");
+    lines.push(`  ${r.reason ?? ""}`);
+  } else {
+    lines.push(`livewiki ledger: OK`);
+  }
   lines.push(`  pages: ${r.pagesProcessed} processed, ${r.pagesSkipped} skipped`);
   lines.push(`  anchors: ${r.anchorsUpserted} upsert`);
   lines.push(

@@ -65,6 +65,19 @@ export interface LedgerOptions {
   quiet?: boolean;
 }
 
+/**
+ * Outcome of one ledger execution.
+ *
+ * `applied`  — the transaction committed; every table below is consistent.
+ * `aborted`  — nothing was written. The filesystem snapshot could not be
+ *              formed (unreadable/unparseable page) or stopped being valid
+ *              before the transaction opened. A retry is the correct response.
+ * `applied_with_pending_rewrites` — the transaction committed but a legacy
+ *              post-commit Markdown rewrite failed. The database is correct
+ *              and `verify` reports the divergence; the next run repairs it.
+ */
+export type LedgerStatus = "applied" | "aborted" | "applied_with_pending_rewrites";
+
 export interface LedgerResult {
   pagesProcessed: number;
   pagesSkipped: number;
@@ -74,6 +87,49 @@ export interface LedgerResult {
   undocumentedSymbols: number;
   /** For telemetry/debug. */
   movedPairs: Array<{ from: string; to: string }>;
+  status: LedgerStatus;
+  /** Present when `status !== "applied"`: why, in one human sentence. */
+  reason?: string;
+}
+
+/** One page as captured by `planLedger`, with the identity used to revalidate. */
+interface PlannedPage {
+  relPath: string;
+  source: string;
+  contentHash: string;
+  size: number;
+  mtimeMs: number;
+  owner: Owner;
+  pageAnchors: string[];
+  sectionAnchors: Array<{ sectionSlug: string; symbolKeys: string[]; inManualBlock: boolean }>;
+  manualBlocks: Array<{ start: number; end: number; contentHash: string }>;
+}
+
+/**
+ * Everything the transaction needs, read from disk up front. Nothing here is
+ * a snapshot of the DATABASE: the transaction re-reads SQLite itself so no
+ * decision runs on state that went stale while the plan was being built.
+ */
+interface LedgerPlan {
+  portableBaselineMode: boolean;
+  repositoryBaseline: DocumentationBaseline | null;
+  pages: PlannedPage[];
+  /** Only collected when a baseline is available. */
+  baselineInventory: Awaited<ReturnType<typeof collectBaselineDocumentationInventory>> | null;
+}
+
+function abortedResult(reason: string): LedgerResult {
+  return {
+    pagesProcessed: 0,
+    pagesSkipped: 0,
+    anchorsUpserted: 0,
+    debtCreated: 0,
+    debtByEvent: { changed: 0, moved: 0, deleted: 0 },
+    undocumentedSymbols: 0,
+    movedPairs: [],
+    status: "aborted",
+    reason,
+  };
 }
 
 export class AnchorParseError extends Error {
@@ -92,29 +148,61 @@ export async function run(
   // Ensures `.livewiki/` exists (derived cache — auto-init).
   await safeIo.mkdir(absRoot, ".livewiki");
   const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
+
+  // Phase 1 — filesystem, read-only. A page that cannot be read or parsed
+  // invalidates the whole plan: reconciliation is destructive, and applying it
+  // from a partial view of the wiki deletes anchors whose page merely could
+  // not be opened.
+  const planned = await planLedger(absRoot, opts);
+  if (planned.plan === null) return abortedResult(planned.reason);
+
+  // Phase 2 — cheap staleness check. The plan was built outside any lock, so
+  // the wiki may have moved underneath it.
+  const stale = await revalidateLedgerPlan(absRoot, planned.plan);
+  if (stale !== null) return abortedResult(stale);
+
   const db = openIndex(dbPath);
+  let applied: { result: LedgerResult; pendingRewrites: PendingRewrite[] };
   try {
-    return await orchestrate(db, absRoot, opts);
+    // Phase 3 — one synchronous transaction. No await, no filesystem.
+    applied = applyLedger(db, planned.plan);
   } finally {
     db.close();
   }
+
+  // Phase 4 — legacy-only filesystem side effects, strictly AFTER the commit.
+  // Crashing here is recoverable: verify reports the divergence, the moved
+  // debt is already durable, and the next run redetects the move and repairs
+  // the Markdown.
+  const failedRewrites = await runPendingRewrites(absRoot, applied.pendingRewrites, opts);
+  if (failedRewrites !== null) {
+    return {
+      ...applied.result,
+      status: "applied_with_pending_rewrites",
+      reason: failedRewrites,
+    };
+  }
+  return applied.result;
 }
 
-async function orchestrate(
-  db: import("better-sqlite3").Database,
+/**
+ * Reads everything the transaction will need from disk, and refuses to produce
+ * a plan when any enumerated page cannot be turned into trustworthy data.
+ *
+ * Strictness is deliberately delegated to the existing parsers: `readText`
+ * surfaces IO/permission failures and post-listing ENOENT, and
+ * `extractAnchors` (through `parseFrontmatter`) already throws on malformed
+ * frontmatter. No second validation layer is introduced here.
+ *
+ * A post-listing ENOENT is NOT treated as a page deletion. Within one run it
+ * means the snapshot changed while it was being captured, which is a reason to
+ * replan — the deletion is picked up by the next run, whose listing simply
+ * will not contain the page.
+ */
+async function planLedger(
   absRoot: string,
   opts: LedgerOptions,
-): Promise<LedgerResult> {
-  const result: LedgerResult = {
-    pagesProcessed: 0,
-    pagesSkipped: 0,
-    anchorsUpserted: 0,
-    debtCreated: 0,
-    debtByEvent: { changed: 0, moved: 0, deleted: 0 },
-    undocumentedSymbols: 0,
-    movedPairs: [],
-  };
-
+): Promise<{ plan: LedgerPlan; reason?: undefined } | { plan: null; reason: string }> {
   const baselineLoad = await readBaseline(absRoot);
   // Once a baseline file exists, even an incompatible one, `index` is
   // detection-only for documentation identity. Falling back to the legacy
@@ -124,8 +212,155 @@ async function orchestrate(
     ? baselineLoad.baseline
     : null;
 
-  // 1. Coleta wiki pages (.md em livewiki/)
   const wikiPages = await collectWikiPages(absRoot);
+  const pages: PlannedPage[] = [];
+  for (const page of wikiPages) {
+    let stat: Awaited<ReturnType<typeof nodeFs.stat>>;
+    let source: string;
+    try {
+      const abs = await safeIo.resolveAndValidate(absRoot, page.relPath);
+      stat = await nodeFs.stat(abs);
+      source = await safeIo.readText(absRoot, page.relPath);
+    } catch (err) {
+      return {
+        plan: null,
+        reason:
+          `${page.relPath} was listed but could not be read (${(err as Error).message}); ` +
+          "the wiki snapshot is incomplete, so no reconciliation was applied",
+      };
+    }
+    let extracted: ReturnType<typeof extractAnchors>;
+    try {
+      extracted = extractAnchors(source);
+    } catch (err) {
+      return {
+        plan: null,
+        reason:
+          `${page.relPath} could not be parsed (${(err as Error).message}); ` +
+          "the wiki snapshot is incomplete, so no reconciliation was applied",
+      };
+    }
+    pages.push({
+      relPath: page.relPath,
+      source,
+      contentHash: hashContent(source),
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      owner: extracted.owner,
+      pageAnchors: [...extracted.pageAnchors],
+      sectionAnchors: extracted.sectionAnchors.map((sa) => ({
+        sectionSlug: sa.sectionSlug,
+        symbolKeys: [...sa.symbolKeys],
+        inManualBlock: sa.inManualBlock,
+      })),
+      manualBlocks: extracted.manualBlocks.map((mb) => ({
+        start: mb.start,
+        end: mb.end,
+        contentHash: sha256(source.slice(mb.start, mb.end)),
+      })),
+    });
+  }
+
+  const baselineInventory = repositoryBaseline !== null
+    ? await collectBaselineDocumentationInventory(absRoot)
+    : null;
+
+  if (!opts.quiet && pages.length === 0 && wikiPages.length > 0) {
+    // Unreachable in practice; kept explicit so a future refactor cannot make
+    // "no pages" and "every page failed" look the same.
+    // eslint-disable-next-line no-console
+    console.warn("[livewiki] ledger: no pages survived planning");
+  }
+
+  return {
+    plan: { portableBaselineMode, repositoryBaseline, pages, baselineInventory },
+  };
+}
+
+/**
+ * Cheap obsolescence check immediately before the transaction: the same set of
+ * paths, and the same size+mtime for each planned page.
+ *
+ * Deliberately NOT a re-hash. Re-reading every page costs an order of
+ * magnitude more (measured: 68ms vs 7ms on this repo, ~1s vs 89ms at 2000
+ * pages) and still cannot close the window between the check and the commit.
+ * The goal is to never knowingly apply a stale snapshot, not to pretend
+ * filesystem/SQLite are one transaction.
+ *
+ * @returns null when the plan is still valid, or the reason it is not.
+ */
+async function revalidateLedgerPlan(
+  absRoot: string,
+  plan: LedgerPlan,
+): Promise<string | null> {
+  const current = await collectWikiPages(absRoot);
+  const currentPaths = new Set(current.map((p) => p.relPath));
+  const plannedPaths = new Set(plan.pages.map((p) => p.relPath));
+  for (const relPath of currentPaths) {
+    if (!plannedPaths.has(relPath)) {
+      return `${relPath} appeared while the plan was being prepared; nothing was applied`;
+    }
+  }
+  for (const relPath of plannedPaths) {
+    if (!currentPaths.has(relPath)) {
+      return `${relPath} disappeared while the plan was being prepared; nothing was applied`;
+    }
+  }
+  for (const page of plan.pages) {
+    try {
+      const abs = await safeIo.resolveAndValidate(absRoot, page.relPath);
+      const stat = await nodeFs.stat(abs);
+      if (stat.size !== page.size || stat.mtimeMs !== page.mtimeMs) {
+        return `${page.relPath} changed while the plan was being prepared; nothing was applied`;
+      }
+    } catch (err) {
+      return `${page.relPath} became unreadable while the plan was being prepared (${(err as Error).message}); nothing was applied`;
+    }
+  }
+  return null;
+}
+
+/** A Markdown rewrite the transaction decided on but cannot perform itself. */
+interface PendingRewrite {
+  wikiPath: string;
+  oldKey: string;
+  newKey: string;
+}
+
+/**
+ * Applies every SQLite mutation of one ledger run inside a single
+ * transaction. Synchronous by construction: better-sqlite3 transactions
+ * cannot contain `await`, and more importantly a half-applied ledger is the
+ * failure mode this exists to remove.
+ *
+ * All DB state used for decisions is re-read HERE, not carried from
+ * `planLedger` — a concurrent indexer may have moved symbols in between.
+ */
+function applyLedger(
+  db: import("better-sqlite3").Database,
+  plan: LedgerPlan,
+): { result: LedgerResult; pendingRewrites: PendingRewrite[] } {
+  const run = db.transaction(() => orchestrate(db, plan));
+  return run();
+}
+
+function orchestrate(
+  db: import("better-sqlite3").Database,
+  plan: LedgerPlan,
+): { result: LedgerResult; pendingRewrites: PendingRewrite[] } {
+  const result: LedgerResult = {
+    pagesProcessed: 0,
+    pagesSkipped: 0,
+    anchorsUpserted: 0,
+    debtCreated: 0,
+    debtByEvent: { changed: 0, moved: 0, deleted: 0 },
+    undocumentedSymbols: 0,
+    movedPairs: [],
+    status: "applied",
+  };
+  const pendingRewrites: PendingRewrite[] = [];
+  const { portableBaselineMode, repositoryBaseline } = plan;
+  const wikiPages = plan.pages;
 
   // 2. Carrega estado atual do DB
   const existingDocPages = new Map<string, { id: number; content_hash: string; owner: string }>();
@@ -177,41 +412,20 @@ async function orchestrate(
     inManualBlock: boolean;
   }> = [];
 
+  // Every page here was read and parsed successfully during planning —
+  // `planLedger` aborts the run otherwise, so there is no skip path left and
+  // reconciliation always sees the complete wiki.
   for (const page of wikiPages) {
     seenDocPages.add(page.relPath);
-    let source: string;
-    try {
-      source = await safeIo.readText(absRoot, page.relPath);
-    } catch (err) {
-      result.pagesSkipped++;
-      if (!opts.quiet) {
-        // eslint-disable-next-line no-console
-        console.warn(`[livewiki] ledger: skip ${page.relPath}: ${(err as Error).message}`);
-      }
-      continue;
-    }
-
-    let extracted;
-    try {
-      extracted = extractAnchors(source);
-    } catch (err) {
-      result.pagesSkipped++;
-      if (!opts.quiet) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[livewiki] ledger: skip ${page.relPath} (parse error): ${(err as Error).message}`,
-        );
-      }
-      continue;
-    }
+    const extracted = page;
     result.pagesProcessed++;
 
     // Upsert doc_page
     const docPageId = upsertDocPage(
       db,
       page.relPath,
-      extracted.owner,
-      hashContent(source),
+      page.owner,
+      page.contentHash,
       existingDocPages,
     );
     processedDocPageIds.add(docPageId);
@@ -287,15 +501,7 @@ async function orchestrate(
     //      removed or altered block remains detectable by verify
     //      (the current block list no longer covers them, and
     //      verify compares stored-current multisets).
-    reconcileManualBlocks(
-      db,
-      docPageId,
-      extracted.manualBlocks.map((mb) => ({
-        start: mb.start,
-        end: mb.end,
-        contentHash: sha256(source.slice(mb.start, mb.end)),
-      })),
-    );
+    reconcileManualBlocks(db, docPageId, page.manualBlocks);
   }
 
   // 4. Detect MOVED at the symbol level. For each deleted symbol, look
@@ -411,14 +617,19 @@ async function orchestrate(
           continue;
         }
         // Step 2: Markdown rewrite. Only for non-manual, non-human
-        // anchors (rule #6). The rewrite is now manual-range aware
-        // and frontmatter-scoped, so it preserves human content even
-        // when the same oldKey appears in generated locations on the
-        // same page. It runs before any SQLite mutation so the
-        // Markdown remains the recoverable source of truth if a
-        // later DB operation fails.
+        // anchors (rule #6). The rewrite is manual-range aware and
+        // frontmatter-scoped, so it preserves human content even when
+        // the same oldKey appears in generated locations on the same
+        // page.
+        //
+        // It is RECORDED here and performed after the commit. Writing
+        // the file first was the old order and lost the moved debt for
+        // good on any crash in between: the Markdown already pointed at
+        // newKey, so no later run could redetect the move. Committing
+        // first inverts the asymmetry — the database is durable, verify
+        // reports the divergence, and the next run repairs the file.
         if (!info.inManualBlock && info.owner !== "human") {
-          await rewriteSymbolKeyInPage(absRoot, info.wikiPath, oldKey, newKey);
+          pendingRewrites.push({ wikiPath: info.wikiPath, oldKey, newKey });
         }
         // Step 3: collision check via the in-memory map (consistent
         // NULL handling — `sectionPart` is the empty string for the
@@ -631,8 +842,8 @@ async function orchestrate(
   //    symbols.
   upsertUndocumented(db, existingSymbols, currentAnchors, result);
 
-  if (repositoryBaseline !== null) {
-    await syncBaselineDebt(db, absRoot, repositoryBaseline, existingSymbols, result);
+  if (repositoryBaseline !== null && plan.baselineInventory !== null) {
+    syncBaselineDebt(db, repositoryBaseline, plan.baselineInventory, existingSymbols, result);
   }
 
   // 9. Expunge dead symbol rows that have an active replacement
@@ -658,17 +869,47 @@ async function orchestrate(
     "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_ledger_at', ?)",
   ).run(String(Date.now()));
 
-  return result;
+  return { result, pendingRewrites };
 }
 
-async function syncBaselineDebt(
-  db: import("better-sqlite3").Database,
+/**
+ * Performs the legacy Markdown rewrites the transaction recorded. Runs only
+ * after the commit, so a failure here leaves the database correct and the
+ * files behind — a state `verify` flags and the next run repairs.
+ *
+ * @returns null on success, or a description of what could not be rewritten.
+ */
+async function runPendingRewrites(
   absRoot: string,
+  rewrites: readonly PendingRewrite[],
+  opts: LedgerOptions,
+): Promise<string | null> {
+  const failures: string[] = [];
+  for (const rw of rewrites) {
+    try {
+      await rewriteSymbolKeyInPage(absRoot, rw.wikiPath, rw.oldKey, rw.newKey);
+    } catch (err) {
+      failures.push(`${rw.wikiPath} (${rw.oldKey} -> ${rw.newKey}): ${(err as Error).message}`);
+    }
+  }
+  if (failures.length === 0) return null;
+  const reason =
+    `the ledger committed but ${failures.length} Markdown rewrite(s) failed: ${failures.join("; ")}. ` +
+    "The database is correct; verify will report the divergence and the next run repairs it.";
+  if (!opts.quiet) {
+    // eslint-disable-next-line no-console
+    console.warn(`[livewiki] ledger: ${reason}`);
+  }
+  return reason;
+}
+
+function syncBaselineDebt(
+  db: import("better-sqlite3").Database,
   baseline: DocumentationBaseline,
+  inventory: Awaited<ReturnType<typeof collectBaselineDocumentationInventory>>,
   activeSymbols: Map<string, SymbolRow>,
   result: LedgerResult,
-): Promise<void> {
-  const inventory = await collectBaselineDocumentationInventory(absRoot);
+): void {
   const health = evaluateBaseline(baseline, [...activeSymbols.values()], inventory);
   const desired = new Map<string, {
     event: DebtEvent;
