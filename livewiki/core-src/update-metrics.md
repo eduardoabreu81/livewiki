@@ -55,14 +55,16 @@ packages/core/src/update-metrics.ts#readMetrics
 packages/core/src/update-metrics.ts#writeMetrics
 -->
 
-The read path tolerates first-run and corruption as a normal case, while the write path is a straight serialisation.
+The read path separates "there is no history" from "the history cannot be read", because collapsing the two is what allowed the next append to erase the ledger.
 
 ```ts
-async function readMetrics(repoRoot: string): Promise<UpdateMetricsFile>
+async function readMetrics(repoRoot: string): Promise<MetricsRead>
 async function writeMetrics(repoRoot: string, file: UpdateMetricsFile): Promise<void>
 ```
 
-`readMetrics` takes a repository root and returns the parsed `UpdateMetricsFile`; if the file is missing, unreadable, or has an unexpected `version`/non-array `entries`, it returns an empty `{ version: 1, entries: [] }` instead of throwing — the ledger is reconstructible, so corruption is non-fatal. `writeMetrics` takes a repository root and a full `UpdateMetricsFile` and persists it as pretty-printed JSON plus a trailing newline via `safeIo.writeText`, producing a "last coherent state" snapshot.
+`readMetrics` takes a repository root and returns `{ file, corruption }`. A missing file is not an error: it yields an empty `{ version: 1, entries: [] }` with `corruption: null`, because no file legitimately means no history. Anything else that stops the ledger from being interpreted — unreadable bytes, invalid JSON, a `version` other than 1, a non-array `entries` — still yields the empty file so callers keep working, but reports the reason alongside it and, when the bytes were readable, the raw content. `corruption.raw` is `null` only when even the read failed; that case can neither be preserved nor safely replaced.
+
+`writeMetrics` takes a repository root and a full `UpdateMetricsFile` and persists it as pretty-printed JSON plus a trailing newline via `safeIo.writeTextAtomic`. The atomic primitive matters here specifically: a ledger torn by an interrupted write is the failure this module exists to avoid, and a plain `writeText` truncates before it writes.
 
 ## Append: `recordUpdateMetric`
 
@@ -79,7 +81,13 @@ export async function recordUpdateMetric(
 ): Promise<void>
 ```
 
-This takes a repository root and an `UpdateMetric` (one of the four `kind` variants) and returns nothing. Internally it reads the file, pushes the new entry, and writes the file back — but the entire body is wrapped in a `try/catch` whose catch is empty. The rationale is that accounting is best-effort: a failure here must not break the main `update` flow, and the caller is documented as fire-and-forget. So while the happy path appends and persists, the visible code path also swallows any read/write/parse error silently.
+This takes a repository root and an `UpdateMetric` (one of the four `kind` variants) and returns nothing. On the happy path it reads the file, pushes the new entry, and writes the file back atomically. The body stays wrapped in a `try/catch` whose catch is empty, because accounting is best-effort and must not break the main `update` flow — the caller is documented as fire-and-forget.
+
+What changed is what happens between the read and the write. When `readMetrics` reports corruption, the unreadable file is copied to a backup **before** anything replaces it, and only then does the new ledger get written. The new ledger contains just the incoming metric: nothing is reconstructed or guessed from the corrupt bytes.
+
+The backup naming policy never destroys existing evidence. The first backup is `.livewiki/update_metrics.json.bak`; if that name is taken, the next is `.<epoch-ms>.bak`, then `.<epoch-ms>-<n>.bak`. Every candidate is created with the `wx` flag, so an existing backup survives — including against a concurrent writer racing for the same name. An older corruption outranks a newer one for the plain `.bak` name.
+
+If the backup cannot be written at all, `preserveCorruptLedger` throws and the empty catch swallows it, which means **nothing is written**. That ordering is the guarantee: losing a single metric is recoverable, losing the history is not, so the original stays on disk untouched whenever it could not be copied. The same holds when the final write fails after a successful backup — the history is then recoverable from the `.bak` and the original is still in place.
 
 ## Aggregating: `snapshotMetrics`
 
@@ -93,7 +101,7 @@ The aggregation entry point is what `status --json` and other status surfaces co
 export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSnapshot>
 ```
 
-This takes a repository root and returns an `UpdateMetricsSnapshot`. It reads the ledger once, then folds over every entry to compute totals: `packagesEmitted` and `totalPackageTokens` (from `package_emitted`), `writesReceived` and `totalWriteTokens` (from `write_received`), `debtResolvedTotal` (a sum of `count` across `debt_resolved`), and `batchRuns` / `batchInputTokens` / `batchOutputTokens` (from `batch_run`). It also remembers the last `package_emitted` and the last `write_received` for debugging, exposes the last 10 entries as `recent`, and finally computes `efficiencyRatio` as `totalWriteTokens / totalPackageTokens` — but only when `totalPackageTokens > 0`; otherwise it returns `null` rather than `Infinity` or `NaN`. The ratio is the proxy that backs the product thesis ("800 tokens instead of re-reading the repo").
+This takes a repository root and returns an `UpdateMetricsSnapshot`. It reads the ledger once — and when that read reports corruption, it emits a `[livewiki] update-metrics:` warning before continuing, so the zeros it is about to return are not mistaken for a repository that never ran. Being a read-only path it takes no backup and mutates nothing; the file is left exactly as found, and the next write is what preserves it. It then folds over every entry to compute totals: `packagesEmitted` and `totalPackageTokens` (from `package_emitted`), `writesReceived` and `totalWriteTokens` (from `write_received`), `debtResolvedTotal` (a sum of `count` across `debt_resolved`), and `batchRuns` / `batchInputTokens` / `batchOutputTokens` (from `batch_run`). It also remembers the last `package_emitted` and the last `write_received` for debugging, exposes the last 10 entries as `recent`, and finally computes `efficiencyRatio` as `totalWriteTokens / totalPackageTokens` — but only when `totalPackageTokens > 0`; otherwise it returns `null` rather than `Infinity` or `NaN`. The ratio is the proxy that backs the product thesis ("800 tokens instead of re-reading the repo").
 
 ## Full history: `listUpdateMetrics`
 
@@ -107,7 +115,9 @@ While the snapshot exposes aggregates plus a short tail, the Phase 7 Activity vi
 export async function listUpdateMetrics(repoRoot: string): Promise<UpdateMetric[]>
 ```
 
-This takes a repository root and returns the full `entries` array in insertion order (oldest first). It uses the same `readMetrics` path and therefore inherits the same tolerance for missing/corrupt files. The visible code wraps the body in a `try/catch` that returns `[]` on any failure, mirroring `recordUpdateMetric`'s "accounting never blocks the caller" posture — a path/realpath failure is treated as "no history" rather than an error.
+This takes a repository root and returns the full `entries` array in insertion order (oldest first). It uses the same `readMetrics` path, so a corrupt ledger yields an empty list — but, as in `snapshotMetrics`, it warns first rather than passing off "unreadable" as "nothing happened". Like that path it is read-only: no backup, no mutation. The body stays wrapped in a `try/catch` that returns `[]` on any remaining failure, mirroring `recordUpdateMetric`'s "accounting never blocks the caller" posture — a path/realpath failure is treated as "no history" rather than an error.
+
+The warning goes to `console.warn` with the `[livewiki]` prefix, the same channel `indexer`, `walker`, and `anchor-ledger` already use for conditions that must reach the operator without interrupting the run. No parallel reporting API was introduced.
 
 ## Test reset: `clearMetricsForTests`
 
