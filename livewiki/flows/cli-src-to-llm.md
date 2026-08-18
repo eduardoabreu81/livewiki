@@ -69,7 +69,7 @@ export function resolveRepoRoot(repoOpt: string | undefined): string {
 export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
 ```
 
-`createServer` accepts optional options and returns a promise for a configured `McpServer` — the in-memory server object that the stdio transport will later attach to. It registers the queue tools the agent path needs: `livewiki_next_task` to claim work, `livewiki_write_doc` to submit it under that claim, and `livewiki_renew_task_claim` to extend a lease that is about to lapse. Only a finished run triggers the full search rebuild; a `busy` answer leaves the index alone because the run is still going.
+`createServer` accepts optional options and returns a promise for a configured `McpServer` — the in-memory server object that the stdio transport will later attach to. It registers the queue tools the agent path needs: `livewiki_next_task` to claim work, `livewiki_write_doc` to submit it under that claim, and `livewiki_renew_task_claim` to extend a lease that is about to lapse. The `livewiki_resolve_debt` path also inspects the ledger outcome: when the reconciliation aborts because the wiki snapshot was unstable, it returns an error carrying `ledgerApplied: false` instead of reporting the debt as resolved — the baseline was accepted on disk, but the debt tables were not reconciled. Only a finished run triggers the full search rebuild; a `busy` answer leaves the index alone because the run is still going.
 
 ```ts
 function isWatchDenied(filename: string): boolean {

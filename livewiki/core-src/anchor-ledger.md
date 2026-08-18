@@ -59,7 +59,7 @@ This module keeps the wiki's documentation anchors consistent with the livewiki 
 
 <!-- lw:anchors packages/core/src/anchor-ledger.ts#run packages/core/src/anchor-ledger.ts#orchestrate -->
 
-The module is driven by `run`, which prepares the environment and then hands off to `orchestrate`, the pipeline that performs the actual reconciliation.
+`run` drives four phases with deliberate boundaries: everything that touches the filesystem happens before or after the SQLite transaction, never inside it.
 
 ```ts
 export async function run(
@@ -68,19 +68,16 @@ export async function run(
 ): Promise<LedgerResult>
 ```
 
-`run` takes the repository root and optional options, and returns a summary of what the ledger pass accomplished. It resolves the absolute root, creates the `.livewiki/` cache directory if missing, opens the SQLite index database, calls `orchestrate`, and always closes the database in a `finally` block.
+`run` takes the repository root and optional options, and returns a `LedgerResult` whose `status` says whether the reconciliation was applied at all.
 
-`orchestrate` then executes the full flow step by step:
+1. **`planLedger`** (async, read-only). Loads the portable baseline state, lists every Markdown page under `livewiki/`, and for each one records `size`, `mtime`, the source, and the parsed anchors and manual blocks. Any enumerated page that cannot be read or parsed **invalidates the entire plan** — reconciliation is destructive, and applying it from a partial view deletes anchors whose page merely could not be opened. A post-listing `ENOENT` is not treated as a deletion: within one run it means the snapshot moved while being captured. Strictness is delegated to the existing parsers; `parseFrontmatter` already throws on malformed frontmatter, so no second validation layer exists here.
+2. **`revalidateLedgerPlan`** (async, read-only). Re-lists the pages and compares the path set, then `stat`s each planned page and compares `size` + `mtime`. Any divergence aborts before a single row is written. This is deliberately not a re-hash: re-reading every page costs an order of magnitude more and still cannot close the window between the check and the commit.
+3. **`applyLedger`** (synchronous). Wraps `orchestrate` in one `db.transaction(...)`. Every mutation of `doc_pages`, `anchors`, `manual_blocks`, `debt`, `undocumented`, `symbols` and the `ledger_runs`/`last_ledger_at` metadata either lands together or not at all. All state used for decisions — documents, anchors, active and deleted symbols — is re-read *inside* the transaction, never carried over from the plan, so a concurrent indexer cannot make a decision run on stale rows.
+4. **`runPendingRewrites`** (async). Performs the legacy Markdown rewrites the transaction recorded, strictly after the commit.
 
-1. It loads the portable baseline state and collects every Markdown page under `livewiki/`. Once a baseline file exists, the ledger runs in "portable baseline" mode where detection is documentation-identity-only, which avoids the legacy rewrite path.
-2. It loads the existing database state into in-memory maps for documents, anchors, active symbols, and deleted symbols. Anchor identity is `(doc_page_id, section_slug, symbol_key)` because the page slot can hold multiple symbols from the frontmatter list.
-3. The page loop reads each file, extracts anchors via `extractAnchors`, upserts the document and anchor rows, and reconciles manual-block rows.
-4. Move detection runs on deleted symbols, followed by pre-move expected-set filtering and per-anchor move handling that performs Markdown rewrites.
-5. A stable-identity reconciliation deletes persisted anchors no longer present in the freshly parsed Markdown.
-6. The diff loop creates `changed` and `deleted` debt, updates stored hashes, and promotes assignees to human when the rules require it.
-7. Move debt is created per canonical anchor identity with deduplication.
-8. Pages removed from disk are removed from the database along with their anchors.
-9. Undocumented symbols are recomputed, baseline debt is synced if a baseline exists, dead symbol rows are cleaned up, and ledger metadata timestamps are updated.
+Inside the transaction, `orchestrate` runs the same pipeline as before: page upserts and manual-block reconciliation, move detection and handling, stable-identity anchor reconciliation, the diff loop that creates `changed`/`deleted` debt, move debt per canonical anchor identity, removal of pages that left the wiki, the undocumented recount, baseline debt sync, dead-symbol cleanup, and the metadata counters. Because there is no read or parse step left inside it, the page loop has no skip path: every page it sees was validated during planning.
+
+`LedgerStatus` distinguishes three outcomes. `applied` means the transaction committed and every table agrees. `aborted` means nothing was written, because the snapshot could not be formed or stopped being valid — a retry is the correct response, and callers must not report success. `applied_with_pending_rewrites` means the database is correct but a post-commit Markdown rewrite failed; `verify` reports the divergence and the next run repairs it.
 
 ## Move Detection
 
@@ -194,16 +191,18 @@ function upsertUndocumented(
 When a portable baseline exists, the ledger reconciles its open debt against the baseline's health evaluation instead of relying only on the historical diff.
 
 ```ts
-async function syncBaselineDebt(
+function syncBaselineDebt(
   db: import("better-sqlite3").Database,
-  absRoot: string,
   baseline: DocumentationBaseline,
+  inventory: BaselineDocumentationInventory,
   activeSymbols: Map<string, SymbolRow>,
   result: LedgerResult,
-): Promise<void>
+): void
 ```
 
-`syncBaselineDebt` takes the database, repo root, loaded baseline, active symbols, and result accumulator, and returns nothing directly. It collects the baseline inventory, evaluates health, builds a "desired" set of debt identities, then upserts open debt rows to match. It deletes rows no longer desired, upgrades agent-assigned rows to human when needed, and creates missing rows using the baseline's symbol and page.
+`syncBaselineDebt` takes the database, the loaded baseline, the documentation inventory, active symbols, and the result accumulator, and returns nothing. It evaluates health, builds a "desired" set of debt identities, then upserts open debt rows to match. It deletes rows no longer desired, upgrades agent-assigned rows to human when needed, and creates missing rows using the baseline's symbol and page.
+
+It is **synchronous** and receives the inventory rather than collecting it. `collectBaselineDocumentationInventory` reads the wiki from disk, which cannot happen inside the transaction; `planLedger` gathers it up front so this step is pure SQL and joins the same atomic unit as the rest of the run.
 
 ```ts
 function addDesiredBaselineDebt(

@@ -41,6 +41,8 @@ This function takes a Commander command tree and returns no value.
 
 `registerIndex` registers the `index` command and its `--ignore`, `--no-ledger`, and `--quiet` options. The action resolves the repository from the current working directory and an optional `--repo` path, loads configuration, combines configured and command-line ignores, and then runs the indexer. The ledger runs afterward unless `--no-ledger` sets the derived `ledger` option to `false`.
 
+When the ledger reports `status: "aborted"` the command sets `process.exitCode = 1`. The ledger wrote nothing in that case, so exiting zero would tell a script the wiki is reconciled when it is not.
+
 `function collectIgnore(value: string, previous: string[]): string[] {`
 
 This function takes one new ignore pattern and the patterns accumulated so far, and returns the combined list.
@@ -82,4 +84,6 @@ The ledger report needs a compact terminal summary that makes changed, moved, de
 
 This function takes a ledger result and returns a newline-joined human-readable report.
 
-`formatLedgerHuman` always begins with a successful ledger status and reports processed pages, skipped pages, upserted anchors, event counts for changed, moved, and deleted anchors, and undocumented symbols. When `r.movedPairs.length > 0`, it appends a `moved pairs:` section and one indented `from → to` line per pair.
+`formatLedgerHuman` branches on the ledger status before reporting anything else. A run whose `status` is `aborted` returns a single `livewiki ledger: NOT APPLIED — <reason>` line and nothing more: the tables were deliberately left untouched because the wiki snapshot could not be trusted, so printing counters would suggest work that never happened. A run with `applied_with_pending_rewrites` prints an `applied, with pending markdown rewrites` header plus the reason, then the usual counters — the database is correct and only the Markdown lags. Otherwise it prints `livewiki ledger: OK`.
+
+After the header it reports processed pages, skipped pages, upserted anchors, event counts for changed, moved, and deleted anchors, and undocumented symbols. When `r.movedPairs.length > 0`, it appends a `moved pairs:` section and one indented `from → to` line per pair.
