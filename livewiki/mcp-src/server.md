@@ -16,7 +16,7 @@ This page documents the Model Context Protocol (MCP) server that exposes livewik
 
 ## When to use this page
 
-- Understand how the server wires its 8 tools and manages error reporting.
+- Understand how the server wires its 9 tools and manages error reporting.
 - Learn how the allowlist and verify steps gate write operations.
 - See how the recursive file watcher keeps the search index current.
 - Trace how the server cleans up on shutdown, including Windows-safe handle handling.
@@ -57,13 +57,17 @@ The watcher's purpose is to keep the index, ledger, and search in sync with the 
 
 <!-- lw:anchors packages/mcp/src/server.ts#createServer -->
 
-`createServer(opts: CreateServerOptions = {}): Promise<McpServer>` takes an options object with an optional `repoRoot` (defaulting to `process.cwd()`) and an optional `verify` seam for tests, and returns a configured `McpServer` instance. It resolves the repo root, picks the verify implementation, opens and indexes the search index, then constructs the MCP server. It registers all 8 tools in order.
+`createServer(opts: CreateServerOptions = {}): Promise<McpServer>` takes an options object with an optional `repoRoot` (defaulting to `process.cwd()`) and an optional `verify` seam for tests, and returns a configured `McpServer` instance. It resolves the repo root, picks the verify implementation, opens and indexes the search index, then constructs the MCP server. It registers all 9 tools in order.
 
-The tools break into read-only and write paths. Read-only tools — `livewiki_quickstart`, `livewiki_read`, `livewiki_search`, `livewiki_debt`, `livewiki_impact`, `livewiki_next_task` — run inside try/catch blocks that convert errors into MCP error results without leaking absolute paths or repo contents. Each successful response also carries a `_hints` block (either as a JSON field or appended text block) so arbitrary MCP clients discover the livewiki loop on their own.
+The tools break into read-only and write paths. Read-only tools — `livewiki_quickstart`, `livewiki_read`, `livewiki_search`, `livewiki_debt`, `livewiki_impact`, `livewiki_next_task`, `livewiki_renew_task_claim` — run inside try/catch blocks that convert errors into MCP error results without leaking absolute paths or repo contents. Each successful response also carries a `_hints` block (either as a JSON field or appended text block) so arbitrary MCP clients discover the livewiki loop on their own.
 
 The write tool `livewiki_write_doc` is the critical one. When no `taskId` is given, it performs a four-step flow: `safeIo.writeText` enforces the allowlist (paths must stay inside `livewiki/`), then `verify` runs on the repo and filters error-level issues touching this page, then it updates the FTS index incrementally via `indexPage`, and finally it records a `write_received` metric. If verify finds issues, `rollbackWrittenPage` unlinks the just-written file and the tool reports rejection with the first error's code and detail. If verify itself crashes, rollback still runs; if rollback fails, the tool reports that the disk may hold an unverified page.
 
-When a `taskId` is present from `livewiki_next_task`, the flow changes: `skipVerify` is forbidden, the content goes through `submitAgentBootstrapTask` which validates against that task's full page contract, and on success the server reindexes all pages so companion deterministic-hub changes are visible in search.
+When a `taskId` is present from `livewiki_next_task`, the flow changes: `skipVerify` is forbidden, `claimId` becomes mandatory (a `taskId` without it is rejected as `InvalidParams`), the content goes through `submitAgentBootstrapTask` which validates the claim before anything else and then checks the task's full page contract, and on success the server reindexes all pages so companion deterministic-hub changes are visible in search. A submission whose claim was replaced or whose lease lapsed comes back as `stale_claim` with nothing written.
+
+A `livewiki_next_task` call can also come back with `status: "busy"` — every unfinished task is leased to another executor. The server treats that as "still running": it does not rebuild the search index, which it reserves for a genuinely finished run.
+
+`livewiki_renew_task_claim` is the explicit lease extension for a task that outlives its claim. It takes the `taskId` and `claimId` handed out by `livewiki_next_task` and returns the new `leaseExpiresAt`, or a `stale_claim` error when the lease already expired or another execution re-claimed the task. There is no heartbeat and no background timer — an executor that needs more time asks for it.
 
 The function also installs a custom `close` on the server. The override stops the watcher first (awaiting any in-flight sync), closes the search index, then delegates to the original `close`. This ordering prevents the same EBUSY failures that plagued Windows CI when tests removed temp directories immediately after a close.
 

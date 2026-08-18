@@ -69,7 +69,7 @@ export function resolveRepoRoot(repoOpt: string | undefined): string {
 export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
 ```
 
-`createServer` accepts optional options and returns a promise for a configured `McpServer` — the in-memory server object that the stdio transport will later attach to.
+`createServer` accepts optional options and returns a promise for a configured `McpServer` — the in-memory server object that the stdio transport will later attach to. It registers the queue tools the agent path needs: `livewiki_next_task` to claim work, `livewiki_write_doc` to submit it under that claim, and `livewiki_renew_task_claim` to extend a lease that is about to lapse. Only a finished run triggers the full search rebuild; a `busy` answer leaves the index alone because the run is still going.
 
 ```ts
 function isWatchDenied(filename: string): boolean {
@@ -187,13 +187,13 @@ The ordered flow is the literal sequence a request follows from the user's keyst
    export async function nextAgentBootstrapTask(repoRoot: string): Promise<AgentQueueResult> {
    ```
 
-   `nextAgentBootstrapTask` takes a repository root and returns a promise for an `AgentQueueResult`; it fetches the next task the agent should work on.
+   `nextAgentBootstrapTask` takes a repository root and returns a promise for an `AgentQueueResult`; it atomically claims the next task the agent should work on, returning it with a `claimId` and a `leaseExpiresAt`. A task whose lease is still alive belongs to another executor and is never handed out again. When every unfinished task is leased, it returns `status: "busy"` rather than advancing: an empty candidate set means "nothing I can claim", never "this phase is done", so the run cannot move on — or finish — while work is still in flight.
 
    ```ts
    export async function submitAgentBootstrapTask(
    ```
 
-   `submitAgentBootstrapTask` accepts the task result supplied by the agent; it is the write path where the validated artifact is persisted.
+   `submitAgentBootstrapTask` accepts the task result supplied by the agent along with the `claimId` it was given; it is the write path where the validated artifact is persisted. The claim is checked before any filesystem work, so a late executor whose claim was replaced or whose lease lapsed gets `stale_claim` and changes nothing.
 
    ```ts
    export async function acceptBaseline(
@@ -242,10 +242,10 @@ export function formatProbeFailure(probe: ProviderProbeResult): string {
 The schema constant also carries a failure-adjacent role:
 
 ```ts
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 ```
 
-`CURRENT_SCHEMA_VERSION` is a numeric export; a value of `9` signals which SQLite layout the current core package expects. Migrations use it to detect drift between the code's expected layout and the database file on disk. The recovery behavior for a detected mismatch lives in the migration machinery, which is outside the supplied source.
+`CURRENT_SCHEMA_VERSION` is a numeric export; a value of `10` signals which SQLite layout the current core package expects. Migrations use it to detect drift between the code's expected layout and the database file on disk. The recovery behavior for a detected mismatch lives in the migration machinery, which is outside the supplied source.
 
 The supplier of the source is explicit: no other failure path is documented in this page, because the excerpt contains no `throw`, `catch`, fallback, or rollback branch for the named symbols.
 

@@ -43,9 +43,11 @@ This page details the SQLite database schema, its creation, and the versioned mi
 
 The module's purpose is to define the durable, reproducible shape of the index. It does this by declaring the current schema version, the key used to track that version, and the SQL that creates the complete database from scratch.
 
-`CURRENT_SCHEMA_VERSION` is a constant set to `9`, representing the latest schema revision the code understands. `SCHEMA_VERSION_KEY` is the string `"schema_version"`, used as the primary key in the `meta` table to store the database's current version. These two constants allow `openIndex` to detect when a database on disk is older than the code expects and to trigger the upgrade path.
+`CURRENT_SCHEMA_VERSION` is a constant set to `10`, representing the latest schema revision the code understands. `SCHEMA_VERSION_KEY` is the string `"schema_version"`, used as the primary key in the `meta` table to store the database's current version. These two constants allow `openIndex` to detect when a database on disk is older than the code expects and to trigger the upgrade path.
 
-`SCHEMA_SQL` is a large SQL string that creates every table and index with `IF NOT EXISTS` guards, making it idempotent — it runs safely on a brand-new database or an existing one. The schema covers the core indexing tables (`files`, `symbols`, `meta`), documentation work tracking (`anchors`, `debt`, `undocumented`), batch execution state (`batch_runs`, `batch_tasks`), generated documentation pages (`doc_pages`, `manual_blocks`), the symbol call graph (`calls`), and intent evidence (`rationales`). Each table is designed for a specific data lifecycle: `symbols` uses a partial unique index so that soft-deleted rows (status `'deleted'`) do not block re-inserting the same key; `debt` uses a partial index on unresolved rows to efficiently find open documentation work. The schema is the canonical definition, and migration functions reuse the same statements where possible so a migrated database converges to the same shape as a fresh one.
+`SCHEMA_SQL` is a large SQL string that creates every table and index with `IF NOT EXISTS` guards, making it idempotent — it runs safely on a brand-new database or an existing one. The schema covers the core indexing tables (`files`, `symbols`, `meta`), documentation work tracking (`anchors`, `debt`, `undocumented`), batch execution state (`batch_runs`, `batch_tasks`), generated documentation pages (`doc_pages`, `manual_blocks`), the symbol call graph (`calls`), and intent evidence (`rationales`). Each table is designed for a specific data lifecycle: `symbols` uses a partial unique index so that soft-deleted rows (status `'deleted'`) do not block re-inserting the same key; `debt` uses a partial index on unresolved rows to efficiently find open documentation work. `batch_tasks` carries `claim_id` and `lease_expires_at`, the per-execution claim the agent bootstrap queue uses to hand one task to exactly one executor. The schema is the canonical definition, and migration functions reuse the same statements where possible so a migrated database converges to the same shape as a fresh one.
+
+One index is deliberately absent from `SCHEMA_SQL`: `idx_batch_tasks_claim` spans `lease_expires_at`, and `SCHEMA_SQL` runs *before* migrations, so on a pre-v10 database `CREATE INDEX` would reference a column that does not exist yet. `openIndex` creates that index after the migration step instead, where both the from-scratch and the migrated path already have the column.
 
 ## Legacy Migration SQL (v2 → v3)
 
@@ -139,7 +141,13 @@ This function takes the current database version and the target version, and ret
   fromVersion: number,
   toVersion: number,
 ): Array<(db: Database.Database) => void>`
-This function takes the current database version and the target version, and returns an array of migration functions that must run after the legacy SQL migration. It pushes a migration function for each version boundary crossed, in order: `migrateV3ToV4`, `migrateV4ToV5`, `migrateV5ToV6`, `migrateV6ToV7`, `migrateV7ToV8`, and `migrateV8ToV9`. These functions are separated so that deterministic tests can control which migrations run, and because the caller executes SQL strings and JavaScript functions differently.
+This function takes the current database version and the target version, and returns an array of migration functions that must run after the legacy SQL migration. It pushes a migration function for each version boundary crossed, in order: `migrateV3ToV4`, `migrateV4ToV5`, `migrateV5ToV6`, `migrateV6ToV7`, `migrateV7ToV8`, `migrateV8ToV9`, and `migrateV9ToV10`. These functions are separated so that deterministic tests can control which migrations run, and because the caller executes SQL strings and JavaScript functions differently.
+
+### v9 → v10: Claim and Lease Columns on `batch_tasks`
+
+`migrateV9ToV10` adds `claim_id` and `lease_expires_at` to `batch_tasks`, guarding each `ALTER TABLE` behind `PRAGMA table_info` because SQLite has no `ADD COLUMN IF NOT EXISTS` and `SCHEMA_SQL` already carries both columns on a from-scratch database. It also creates `idx_batch_tasks_claim`.
+
+Existing rows are deliberately left with `NULL` in both columns. A pre-v10 database holds no claim information, so any row it left in `'running'` reads as unclaimed and is immediately re-claimable — which is exactly the crash-recovery behavior that existed before the claim was introduced.
 
 ## Database Opening and Initialization
 
@@ -154,7 +162,9 @@ The function first derives the directory from `dbPath` and creates a `better-sql
 
 Because `SCHEMA_SQL` references the v9 `idx_debt_open` index expression (which needs `symbol_key` and `doc_page_id` columns that pre-v8 databases lack), the function first checks whether a `debt` table exists and, if so, whether it is missing either column. In that case it creates a temporary legacy index on `(anchor_id, event)` using the same name, so that the subsequent `CREATE INDEX IF NOT EXISTS` in `SCHEMA_SQL` is safe until the migrations add the columns.
 
-After running `SCHEMA_SQL`, the function reads the `schema_version` value from the `meta` table. If there is no version row, it inserts the current `CURRENT_SCHEMA_VERSION`. Otherwise, it parses the stored version and, when it differs from `CURRENT_SCHEMA_VERSION`, applies the migrations from `migrationsFor(stored, CURRENT_SCHEMA_VERSION)` (running each entry either as `db.exec` on a string or by invoking it as a function) and then runs every function from `postV3Migrations(stored, CURRENT_SCHEMA_VERSION)` in order. Finally, it updates the `meta` table to the current version and returns the ready-to-use database handle. The function deliberately does not validate the path because the caller has already passed it through safe-io.
+After running `SCHEMA_SQL`, the function reads the `schema_version` value from the `meta` table. If there is no version row, it inserts the current `CURRENT_SCHEMA_VERSION`. Otherwise, it parses the stored version and, when it differs from `CURRENT_SCHEMA_VERSION`, applies the migrations from `migrationsFor(stored, CURRENT_SCHEMA_VERSION)` (running each entry either as `db.exec` on a string or by invoking it as a function) and then runs every function from `postV3Migrations(stored, CURRENT_SCHEMA_VERSION)` in order. Finally, it updates the `meta` table to the current version.
+
+After the migration step — and only there — it creates `idx_batch_tasks_claim`. That index spans `lease_expires_at`, a column a pre-v10 file does not have while `SCHEMA_SQL` is running; creating it last is what lets both the from-scratch path (column from `SCHEMA_SQL`) and the migrated path (column from `migrateV9ToV10`) converge on the same indexes. It then returns the ready-to-use database handle. The function deliberately does not validate the path because the caller has already passed it through safe-io.
 
 ## Tests
 

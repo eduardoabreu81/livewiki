@@ -28,7 +28,7 @@ A developer using a coding agent with livewiki wants the agent to be able to rea
 export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
 ```
 
-It takes an optional options object and resolves to a fully wired `McpServer`, which is the object the outer stdio entry point connects to an MCP transport so an LLM client such as Claude Code can call its tools.
+It takes an optional options object and resolves to a fully wired `McpServer`, which is the object the outer stdio entry point connects to an MCP transport so an LLM client such as Claude Code can call its tools. Among them are the agent-queue tools, where a task is handed out under an exclusive claim and its lease can be renewed explicitly. When every unfinished task is already leased, the queue answers `busy` instead of advancing, and the server skips its search rebuild because the run has not finished.
 
 ## Ordered flow
 
