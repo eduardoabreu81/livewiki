@@ -87,37 +87,166 @@ async function metricsPath(repoRoot: string): Promise<string> {
   return await safeIo.resolveAndValidate(repoRoot, METRICS_REL_PATH);
 }
 
-/** Reads the metrics file (or creates an empty one if it does not exist). */
-async function readMetrics(repoRoot: string): Promise<UpdateMetricsFile> {
-  const absPath = await metricsPath(repoRoot);
-  try {
-    const raw = await nodeFs.readFile(absPath, "utf8");
-    const parsed = JSON.parse(raw) as UpdateMetricsFile;
-    if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
-      // Corrupted — start over from scratch (rule #3: everything important is versioned).
-      return { version: 1, entries: [] };
-    }
-    return parsed;
-  } catch {
-    return { version: 1, entries: [] };
-  }
+/**
+ * A ledger file that exists but cannot be interpreted. `raw` holds the bytes
+ * when they could be read — null means even the read failed, in which case
+ * nothing can be preserved and nothing may be overwritten.
+ */
+interface LedgerCorruption {
+  raw: string | null;
+  reason: string;
 }
 
-/** Persists the file. Idempotent in the sense of "last coherent state". */
+interface MetricsRead {
+  file: UpdateMetricsFile;
+  /** Null when the file was absent (legitimately no history) or valid. */
+  corruption: LedgerCorruption | null;
+}
+
+/**
+ * Reads the ledger, distinguishing "absent" from "unreadable".
+ *
+ * Absent is not an error: no file means no history. An unparseable file IS
+ * an error, and is reported as such instead of being flattened into an empty
+ * ledger — that flattening is what let the next write erase the history.
+ */
+async function readMetrics(repoRoot: string): Promise<MetricsRead> {
+  const absPath = await metricsPath(repoRoot);
+  const empty: UpdateMetricsFile = { version: 1, entries: [] };
+
+  let raw: string;
+  try {
+    raw = await nodeFs.readFile(absPath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { file: empty, corruption: null };
+    }
+    // Present but unreadable: we hold no bytes, so we can neither preserve
+    // nor safely replace it.
+    return {
+      file: empty,
+      corruption: { raw: null, reason: `could not be read (${(err as Error).message})` },
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { file: empty, corruption: { raw, reason: `is not valid JSON (${(err as Error).message})` } };
+  }
+  const candidate = parsed as UpdateMetricsFile;
+  if (candidate === null || typeof candidate !== "object" || candidate.version !== 1) {
+    return { file: empty, corruption: { raw, reason: "does not declare version 1" } };
+  }
+  if (!Array.isArray(candidate.entries)) {
+    return { file: empty, corruption: { raw, reason: "has no `entries` array" } };
+  }
+  return { file: candidate, corruption: null };
+}
+
+/** Repo-relative path of the backup that preserved a corrupt ledger. */
+function backupRelPath(suffix: string): string {
+  return `${METRICS_REL_PATH}${suffix}.bak`;
+}
+
+/** Bounded search for a free backup name; see `preserveCorruptLedger`. */
+const MAX_BACKUP_ATTEMPTS = 100;
+
+/**
+ * Copies the unreadable ledger aside before anything replaces it, and says so.
+ *
+ * Naming policy: `.bak` first, and when that is taken a timestamped
+ * `.<epoch-ms>.bak`, then `.<epoch-ms>-<n>.bak`. Each candidate is created
+ * with the `wx` flag, so an existing backup is never overwritten — not by this
+ * call and not by a concurrent one. An earlier corruption is itself evidence
+ * and outranks a newer one.
+ *
+ * Throws when no backup could be written. The caller MUST treat that as
+ * "do not write", because replacing the original is only safe once a copy of
+ * it exists.
+ */
+async function preserveCorruptLedger(
+  repoRoot: string,
+  corruption: LedgerCorruption,
+): Promise<string> {
+  if (corruption.raw === null) {
+    throw new Error(
+      `${METRICS_REL_PATH} ${corruption.reason}; refusing to replace a file whose contents could not be preserved`,
+    );
+  }
+  for (let attempt = 0; attempt < MAX_BACKUP_ATTEMPTS; attempt++) {
+    const relPath =
+      attempt === 0
+        ? backupRelPath("")
+        : attempt === 1
+          ? backupRelPath(`.${Date.now()}`)
+          : backupRelPath(`.${Date.now()}-${attempt}`);
+    const abs = await safeIo.resolveAndValidate(repoRoot, relPath);
+    try {
+      // `wx` fails when the path exists — the guarantee that no prior backup
+      // is destroyed.
+      const handle = await nodeFs.open(abs, "wx");
+      try {
+        await handle.writeFile(corruption.raw, "utf8");
+      } finally {
+        await handle.close();
+      }
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[livewiki] update-metrics: ${METRICS_REL_PATH} ${corruption.reason}.\n` +
+          `[livewiki] update-metrics: previous contents preserved at ${relPath}.\n` +
+          `[livewiki] update-metrics: starting a new ledger; earlier metrics are NOT recovered.`,
+      );
+      return relPath;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw err;
+    }
+  }
+  throw new Error(
+    `${METRICS_REL_PATH} could not be preserved: ${MAX_BACKUP_ATTEMPTS} backup names already taken`,
+  );
+}
+
+/** Warns that a corrupt ledger was read, on paths that never write. */
+function warnCorruptOnRead(corruption: LedgerCorruption): void {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[livewiki] update-metrics: ${METRICS_REL_PATH} ${corruption.reason}; ` +
+      `reporting no history. The file is left untouched until the next write, which preserves it as a .bak.`,
+  );
+}
+
+/** Persists the file atomically — a torn ledger is the failure being fixed. */
 async function writeMetrics(repoRoot: string, file: UpdateMetricsFile): Promise<void> {
-  await safeIo.writeText(repoRoot, METRICS_REL_PATH, JSON.stringify(file, null, 2) + "\n");
+  await safeIo.writeTextAtomic(
+    repoRoot,
+    METRICS_REL_PATH,
+    JSON.stringify(file, null, 2) + "\n",
+  );
 }
 
 /**
  * Appends a metric. Fire-and-forget function — the caller does not need to
  * wait, and an error here must NOT break the main `update` flow.
+ *
+ * A corrupt ledger is copied to a `.bak` BEFORE the replacement is written. If
+ * that copy cannot be made, nothing is written at all: losing one metric is
+ * recoverable, losing the history is not.
  */
 export async function recordUpdateMetric(
   repoRoot: string,
   metric: UpdateMetric,
 ): Promise<void> {
   try {
-    const file = await readMetrics(repoRoot);
+    const { file, corruption } = await readMetrics(repoRoot);
+    if (corruption !== null) {
+      // Throws when the original could not be preserved — the catch below
+      // then leaves the file exactly as it was. Never invents entries from
+      // the unreadable content.
+      await preserveCorruptLedger(repoRoot, corruption);
+    }
     file.entries.push(metric);
     await writeMetrics(repoRoot, file);
   } catch {
@@ -156,7 +285,10 @@ export interface UpdateMetricsSnapshot {
 }
 
 export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSnapshot> {
-  const file = await readMetrics(repoRoot);
+  const { file, corruption } = await readMetrics(repoRoot);
+  // Read-only path: no backup is taken here (nothing is being replaced), but
+  // the zeros below must not be mistaken for a repository that never ran.
+  if (corruption !== null) warnCorruptOnRead(corruption);
   let packagesEmitted = 0;
   let totalPackageTokens = 0;
   let lastPackage: UpdateMetric | null = null;
@@ -212,7 +344,8 @@ export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSn
  */
 export async function listUpdateMetrics(repoRoot: string): Promise<UpdateMetric[]> {
   try {
-    const file = await readMetrics(repoRoot);
+    const { file, corruption } = await readMetrics(repoRoot);
+    if (corruption !== null) warnCorruptOnRead(corruption);
     return file.entries;
   } catch {
     // best-effort: accounting never blocks the caller (same posture as
