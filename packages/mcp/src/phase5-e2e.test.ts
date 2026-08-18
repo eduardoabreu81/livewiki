@@ -58,19 +58,74 @@ interface SubprocessResult {
   stderr: string;
 }
 
+/**
+ * Budget for a test that shells out to the real CLI. The default 5s was too
+ * tight for these: `livewiki init` costs ~0.9s on a developer machine and the
+ * idempotence case runs it twice, which measured 2.6s locally and 2.8s on a
+ * healthy Windows runner — under two-fold headroom, so a loaded runner
+ * overshot. Matches the budget the other subprocess-heavy E2Es already use.
+ * Applied per test, never as a suite-wide default: fast tests must stay fast
+ * to fail.
+ */
+const SUBPROCESS_TIMEOUT_MS = 30_000;
+
 /** Runs the livewiki CLI as a subprocess. Captures stdout/stderr/code. */
+/**
+ * CLI subprocesses started by the currently running test and not yet closed.
+ *
+ * Vitest abandons a test's promise when it times out, but it does not kill the
+ * process that test spawned. Without this registry the CLI kept writing
+ * `.livewiki/index.db` while the teardown removed the directory, and the real
+ * failure (a slow `init`) surfaced as `EBUSY: unlink index.db` on Windows —
+ * the timeout's consequence masquerading as its cause.
+ */
+const liveChildren = new Set<ReturnType<typeof spawn>>();
+
 function runCli(args: readonly string[], cwd: string): Promise<SubprocessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliBin, ...args, "--repo", cwd], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    liveChildren.add(child);
     let out = "";
     let err = "";
     child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
     child.stderr?.on("data", (d: Buffer) => (err += d.toString()));
-    child.on("close", (code) => resolve({ code, stdout: out, stderr: err }));
-    child.on("error", reject);
+    child.on("close", (code) => {
+      liveChildren.delete(child);
+      resolve({ code, stdout: out, stderr: err });
+    });
+    child.on("error", (e) => {
+      liveChildren.delete(child);
+      reject(e);
+    });
   });
+}
+
+/**
+ * Terminates any CLI subprocess still running and waits for it to actually
+ * exit before the caller deletes the repo. Waiting on `close` — not a sleep —
+ * is what guarantees Windows has released the SQLite handles.
+ *
+ * This only reaps orphans left by an aborted test. A subprocess that fails on
+ * its own still resolves through `runCli`, so genuine failures stay visible.
+ */
+async function reapLiveChildren(): Promise<void> {
+  const pending = [...liveChildren];
+  liveChildren.clear();
+  await Promise.all(
+    pending.map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) {
+            resolve();
+            return;
+          }
+          child.once("close", () => resolve());
+          child.kill();
+        }),
+    ),
+  );
 }
 
 interface Connected {
@@ -147,6 +202,9 @@ describe("E2E Phase 5 — end-to-end flow (hook → MCP → verify)", () => {
   });
 
   afterEach(async () => {
+    // Orphaned subprocesses must die before the directory goes, or the rm
+    // races a live writer and fails with EBUSY on Windows.
+    await reapLiveChildren();
     await nodeFs.rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -435,6 +493,9 @@ describe("E2E Phase 5 — Finding R: livewiki init adds .livewiki/ to .gitignore
   });
 
   afterEach(async () => {
+    // Orphaned subprocesses must die before the directory goes, or the rm
+    // races a live writer and fails with EBUSY on Windows.
+    await reapLiveChildren();
     await nodeFs.rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -452,7 +513,7 @@ describe("E2E Phase 5 — Finding R: livewiki init adds .livewiki/ to .gitignore
     expect(content).toContain(".livewiki/");
     expect(content).toContain("# livewiki:start");
     expect(content).toContain("# livewiki:end");
-  });
+  }, SUBPROCESS_TIMEOUT_MS);
 
   it("init PRESERVES existing user entries (append, not overwrite)", async () => {
     // .gitignore already exists with user entries
@@ -472,7 +533,7 @@ describe("E2E Phase 5 — Finding R: livewiki init adds .livewiki/ to .gitignore
     // Managed block present
     expect(content).toContain("# livewiki:start");
     expect(content).toContain("# livewiki:end");
-  });
+  }, SUBPROCESS_TIMEOUT_MS);
 
   it("init is idempotent: running twice doesn't duplicate .livewiki/", async () => {
     await runCli(["init"], repoRoot);
@@ -485,7 +546,7 @@ describe("E2E Phase 5 — Finding R: livewiki init adds .livewiki/ to .gitignore
     // Exact count of ".livewiki/" — only 1 (not duplicated)
     const matches = second.match(/^\.livewiki\/$/gm) ?? [];
     expect(matches.length).toBe(1);
-  });
+  }, SUBPROCESS_TIMEOUT_MS);
 
   it("init respects an existing user entry with the same name (doesn't duplicate)", async () => {
     // The user already added .livewiki/ manually (outside the managed block)
@@ -498,7 +559,7 @@ describe("E2E Phase 5 — Finding R: livewiki init adds .livewiki/ to .gitignore
     // Didn't duplicate — the user's entry remains the only one
     const matches = content.match(/^\.livewiki\/$/gm) ?? [];
     expect(matches.length).toBe(1);
-  });
+  }, SUBPROCESS_TIMEOUT_MS);
 
   it("init --batch also adds .gitignore (regression: must run before the batch)", async () => {
     // Ensures init (with or without --batch) does the gitignore work
@@ -516,4 +577,76 @@ describe("E2E Phase 5 — Finding R: livewiki init adds .livewiki/ to .gitignore
       expect(r.code).not.toBe(0);
     }
   }, 60_000);
+});
+
+/**
+ * Regression for the harness itself.
+ *
+ * A Windows CI run failed here with `EBUSY: unlink index.db`. The EBUSY was a
+ * consequence, not a cause: `init is idempotent` overshot the 5s default,
+ * vitest abandoned the test, the subprocess kept writing the database, and the
+ * teardown deleted the directory underneath it. Proven separately — the same
+ * sequence with the child killed first cleans up fine, and leftover WAL
+ * sidecars with no live handle delete without complaint (40/40).
+ */
+describe("E2E Phase 5 — subprocess lifecycle", () => {
+  let repoRoot: string;
+
+  beforeEach(async () => {
+    repoRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "lw-lifecycle-"));
+    await nodeFs.mkdir(nodePath.join(repoRoot, "src"), { recursive: true });
+    await nodeFs.writeFile(
+      nodePath.join(repoRoot, "src/lib.ts"),
+      "export function hello(): string { return 'hi'; }\n",
+      "utf8",
+    );
+  });
+
+  afterEach(async () => {
+    await reapLiveChildren();
+    await nodeFs.rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it("deregisters a subprocess that exits normally", async () => {
+    const before = liveChildren.size;
+    const r = await runCli(["init"], repoRoot);
+    expect(r.code).toBe(0);
+    // The registry must not grow across a completed run.
+    expect(liveChildren.size).toBe(before);
+  }, SUBPROCESS_TIMEOUT_MS);
+
+  it("reaps a subprocess still running at teardown, then the repo deletes cleanly", async () => {
+    // Start the CLI and deliberately do NOT await it — the exact state vitest
+    // leaves behind when a test times out.
+    const pending = runCli(["init"], repoRoot);
+    expect(liveChildren.size).toBe(1);
+
+    // Wait until the database actually exists, so the child provably holds it.
+    const dbPath = nodePath.join(repoRoot, ".livewiki", "index.db");
+    const deadline = Date.now() + 20_000;
+    while (!nodeFsSync.existsSync(dbPath) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(nodeFsSync.existsSync(dbPath)).toBe(true);
+
+    // Teardown behaviour: reap first, then delete.
+    await reapLiveChildren();
+    expect(liveChildren.size).toBe(0);
+
+    // The child is gone, so this must not throw EBUSY/EPERM.
+    await nodeFs.rm(repoRoot, { recursive: true });
+    expect(nodeFsSync.existsSync(repoRoot)).toBe(false);
+
+    // Let the abandoned promise settle so it cannot leak into another test.
+    await pending.catch(() => undefined);
+    await nodeFs.mkdir(repoRoot, { recursive: true }); // afterEach removes it again
+  }, SUBPROCESS_TIMEOUT_MS);
+
+  it("leaves no live child behind once teardown has run", async () => {
+    const pending = runCli(["init"], repoRoot);
+    expect(liveChildren.size).toBe(1);
+    await reapLiveChildren();
+    expect(liveChildren.size).toBe(0);
+    await pending.catch(() => undefined);
+  }, SUBPROCESS_TIMEOUT_MS);
 });
