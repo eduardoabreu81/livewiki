@@ -41,6 +41,8 @@ interface QueueTask {
     sectionByKey?: Record<string, string>;
   };
   attempts: { used: number; limit: number };
+  claimId: string;
+  leaseExpiresAt: number;
 }
 
 interface QueueResponse {
@@ -49,6 +51,22 @@ interface QueueResponse {
   task?: QueueTask;
   accounting: "unavailable";
   topicRefine: "not-run";
+}
+
+/**
+ * Forces a claim to lapse. The lease is 30 minutes of wall clock, so tests
+ * move the deadline into the past instead of waiting or faking timers — the
+ * production code reads Date.now() at the moment of the query, so this
+ * exercises the real expiry predicate.
+ */
+function expireLease(root: string, taskId: number): void {
+  const db = openIndex(nodePath.join(root, ".livewiki", "index.db"));
+  try {
+    db.prepare("UPDATE batch_tasks SET lease_expires_at = ? WHERE id = ?")
+      .run(Date.now() - 1000, taskId);
+  } finally {
+    db.close();
+  }
 }
 
 let repoRoot: string;
@@ -434,6 +452,7 @@ describe("MCP agent bootstrap queue", () => {
           name: "livewiki_write_doc",
           arguments: {
             taskId: task.taskId,
+            claimId: task.claimId,
             path: task.targetPath,
             content: renderSubmission(task),
           },
@@ -538,6 +557,7 @@ describe("MCP agent bootstrap queue", () => {
           name: "livewiki_write_doc",
           arguments: {
             taskId: task.taskId,
+            claimId: task.claimId,
             path: task.targetPath,
             content: renderSubmission(task),
           },
@@ -584,6 +604,7 @@ describe("MCP agent bootstrap queue", () => {
           name: "livewiki_write_doc",
           arguments: {
             taskId: task.taskId,
+            claimId: task.claimId,
             path: task.targetPath,
             content: renderSubmission(task),
           },
@@ -632,7 +653,7 @@ describe("MCP agent bootstrap queue", () => {
       for (let attempt = 1; attempt <= task.attempts.limit; attempt++) {
         const result = await connection.client.callTool({
           name: "livewiki_write_doc",
-          arguments: { taskId: task.taskId, path: task.targetPath, content: invalid },
+          arguments: { taskId: task.taskId, claimId: task.claimId, path: task.targetPath, content: invalid },
         });
         expect(result.isError).toBe(true);
         expect(text(result)).toContain("anchor_outside_closed_list");
@@ -677,6 +698,7 @@ describe("MCP agent bootstrap queue", () => {
           name: "livewiki_write_doc",
           arguments: {
             taskId: task.taskId,
+            claimId: task.claimId,
             path: task.targetPath,
             content: renderSubmission(task),
           },
@@ -692,7 +714,10 @@ describe("MCP agent bootstrap queue", () => {
     }
   }, 30_000);
 
-  it("reoffers an in-flight task after the MCP client abandons the run", async () => {
+  // Abandoning the connection does NOT release the claim: livewiki cannot
+  // tell a dropped client from a slow one, so the lease — not the socket — is
+  // what decides. A fresh client gets different work until the lease lapses.
+  it("does not reoffer an in-flight task while its lease is alive", async () => {
     const firstConnection = await connect();
     const first = await nextTask(firstConnection.client);
     await close(firstConnection);
@@ -701,12 +726,105 @@ describe("MCP agent bootstrap queue", () => {
     try {
       const resumed = await nextTask(secondConnection.client);
       expect(resumed.runId).toBe(first.runId);
+      expect(resumed.task?.taskId).not.toBe(first.task?.taskId);
+      expect(resumed.task?.claimId).not.toBe(first.task?.claimId);
+    } finally {
+      await close(secondConnection);
+    }
+  });
+
+  it("reoffers an abandoned task once its lease expires, under a new claim", async () => {
+    const firstConnection = await connect();
+    const first = await nextTask(firstConnection.client);
+    await close(firstConnection);
+    expireLease(repoRoot, first.task!.taskId);
+
+    const secondConnection = await connect();
+    try {
+      const resumed = await nextTask(secondConnection.client);
+      expect(resumed.runId).toBe(first.runId);
       expect(resumed.task?.taskId).toBe(first.task?.taskId);
+      expect(resumed.task?.claimId).not.toBe(first.task?.claimId);
       expect(resumed.task?.attempts.used).toBe(0);
     } finally {
       await close(secondConnection);
     }
   });
+
+  it("refuses a write from the claim the reclaim replaced, without touching the page", async () => {
+    const firstConnection = await connect();
+    const first = await nextTask(firstConnection.client);
+    const stale = first.task!;
+    await close(firstConnection);
+    expireLease(repoRoot, stale.taskId);
+
+    const secondConnection = await connect();
+    try {
+      const resumed = await nextTask(secondConnection.client);
+      expect(resumed.task?.taskId).toBe(stale.taskId);
+
+      const late = await secondConnection.client.callTool({
+        name: "livewiki_write_doc",
+        arguments: {
+          taskId: stale.taskId,
+          claimId: stale.claimId,
+          path: stale.targetPath,
+          content: renderSubmission(stale),
+        },
+      });
+      expect(late.isError).toBe(true);
+      expect(text(late)).toContain("stale_claim");
+      // The losing executor must not have written the page.
+      await expect(
+        nodeFs.access(nodePath.join(repoRoot, stale.targetPath)),
+      ).rejects.toThrow();
+
+      // The current claim still works.
+      const ok = await secondConnection.client.callTool({
+        name: "livewiki_write_doc",
+        arguments: {
+          taskId: resumed.task!.taskId,
+          claimId: resumed.task!.claimId,
+          path: resumed.task!.targetPath,
+          content: renderSubmission(resumed.task!),
+        },
+      });
+      expect(ok.isError).toBeFalsy();
+    } finally {
+      await close(secondConnection);
+    }
+  }, 30_000);
+
+  it("renews a live claim and refuses to renew one that was replaced", async () => {
+    const connection = await connect();
+    try {
+      const first = await nextTask(connection.client);
+      const task = first.task!;
+
+      const renewed = await connection.client.callTool({
+        name: "livewiki_renew_task_claim",
+        arguments: { taskId: task.taskId, claimId: task.claimId },
+      });
+      expect(renewed.isError).toBeFalsy();
+      const payload = JSON.parse(text(renewed)) as { ok: boolean; leaseExpiresAt: number };
+      expect(payload.ok).toBe(true);
+      expect(payload.leaseExpiresAt).toBeGreaterThanOrEqual(task.leaseExpiresAt);
+
+      // Expire and let another execution take it: the old claim is dead.
+      expireLease(repoRoot, task.taskId);
+      const reclaimed = await nextTask(connection.client);
+      expect(reclaimed.task?.taskId).toBe(task.taskId);
+
+      const refused = await connection.client.callTool({
+        name: "livewiki_renew_task_claim",
+        arguments: { taskId: task.taskId, claimId: task.claimId },
+      });
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toContain("stale_claim");
+    } finally {
+      await close(connection);
+    }
+  }, 30_000);
 
   it("preserves human ownership and manual blocks while completing queued writes", async () => {
     const connection = await connect();
@@ -720,6 +838,7 @@ describe("MCP agent bootstrap queue", () => {
         name: "livewiki_write_doc",
         arguments: {
           taskId: humanTask.taskId,
+          claimId: humanTask.claimId,
           path: humanTask.targetPath,
           content: renderSubmission(humanTask),
         },
@@ -742,6 +861,7 @@ describe("MCP agent bootstrap queue", () => {
         name: "livewiki_write_doc",
         arguments: {
           taskId: task.taskId,
+          claimId: task.claimId,
           path: task.targetPath,
           content: renderSubmission(task),
         },

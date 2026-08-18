@@ -15,7 +15,7 @@
 import Database from "better-sqlite3";
 import * as nodePath from "node:path";
 
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 export const SCHEMA_VERSION_KEY = "schema_version";
 
@@ -121,11 +121,20 @@ CREATE TABLE IF NOT EXISTS batch_tasks (
   target TEXT NOT NULL,
   status TEXT NOT NULL,
   checkpoint_json TEXT,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  -- Opaque per-execution claim token. NULL means unclaimed: a row that a
+  -- previous version left 'running', or one whose lease was never taken.
+  claim_id TEXT,
+  -- Epoch ms after which the claim is void and the task may be re-claimed.
+  lease_expires_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_batch_tasks_run_id ON batch_tasks(run_id);
 CREATE INDEX IF NOT EXISTS idx_batch_tasks_status ON batch_tasks(run_id, status);
+-- NOTE: idx_batch_tasks_claim is deliberately NOT here. SCHEMA_SQL runs before
+-- migrations, and on a pre-v10 database batch_tasks exists without
+-- lease_expires_at — CREATE INDEX would fail on a column that does not exist
+-- yet. openIndex creates it after migrations, where both paths have the column.
 
 CREATE TABLE IF NOT EXISTS doc_pages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -384,6 +393,32 @@ export function migrateV8ToV9(db: Database.Database): void {
 }
 
 /**
+ * v10: batch_tasks.claim_id + batch_tasks.lease_expires_at — the agent
+ * bootstrap queue hands one task to one executor at a time. Idempotent via
+ * PRAGMA table_info because SCHEMA_SQL already carries both columns on a
+ * from-scratch DB (SQLite has no `ADD COLUMN IF NOT EXISTS`).
+ *
+ * Existing rows are deliberately left with NULL in both columns. A pre-v10
+ * database has no claim information, so any row it left in 'running' is
+ * treated as unclaimed and is immediately re-claimable — which is exactly the
+ * crash-recovery semantics that existed before this migration.
+ */
+export function migrateV9ToV10(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(batch_tasks)").all() as Array<{ name: string }>;
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("claim_id")) {
+    db.exec("ALTER TABLE batch_tasks ADD COLUMN claim_id TEXT");
+  }
+  if (!names.has("lease_expires_at")) {
+    db.exec("ALTER TABLE batch_tasks ADD COLUMN lease_expires_at INTEGER");
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_batch_tasks_claim " +
+      "ON batch_tasks(run_id, status, lease_expires_at)",
+  );
+}
+
+/**
  * Pending migrations for a target version. Mapped by destination version. Each
  * entry is the SQL (string) OR the function (db) => void to apply when the DB is
  * at a lower version.
@@ -413,6 +448,7 @@ export function postV3Migrations(
   if (fromVersion < 7 && toVersion >= 7) out.push(migrateV6ToV7);
   if (fromVersion < 8 && toVersion >= 8) out.push(migrateV7ToV8);
   if (fromVersion < 9 && toVersion >= 9) out.push(migrateV8ToV9);
+  if (fromVersion < 10 && toVersion >= 10) out.push(migrateV9ToV10);
   return out;
 }
 
@@ -483,6 +519,15 @@ export function openIndex(dbPath: string): Database.Database {
       ).run(String(CURRENT_SCHEMA_VERSION), SCHEMA_VERSION_KEY);
     }
   }
+
+  // Claim index, created only here: it spans lease_expires_at, which a
+  // from-scratch DB gets from SCHEMA_SQL above and a migrated DB gets from
+  // migrateV9ToV10 — neither of which has run by the time SCHEMA_SQL executes
+  // on a pre-v10 file.
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_batch_tasks_claim " +
+      "ON batch_tasks(run_id, status, lease_expires_at)",
+  );
 
   return db;
 }

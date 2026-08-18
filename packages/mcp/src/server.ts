@@ -80,7 +80,8 @@ const TOOL_HINTS: Record<string, ToolHint[]> = {
     { tool: "livewiki_debt", when: "to check open documentation debt for the changed symbols (repo-wide impact mode)" },
   ],
   livewiki_next_task: [
-    { tool: "livewiki_write_doc", when: "to submit the task result with the returned taskId" },
+    { tool: "livewiki_write_doc", when: "to submit the task result with the returned taskId AND claimId" },
+    { tool: "livewiki_renew_task_claim", when: "to extend the lease when the work outlives leaseExpiresAt" },
   ],
   livewiki_write_doc: [
     { tool: "livewiki_debt", when: "to re-check which debt items remain open after the write" },
@@ -107,6 +108,7 @@ import { run as runLedger } from "@livewiki/core/anchor-ledger";
 import { acceptBaseline } from "@livewiki/core/baseline-operations";
 import {
   nextAgentBootstrapTask,
+  renewAgentBootstrapClaim,
   submitAgentBootstrapTask,
 } from "@livewiki/core/agent-bootstrap";
 import * as nodePath from "node:path";
@@ -483,7 +485,9 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     async () => {
       try {
         const result = await nextAgentBootstrapTask(repoRoot);
-        if (result.status !== "task") {
+        // Only a finished run warrants the full rebuild. "busy" means another
+        // executor holds the remaining work — the run is still going.
+        if (result.status === "completed" || result.status === "completed_with_failures") {
           await reindexAllPages(searchIdx, repoRoot);
         }
         return textResult(
@@ -496,6 +500,40 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
       } catch (err) {
         return errorResult(
           err instanceof Error ? err.message : "failed to load the agent bootstrap queue",
+        );
+      }
+    },
+  );
+
+  // ─── livewiki_renew_task_claim ─────────────────────────────────────────
+  // Explicit lease extension for a task that is taking longer than the
+  // default lease. There is no heartbeat: an executor that needs more time
+  // asks for it. A lapsed lease is never renewable — the task is already
+  // back in the pool by then.
+  server.tool(
+    "livewiki_renew_task_claim",
+    "Extends the lease on a task claimed through livewiki_next_task. Pass the taskId and the claimId you were given. Returns the new leaseExpiresAt, or a stale_claim error when the lease already expired or another execution re-claimed the task.",
+    {
+      taskId: z
+        .number()
+        .int()
+        .positive()
+        .describe("Task ID returned by livewiki_next_task"),
+      claimId: z
+        .string()
+        .min(1)
+        .describe("The claimId returned with that task"),
+    },
+    async ({ taskId, claimId }) => {
+      try {
+        const result = await renewAgentBootstrapClaim({ repoRoot, taskId, claimId });
+        if (!result.ok) {
+          return errorResult(JSON.stringify(result, null, 2));
+        }
+        return textResult(JSON.stringify(result, null, 2));
+      } catch (err) {
+        return errorResult(
+          err instanceof Error ? err.message : `failed to renew the claim on task #${taskId}`,
         );
       }
     },
@@ -520,6 +558,13 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         .positive()
         .optional()
         .describe("Optional task ID returned by livewiki_next_task"),
+      claimId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "The claimId returned with the task by livewiki_next_task. Required whenever taskId is set.",
+        ),
       /** When true, skips verify (not recommended; use only to write
        *  legitimate pages like quickstart that don't anchor symbols) */
       skipVerify: z
@@ -527,12 +572,18 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         .optional()
         .describe("Skip verify step (default false). Only use for non-anchor pages."),
     },
-    async ({ path, content, taskId, skipVerify }) => {
+    async ({ path, content, taskId, claimId, skipVerify }) => {
       if (taskId !== undefined) {
         if (skipVerify === true) {
           throw new McpError(
             ErrorCode.InvalidParams,
             "skipVerify cannot be used with an agent bootstrap task",
+          );
+        }
+        if (claimId === undefined) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            "claimId is required when taskId is set; use the claimId returned by livewiki_next_task",
           );
         }
         try {
@@ -541,6 +592,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
             taskId,
             path,
             content,
+            claimId,
             verify,
           });
           if (!result.ok) {

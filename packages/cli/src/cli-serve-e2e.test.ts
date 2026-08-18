@@ -37,6 +37,7 @@ const EXPECTED_TOOLS = [
   "livewiki_write_doc",
   "livewiki_resolve_debt",
   "livewiki_impact",
+  "livewiki_renew_task_claim",
 ];
 
 let repoRoot: string;
@@ -63,7 +64,7 @@ function cliBin(): string {
 }
 
 describe("livewiki serve (MCP over stdio, real binary)", () => {
-  it("handshakes, lists the 8 tools, and shuts down cleanly", async () => {
+  it("handshakes, lists the 9 tools, and shuts down cleanly", async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [cliBin(), "serve", "--repo", repoRoot],

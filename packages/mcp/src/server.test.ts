@@ -88,7 +88,7 @@ function git(args: string[]): void {
 }
 
 describe("MCP server — Phase 4", () => {
-  it("tools/list returns the 8 tools, including the agent bootstrap queue", async () => {
+  it("tools/list returns the 9 tools, including the agent bootstrap queue and its claim renewal", async () => {
     const c = await connect();
     try {
       const { tools } = await c.client.listTools();
@@ -99,6 +99,7 @@ describe("MCP server — Phase 4", () => {
         "livewiki_next_task",
         "livewiki_quickstart",
         "livewiki_read",
+        "livewiki_renew_task_claim",
         "livewiki_resolve_debt",
         "livewiki_search",
         "livewiki_write_doc",

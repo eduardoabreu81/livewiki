@@ -549,11 +549,13 @@ describe("db.openIndex", () => {
 
     const db = openIndex(dbPath);
     try {
-      expect(CURRENT_SCHEMA_VERSION).toBe(9);
+      // openIndex runs every pending migration, so a legacy file lands on the
+      // current version — not on the version this test's fixture targets.
+      expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(9);
       const version = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
         | { value: string }
         | undefined;
-      expect(version?.value).toBe("9");
+      expect(version?.value).toBe(String(CURRENT_SCHEMA_VERSION));
 
       const rows = db.prepare(
         "SELECT id, event, symbol_key, doc_page_id, resolved_at FROM debt ORDER BY id",
@@ -634,7 +636,7 @@ describe("db.openIndex", () => {
       const version = db.prepare("SELECT value FROM meta WHERE key = ?").get(SCHEMA_VERSION_KEY) as
         | { value: string }
         | undefined;
-      expect(version?.value).toBe("9");
+      expect(version?.value).toBe(String(CURRENT_SCHEMA_VERSION));
     } finally {
       db.close();
     }

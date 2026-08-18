@@ -4,6 +4,7 @@ import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { run as runIndexer } from "./indexer.js";
 import { run as runStatus } from "./status.js";
+import { CURRENT_SCHEMA_VERSION } from "./db.js";
 import { sha256 } from "./hashes.js";
 
 let repoRoot: string;
@@ -291,7 +292,7 @@ describe("indexer end-to-end", () => {
     expect(report.symbols.byKind.method).toBe(2);
     expect(report.symbols.byKind.function).toBe(2);
     expect(report.symbols.byKind.export).toBe(1);
-    expect(report.meta.schemaVersion).toBe(9);
+    expect(report.meta.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
   });
 
   it("indexes duplicate method names and persists one active row per key", async () => {

@@ -7,6 +7,7 @@
  * It deliberately has no dependency on llm/index.ts or batch.ts.
  */
 
+import * as nodeCrypto from "node:crypto";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type Database from "better-sqlite3";
@@ -189,12 +190,21 @@ export interface AgentBootstrapTask {
   formatContract: PromptPair;
   validation: AgentTaskValidationSummary;
   attempts: { used: number; limit: number };
+  /** Opaque token proving this execution owns the task. Required to submit. */
+  claimId: string;
+  /** Epoch ms after which the claim is void and the task is re-claimable. */
+  leaseExpiresAt: number;
 }
 
 export interface AgentQueueResult {
   runId: number;
-  status: "task" | "completed" | "completed_with_failures";
+  status: "task" | "busy" | "completed" | "completed_with_failures";
   task?: AgentBootstrapTask;
+  /**
+   * Present only when `status === "busy"`: every unfinished task is leased to
+   * another executor right now. The run is NOT done — call again later.
+   */
+  leased?: { tasks: number; nextLeaseExpiresAt: number | null };
   accounting: "unavailable";
   topicRefine: "not-run";
 }
@@ -261,6 +271,34 @@ interface TaskRow {
   target: string;
   status: string;
   checkpoint_json: string | null;
+  claim_id: string | null;
+  lease_expires_at: number | null;
+}
+
+/** Columns every task read needs; kept in one place so claim state is never
+ *  accidentally left out of a SELECT. */
+const TASK_COLUMNS =
+  "id, run_id, stage, target, status, checkpoint_json, claim_id, lease_expires_at";
+
+/**
+ * How long a claim is valid without renewal. An agent task is human-scale
+ * work — the executor leaves to read the checkout and compose Markdown — so
+ * the lease is generous. There is no heartbeat and no background timer:
+ * expiry is evaluated only when someone asks for a task, renews, or submits.
+ */
+export const AGENT_CLAIM_LEASE_MS = 30 * 60 * 1000;
+
+/** Matches rows nobody currently owns: pending, or running with a dead lease.
+ *  A pre-v10 row (claim_id IS NULL) counts as unowned. */
+const UNCLAIMED_PREDICATE =
+  "(status = 'pending' OR (status = 'running' AND " +
+  "(claim_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?)))";
+
+/** Guards against a pathological claim race livelocking the MCP server. */
+const MAX_CLAIM_ATTEMPTS = 50;
+
+function newClaimId(): string {
+  return nodeCrypto.randomUUID();
 }
 
 interface RunRow {
@@ -1152,6 +1190,7 @@ function taskPresentation(
   task: PersistedAgentTask,
   checkpoint: TaskCheckpoint,
   state: AgentRunState,
+  claim: { claimId: string; leaseExpiresAt: number },
 ): AgentBootstrapTask {
   let formatContract: PromptPair;
   const validation: AgentTaskValidationSummary = {};
@@ -1239,6 +1278,8 @@ function taskPresentation(
     formatContract: withEvidenceRetrievalGuidance(formatContract, task),
     validation,
     attempts: { used: checkpoint.attempt, limit: state.maxAttempts },
+    claimId: claim.claimId,
+    leaseExpiresAt: claim.leaseExpiresAt,
   };
 }
 
@@ -1300,25 +1341,73 @@ export async function nextAgentBootstrapTask(repoRoot: string): Promise<AgentQue
     }
 
     const state = readAgentState(run);
+    let claimAttempts = 0;
     for (;;) {
+      const now = Date.now();
+      // Only rows nobody owns are candidates. A task whose lease is still
+      // alive belongs to another executor and is invisible here — that is what
+      // stops two callers from being handed the same work.
       const row = db.prepare(
-        "SELECT id, run_id, stage, target, status, checkpoint_json FROM batch_tasks " +
-          "WHERE run_id = ? AND status IN ('running', 'pending') " +
+        `SELECT ${TASK_COLUMNS} FROM batch_tasks ` +
+          `WHERE run_id = ? AND ${UNCLAIMED_PREDICATE} ` +
           "ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, id LIMIT 1",
-      ).get(run.id) as TaskRow | undefined;
+      ).get(run.id, now) as TaskRow | undefined;
       if (row !== undefined) {
-        const { task, checkpoint } = readAgentTask(row);
-        if (row.status === "pending") {
-          checkpoint.status = "running";
-          db.prepare(
-            "UPDATE batch_tasks SET status = 'running', checkpoint_json = ?, updated_at = ? " +
-              "WHERE id = ? AND status = 'pending'",
-          ).run(JSON.stringify(checkpoint), Date.now(), row.id);
+        if (++claimAttempts > MAX_CLAIM_ATTEMPTS) {
+          throw new Error(
+            `agent bootstrap run #${run.id}: lost ${MAX_CLAIM_ATTEMPTS} consecutive claim races`,
+          );
         }
+        const { task, checkpoint } = readAgentTask(row);
+        const claimId = newClaimId();
+        const leaseExpiresAt = now + AGENT_CLAIM_LEASE_MS;
+        checkpoint.status = "running";
+        // THE claim. A single UPDATE is atomic in SQLite, and the whole
+        // compare-and-swap lives in the WHERE, so exactly one concurrent
+        // caller can see changes === 1. The re-check of the unclaimed
+        // predicate closes the window between the SELECT above and here.
+        const claimed = db.prepare(
+          "UPDATE batch_tasks SET status = 'running', claim_id = ?, lease_expires_at = ?, " +
+            "checkpoint_json = ?, updated_at = ? " +
+            `WHERE id = ? AND ${UNCLAIMED_PREDICATE}`,
+        ).run(
+          claimId,
+          leaseExpiresAt,
+          JSON.stringify(checkpoint),
+          now,
+          row.id,
+          now,
+        );
+        // Someone else won this row between the SELECT and the UPDATE. It now
+        // carries a live lease, so the next SELECT skips it — never advance the
+        // phase on a lost race.
+        if (claimed.changes !== 1) continue;
         return {
           runId: run.id,
           status: "task",
-          task: taskPresentation(row.id, task, checkpoint, state),
+          task: taskPresentation(row.id, task, checkpoint, state, {
+            claimId,
+            leaseExpiresAt,
+          }),
+          accounting: ACCOUNTING,
+          topicRefine: TOPIC_REFINE,
+        };
+      }
+
+      // An empty candidate set means "nothing I can claim", which is NOT the
+      // same as "this phase is finished". Work leased to another executor is
+      // still in flight and invisible to the SELECT above by design, so
+      // advancing here would materialize the next phase — or, on the last
+      // phase, finalize the whole run — while someone is still writing.
+      const inFlight = db.prepare(
+        "SELECT COUNT(*) AS tasks, MIN(lease_expires_at) AS soonest FROM batch_tasks " +
+          "WHERE run_id = ? AND status IN ('pending', 'running')",
+      ).get(run.id) as { tasks: number; soonest: number | null };
+      if (inFlight.tasks > 0) {
+        return {
+          runId: run.id,
+          status: "busy",
+          leased: { tasks: inFlight.tasks, nextLeaseExpiresAt: inFlight.soonest },
           accounting: ACCOUNTING,
           topicRefine: TOPIC_REFINE,
         };
@@ -1740,8 +1829,72 @@ export interface SubmitAgentBootstrapTaskOptions {
   taskId: number;
   path: string;
   content: string;
+  /** The claim handed out with this task. A submission without the current,
+   *  still-valid token is refused before anything is written. */
+  claimId: string;
   /** Test seam; production uses the core verifier. */
   verify?: typeof runVerify;
+}
+
+export interface RenewAgentBootstrapClaimOptions {
+  repoRoot: string;
+  taskId: number;
+  claimId: string;
+}
+
+export interface AgentClaimRenewalResult {
+  ok: boolean;
+  taskId: number;
+  claimId: string;
+  leaseExpiresAt: number | null;
+  error?: AgentSubmissionError;
+}
+
+/** The one error shape a losing executor sees, from every claim-guarded call. */
+function staleClaimError(taskId: number, detail: string): AgentSubmissionError {
+  return {
+    code: "stale_claim",
+    message:
+      `task #${taskId} is no longer held by this claim (${detail}). ` +
+      "Call livewiki_next_task to obtain a fresh task and claim; nothing was written.",
+    location: "claim",
+  };
+}
+
+/**
+ * Extends a claim that is still alive. There is no heartbeat and no timer —
+ * an executor that needs longer than the lease asks for it explicitly.
+ *
+ * A lease that already expired is NOT renewable, even when no one re-claimed
+ * the task yet: once it lapses the task is up for grabs, and pretending
+ * otherwise would reopen the double-execution window this exists to close.
+ */
+export async function renewAgentBootstrapClaim(
+  opts: RenewAgentBootstrapClaimOptions,
+): Promise<AgentClaimRenewalResult> {
+  const absRoot = nodePath.resolve(opts.repoRoot);
+  const dbPath = await safeIo.resolveAndValidate(absRoot, ".livewiki/index.db");
+  const db = openIndex(dbPath);
+  try {
+    const now = Date.now();
+    const leaseExpiresAt = now + AGENT_CLAIM_LEASE_MS;
+    const renewed = db.prepare(
+      "UPDATE batch_tasks SET lease_expires_at = ?, updated_at = ? " +
+        "WHERE id = ? AND claim_id = ? AND status = 'running' AND lease_expires_at > ?",
+    ).run(leaseExpiresAt, now, opts.taskId, opts.claimId, now);
+    if (renewed.changes !== 1) {
+      return {
+        ok: false,
+        taskId: opts.taskId,
+        claimId: opts.claimId,
+        leaseExpiresAt: null,
+        error: staleClaimError(opts.taskId, "the lease expired or the task was re-claimed"),
+      };
+    }
+    return { ok: true, taskId: opts.taskId, claimId: opts.claimId, leaseExpiresAt };
+  } finally {
+    db.close();
+  }
 }
 
 /** Validates, writes, verifies, and checkpoints one agent-supplied task. */
@@ -1753,7 +1906,7 @@ export async function submitAgentBootstrapTask(
   const db = openIndex(dbPath);
   try {
     const row = db.prepare(
-      "SELECT t.id, t.run_id, t.stage, t.target, t.status, t.checkpoint_json " +
+      `SELECT ${TASK_COLUMNS.split(", ").map((c) => `t.${c}`).join(", ")} ` +
         "FROM batch_tasks t JOIN batch_runs r ON r.id = t.run_id " +
         "WHERE t.id = ? AND r.started_by = 'agent'",
     ).get(opts.taskId) as TaskRow | undefined;
@@ -1769,6 +1922,35 @@ export async function submitAgentBootstrapTask(
     }
     const state = readAgentState(run);
     const { task, checkpoint } = readAgentTask(row);
+
+    // Claim gate — BEFORE any filesystem work, and deliberately before the
+    // attempt counter moves: a late executor that lost the task must not
+    // consume one of the retries belonging to whoever holds it now, and must
+    // not touch the documentation at all.
+    const claimNow = Date.now();
+    const claimStale =
+      row.claim_id === null ||
+      row.claim_id !== opts.claimId ||
+      row.lease_expires_at === null ||
+      row.lease_expires_at <= claimNow;
+    if (claimStale) {
+      return {
+        ok: false,
+        runId: run.id,
+        taskId: row.id,
+        taskStatus: row.status as BatchTaskStatus,
+        writtenPaths: [],
+        errors: [
+          staleClaimError(
+            row.id,
+            row.claim_id !== opts.claimId
+              ? "it was re-claimed by another execution"
+              : "the lease expired",
+          ),
+        ],
+        attempts: { used: checkpoint.attempt, limit: state.maxAttempts },
+      };
+    }
     if (opts.path !== task.targetPath) {
       throw new Error(
         `task #${row.id} targets ${JSON.stringify(task.targetPath)}, not ${JSON.stringify(opts.path)}`,
