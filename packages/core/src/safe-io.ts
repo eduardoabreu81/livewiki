@@ -317,14 +317,30 @@ export async function writeText(
  * Atomically replace an allowlisted text file, optionally guarded by an exact
  * compare-and-swap. The short-lived lock belongs in `.livewiki/`, so a crash
  * cannot leave uncommitted lock state in the versioned wiki.
+ *
+ * `tempDirRelPath` moves the staged temp file out of the target's own
+ * directory. Use it whenever another component enumerates that directory
+ * concurrently: a reader that lists the directory and then opens each entry
+ * races the rename and fails with ENOENT on a temp file that is no longer
+ * there. The rename stays atomic as long as both live on the same volume,
+ * which any path inside the repository does.
  */
 export async function writeTextAtomic(
   repoRoot: string,
   relPath: string,
   content: string,
-  opts: SafeIoOptions & { expected?: string | null; lockRelPath?: string } = {},
+  opts: SafeIoOptions & {
+    expected?: string | null;
+    lockRelPath?: string;
+    tempDirRelPath?: string;
+  } = {},
 ): Promise<void> {
-  const { expected, lockRelPath = ".livewiki/write.lock", ...safeOpts } = opts;
+  const {
+    expected,
+    lockRelPath = ".livewiki/write.lock",
+    tempDirRelPath,
+    ...safeOpts
+  } = opts;
   const abs = await resolveAndValidate(repoRoot, relPath, safeOpts);
   const lockAbs = await resolveAndValidate(repoRoot, lockRelPath);
   await nodeFs.mkdir(nodePath.dirname(abs), { recursive: true });
@@ -332,9 +348,15 @@ export async function writeTextAtomic(
 
   const lock = await acquireWriteLock(lockAbs, lockRelPath);
 
+  const tempBaseName = tempDirRelPath === undefined
+    ? relPath
+    : `${tempDirRelPath.replace(/\/$/, "")}/${nodePath.posix.basename(relPath)}`;
   const tempRelPath =
-    `${relPath}.tmp-${process.pid}-${Date.now()}-${atomicTempSequence++}`;
+    `${tempBaseName}.tmp-${process.pid}-${Date.now()}-${atomicTempSequence++}`;
   const tempAbs = await resolveAndValidate(repoRoot, tempRelPath, safeOpts);
+  if (tempDirRelPath !== undefined) {
+    await nodeFs.mkdir(nodePath.dirname(tempAbs), { recursive: true });
+  }
   try {
     if (Object.prototype.hasOwnProperty.call(opts, "expected")) {
       let current: string | null;

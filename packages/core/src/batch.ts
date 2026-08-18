@@ -4824,6 +4824,11 @@ function injectManualBlocksBySection(existing: string, newContent: string): stri
  * — and, on contention, fail — the stage-4 worker pool writing DIFFERENT
  * pages concurrently. No compare-and-swap: the observable success/rollback
  * behavior must stay identical to the previous write.
+ *
+ * The staged temp file lands in `.livewiki/tmp/`, never beside the page:
+ * `computeSnapshotHash` walks `livewiki/` and reads every entry it lists, so
+ * a temp file inside the wiki races the rename and fails that walk with
+ * ENOENT under the concurrent worker pool.
  */
 async function writeArtifactAtomic(
   absRoot: string,
@@ -4832,6 +4837,7 @@ async function writeArtifactAtomic(
 ): Promise<void> {
   await safeIo.writeTextAtomic(absRoot, relPath, content, {
     lockRelPath: `.livewiki/locks/${sha256(relPath).slice(0, 16)}.lock`,
+    tempDirRelPath: ".livewiki/tmp",
   });
 }
 
