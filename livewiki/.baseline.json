@@ -934,7 +934,7 @@
 {"wikiPath":"livewiki/mcp-src/search.md","symbolKey":"packages/mcp/src/search.ts#reindexAll","hash":"e7fa7d029a8e5ffd6c0f4c78257d3f3a75602e314bbbcf1e46c33ff31a8e32ae","extraction":"ts-v1","provenance":"accepted"},
 {"wikiPath":"livewiki/mcp-src/search.md","symbolKey":"packages/mcp/src/search.ts#reindexAllPages","hash":"221addaa7f45cfdc423e2aba36b1bfd88c9aa9e1a186fe4706c3feb2ea1363ab","extraction":"ts-v1","provenance":"accepted"},
 {"wikiPath":"livewiki/mcp-src/search.md","symbolKey":"packages/mcp/src/search.ts#removePage","hash":"1ccef72188cf76a8b338117ca989737a0bf12b3ea8536aaf70530129f41766ad","extraction":"ts-v1","provenance":"accepted"},
-{"wikiPath":"livewiki/mcp-src/search.md","symbolKey":"packages/mcp/src/search.ts#search","hash":"22146c0ff5e7a2dd51d31066a0b64c3f25a7d5433ae85de5daf7a5239eefc7d6","extraction":"ts-v1","provenance":"accepted"},
+{"wikiPath":"livewiki/mcp-src/search.md","symbolKey":"packages/mcp/src/search.ts#search","hash":"0d44ae969743625fa13c2b70c65aeac36d2a9f38c8be97d9d721170a9737c930","extraction":"ts-v1","provenance":"accepted"},
 {"wikiPath":"livewiki/mcp-src/search.md","symbolKey":"packages/mcp/src/search.ts#snippetAround","hash":"7321c8aaefde62bba157c63806e0dba9ec50548da645c7dbbde65a132686b0a6","extraction":"ts-v1","provenance":"accepted"},
 {"wikiPath":"livewiki/mcp-src/search.md","symbolKey":"packages/mcp/src/search.ts#splitIdentifiers","hash":"09d6c439513e49217f92df22fc979cca99b8282648f1953f30a7d956a70bcc86","extraction":"ts-v1","provenance":"accepted"},
 {"wikiPath":"livewiki/mcp-src/search.md","symbolKey":"packages/mcp/src/search.ts#walk","hash":"d3e513917d26f2b1a424ec5e12f2b5be7a4d4c1530afe8722ae7e26b58bdb5e9","extraction":"ts-v1","provenance":"accepted"},
