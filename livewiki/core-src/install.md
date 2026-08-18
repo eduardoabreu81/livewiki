@@ -393,8 +393,9 @@ It takes a read-only list of actions and the repo root, and returns per-action r
 1. For every action, create a sanitized copy: if `sensitive`, null out `content` so formatters never leak credentials.
 2. For non-`write` statuses, report `applied: false` with the reason as detail, without touching disk.
 3. For `pointer`, call `insertPointer(repoRoot)` and report whether it changed the file.
-4. For other `write` actions, ensure the parent directory exists, write the exact `action.content` (with an optional POSIX `mode`), then chmod if needed. `executable` forces `0o755` best-effort on Windows.
-5. On any write error, report `applied: false` with the error message.
+4. For `credentials`, delegate to `writeCredentialStoreAtomic` from `credentials.js` instead of the plain write below. The credential store is the one target where a half-written file locks the user out of every provider, so it is replaced through a temp file plus rename rather than truncated in place.
+5. For every other `write` action, ensure the parent directory exists, write the exact `action.content` (with an optional POSIX `mode`), then chmod if needed. `executable` forces `0o755` best-effort on Windows.
+6. On any write error, report `applied: false` with the error message.
 
 ## Tests
 

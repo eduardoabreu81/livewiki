@@ -18,7 +18,9 @@
  *     safe-io only knows repo-internal paths. Instead, `planInstall`
  *     computes every write up front. Non-sensitive actions can be rendered
  *     exactly in dry-run output; credential content remains internal and is
- *     redacted from apply results.
+ *     redacted from apply results. The credential store is replaced through
+ *     `writeCredentialStoreAtomic` (temp + rename in the same directory) so an
+ *     interrupted install can never leave a truncated key file behind.
  *   - Never overwrites user content: an existing foreign git hook, an
  *     unparseable JSON config, or a different file at the skill target is
  *     a REFUSAL, not a merge attempt.
@@ -31,7 +33,11 @@
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import { insertPointer, readPointerStatus, buildPointerBlock } from "./pointer.js";
-import { credentialStorePath, readCredentialStoreSync } from "./credentials.js";
+import {
+  credentialStorePath,
+  readCredentialStoreSync,
+  writeCredentialStoreAtomic,
+} from "./credentials.js";
 
 // ── Registry (pure data) ────────────────────────────────────────────────────
 
@@ -935,6 +941,18 @@ export async function applyInstall(
       }
       if (action.content === null) {
         results.push({ action: resultAction, applied: false, detail: "internal: writable action without content" });
+        continue;
+      }
+      if (action.kind === "credentials") {
+        // The credential store is the one target where a half-written file
+        // locks the user out of every provider, so it never takes the plain
+        // write path below.
+        await writeCredentialStoreAtomic(
+          action.targetPath,
+          action.content,
+          action.mode !== undefined ? { mode: action.mode } : {},
+        );
+        results.push({ action: resultAction, applied: true, detail: `wrote ${action.targetPath}` });
         continue;
       }
       await nodeFs.mkdir(nodePath.dirname(action.targetPath), { recursive: true });
