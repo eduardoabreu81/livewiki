@@ -123,6 +123,7 @@ import {
   close as closeSearch,
   type SearchIndex,
 } from "./search.js";
+import { createSyncQueue, type SyncQueueOptions } from "./watch-queue.js";
 
 export interface CreateServerOptions {
   /** Repo root the server serves. Default: process.cwd() */
@@ -162,11 +163,8 @@ function isWatchDenied(filename: string): boolean {
   return WATCH_DENIED_EXTENSIONS.has(nodePath.extname(filename).toLowerCase());
 }
 
-/** Debounce window for watcher-triggered syncs (backlog #3 design). */
-const WATCH_DEBOUNCE_MS = 1500;
-
 interface WatcherHandle {
-  /** Stops the watcher, clears the pending debounce, awaits any in-flight sync. */
+  /** Stops the watcher, clears the pending debounce/retry, awaits any in-flight sync. */
   stop(): Promise<void>;
 }
 
@@ -184,50 +182,36 @@ interface WatcherHandle {
  * log line — never a crash. `stop()` releases the OS handle and awaits
  * the in-flight sync so a following search.db close + temp-dir removal
  * is EBUSY-safe on Windows.
+ *
+ * A sync that FAILS keeps its work pending and reschedules itself — see
+ * `createSyncQueue`, which owns that state machine. This file is only the
+ * fs.watch plumbing: it turns OS events into `notify()` and hands the queue
+ * the actual sync to run.
+ *
+ * `opts` exists for tests, which substitute the sync and drive time by hand
+ * instead of waiting on real timers.
  */
-function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
+export function startWatcher(
+  repoRoot: string,
+  searchIdx: SearchIndex,
+  opts: { sync?: () => Promise<void>; queue?: Partial<SyncQueueOptions> } = {},
+): WatcherHandle {
   let watcher: FSWatcher | null = null;
-  let debounce: ReturnType<typeof setTimeout> | null = null;
-  let inFlight: Promise<void> | null = null;
-  let stopped = false;
 
-  async function syncBatch(): Promise<void> {
-    try {
+  const sync =
+    opts.sync ??
+    (async (): Promise<void> => {
       await runIndexer(repoRoot, { quiet: true });
       await runLedger(repoRoot, { quiet: true });
       await reindexAllPages(searchIdx, repoRoot);
-    } catch (err) {
-      // A failed sync never kills the server; the next event retries.
-      // eslint-disable-next-line no-console
-      console.error(
-        `[livewiki] watcher sync failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
+    });
 
-  function schedule(): void {
-    if (stopped) return;
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => {
-      debounce = null;
-      // Serialize syncs: overlapping indexer/ledger runs on the same DB
-      // are pointless — re-arm and let the in-flight one settle.
-      if (inFlight) {
-        schedule();
-        return;
-      }
-      inFlight = syncBatch().finally(() => {
-        inFlight = null;
-      });
-    }, WATCH_DEBOUNCE_MS);
-  }
+  const queue = createSyncQueue({ run: sync, ...opts.queue });
 
   async function stop(): Promise<void> {
-    stopped = true;
-    if (debounce) {
-      clearTimeout(debounce);
-      debounce = null;
-    }
+    // Stop the queue FIRST: it disarms any pending debounce or retry, so no
+    // sync can start while the watch handle is being torn down.
+    const queueStopped = queue.stop();
     if (watcher) {
       const w = watcher;
       watcher = null;
@@ -240,7 +224,9 @@ function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
         w.close();
       });
     }
-    if (inFlight) await inFlight;
+    // Awaited last, so the OS handle is already released by the time we block
+    // on whatever sync was still running.
+    await queueStopped;
   }
 
   try {
@@ -258,7 +244,7 @@ function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
     watcher = watch(watchRoot, { recursive: true }, (_eventType, filename) => {
       // filename may be null on some platforms — treat as "sync anyway".
       if (filename !== null && isWatchDenied(filename)) return;
-      schedule();
+      queue.notify();
     });
     watcher.on("error", (err) => {
       // eslint-disable-next-line no-console
