@@ -23,8 +23,12 @@ import type { SearchIndex } from "./search.js";
 import type { TimerApi } from "./watch-queue.js";
 
 // The contention proof has to outlast one full write-lock wait
-// (WRITE_LOCK_TIMEOUT_MS) plus the debounce, plus a retry.
-vi.setConfig({ testTimeout: WRITE_LOCK_TIMEOUT_MS * 4 });
+// (WRITE_LOCK_TIMEOUT_MS) plus server boot, the debounce, a whole-repo pass,
+// and a retry. Only the 30s lock wait is fixed; everything around it scales
+// with how slow the machine is. Measured wall time for this file: 33s on
+// ubuntu, 46s on macOS, >61s on the Windows runner — so the budget has to be
+// a multiple of the fixed part, not a small margin over it.
+vi.setConfig({ testTimeout: WRITE_LOCK_TIMEOUT_MS * 8 });
 
 let repoRoot: string;
 let server: ChildProcess | null = null;
@@ -43,16 +47,31 @@ afterEach(async () => {
   await nodeFs.rm(repoRoot, { recursive: true, force: true });
 });
 
-/** Polls `predicate` until it holds or the deadline passes. Never a bare sleep. */
+/**
+ * Polls `predicate` until it holds or the deadline passes. Never a bare sleep.
+ *
+ * `diagnose` is appended to the timeout message. A bare "timed out" here is
+ * ambiguous in CI between "the machine was slow" and "the watcher never
+ * started" (fs.watch degrades to no-watcher with a log line on some
+ * platforms), and telling those apart from a log after the fact is the
+ * difference between a one-line fix and a re-run.
+ */
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   label: string,
   timeoutMs: number,
+  diagnose?: () => string,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (await predicate()) return;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${label}`);
+    if (Date.now() > deadline) {
+      const extra = diagnose?.() ?? "";
+      throw new Error(
+        `timed out waiting for: ${label} (after ${timeoutMs}ms)` +
+          (extra ? `\n--- diagnostics ---\n${extra}` : ""),
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
@@ -181,7 +200,9 @@ describe("MCP server watcher recovers a contended sync with no further event", (
           .then(() => true)
           .catch(() => false),
       "server startup rebuild",
-      30_000,
+      WRITE_LOCK_TIMEOUT_MS * 2,
+      () => `server stderr:
+${stderr || "(empty)"}`,
     );
 
     // 3. Hold the write lock so the watcher's sync cannot get it.
@@ -199,7 +220,13 @@ describe("MCP server watcher recovers a contended sync with no further event", (
       await waitFor(
         () => /watcher sync hit write contention/.test(stderr),
         "watcher to report write contention",
-        WRITE_LOCK_TIMEOUT_MS * 2,
+        WRITE_LOCK_TIMEOUT_MS * 4,
+        () =>
+          `server stderr:
+${stderr || "(empty)"}
+` +
+          "(empty stderr here means the watcher never ran — check whether fs.watch " +
+          "degraded to no-watcher on this platform, rather than assuming slowness)",
       );
       // The message must say the work survived, not that a batch was dropped.
       expect(stderr).toMatch(/work stays pending, retrying in \d+ms/);
@@ -224,7 +251,9 @@ describe("MCP server watcher recovers a contended sync with no further event", (
     await waitFor(
       () => indexedPaths().includes("src/appears-after-retry.ts"),
       "watcher retry to index the file with no further event",
-      WRITE_LOCK_TIMEOUT_MS * 2,
+      WRITE_LOCK_TIMEOUT_MS * 4,
+      () => `server stderr:
+${stderr || "(empty)"}`,
     );
 
     // 8. And it converged cleanly.
