@@ -7,10 +7,8 @@ anchors:
   - packages/cli/src/cli.ts#resolveRepoRoot
   - packages/mcp/src/server.ts#createServer
   - packages/mcp/src/server.ts#isWatchDenied
-  - packages/mcp/src/server.ts#schedule
   - packages/mcp/src/server.ts#startWatcher
-  - packages/mcp/src/server.ts#stop
-  - packages/mcp/src/server.ts#syncBatch
+  - packages/mcp/src/watch-queue.ts#createSyncQueue
   - packages/cli/src/output.ts#emitHuman
   - packages/cli/src/commands/baseline.ts#registerBaseline
   - packages/mcp/src/stdio.ts#startMcpStdioServer
@@ -41,7 +39,7 @@ This page explains the end-to-end path from a user invoking the `livewiki` comma
 
 ## Purpose
 
-<!-- lw:anchors packages/cli/src/cli.ts#createProgram packages/cli/src/cli.ts#readVersion packages/cli/src/cli.ts#resolveRepoRoot packages/mcp/src/server.ts#createServer packages/mcp/src/server.ts#isWatchDenied packages/mcp/src/server.ts#schedule packages/mcp/src/server.ts#startWatcher packages/mcp/src/server.ts#stop packages/mcp/src/server.ts#syncBatch -->
+<!-- lw:anchors packages/cli/src/cli.ts#createProgram packages/cli/src/cli.ts#readVersion packages/cli/src/cli.ts#resolveRepoRoot packages/mcp/src/server.ts#createServer packages/mcp/src/server.ts#isWatchDenied packages/mcp/src/server.ts#startWatcher packages/mcp/src/watch-queue.ts#createSyncQueue -->
 
 A developer runs `livewiki` because they want their repository documented automatically: symbols indexed, pages generated, and the result validated against the code. The journey begins at the command line, where a thin shell assembles every subcommand, and ends far deeper in the engine, where a uniform client seam decides which provider to call.
 
@@ -78,28 +76,20 @@ function isWatchDenied(filename: string): boolean {
 `isWatchDenied` takes a filename and returns a boolean; it decides whether a changed file is disallowed from the watcher's consideration.
 
 ```ts
-function schedule(): void {
+function startWatcher(
+  repoRoot: string,
+  searchIdx: SearchIndex,
+  opts: { sync?: () => Promise<void>; queue?: Partial<SyncQueueOptions> } = {},
+): WatcherHandle {
 ```
 
-`schedule` takes no arguments and returns nothing; it arranges the next batch of watcher work to run.
+`startWatcher` takes a repository root and a search index and returns a `WatcherHandle` — the object the caller uses to stop watching later. It is the `fs.watch` plumbing only: it builds the sync and hands it to a queue, then turns OS events into `notify()`.
 
 ```ts
-function startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle {
+export function createSyncQueue(options: SyncQueueOptions): SyncQueue {
 ```
 
-`startWatcher` takes a repository root and a search index and returns a `WatcherHandle` — the object the caller uses to stop watching later.
-
-```ts
-async function stop(): Promise<void> {
-```
-
-`stop` takes no arguments and returns a void promise; it tears down the running watcher.
-
-```ts
-async function syncBatch(): Promise<void> {
-```
-
-`syncBatch` takes no arguments and returns a void promise; it applies a batch of queued file changes to the search index.
+`createSyncQueue` takes the sync to run plus optional policy knobs and returns the watcher's pending-work state machine, in `packages/mcp/src/watch-queue.ts`. It owns the debounce, the single in-flight run, and the retry: a sync that fails keeps its work pending and reschedules itself, so the last event of a sequence is no longer lost when its sync fails.
 
 A developer reaching for `livewiki` in the first place needs a repo root, a known command set, and a version string they can trust. Those facts are established here, in the CLI and MCP entry layers, before any LLM traffic is possible.
 
@@ -217,7 +207,7 @@ What must hold at each stage so the flow stays coherent:
 - **The command set is closed at registration time.** `createProgram` builds one root `Command`, and each verb is registered by an explicit adapter such as `registerBaseline` or `registerBatch`; a caller cannot reach core work except through a registered subcommand or the MCP server.
 - **All CLI output passes through the `emit` funnel.** The `output.ts` module is documented as the sole formatter for human and JSON output; the same module also exposes `emitHuman` and `emitJson`, and the supplied source shows commands importing it rather than writing to stdout directly.
 - **The MCP server is side-effect free on import.** The `stdio.ts` module may be imported without starting a server or touching process signals; the running state exists only after `startMcpStdioServer` is called.
-- **The watcher and search path are explicit.** `startWatcher` returns a handle, `stop` tears the watcher down, `schedule` arranges work, and `syncBatch` applies queued changes; the supplied source keeps these operations as named steps rather than implicit background behavior.
+- **The watcher and search path are explicit.** `startWatcher` returns a handle whose `stop()` tears the watcher down, and `createSyncQueue` owns scheduling and retry as a named state machine rather than implicit background behavior. Work is never dropped: a failed sync stays pending and reschedules itself.
 
 These invariants keep the flow predictable: one root, one program, one output path, one explicit MCP start, and one authoritative schema number.
 

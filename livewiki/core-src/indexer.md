@@ -96,6 +96,8 @@ async function orchestrateIndex(
 
 The pipeline runs in two phases. **Phase A** is the asynchronous outer loop: for each walked entry, `orchestrateIndex` calls `stat` to learn the size, applies the `MAX_FILE_BYTES` gate, reads the file as UTF-8, applies the NUL-byte binary sniff inside the `BINARY_SNIFF_BYTES` window, normalises line endings once via `normalizeEol` (the CRLF→LF flip is invisible to everything downstream — the hash, the tree-sitter parse, and the symbol/call/rationale extraction all consume the same normalised string), and finally computes `sha256(content)`. **Phase B** is a synchronous SQLite transaction that drains the collected `FilePlan` array in one shot; the split exists because `better-sqlite3` transactions cannot contain `await`, so all I/O and CPU-bound parsing must finish before the DB writes begin.
 
+Before Phase A, `orchestrateIndex` reads a `path → FileRow` map from `files`. This is the **planning** snapshot, and it is explicitly not the authority for any write — see "Concurrent writers" below. Its two jobs are to let Phase A skip unchanged files without parsing them, and to bound the delete sweep to paths this run actually compared against the walk.
+
 The hash comparison drives three branches per file:
 
 - **Hash match, no grammar drift, row already `active`** — fast path. The file is counted as `filesUnchanged` and skipped entirely; no parse, no write.
@@ -121,8 +123,11 @@ These anchors identify indexed symbols whose implementation is part of this modu
 
 For every file that needs parsing, Phase A invokes `parseSource` only when `grammarForExtension(ext)` returns a grammar; otherwise the file is indexed as a zero-symbol prose tier (no warning). A successful parse yields `symbols`, `calls`, and `rationales`, with rationales suppressed for files that look generated (header sniff). Parse failures are surfaced as a non-fatal warning and the file proceeds with zero extracted data.
 
-All parsed files are pushed into a `FilePlan` array that the Phase B transaction drains. The transaction itself does several things per file in a fixed order:
+All parsed files are pushed into a `FilePlan` array that the Phase B transaction drains. The transaction opens by re-reading the state it is about to decide from: the `files` map, `meta.eol_hashes_normalized`, and `meta.grammar_state`. Those reads happen *inside* the transaction, after the write lock is held, so nothing they say can move before `COMMIT`.
 
+Then, per file in a fixed order:
+
+0. Reconcile the plan against the row that exists now (`reconcilePlan`), which decides insert, update, or converged.
 1. Mark previously active symbols as `deleted` (soft delete — preserves the content hash for moved-symbol detection).
 2. Update or insert the `files` row with the new hash, size, mtime, and language label.
 3. For each new symbol, insert the active row; for EOL migrations, realign `anchors.symbol_hash_at_doc` to the new hash in the same transaction so the ledger never sees the raw→normalised transition.
@@ -131,7 +136,43 @@ All parsed files are pushed into a `FilePlan` array that the Phase B transaction
 
 A file whose row was `deleted` and is back in the walk goes through step 2 like any other update, because `updateFile` already sets `status = 'active'`; the reactivation therefore needs no statement of its own. It is counted on `result.filesReactivated`, an axis orthogonal to the content buckets: the same file still lands in `filesUnchanged` when its bytes are identical, or in `filesUpdated` when they also moved.
 
-The transaction also runs `resolveCalls`, writes `last_indexed_at`, closes the EOL legacy window by recording `eol_hashes_normalized`, and persists the current `grammar_state` so the next run can diff it. Because all of this happens inside one `db.transaction(...)` call, the index is atomic: readers never see a partial reindex.
+The transaction also runs `resolveCalls`, writes `last_indexed_at`, closes the EOL legacy window by recording `eol_hashes_normalized`, and persists the current `grammar_state` so the next run can diff it. Because all of this happens inside one transaction, the index is atomic: readers never see a partial reindex, and a run that fails part-way leaves nothing behind — including the `files` rows and `sqlite_sequence` counter its earlier statements had already touched.
+
+## Concurrent writers
+
+More than one process indexes the same `index.db` in normal use: a CLI invocation, an editor hook, and the MCP server's watcher all call this module. The shape that made that unsafe was a snapshot read before the async phase and consumed after it:
+
+```
+SELECT * FROM files          ← planning snapshot
+…0.5s–15s of read + parse…   ← another writer commits in here
+BEGIN DEFERRED               ← no lock yet
+INSERT INTO files …          ← decided from the stale snapshot
+                             → UNIQUE constraint failed: files.path
+```
+
+That reproduced 100% of the time with 2, 3 and 5 concurrent processes: exactly one writer won and the rest died on that `INSERT`. It was never corruption — the loser's transaction rolled back whole and a later run converged — but it made concurrent indexing a coin toss with an exit code attached, and the error named a database constraint for what was really "another process indexed first".
+
+The write phase now runs through `runWriteTransaction`, so it takes the transaction as **IMMEDIATE**: writers queue at `BEGIN`, one at a time, instead of discovering the conflict halfway through their own mutation. Phase A stays outside, so the lock is never held across I/O. `reconcilePlan` then decides each file from the fresh row rather than the planning snapshot:
+
+- **no row** → insert;
+- **row present, active, already at this plan's hash** (and no grammar re-parse still pending) → **converged**: another writer applied these exact bytes while this run was parsing. Nothing is written. It is a success, not a conflict — the file *is* indexed, correctly, at the content read from disk;
+- **anything else** → update against the fresh row's id.
+
+Two planning flags are re-qualified there, because each describes work that made sense against a row that may have since moved. An `eolMigration` only holds while the row still carries the hash it was diagnosed against — otherwise "only the hash algorithm changed" is no longer proven, and claiming it would count a real content change as unchanged while realigning anchors to it. A `grammarReprocess` only holds while `meta.grammar_state` is still stale, since a writer that committed ahead stamped the current state along with the re-parsed symbols.
+
+A fresh row whose hash matches neither the planning snapshot nor this plan means a concurrent writer indexed different bytes than the ones this run read. The plan is applied anyway: it reflects bytes that really were on disk, and the next run re-reads disk and converges either way. Picking a winner there would need a re-read inside the transaction, which is exactly the async work Phase A exists to keep out of the write lock.
+
+The delete sweep is split across the two states for the same reason. It iterates the **planning** snapshot as its candidate set — a path another writer created after this run's walk was never absent from disk as far as this run can tell, so sweeping the fresh map instead would let a slow writer soft-delete a file a faster one had just indexed — and reads each row's id and status from the **fresh** map, so a concurrently deleted row is not re-counted and a concurrently reactivated one is not deleted off a stale id.
+
+### What the counters mean under contention
+
+`filesAdded`, `filesUpdated` and `filesDeleted` report work **this run performed**. A run that planned an insert and found, under the write lock, that another writer had already applied the same bytes reports the file in `filesUnchanged` — the file is indexed and correct, it was simply not this run's write. So across a racing set of writers each unit of real work is claimed exactly once, and no run reports work it did not do. `filesReactivated`, `filesReprocessedGrammar` and `symbolsAdded` follow the same rule: they count only when this run actually wrote.
+
+### Waiting, and giving up
+
+Queueing at `BEGIN` means waiting, and the wait is bounded by `busy_timeout` (see `openIndex`). When it runs out, `runWriteTransaction` raises a `WriteContentionError` naming the blocked phase and telling the user to wait for the running writer — never a raw `SQLITE_BUSY` surfacing as "database is locked". The database is still correct in that case: the writer that held the lock committed its own work in full.
+
+Measured after the change: 2, 3 and 5 concurrent processes over ten trials each — 100 processes — all exit 0, with a final logical state identical to a single writer's and a later run that changes nothing. The timeout is reachable, but only well past realistic use: five processes each inserting 200 new files into the same repo queue past 30 s, and the four that give up say so actionably while the index the winner left is complete and a fixpoint.
 
 The `legacyWindow` flag is the gate for per-symbol EOL realignment: it is open only on the first post-upgrade run (when `meta.eol_hashes_normalized` is absent) and closed by the transaction itself, so steady-state normalised operation pays zero extra hashing cost. While open, an updated file captures the old key→hash map; for each re-inserted symbol whose stored hash does not match the new one, the indexer re-cuts the slice from the normalised text and compares `sha256(expandEolToCrlf(slice))` against the old hash. A match means the code is identical modulo line endings and triggers the same in-transaction anchor realignment; a miss follows the normal `changed` debt path.
 

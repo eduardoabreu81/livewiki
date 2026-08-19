@@ -158,7 +158,9 @@ This section explains the core routine that opens (or creates) the index databas
 `export function openIndex(dbPath: string): Database.Database`
 This function takes the filesystem path to the database file and returns an open, migrated, write-enabled SQLite database handle.
 
-The function first derives the directory from `dbPath` and creates a `better-sqlite3` `Database` instance without recursive `mkdir`, so it fails closed if the `.livewiki/` directory disappears between setup and open. It then sets pragmatic pragmas: WAL journal mode for concurrent access, `foreign_keys = ON` for referential integrity, and `synchronous = NORMAL` for a good durability/performance trade-off.
+The function first derives the directory from `dbPath` and creates a `better-sqlite3` `Database` instance without recursive `mkdir`, so it fails closed if the `.livewiki/` directory disappears between setup and open. It then sets pragmatic pragmas: WAL journal mode for concurrent access, `foreign_keys = ON` for referential integrity, `synchronous = NORMAL` for a good durability/performance trade-off, and `busy_timeout = WRITE_LOCK_TIMEOUT_MS` for how long a writer queues behind another one.
+
+That last pragma is set explicitly rather than inherited. The driver's own default is 5 s, which is shorter than a single large write transaction — measured at about 5.5 s to insert 300 new files with their symbols, calls and rationales — so a queued writer used to die while the writer ahead of it was doing ordinary work. `WRITE_LOCK_TIMEOUT_MS` is 30 s: long enough for a cold first index on a large repo, short enough that a genuinely wedged writer is noticed in a human timeframe. SQLite allows exactly one writer at a time and `livewiki index` really is run concurrently — a CLI invocation, an editor hook, and the MCP server's watcher all reach for the same file — so this value is the length of the writer queue, not a workaround.
 
 Because `SCHEMA_SQL` references the v9 `idx_debt_open` index expression (which needs `symbol_key` and `doc_page_id` columns that pre-v8 databases lack), the function first checks whether a `debt` table exists and, if so, whether it is missing either column. In that case it creates a temporary legacy index on `(anchor_id, event)` using the same name, so that the subsequent `CREATE INDEX IF NOT EXISTS` in `SCHEMA_SQL` is safe until the migrations add the columns.
 
@@ -181,6 +183,14 @@ After the migration step — and only there — it creates `idx_batch_tasks_clai
 Two problems motivated the split. A pending migration turned every read into a write that waits on the write lock — measured as `SQLITE_BUSY` after the full busy timeout while another process held a transaction, where a plain read-only connection answered in about 2 ms. And a build whose `CURRENT_SCHEMA_VERSION` was lower than the database's would migrate, or relabel, an index belonging to a newer build. `readonly: true` is safe on a WAL database even when no `-wal`/`-shm` sidecars exist: SQLite materialises the shared memory it needs without modifying the database.
 
 `SchemaAccessError` carries `kind`, `stored` and `current`, and its message names the corrective action rather than surfacing a raw SQLite error or a misleading "database is locked".
+
+## Running a Write Transaction
+
+`runWriteTransaction(phase, tx)` is how the writers in this codebase execute a `db.transaction(...)`. It does two things.
+
+It takes the transaction as **IMMEDIATE**. Under the default DEFERRED, a transaction holds no lock at `BEGIN` and only reaches for it at its first write, so two writers both entered their mutation and the second discovered the conflict mid-flight — after it had already decided what to write from state that had since moved. IMMEDIATE puts the contention at the boundary: writers queue at `BEGIN`, one at a time, and whichever gets in can read decisive state knowing it cannot change before `COMMIT`.
+
+It also classifies the failure. `SQLITE_BUSY` reaching the user as "database is locked" says nothing about what to do, so it becomes a `WriteContentionError` carrying `code = "INDEX_WRITE_CONTENTION"`, the `phase` that was blocked, the original error as `cause`, and a message that says to wait for the running writer and try again. Every other failure passes through untouched, because it is a real error about the repo or the index. `SQLITE_BUSY_SNAPSHOT` is handled for completeness but should never appear: it means a DEFERRED transaction read first and then tried to write against a snapshot another writer had already invalidated, and the busy handler is never consulted for it — no timeout can absorb it. Seeing it means a write transaction lost its immediate boundary.
 
 ## Tests
 

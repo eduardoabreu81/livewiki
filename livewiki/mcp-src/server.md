@@ -4,10 +4,9 @@ owner: generated
 anchors:
   - packages/mcp/src/server.ts#createServer
   - packages/mcp/src/server.ts#isWatchDenied
-  - packages/mcp/src/server.ts#schedule
   - packages/mcp/src/server.ts#startWatcher
-  - packages/mcp/src/server.ts#stop
-  - packages/mcp/src/server.ts#syncBatch
+  - packages/mcp/src/watch-queue.ts#createSyncQueue
+  - packages/mcp/src/watch-queue.ts#isWriteContention
 ---
 
 # LiveWiki MCP Server Implementation
@@ -33,25 +32,38 @@ The server is the MCP front-end for livewiki, living in `packages/mcp/src/server
 
 ## Watcher filter and debounce
 
-<!-- lw:anchors packages/mcp/src/server.ts#isWatchDenied packages/mcp/src/server.ts#schedule packages/mcp/src/server.ts#syncBatch -->
+<!-- lw:anchors packages/mcp/src/server.ts#isWatchDenied packages/mcp/src/watch-queue.ts#createSyncQueue packages/mcp/src/watch-queue.ts#isWriteContention -->
 
-The watcher exists so the MCP server's search results stay current without a restart. It watches the entire repo root recursively, but not every file event should trigger a re-index — `.git`, `.livewiki`, `node_modules`, and `dist` directory segments are all derived or bulky and must never retrigger the sync loop; binary/media/font extensions never carry symbols or prose. The filter is one-sided: it denies paths containing those segments or having those extensions, and lets everything else flow into the debounce.
+The watcher exists so the MCP server's search results stay current without a restart. It watches the entire repo root recursively, but not every file event should trigger a re-index — `.git`, `.livewiki`, `node_modules`, and `dist` directory segments are all derived or bulky and must never retrigger the sync loop; binary/media/font extensions never carry symbols or prose. The filter is one-sided: it denies paths containing those segments or having those extensions, and lets everything else flow into the queue.
 
 `isWatchDenied(filename: string): boolean` takes a filename as it appears in a watch event and returns `true` when the event should be skipped. It splits the filename on both backslashes and forward slashes (since Windows emits one form and POSIX the other) and checks each segment against a denylist; it then checks the lowercased extension against a second set. The check is a simple deny — a path is denied if it matches any denied segment or any denied extension, otherwise it is allowed.
 
-`syncBatch(): Promise<void>` runs the actual re-index pipeline: it awaits `runIndexer` with `{ quiet: true }`, then `runLedger` with `{ quiet: true }`, then `reindexAllPages` against the search index. This is the same sub-second, idempotent pass the startup rebuild uses; unchanged files skip by design because the indexer is hash-incremental. The function catches all errors and logs a single line, so a failed sync never kills the server — the next event simply retries.
+Everything after the filter lives in `packages/mcp/src/watch-queue.ts`, split out so the part that can lose work is testable without a filesystem and without real timers. `createSyncQueue({ run, … }): SyncQueue` returns the pending-work state machine: `notify()` for "an event arrived", `stop()` for shutdown, and `snapshot()` exposing `pending` / `running` / `attempt` / `armedMs` for assertions.
 
-`schedule(): void` is the debounce controller. It returns immediately if `stopped` is true, clears any pending timeout, and arms a new one for 1500 ms. When the timeout fires, it re-arms the schedule if a sync is already in flight (serializing syncs so overlapping indexer/ledger runs never touch the same DB), otherwise it starts `syncBatch()` and tracks the promise in `inFlight`.
+**What "the batch" is.** The sync is a whole-repo incremental pass — `runIndexer` walks the repo and skips unchanged files by hash — so pending work is not a list of paths to replay. It is one bit meaning "the index may be behind the working tree". That makes merging free and total: a run occurring after events A and B covers both. What must never happen is that bit being cleared by anything other than a run that actually **succeeded**.
+
+That is exactly what the old code did. It logged one line on failure and dropped the batch, with a comment saying the next event would retry. For every batch but one that was true; for the **last** event of a sequence there is no next event, so a failed sync left the index behind the working tree silently until someone happened to touch another file (P1, 2026-08-19).
+
+**Invariants.** At most one `run()` in flight — never a second queue. At most one timer armed: the debounce and the retry are the same timer, never two racing. `pending` is cleared only when a run starts and restored if that run fails, and events arriving mid-run set it again so they are merged into the next run instead of being swallowed by the one already going. After `stop()` no timer stays armed and no run is ever started.
+
+**Retry policy.** A failed run always keeps its work pending; what differs is the scheduling.
+
+- **Write contention** (`isWriteContention`, matching `WriteContentionError`'s `INDEX_WRITE_CONTENTION` code rather than `instanceof`, so it survives crossing a module boundary) retries with **no attempt limit**. Contention is transient by definition — it means another writer holds the lock, so someone *is* making progress — and giving up would leave the index behind with nothing scheduled to fix it, which is the bug being removed. The capped backoff is what keeps it from being a hot loop.
+- **Anything else** is a real error about the repo or the index, and repeating it forever is a hot loop. It retries `WATCH_PERMANENT_ATTEMPTS` (5) times, reporting the error every time, then stops scheduling itself with an explicit give-up line. The work still stays pending: the next filesystem event, or the next server start, picks it up. It is never silently dropped.
+
+Backoff is `WATCH_RETRY_BASE_MS * 2^(failures-1)` capped at `WATCH_RETRY_MAX_MS` — 1s, 2s, 4s, 8s, 16s, then 30s. No jitter: there is one queue per server, so there is no herd to spread out, and a predictable delay is what makes the policy assertable in a test.
+
+While backing off, an incoming event does **not** shorten the wait. The armed retry already covers it (the sync is whole-repo), and letting events reset the timer would turn a steady stream of edits into precisely the hot loop the backoff exists to prevent.
 
 ## Watcher lifecycle and control
 
-<!-- lw:anchors packages/mcp/src/server.ts#startWatcher packages/mcp/src/server.ts#stop -->
+<!-- lw:anchors packages/mcp/src/server.ts#startWatcher -->
 
 The watcher's purpose is to keep the index, ledger, and search in sync with the working tree for the server's entire lifetime. It must start without requiring a particular platform's recursive-watch support, and it must stop cleanly because a lingering sync could hold database handles past `close()` — the EBUSY lesson on Windows.
 
-`startWatcher(repoRoot: string, searchIdx: SearchIndex): WatcherHandle` takes a repository root string and a `SearchIndex` and returns a handle with a `stop()` method. It creates the `FSWatcher` and wires event and error listeners. On each event it filters via `isWatchDenied` (a `null` filename means "sync anyway") and calls `schedule()`. Watch creation goes through `realpathSync.native` first because on Windows the temp root may arrive in 8.3 form while events use long names; any failure keeps the lexical path and the inability to watch degrades to no watcher with a single log line.
+`startWatcher(repoRoot, searchIdx, opts?): WatcherHandle` takes a repository root string and a `SearchIndex` and returns a handle with a `stop()` method. It is now only the `fs.watch` plumbing: it builds the sync (`runIndexer` → `runLedger` → `reindexAllPages`, all `{ quiet: true }`), hands it to `createSyncQueue`, and turns OS events into `queue.notify()`. On each event it filters via `isWatchDenied` (a `null` filename means "sync anyway"). Watch creation goes through `realpathSync.native` first because on Windows the temp root may arrive in 8.3 form while events use long names; any failure keeps the lexical path and the inability to watch degrades to no watcher with a single log line. The optional third argument is a test seam — it substitutes the sync and the queue's timers so tests drive time by hand instead of waiting on real ones.
 
-`stop(): Promise<void>` is the clean shutdown path. It sets `stopped = true`, clears any pending debounce, then awaits the OS-level watcher close via the `"close"` event (not just `close()`), and finally awaits `inFlight` so any running sync settles before the caller proceeds. This order matters: stopping the watcher first prevents new events from arming a debounce, awaiting the OS close prevents late events on a dying handle, and awaiting the in-flight sync prevents DB handle contention.
+Its `stop()` is the clean shutdown path, and the order is load-bearing. It stops the **queue first**, which disarms any pending debounce *or retry* so no sync can start while the watch handle is being torn down. Then it awaits the OS-level watcher close via the `"close"` event (not just `close()`), which prevents late events being delivered to a dying handle. Only then does it await the queue's promise, so whatever sync was already running settles after the OS handle is released rather than while it is still held. A pending retry can therefore never fire after shutdown, and its timer is `unref`'d besides, so it can never be the reason a process stays alive.
 
 ## Server construction and tool registry
 
