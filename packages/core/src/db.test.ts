@@ -4,6 +4,9 @@ import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
 import {
   openIndex,
+  runWriteTransaction,
+  WriteContentionError,
+  WRITE_LOCK_TIMEOUT_MS,
   CURRENT_SCHEMA_VERSION,
   SCHEMA_VERSION_KEY,
   migrateV8ToV9,
@@ -640,5 +643,84 @@ describe("db.openIndex", () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe("db write-lock policy", () => {
+  it("states the busy timeout instead of inheriting the driver's default", () => {
+    // The default happened to be 5s — shorter than one large write
+    // transaction, which is how a queued writer used to die while the writer
+    // ahead of it was doing ordinary work. The value must be the declared one.
+    const db = openIndex(dbPath);
+    try {
+      const rows = db.pragma("busy_timeout") as Array<{ timeout: number }>;
+      expect(rows[0]?.timeout).toBe(WRITE_LOCK_TIMEOUT_MS);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("takes the transaction as IMMEDIATE", () => {
+    // Proven by behaviour, not by reading the call: an immediate transaction
+    // holds the write lock from BEGIN, so a second connection cannot start
+    // one of its own while the first is open.
+    const first = openIndex(dbPath);
+    const second = openIndex(dbPath);
+    try {
+      second.pragma("busy_timeout = 50"); // do not sit here for 30s
+      let secondSaw: string | undefined;
+      runWriteTransaction("probe", first.transaction(() => {
+        try {
+          second.exec("BEGIN IMMEDIATE");
+          second.exec("ROLLBACK");
+        } catch (err) {
+          secondSaw = (err as { code?: string }).code;
+        }
+      }));
+      expect(secondSaw).toBe("SQLITE_BUSY");
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  it("turns lock contention into an actionable error, not \"database is locked\"", () => {
+    const busy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    expect(() =>
+      runWriteTransaction("index", {
+        immediate: () => {
+          throw busy;
+        },
+      }),
+    ).toThrow(WriteContentionError);
+
+    try {
+      runWriteTransaction("index", {
+        immediate: () => {
+          throw busy;
+        },
+      });
+    } catch (err) {
+      const contention = err as WriteContentionError;
+      expect(contention.code).toBe("INDEX_WRITE_CONTENTION");
+      expect(contention.phase).toBe("index");
+      expect(contention.cause).toBe(busy);
+      // The message has to say what to do; the raw SQLite text does not.
+      expect(contention.message).toMatch(/another process is writing to the index/);
+      expect(contention.message).toMatch(/run it again/);
+    }
+  });
+
+  it("lets every non-contention failure through unchanged", () => {
+    const real = Object.assign(new Error("UNIQUE constraint failed: files.path"), {
+      code: "SQLITE_CONSTRAINT_UNIQUE",
+    });
+    expect(() =>
+      runWriteTransaction("index", {
+        immediate: () => {
+          throw real;
+        },
+      }),
+    ).toThrow(real);
   });
 });

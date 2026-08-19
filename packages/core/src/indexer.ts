@@ -21,6 +21,34 @@
  * commit 300ad58). If `livewiki/` does not exist either, an info note is emitted
  * suggesting `livewiki init` (Phase 3) — exit 0.
  *
+ * CONCURRENT WRITERS (P1, investigated 2026-08-19). More than one process
+ * indexes the same `index.db` in normal use: a CLI invocation, an editor hook,
+ * and the MCP server's file watcher all call this module. The shape that made
+ * that unsafe was a snapshot read before the async phase and consumed after it:
+ *
+ *     SELECT * FROM files          ← planning snapshot
+ *     …0.5s–15s of read + parse…   ← another writer commits in here
+ *     BEGIN DEFERRED               ← no lock yet
+ *     INSERT INTO files …          ← decided from the stale snapshot
+ *                                    → UNIQUE constraint failed: files.path
+ *
+ * Reproduced 100% of the time with 2, 3 and 5 concurrent processes: exactly
+ * one writer won, the rest died on that INSERT.
+ *
+ * The shape now is:
+ *
+ *     plan/parse (async, no lock)
+ *     → BEGIN IMMEDIATE            ← writers queue here, one at a time
+ *     → re-read `files` + meta     ← the decisive state, under the lock
+ *     → reconcile each plan against it (`reconcilePlan`)
+ *     → apply
+ *     → COMMIT
+ *
+ * The snapshot still exists, but only for planning (skip unchanged files
+ * without parsing them, bound the delete sweep). No write is decided from it.
+ * A plan whose bytes another writer already applied resolves to `converged`:
+ * a no-op counted as unchanged, not an error and not work this run performed.
+ *
  * EOL-insensitive hashing + legacy silent migration (roadmap item 12):
  * file text is normalized with `normalizeEol` (CRLF → LF) ONCE right after
  * the read; the normalized string feeds the content_hash, tree-sitter, and
@@ -92,7 +120,7 @@ import { walkRepo } from "./walker.js";
 import { sha256, normalizeEol, expandEolToCrlf } from "./hashes.js";
 import { initParser, parseSource, listSupportedGrammars, grammarForExtension, grammarState, type GrammarState } from "./parser.js";
 import { extractSymbolsWithRanges, extractCalls, extractRationales, isLikelyGenerated, type SymbolRecord, type SymbolRange, type CallRecord, type RationaleRecord } from "./symbols.js";
-import { openIndex, type FileRow, type SymbolRow } from "./db.js";
+import { openIndex, runWriteTransaction, type FileRow, type SymbolRow } from "./db.js";
 import { resolveCalls } from "./call-resolution.js";
 
 export interface IndexOptions {
@@ -189,6 +217,97 @@ async function ensureLivewikiDir(absRoot: string, quiet: boolean): Promise<void>
   }
 }
 
+/** One file's parsed result, produced in Phase A and applied in Phase B. */
+interface FilePlan {
+  entry: { path: string; lang: string };
+  content: string;
+  size: number;
+  mtime: number;
+  hash: string;
+  /** True when only the hash ALGORITHM changed (legacy raw-bytes →
+   *  normalized); the on-disk bytes are provably identical. */
+  eolMigration: boolean;
+  /** True when the content is unchanged but the grammar set changed and
+   *  the file had zero symbols (P1 directed re-parse). */
+  grammarReprocess: boolean;
+  /** True when this file's row was `status='deleted'` and the file is back
+   *  in the walk. Orthogonal to the content buckets: the row transitions to
+   *  active regardless of whether the bytes also changed. Planning-time
+   *  value; the write phase recomputes it from the fresh row. */
+  reactivated: boolean;
+  /** `content_hash` this plan was built against, or null when the planning
+   *  snapshot had no row for this path. The write phase compares it to the
+   *  fresh row to tell "nobody touched this line" from "another writer got
+   *  here first" — the two need different decisions, and the planning flags
+   *  above (`eolMigration` in particular) are only valid in the first case. */
+  prevHash: string | null;
+  symbols: Array<SymbolRecord & SymbolRange>;
+  calls: CallRecord[];
+  rationales: RationaleRecord[];
+}
+
+/**
+ * What the write phase does with one plan, decided from the row that exists
+ * RIGHT NOW rather than from the planning snapshot.
+ *
+ * `converged` is the case this whole mechanism exists for: another writer
+ * already applied the very bytes this plan carries, so there is nothing left
+ * to write. It is a success, not a conflict — the file IS indexed, correctly,
+ * at the content we read from disk.
+ */
+export type PlanDecision =
+  | { kind: "insert" }
+  | {
+      kind: "update";
+      row: FileRow;
+      reactivated: boolean;
+      eolMigration: boolean;
+      grammarReprocess: boolean;
+    }
+  | { kind: "converged" };
+
+/**
+ * Reconciles one plan against the fresh `files` row, inside the write
+ * transaction. Pure, so the decision table is testable without a race.
+ *
+ * The planning flags (`eolMigration`, `grammarReprocess`) describe work that
+ * made sense against the row Phase A saw. Each is re-qualified here:
+ *
+ *  - `eolMigration` only holds while the row still carries the hash it was
+ *    diagnosed against. If another writer moved that hash, this is no longer
+ *    provably an EOL-only change and the file takes the ordinary updated path.
+ *  - `grammarReprocess` only holds while `meta.grammar_state` is still stale.
+ *    A writer that committed ahead of us wrote the current state along with
+ *    the re-parsed symbols, so repeating the re-parse would be pure work for
+ *    an identical result.
+ *
+ * A fresh row whose hash differs from BOTH the planning snapshot and this
+ * plan means a concurrent writer indexed different bytes than the ones we
+ * read. We still apply our plan: it reflects bytes that really were on disk,
+ * and the next run re-reads disk and converges either way. Picking a winner
+ * here would need a re-read inside the transaction, which is exactly the
+ * async work Phase A exists to keep out of the write lock.
+ */
+export function reconcilePlan(
+  plan: Pick<FilePlan, "hash" | "eolMigration" | "grammarReprocess" | "prevHash">,
+  fresh: FileRow | undefined,
+  ctx: { grammarReprocessStillPending: boolean },
+): PlanDecision {
+  if (fresh === undefined) return { kind: "insert" };
+
+  const grammarReprocess = plan.grammarReprocess && ctx.grammarReprocessStillPending;
+  if (fresh.status === "active" && fresh.content_hash === plan.hash && !grammarReprocess) {
+    return { kind: "converged" };
+  }
+  return {
+    kind: "update",
+    row: fresh,
+    reactivated: fresh.status !== "active",
+    eolMigration: plan.eolMigration && fresh.content_hash === plan.prevHash,
+    grammarReprocess,
+  };
+}
+
 async function orchestrateIndex(
   db: import("better-sqlite3").Database,
   repoRoot: string,
@@ -197,7 +316,18 @@ async function orchestrateIndex(
 ): Promise<IndexResult> {
   await initParser();
 
-  // Load the current path → file row map for comparison
+  // PLANNING snapshot of path → file row. Read here, outside any transaction,
+  // because Phase A below is async and must not hold the write lock while it
+  // reads and parses the repo.
+  //
+  // It is deliberately NOT the authority for any write. Phase A runs for
+  // 0.5s–15s depending on repo size, and another `livewiki index` process can
+  // commit inside that window; deciding INSERT-vs-UPDATE from this map is what
+  // produced `UNIQUE constraint failed: files.path`. The write phase re-reads
+  // `files` inside its own transaction and reconciles every plan against that
+  // fresh state (see `reconcilePlan`). This map's remaining jobs are (a) to let
+  // Phase A skip unchanged files without parsing them and (b) to bound the
+  // delete sweep to paths this run actually compared against the walk.
   const existingFiles = new Map<string, FileRow>();
   for (const row of db.prepare("SELECT * FROM files").all() as FileRow[]) {
     existingFiles.set(row.path, row);
@@ -252,26 +382,6 @@ async function orchestrateIndex(
 
   // ── Phase A: async I/O (read + parse) OUTSIDE the transaction.
   // better-sqlite3 transactions are synchronous and cannot contain await.
-  interface FilePlan {
-    entry: { path: string; lang: string };
-    content: string;
-    size: number;
-    mtime: number;
-    hash: string;
-    /** True when only the hash ALGORITHM changed (legacy raw-bytes →
-     *  normalized); the on-disk bytes are provably identical. */
-    eolMigration: boolean;
-    /** True when the content is unchanged but the grammar set changed and
-     *  the file had zero symbols (P1 directed re-parse). */
-    grammarReprocess: boolean;
-    /** True when this file's row was `status='deleted'` and the file is back
-     *  in the walk. Orthogonal to the content buckets: the row transitions to
-     *  active regardless of whether the bytes also changed. */
-    reactivated: boolean;
-    symbols: Array<SymbolRecord & SymbolRange>;
-    calls: CallRecord[];
-    rationales: RationaleRecord[];
-  }
   const plans: FilePlan[] = [];
 
   let filesUnchanged = 0;
@@ -412,6 +522,7 @@ async function orchestrateIndex(
       eolMigration,
       grammarReprocess,
       reactivated,
+      prevHash: prev?.content_hash ?? null,
       symbols,
       calls,
       rationales,
@@ -431,20 +542,54 @@ async function orchestrateIndex(
     symbolsDeleted: 0,
   };
 
-  // Legacy window for the per-symbol EOL realignment (roadmap item 12,
-  // follow-up 2): CRLF-era (non-normalized) symbol hashes can only be
-  // present until ONE complete post-upgrade index run finishes — after it,
-  // every file row was either re-hashed to normalized or took the
-  // unchanged fast path (which requires stored == normalized). Scoping
-  // the realignment to this window means steady-state normalized
-  // operation pays ZERO extra hashing cost (no slice hashes, no extra
-  // queries). The flag is written inside the transaction below.
-  const legacyWindow =
-    (db.prepare("SELECT value FROM meta WHERE key = 'eol_hashes_normalized'").get() as
-      | { value: string }
-      | undefined) === undefined;
-
   const writeAll = db.transaction(() => {
+    // ── Fresh decisive state, read INSIDE the write transaction.
+    //
+    // Everything below decides what to mutate, so it has to be read after the
+    // write lock is held, not from the planning snapshot taken before Phase A.
+    // With `BEGIN IMMEDIATE` (see the call site) this connection is the only
+    // writer from here to COMMIT, so these reads cannot go stale underneath
+    // the statements that consume them.
+    const freshFiles = new Map<string, FileRow>();
+    for (const row of db.prepare("SELECT * FROM files").all() as FileRow[]) {
+      freshFiles.set(row.path, row);
+    }
+
+    // Legacy window for the per-symbol EOL realignment (roadmap item 12,
+    // follow-up 2): CRLF-era (non-normalized) symbol hashes can only be
+    // present until ONE complete post-upgrade index run finishes — after it,
+    // every file row was either re-hashed to normalized or took the
+    // unchanged fast path (which requires stored == normalized). Scoping
+    // the realignment to this window means steady-state normalized
+    // operation pays ZERO extra hashing cost (no slice hashes, no extra
+    // queries). The flag is written at the end of this transaction — and read
+    // here, so a writer that closed the window while we were parsing is seen.
+    const legacyWindow =
+      (db.prepare("SELECT value FROM meta WHERE key = 'eol_hashes_normalized'").get() as
+        | { value: string }
+        | undefined) === undefined;
+
+    // Same reasoning for the grammar state: a concurrent writer that already
+    // re-parsed under the current grammar set also stamped the current state.
+    // Re-reading it here is what turns "my planned re-parse" into a no-op
+    // instead of redundant work with an identical result.
+    const storedGrammarStateNow = (
+      db.prepare("SELECT value FROM meta WHERE key = 'grammar_state'").get() as
+        | { value: string }
+        | undefined
+    )?.value;
+    let grammarReprocessStillPending = true;
+    if (storedGrammarStateNow !== undefined) {
+      try {
+        grammarReprocessStillPending = !grammarStateEqual(
+          JSON.parse(storedGrammarStateNow) as GrammarState,
+          currentGrammarState,
+        );
+      } catch {
+        grammarReprocessStillPending = true; // corrupt state: treat as legacy
+      }
+    }
+
     const insertFile = db.prepare(
       "INSERT INTO files (path, lang, content_hash, size, mtime, indexed_at) VALUES (?, ?, ?, ?, ?, ?)",
     );
@@ -494,7 +639,24 @@ async function orchestrateIndex(
     );
 
     for (const plan of plans) {
-      const prev = existingFiles.get(plan.entry.path);
+      const decision = reconcilePlan(plan, freshFiles.get(plan.entry.path), {
+        grammarReprocessStillPending,
+      });
+      if (decision.kind === "converged") {
+        // Another writer applied these exact bytes while we were parsing.
+        // The file is indexed and correct, so this is the unchanged bucket —
+        // NOT filesAdded/filesUpdated, which report work this run performed.
+        result.filesUnchanged++;
+        continue;
+      }
+      // From here on the plan's own flags are stale by construction — the
+      // reconciled decision is the authority. An INSERT has no prior row, so
+      // none of the three can apply to it.
+      const applied = decision.kind === "update" ? decision : null;
+      const prev = applied?.row;
+      const isReactivated = applied?.reactivated ?? false;
+      const isEolMigration = applied?.eolMigration ?? false;
+      const isGrammarReprocess = applied?.grammarReprocess ?? false;
       let fileId: number;
       // Per-symbol EOL realignment (roadmap item 12, follow-up 2): an
       // UPDATED file inside the legacy window may still hold CRLF-era
@@ -520,16 +682,16 @@ async function orchestrateIndex(
         // symbol loop below re-inserts today's symbols as active, so the
         // reactivation is complete here. It is counted on its own axis: the
         // content bucket still reports whether the bytes moved.
-        if (plan.reactivated) {
+        if (isReactivated) {
           result.filesReactivated++;
           if (plan.hash === prev.content_hash) result.filesUnchanged++;
           else result.filesUpdated++;
         }
         // EOL migration is not a content change: the file counts as
         // unchanged and its re-inserted symbols are not "added".
-        else if (plan.eolMigration) {
+        else if (isEolMigration) {
           result.filesUnchanged++;
-        } else if (plan.grammarReprocess) {
+        } else if (isGrammarReprocess) {
           // Directed re-parse: not a content change either — counted
           // separately so the grammar upgrade is visible, never as
           // "updated" (no phantom debt). Capture the just-soft-deleted
@@ -582,9 +744,9 @@ async function orchestrateIndex(
           sym.end_line,
           sym.content_hash,
         );
-        if (plan.eolMigration) {
+        if (isEolMigration) {
           realignAnchorHash.run(sym.content_hash, sym.key);
-        } else if (plan.grammarReprocess) {
+        } else if (isGrammarReprocess) {
           const oldHash = oldSymbolHashes?.get(sym.key);
           if (oldHash === undefined) {
             // Genuinely new anchor (grammar added or extraction widened).
@@ -634,15 +796,31 @@ async function orchestrateIndex(
     }
 
     // Files that existed in the DB but not in the walk → mark as deleted (file + symbols)
-// WITHOUT deleting the file row. This preserves history for moved detection in
-// Phase 2 (we need the deleted symbols with content_hash for matching).
-    for (const [prevPath, prevRow] of existingFiles) {
+    // WITHOUT deleting the file row. This preserves history for moved detection in
+    // Phase 2 (we need the deleted symbols with content_hash for matching).
+    //
+    // Iterates the PLANNING snapshot on purpose, and reads each row's current
+    // state from `freshFiles`. Both halves matter:
+    //   - snapshot as the candidate set: a path another writer created after
+    //     our walk was never absent from disk as far as this run can tell —
+    //     our walk simply predates it. Sweeping `freshFiles` instead would let
+    //     a slow writer soft-delete a file a faster one just indexed.
+    //   - fresh row as the authority: the id and status must come from the row
+    //     that exists now, so a concurrently deleted row is not re-counted and
+    //     a concurrently reactivated one is not deleted off a stale id.
+    for (const [prevPath] of existingFiles) {
       if (seenPaths.has(prevPath)) continue;
+      const prevRow = freshFiles.get(prevPath);
+      // Vanished from `files` entirely (no writer in this codebase hard-deletes
+      // rows, but the sweep must not assume that).
+      if (prevRow === undefined) continue;
       // Already-deleted rows are left exactly as they are. Re-marking them
       // wrote the same value back, re-counted the same history on every run
       // (so `removed` never converged), and burned four statements per row
       // for nothing. Their history is preserved, never removed — only the
-      // active → deleted transition is real work worth counting.
+      // active → deleted transition is real work worth counting. A row another
+      // writer already soft-deleted lands here too: the transition happened,
+      // it just was not ours to count.
       if (prevRow.status !== "active") continue;
       // Count BEFORE the UPDATE (otherwise the WHERE filters out what just changed).
       const oldSyms = db
@@ -679,7 +857,14 @@ async function orchestrateIndex(
     ).run(JSON.stringify(currentGrammarState));
   });
 
-  writeAll();
+  // IMMEDIATE, not the default DEFERRED. A deferred transaction takes no lock
+  // at BEGIN and only reaches for it at the first write — so two writers both
+  // entered their mutation, and the one that got there second discovered the
+  // conflict mid-flight, after deciding what to write. IMMEDIATE moves the
+  // whole contention to the boundary: writers queue HERE, one at a time, and
+  // whoever gets in reads the fresh `files` state above knowing it cannot move
+  // until COMMIT. Phase A stays outside, so the lock is never held across I/O.
+  runWriteTransaction("index", writeAll);
 
   return {
     filesScanned: walked.length,

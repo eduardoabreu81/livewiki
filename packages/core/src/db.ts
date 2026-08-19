@@ -21,6 +21,73 @@ export const CURRENT_SCHEMA_VERSION = 10;
 export const SCHEMA_VERSION_KEY = "schema_version";
 
 /**
+ * How long a writer waits for the write lock before giving up.
+ *
+ * SQLite allows exactly one writer at a time, and `livewiki index` is run
+ * concurrently in practice (a CLI invocation, an editor hook, and the MCP
+ * server's watcher all reach for the same file). The indexer's write phase
+ * takes a `BEGIN IMMEDIATE`, so a second writer QUEUES here instead of
+ * discovering the conflict halfway through its own mutation — this timeout is
+ * the length of that queue, not a workaround for a stale snapshot.
+ *
+ * The value has to cover one full write transaction of the writer ahead in
+ * line. Measured worst case on this repo class: ~5.5s to insert 300 new files
+ * with their symbols, calls and rationales. 30s leaves ample headroom for a
+ * cold first index on a large repo while still failing in a human timeframe
+ * when a writer is genuinely wedged. Applies to reads in the same connection
+ * too, which is what keeps a checkpointing writer from failing a reader.
+ */
+export const WRITE_LOCK_TIMEOUT_MS = 30_000;
+
+/**
+ * Raised when a write phase could not get the write lock within
+ * `WRITE_LOCK_TIMEOUT_MS`. Distinct from every other failure because the
+ * action it calls for is different: nothing is wrong with the repo or the
+ * index, another process is simply still writing.
+ */
+export class WriteContentionError extends Error {
+  readonly code = "INDEX_WRITE_CONTENTION";
+  constructor(readonly phase: string, cause: unknown) {
+    super(
+      `another process is writing to the index and did not release it within ` +
+        `${Math.round(WRITE_LOCK_TIMEOUT_MS / 1000)}s (phase: ${phase}). ` +
+        "Wait for the running `livewiki index` (or the MCP server's watcher) to finish, then run it again.",
+    );
+    this.name = "WriteContentionError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * Runs one write transaction, translating lock contention into an actionable
+ * error. Raw `SQLITE_BUSY` surfacing as "database is locked" tells the user
+ * nothing about what to do; every other failure passes through untouched
+ * because it IS an index error.
+ *
+ * `SQLITE_BUSY_SNAPSHOT` is listed for completeness, not because it is
+ * expected: it means a DEFERRED transaction read first and then tried to
+ * write against a snapshot another writer had already invalidated — the busy
+ * handler is never consulted for it, so no timeout can absorb it. Callers
+ * take `BEGIN IMMEDIATE` precisely so it cannot happen; seeing it means a
+ * write transaction lost its immediate boundary.
+ */
+export function runWriteTransaction<T>(phase: string, tx: { immediate: () => T }): T {
+  try {
+    return tx.immediate();
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (
+      code === "SQLITE_BUSY" ||
+      code === "SQLITE_BUSY_SNAPSHOT" ||
+      code === "SQLITE_BUSY_TIMEOUT"
+    ) {
+      throw new WriteContentionError(phase, err);
+    }
+    throw err;
+  }
+}
+
+/**
  * The index cannot be used as-is, and the fix is a human action rather than a
  * retry. Each `kind` maps to one instruction, because "database is locked" or
  * a raw SQLite error tells the user nothing about what to do.
@@ -594,6 +661,12 @@ export function openIndex(dbPath: string): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("synchronous = NORMAL");
+  // Explicit, not inherited: the driver's own default happens to be 5s, which
+  // is shorter than a single large write transaction and made a queued writer
+  // die while the writer ahead of it was doing ordinary work. Stated here so
+  // the wait is a decision with a rationale (see WRITE_LOCK_TIMEOUT_MS) rather
+  // than a property of whichever driver version is installed.
+  db.pragma(`busy_timeout = ${WRITE_LOCK_TIMEOUT_MS}`);
 
   // SCHEMA_SQL carries the v9 index expression, which references columns that
   // pre-v8 databases do not have yet. A temporary legacy index with the same

@@ -44,7 +44,7 @@
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 import * as safeIo from "./safe-io.js";
-import { openIndex, type FileRow, type SymbolRow } from "./db.js";
+import { openIndex, runWriteTransaction, type FileRow, type SymbolRow } from "./db.js";
 import { extractAnchors, type Owner } from "./anchors.js";
 import { maskCodeSpansPreservingLength } from "./markdown-mask.js";
 import { sha256 } from "./hashes.js";
@@ -335,13 +335,21 @@ interface PendingRewrite {
  *
  * All DB state used for decisions is re-read HERE, not carried from
  * `planLedger` — a concurrent indexer may have moved symbols in between.
+ *
+ * IMMEDIATE for the same reason the indexer's write phase is (P1,
+ * 2026-08-19): under the default DEFERRED, those decision re-reads open a
+ * read snapshot, and the first write after a concurrent commit fails with
+ * `SQLITE_BUSY_SNAPSHOT` — which the busy handler is never consulted for, so
+ * no timeout can absorb it. Taking the write lock at BEGIN means the state
+ * re-read here genuinely cannot move before COMMIT, which is what the
+ * paragraph above claims. Measured: this was the entire residual failure of
+ * concurrent `livewiki index` runs once the indexer itself was fixed.
  */
 function applyLedger(
   db: import("better-sqlite3").Database,
   plan: LedgerPlan,
 ): { result: LedgerResult; pendingRewrites: PendingRewrite[] } {
-  const run = db.transaction(() => orchestrate(db, plan));
-  return run();
+  return runWriteTransaction("ledger", db.transaction(() => orchestrate(db, plan)));
 }
 
 function orchestrate(
