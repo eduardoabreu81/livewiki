@@ -34,15 +34,20 @@ to npm since 2026-08-12.
 > items follow. The earlier reconciliation notes moved to "Decision
 > history" below.
 
-### P1 — open (surfaced by the 2026-08-18 hardening round)
+### P1 — CLOSED (surfaced by the 2026-08-18 hardening round)
 
-1. **Concurrent `livewiki index` writers** — two or more `livewiki index`
-   processes can race over creating/updating rows in `files`. Observed
-   reproduction: 3 concurrent processes, 2 failed with `UNIQUE constraint
-   failed: files.path` and exited 1. Investigate and establish safe
-   serialization/convergence between writers. Deliberately NOT prescribing a
-   mutex, a retry, or any other fix before the investigation — the last two
-   rounds both showed the obvious remedy was aimed at the wrong layer.
+1. ~~**Concurrent `livewiki index` writers**~~ DONE (2026-08-19, `f8e0ba4`
+   + `429285e`) — the write phase now runs under an IMMEDIATE transaction
+   and re-reads the decisive state inside it, so writers queue at `BEGIN`
+   instead of consuming a planning snapshot taken before the read+parse
+   phase; `applyLedger` takes the same boundary, `openIndex` states a 30s
+   `busy_timeout`, and a lock timeout surfaces as `WriteContentionError`
+   (`INDEX_WRITE_CONTENTION`) instead of a raw `SQLITE_BUSY`. The MCP
+   watcher no longer drops a failed sync batch: pending work is kept and
+   retried with backoff, unbounded for contention and five attempts for any
+   other error. Adversarial matrix 2/3/5 writers × 10 trials (100
+   processes): all exit 0, final state identical to a single writer's, and
+   a later run is a fixpoint.
 
 ### P2 — post-launch (decided, written, unscheduled)
 
@@ -87,6 +92,15 @@ to npm since 2026-08-12.
     refactor: a page that cannot be read or parsed now invalidates the
     whole plan instead of being skipped. Decide whether to remove it or
     keep it as a compatibility field.
+12. **MCP stdio server does not exit on stdin EOF** (post-release, filed
+    2026-08-19 during the 0.3.0 RC) — closing the client's end of stdin
+    leaves `livewiki-mcp` running indefinitely (measured >8s, same in
+    0.2.1, so not a 0.3.0 regression). Real clients terminate the child on
+    shutdown, which is why nothing has broken, but a client that only
+    closes the pipe leaks a process holding an fs.watch on the repo.
+    Deliberately NOT fixed in 0.3.0: teardown was just reworked for the
+    watcher retry, and changing shutdown semantics in the same release
+    would ship an untested interaction.
 
 ### Dogfood / repository hygiene
 
