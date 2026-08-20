@@ -46,6 +46,12 @@ jobs:
       - name: Build all packages
         run: pnpm -r build
 
+      - name: Type-check all packages
+        # Same gate the maintainer runs locally before every commit.
+        # Runs after the build because `cli` and `mcp` type-check against
+        # `@livewiki/core`'s emitted `dist/*.d.ts`.
+        run: pnpm lint:tsc
+
       - name: Run all tests
         run: pnpm -r test
 

@@ -1,6 +1,6 @@
 {
   "name": "@livewiki/cli",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": false,
   "type": "module",
   "description": "livewiki command-line interface — living documentation anchored to code, verifiable against hallucination.",
@@ -34,6 +34,7 @@
   "files": ["dist", "skills", "templates", "!dist/**/*.test.*"],
   "scripts": {
     "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/make-executable.mjs",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint:tsc": "tsc -p tsconfig.json --noEmit"

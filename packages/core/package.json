@@ -1,6 +1,6 @@
 {
   "name": "@livewiki/core",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": false,
   "type": "module",
   "description": "Deterministic structural index and batch documentation engine for livewiki.",
@@ -218,6 +218,7 @@
   ],
   "scripts": {
     "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

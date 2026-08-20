@@ -1,6 +1,6 @@
 {
   "name": "@livewiki/mcp",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": false,
   "type": "module",
   "description": "MCP server exposing a livewiki repository wiki to any MCP client.",
@@ -44,6 +44,7 @@
   ],
   "scripts": {
     "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/make-executable.mjs",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint:tsc": "tsc -p tsconfig.json --noEmit"
