@@ -4,9 +4,9 @@
 
 livewiki turns a repository into a Markdown wiki whose every code reference is
 *anchored* to a real indexed symbol. An LLM writes the prose; livewiki does the
-deterministic work: it plans the pages, tracks which anchored symbols changed,
-preserves your edits, and mechanically validates the structure of what was
-written.
+deterministic work — planning the pages, running **structural
+anti-hallucination checks** on what the model wrote, tracking which anchored
+symbols changed, and preserving your edits.
 
 [![npm](https://img.shields.io/npm/v/@livewiki/cli)](https://www.npmjs.com/package/@livewiki/cli)
 [![CI](https://github.com/eduardoabreu81/livewiki/actions/workflows/cross-platform-ci.yml/badge.svg)](https://github.com/eduardoabreu81/livewiki/actions/workflows/cross-platform-ci.yml)
@@ -27,10 +27,12 @@ Python repository.*
 Technical docs go stale the moment the code changes. livewiki makes that
 visible and cheap to fix instead of silent:
 
-- **Anchored, not hand-waved.** Every code reference points at a real indexed
-  symbol. `livewiki verify` reads the wiki fresh from disk and fails when a
-  reference breaks — including references written by the LLM, without running
-  `index` first.
+- **Deterministic anti-hallucination checks.** Every code reference must point
+  at a real indexed symbol. `livewiki verify` reads the wiki fresh from disk and
+  fails on invented symbols, broken anchors, and signatures that no longer match
+  — including references the LLM wrote seconds ago, without running `index`
+  first, and without spending a token. Structural, not semantic; the section
+  below draws the line.
 - **Your edits win.** Pages you mark `owner: human` are never rewritten, and
   `lw:manual` blocks are preserved byte-for-byte.
 - **Debt is tracked, not discovered.** `livewiki status` ranks what drifted;
@@ -41,17 +43,29 @@ visible and cheap to fix instead of silent:
 
 ### What `verify` checks — and what it doesn't
 
-`livewiki verify` is a structural gate, not a fact checker. It confirms that
-every cited symbol exists in the code, that cited signatures still match, that
-internal links resolve, and that referenced artifacts are present — reading the
-wiki fresh from disk, so a page an LLM just wrote is checked without running
-`index` first.
+The anti-hallucination layer is deterministic and structural. `livewiki verify`
+reads the wiki fresh from disk — so a page an LLM wrote seconds ago is checked
+without running `index` first — and fails on:
 
-It does **not** judge whether the surrounding prose is true. Nothing here
-detects a plausible-sounding but wrong explanation of code that does exist;
-reviewing the explanation is still your job. What livewiki guarantees is
-narrower and mechanical: the documentation is anchored to code that exists,
-and you are told the moment that code moves.
+- a cited symbol that does not exist in the code;
+- an anchor that broke because the symbol moved, was renamed, or was deleted;
+- a cited signature that no longer matches the indexed one;
+- an internal link that does not resolve;
+- a referenced artifact that is missing from disk;
+- frontmatter or page structure that violates the format contract.
+
+That removes whole classes of fabricated content — the invented function, the
+API that never existed, the reference that quietly rotted — before a reader
+ever sees it, at zero token cost. Anything that fails is rejected and rolled
+back rather than merged.
+
+It does **not** prove that a sentence is true. A plausible but wrong
+explanation of code that really does exist passes every check above, because
+every check above is about structure and identity, not meaning. Read
+"anti-hallucination" here as a layer that mechanically eliminates a large class
+of fabrication and tells you the moment code moves under the prose — not as a
+guarantee of factual accuracy. Reviewing the explanation itself is still your
+job.
 
 ## Quick start
 
@@ -212,8 +226,10 @@ mechanically.
   staleness, plans work, tracks debt, and verifies — without a model.
 - **Writing layer** — a connected agent (or an API-backed batch) writes the
   prose, from a closed list of allowed symbol keys.
-- **Validation layer** — code anchors, internal links, and artifacts are all
-  checked against disk; invalid writes are rolled back.
+- **Anti-hallucination layer** — deterministic and structural: code anchors,
+  cited signatures, internal links, artifacts, and page structure are all
+  checked against disk; invalid writes are rolled back. It eliminates fabricated
+  and rotted references, not semantic mistakes.
 - **Human ownership** — `owner: human` pages are never rewritten; `lw:manual`
   blocks are preserved byte-for-byte.
 - **Portable baseline** — the accepted state of every documentation obligation

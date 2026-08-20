@@ -8,13 +8,16 @@
 > be in PT-BR. Existing PT-BR artifacts are migration debt for a dedicated final
 > language-normalization pass; new work must not add to that debt.
 
-> **Status note (2026-08-20, v0.3.0).** This document preserves the founding
-> vision and the decisions taken along the way. It is deliberately not rewritten
-> as the product evolves, so its phase names and some of its framing are
-> historical. For what livewiki does *today* — the guarantees that actually
-> ship, the current commands, and what is planned next — read
-> [README.md](README.md) and [docs/ROADMAP.md](docs/ROADMAP.md); where they
-> disagree with this file, they are the current state.
+> **How this document relates to the others.** VISION.md is canonical product
+> documentation: it defines the thesis, the principles, the positioning, and the
+> durable product decisions, and it remains a living part of what livewiki is.
+> [README.md](README.md) describes the public experience and current usage;
+> [SPEC.md](SPEC.md) holds the normative technical contracts;
+> [docs/ROADMAP.md](docs/ROADMAP.md) records implementation state, backlog, and
+> priorities. Where this document uses historical language about phases or
+> delivery status, ROADMAP is the source of truth for what has actually
+> shipped — which settles execution state only, and leaves the vision,
+> principles, and direction defined here fully in force.
 
 ## What it is
 
@@ -236,7 +239,7 @@ maintain, verify, navigate, and hand off documentation.
   repos and publish the table — the product's "real-world stamp", alongside the
   token comparison vs OpenWiki.
 
-### User-informed backlog (mined from OpenWiki issues + ecosystem scan — see [docs/market-research.md](docs/market-research.md))
+### User-informed backlog (mined from OpenWiki issues + ecosystem scan; the underlying research file was removed from the public repository in `9819b02`)
 
 - **Monorepo support** (their 2nd most-upvoted request): per-package scoping vs
   a single wiki with package sections — deserves explicit design.

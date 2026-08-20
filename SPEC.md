@@ -855,7 +855,8 @@ when git is absent or the directory is not a repo it degrades silently (churn fa
 | `livewiki_read` | reads a wiki page by path |
 | `livewiki_search` | full-text search over the wiki (SQLite FTS5) |
 | `livewiki_debt` | open debt (equivalent to `status --json`) |
-| `livewiki_next_task` | starts or resumes the agent-written bootstrap queue and returns the next prioritized Markdown task |
+| `livewiki_next_task` | starts or resumes the agent-written bootstrap queue and returns the next prioritized Markdown task, under an exclusive claim |
+| `livewiki_renew_task_claim` | extends the lease on a task already claimed through `livewiki_next_task` (takes `taskId` + `claimId`, returns the new `leaseExpiresAt`) |
 | `livewiki_write_doc` | writes/updates a page (path validated by the allowlist; runs `verify` on the content before accepting) |
 | `livewiki_resolve_debt` | explicitly accepts the current anchored symbols for one named page into the versioned baseline (`symbols` or `all`; never local SQLite IDs) |
 | `livewiki_impact` | blast radius of a symbol key: resolved call-graph callers + the wiki pages documenting them (best-effort, bounded by maxDepth/maxNodes) |
@@ -880,11 +881,30 @@ tools and submits Markdown through `livewiki_write_doc` with the returned
 A queued `write_doc` submission is validated against the task-specific page
 contract and the repository verifier before the task is completed. Failed
 submissions consume a server-owned bounded attempt; exhaustion marks the task
-failed and the queue advances. Completed tasks are never reoffered, while an
-in-flight task is reoffered after an MCP disconnect. Existing `owner: human`
+failed and the queue advances. Completed tasks are never reoffered; an
+in-flight task is reoffered once its lease expires. Existing `owner: human`
 pages remain byte-identical and `lw:manual` blocks are preserved. Agent runs
 persist `usage: null`, report accounting as `unavailable`, and record topic
 refine as `not-run` — never as zero tokens or an estimated token count.
+
+**Task claims and leases (schema v10).** A task handed out by
+`livewiki_next_task` carries an opaque `claimId` that livewiki generates per
+execution — never an identity supplied by the client — plus a lease, 30 minutes
+by default. While the lease holds, the task is invisible to other callers, so
+two agents pointed at the same repository are never handed the same task. An
+executor that needs longer calls `livewiki_renew_task_claim`; expiry is
+evaluated when someone asks for work, renews, or submits, so there is no
+heartbeat and no background timer. A submission whose claim was replaced or
+whose lease lapsed is rejected as `stale_claim`: nothing is written and the
+current holder's attempt budget is untouched. When every unfinished task is
+leased, the queue answers `busy` instead of advancing the phase.
+
+**`livewiki_search` failures are errors, not empty results.** A genuine query
+fault — FTS5 syntax, an unterminated string, an unknown special query, or a
+filter naming a column the caller invented — still returns zero matches. Any
+other failure of the search index raises an error instead, so a corrupt,
+closed, or otherwise unavailable index can never be reported to an agent as
+"this repository has no matches".
 
 This queue never configures or creates an LLM client and never launches an
 external agent process. Agent products are MCP consumers, not provider presets
