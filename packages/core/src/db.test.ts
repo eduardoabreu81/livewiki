@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as nodePath from "node:path";
 import * as nodeOs from "node:os";
 import * as nodeFs from "node:fs/promises";
+import Database from "better-sqlite3";
 import {
   openIndex,
   runWriteTransaction,
+  SchemaAccessError,
   WriteContentionError,
   WRITE_LOCK_TIMEOUT_MS,
   CURRENT_SCHEMA_VERSION,
@@ -20,7 +22,15 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await nodeFs.rm(nodePath.dirname(dbPath), { recursive: true, force: true });
+  // A handle released microseconds ago can still hold the -wal on Windows.
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      await nodeFs.rm(nodePath.dirname(dbPath), { recursive: true, force: true });
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 });
 
 describe("db.openIndex", () => {
@@ -722,5 +732,172 @@ describe("db write-lock policy", () => {
         },
       }),
     ).toThrow(real);
+  });
+});
+
+/**
+ * Open-time contention (0.3.1).
+ *
+ * 0.3.0 promised that lock contention reaches the user as an actionable
+ * `WriteContentionError` rather than a raw "database is locked". That held for
+ * the indexer and ledger write phases, which go through `runWriteTransaction`,
+ * and NOT for `openIndex` itself — which sets journal mode, runs SCHEMA_SQL,
+ * applies migrations, stamps the version and creates the claim index, all
+ * outside any classification. Both halves of the hole are reproduced here:
+ * a journal-mode change (SQLITE_BUSY returned immediately, the busy handler is
+ * never consulted for it) and a DDL statement (which does wait, then fails).
+ *
+ * The trigger observed in CI was a Windows runner under load; the defect is
+ * deterministic given the state, which is what these reproduce.
+ */
+describe("db.openIndex — open-time contention", () => {
+  /** A raw handle that never goes through openIndex, so probing cannot repair the state under test. */
+  function rawHandle(): Database.Database {
+    return new Database(dbPath);
+  }
+
+  function holdWriteLock(): Database.Database {
+    const holder = rawHandle();
+    holder.pragma(`busy_timeout = ${WRITE_LOCK_TIMEOUT_MS}`);
+    holder.exec("BEGIN IMMEDIATE");
+    holder.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run("hold", "1");
+    return holder;
+  }
+
+  function release(holder: Database.Database): void {
+    try {
+      holder.exec("ROLLBACK");
+    } catch {
+      /* already rolled back */
+    }
+    holder.close();
+  }
+
+  it("A. sets busy_timeout before the first statement that can contend", () => {
+    // Ordering, not just the value: the pragma used to sit after journal_mode,
+    // so the compatibility gate and the journal-mode change ran on the
+    // driver's 5s default. Recorded at the prototype because the handle does
+    // not exist until openIndex creates it.
+    const calls: string[] = [];
+    const realPragma = Database.prototype.pragma;
+    const realExec = Database.prototype.exec;
+    const realPrepare = Database.prototype.prepare;
+    Database.prototype.pragma = function (this: Database.Database, source: string, options?: unknown) {
+      calls.push(`pragma:${String(source)}`);
+      return realPragma.call(this, source, options as never);
+    } as typeof Database.prototype.pragma;
+    Database.prototype.exec = function (this: Database.Database, source: string) {
+      calls.push("exec");
+      return realExec.call(this, source);
+    } as typeof Database.prototype.exec;
+    Database.prototype.prepare = function (this: Database.Database, source: string) {
+      calls.push("prepare");
+      return realPrepare.call(this, source);
+    } as typeof Database.prototype.prepare;
+
+    let db: Database.Database | undefined;
+    try {
+      db = openIndex(dbPath);
+    } finally {
+      Database.prototype.pragma = realPragma;
+      Database.prototype.exec = realExec;
+      Database.prototype.prepare = realPrepare;
+      db?.close();
+    }
+
+    const busyAt = calls.findIndex((c) => c.startsWith("pragma:busy_timeout"));
+    expect(busyAt, `busy_timeout never set; calls: ${calls.join(", ")}`).toBeGreaterThanOrEqual(0);
+    // Nothing that touches the file may precede it.
+    expect(calls.slice(0, busyAt)).toEqual([]);
+    const journalAt = calls.findIndex((c) => c.startsWith("pragma:journal_mode"));
+    expect(journalAt).toBeGreaterThan(busyAt);
+  });
+
+  it("B. classifies a journal-mode SQLITE_BUSY as open-phase contention", () => {
+    // journal_mode changes never consult the busy handler: this returns BUSY
+    // immediately, which is why no timeout could ever have absorbed it.
+    openIndex(dbPath).close();
+    const convert = rawHandle();
+    convert.pragma("journal_mode = DELETE");
+    convert.close();
+
+    const holder = holdWriteLock();
+    try {
+      let caught: unknown;
+      try {
+        openIndex(dbPath).close();
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(WriteContentionError);
+      const contention = caught as WriteContentionError;
+      expect(contention.code).toBe("INDEX_WRITE_CONTENTION");
+      expect(contention.phase).toBe("open");
+      expect((contention.cause as { code?: string }).code).toBe("SQLITE_BUSY");
+      // The raw text must not be what the user is handed.
+      expect(contention.message).not.toBe("database is locked");
+      expect(contention.message).toMatch(/another process is writing to the index/);
+    } finally {
+      release(holder);
+    }
+  });
+
+  it("C. classifies an open-time DDL SQLITE_BUSY as open-phase contention", async () => {
+    // The claim index is created at the end of openIndex, outside any
+    // transaction. Unlike journal_mode, DDL does consult the busy handler, so
+    // this one spends the full busy_timeout before failing — that wait IS the
+    // contract, and the assertion is on what the caller is handed afterwards.
+    // openIndex is synchronous, so the lock cannot be released from a timer in
+    // this thread; it is held for the whole wait on purpose.
+    openIndex(dbPath).close();
+    const drop = rawHandle();
+    drop.exec("DROP INDEX IF EXISTS idx_batch_tasks_claim");
+    expect(
+      (drop
+        .prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'idx_batch_tasks_claim'")
+        .get() as { c: number }).c,
+    ).toBe(0);
+    drop.close();
+
+    const holder = holdWriteLock();
+    try {
+      let caught: unknown;
+      const t0 = Date.now();
+      try {
+        openIndex(dbPath).close();
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(WriteContentionError);
+      const contention = caught as WriteContentionError;
+      expect(contention.code).toBe("INDEX_WRITE_CONTENTION");
+      expect(contention.phase).toBe("open");
+      expect((contention.cause as { code?: string }).code).toBe("SQLITE_BUSY");
+      expect(contention.message).not.toBe("database is locked");
+      // It waited rather than failing fast, which is what busy_timeout buys.
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(WRITE_LOCK_TIMEOUT_MS - 2_000);
+    } finally {
+      release(holder);
+    }
+  }, WRITE_LOCK_TIMEOUT_MS * 3);
+
+  it("D. leaves a non-contention open-time failure unreclassified", () => {
+    // A database from a newer build is a schema problem, not contention: it
+    // must keep its own actionable error and its own instruction.
+    const db = openIndex(dbPath);
+    db.prepare("UPDATE meta SET value = ? WHERE key = ?").run(
+      String(CURRENT_SCHEMA_VERSION + 1),
+      SCHEMA_VERSION_KEY,
+    );
+    db.close();
+
+    let caught: unknown;
+    try {
+      openIndex(dbPath).close();
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(SchemaAccessError);
+    expect(caught).not.toBeInstanceOf(WriteContentionError);
   });
 });

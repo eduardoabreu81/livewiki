@@ -423,4 +423,45 @@ describe("concurrent `livewiki index` writers", () => {
     expect(runs[0]?.index?.filesAdded).toBe(1);
     healthy(logicalSnapshot(repo));
   });
+
+  it("G. three writers against a held lock: contention is never a raw \"database is locked\"", async () => {
+    // The 0.3.1 hole, end to end. openIndex sets journal mode, runs SCHEMA_SQL,
+    // migrates, stamps the version and creates the claim index — all outside
+    // runWriteTransaction, so contention there used to reach the user as a bare
+    // SQLite string with nothing to act on. The Windows CI failure of
+    // 2026-08-20 was exactly that, in `B. 3 writers`.
+    //
+    // Three real processes are launched while the test process holds the write
+    // lock, so all three meet contention rather than hoping to collide with
+    // each other. Whatever the outcome, no stderr may carry the raw text.
+    const HOLD_MS = 2_000;
+    const repo = await makeRepo(15);
+    indexOnce(repo);
+    await writeModule(repo, "src/contended.ts", 994, 1);
+
+    const holder = openIndex(nodePath.join(repo, ".livewiki", "index.db"));
+    let runs: IndexRun[];
+    try {
+      holder.exec("BEGIN IMMEDIATE");
+      holder.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('lock_probe', '1')").run();
+      const pending = indexConcurrent(repo, 3);
+      await new Promise((resolve) => setTimeout(resolve, HOLD_MS));
+      holder.exec("COMMIT");
+      runs = await pending;
+    } finally {
+      holder.close();
+    }
+
+    // The specific regression: the bare SQLite text must never be what a user
+    // is handed, whether the run succeeded or failed.
+    for (const run of runs) {
+      expect(run.stderr, "raw SQLite contention text reached the user").not.toMatch(
+        /database is locked/i,
+      );
+    }
+    // And ordinary contention still converges: everyone queued and finished.
+    expectAllSucceeded(runs);
+    expect(runs.reduce((sum, r) => sum + (r.index?.filesAdded ?? 0), 0)).toBe(1);
+    healthy(logicalSnapshot(repo));
+  });
 });

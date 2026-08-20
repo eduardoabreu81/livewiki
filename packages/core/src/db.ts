@@ -71,18 +71,18 @@ export class WriteContentionError extends Error {
  * take `BEGIN IMMEDIATE` precisely so it cannot happen; seeing it means a
  * write transaction lost its immediate boundary.
  */
+export function isWriteContention(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return (
+    code === "SQLITE_BUSY" || code === "SQLITE_BUSY_SNAPSHOT" || code === "SQLITE_BUSY_TIMEOUT"
+  );
+}
+
 export function runWriteTransaction<T>(phase: string, tx: { immediate: () => T }): T {
   try {
     return tx.immediate();
   } catch (err) {
-    const code = (err as { code?: string } | null)?.code;
-    if (
-      code === "SQLITE_BUSY" ||
-      code === "SQLITE_BUSY_SNAPSHOT" ||
-      code === "SQLITE_BUSY_TIMEOUT"
-    ) {
-      throw new WriteContentionError(phase, err);
-    }
+    if (isWriteContention(err)) throw new WriteContentionError(phase, err);
     throw err;
   }
 }
@@ -649,6 +649,49 @@ export function openIndex(dbPath: string): Database.Database {
   const existedBefore = nodeFsSync.existsSync(dbPath);
   const db = new Database(dbPath);
 
+  // busy_timeout is the FIRST statement on the handle, before the
+  // compatibility gate, before journal_mode, before any DDL. Position is the
+  // property, not just the value: it used to sit after journal_mode, so every
+  // statement ahead of it ran on the driver's own 5s default — a fifth of the
+  // wait this function is supposed to grant. A queued opener died while the
+  // writer ahead of it was doing ordinary work.
+  db.pragma(`busy_timeout = ${WRITE_LOCK_TIMEOUT_MS}`);
+
+  // Everything below can contend with another process opening or writing the
+  // same file, and none of it runs inside runWriteTransaction. Lock contention
+  // here reaches the user as the same actionable error as every other phase
+  // instead of a raw "database is locked"; anything that is NOT contention —
+  // an incompatible schema, corruption, a constraint — propagates untouched.
+  try {
+    bootstrapIndexHandle(db, dbPath, existedBefore);
+  } catch (err) {
+    if (isWriteContention(err)) {
+      // Close only on the path this function did not have before. The handle
+      // is useless once bootstrap failed, and on Windows an open handle keeps
+      // the -wal locked, so a caller that reports the error and moves on would
+      // leave the file pinned. Every other failure keeps its previous
+      // behaviour untouched.
+      db.close();
+      throw new WriteContentionError("open", err);
+    }
+    throw err;
+  }
+  return db;
+}
+
+/**
+ * The mutable half of `openIndex`: compatibility gate, journal mode, schema,
+ * migrations, version stamp. Split out so the whole phase sits under one
+ * contention boundary without re-indenting it into a try block.
+ *
+ * Takes an already-configured handle; `openIndex` owns busy_timeout because it
+ * has to be set before the first statement here can run.
+ */
+function bootstrapIndexHandle(
+  db: Database.Database,
+  dbPath: string,
+  existedBefore: boolean,
+): void {
   // Compatibility gate, FIRST — before journal_mode, before SCHEMA_SQL,
   // before any index bootstrap, before any migration. A database this build
   // must not touch has to leave this function exactly as it arrived: not
@@ -661,12 +704,6 @@ export function openIndex(dbPath: string): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("synchronous = NORMAL");
-  // Explicit, not inherited: the driver's own default happens to be 5s, which
-  // is shorter than a single large write transaction and made a queued writer
-  // die while the writer ahead of it was doing ordinary work. Stated here so
-  // the wait is a decision with a rationale (see WRITE_LOCK_TIMEOUT_MS) rather
-  // than a property of whichever driver version is installed.
-  db.pragma(`busy_timeout = ${WRITE_LOCK_TIMEOUT_MS}`);
 
   // SCHEMA_SQL carries the v9 index expression, which references columns that
   // pre-v8 databases do not have yet. A temporary legacy index with the same
@@ -733,8 +770,6 @@ export function openIndex(dbPath: string): Database.Database {
     "CREATE INDEX IF NOT EXISTS idx_batch_tasks_claim " +
       "ON batch_tasks(run_id, status, lease_expires_at)",
   );
-
-  return db;
 }
 
 /**
