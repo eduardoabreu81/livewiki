@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * @livewiki/mcp — stdio entry point (Phase 4).
  *

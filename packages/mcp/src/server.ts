@@ -124,6 +124,7 @@ import {
   type SearchIndex,
 } from "./search.js";
 import { createSyncQueue, type SyncQueueOptions } from "./watch-queue.js";
+import { readPackageVersion } from "./version.js";
 
 export interface CreateServerOptions {
   /** Repo root the server serves. Default: process.cwd() */
@@ -277,7 +278,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   const server = new McpServer(
     {
       name: "livewiki",
-      version: "0.0.0",
+      version: readPackageVersion(),
     },
     {
       capabilities: {
