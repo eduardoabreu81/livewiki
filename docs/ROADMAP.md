@@ -15,8 +15,14 @@ to npm since 2026-08-12.
 - **Beta closed.** `@livewiki/core`, `@livewiki/cli`, `@livewiki/mcp`
   published at **0.1.0** (2026-08-12, matrix green), **0.2.0**
   (2026-08-16 — portable baseline + SQLite-loss recovery, thinking-leak
-  defense, 17 provider presets), and **0.2.1** (2026-08-17 — README
-  rewrite, tarball regression test, post-0.2.0 fixes).
+  defense, 17 provider presets), **0.2.1** (2026-08-17 — README
+  rewrite, tarball regression test, post-0.2.0 fixes), and **0.3.0**
+  (2026-08-20 — correctness and integrity hardening: safe concurrent
+  index writers plus watcher retry, atomic credential/ledger/artifact
+  writes, schema downgrade protection and read-only index access, FTS5
+  failures no longer answered as empty results, transactional agent task
+  claims on **schema v10**, and MCP packaging — a POSIX-executable
+  `livewiki-mcp` bin and a handshake version read from package.json).
 - **#29 real page units** DONE (P0–P5, commit `6e5efdb`) — deterministic
   file+folder planner; one page per symbol-bearing product file plus one
   folder page per directory.

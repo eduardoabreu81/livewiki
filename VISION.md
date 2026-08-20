@@ -8,6 +8,14 @@
 > be in PT-BR. Existing PT-BR artifacts are migration debt for a dedicated final
 > language-normalization pass; new work must not add to that debt.
 
+> **Status note (2026-08-20, v0.3.0).** This document preserves the founding
+> vision and the decisions taken along the way. It is deliberately not rewritten
+> as the product evolves, so its phase names and some of its framing are
+> historical. For what livewiki does *today* — the guarantees that actually
+> ship, the current commands, and what is planned next — read
+> [README.md](README.md) and [docs/ROADMAP.md](docs/ROADMAP.md); where they
+> disagree with this file, they are the current state.
+
 ## What it is
 
 **livewiki** is an open-source **living repository documentation** tool: a

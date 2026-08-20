@@ -1,11 +1,12 @@
 # livewiki
 
-**Documentation that stays in sync with your code — written for you, verifiable against hallucination.**
+**Code-anchored documentation that knows when it is stale.**
 
-livewiki turns a repository into a Markdown wiki that is *anchored* to real
-code symbols. An LLM writes the prose; livewiki does the deterministic work:
-it plans the pages, tracks what changed, preserves your edits, and validates
-every reference so a stale or invented claim is caught mechanically.
+livewiki turns a repository into a Markdown wiki whose every code reference is
+*anchored* to a real indexed symbol. An LLM writes the prose; livewiki does the
+deterministic work: it plans the pages, tracks which anchored symbols changed,
+preserves your edits, and mechanically validates the structure of what was
+written.
 
 [![npm](https://img.shields.io/npm/v/@livewiki/cli)](https://www.npmjs.com/package/@livewiki/cli)
 [![CI](https://github.com/eduardoabreu81/livewiki/actions/workflows/cross-platform-ci.yml/badge.svg)](https://github.com/eduardoabreu81/livewiki/actions/workflows/cross-platform-ci.yml)
@@ -37,6 +38,20 @@ visible and cheap to fix instead of silent:
   spending tokens.
 - **Works where you already work.** Bootstrap and maintain through the coding
   agent you use, or run a fully automated batch.
+
+### What `verify` checks — and what it doesn't
+
+`livewiki verify` is a structural gate, not a fact checker. It confirms that
+every cited symbol exists in the code, that cited signatures still match, that
+internal links resolve, and that referenced artifacts are present — reading the
+wiki fresh from disk, so a page an LLM just wrote is checked without running
+`index` first.
+
+It does **not** judge whether the surrounding prose is true. Nothing here
+detects a plausible-sounding but wrong explanation of code that does exist;
+reviewing the explanation is still your job. What livewiki guarantees is
+narrower and mechanical: the documentation is anchored to code that exists,
+and you are told the moment that code moves.
 
 ## Quick start
 
