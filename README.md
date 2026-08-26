@@ -8,7 +8,12 @@ deterministic work — planning the pages, running **structural
 anti-hallucination checks** on what the model wrote, tracking which anchored
 symbols changed, and preserving your edits.
 
-[![npm](https://img.shields.io/npm/v/@livewiki/cli)](https://www.npmjs.com/package/@livewiki/cli)
+The wiki is exposed to any coding agent by
+**[`@livewiki/mcp`](packages/mcp)** — an **MCP (Model Context Protocol)
+server** with eight tools for reading, searching, and safely writing the wiki.
+
+[![npm @livewiki/cli](https://img.shields.io/npm/v/@livewiki/cli?label=cli)](https://www.npmjs.com/package/@livewiki/cli)
+[![npm @livewiki/mcp](https://img.shields.io/npm/v/@livewiki/mcp?label=mcp)](https://www.npmjs.com/package/@livewiki/mcp)
 [![CI](https://github.com/eduardoabreu81/livewiki/actions/workflows/cross-platform-ci.yml/badge.svg)](https://github.com/eduardoabreu81/livewiki/actions/workflows/cross-platform-ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 

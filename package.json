@@ -3,7 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Living repository documentation anchored to code and verifiable against hallucination. See VISION.md and SPEC.md.",
+  "description": "Living repository documentation anchored to code and verifiable against hallucination. Monorepo for the livewiki CLI, the core library, and @livewiki/mcp — an MCP (Model Context Protocol) server in packages/mcp. See VISION.md and SPEC.md.",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "livewiki",
+    "documentation",
+    "code-documentation",
+    "llm",
+    "agents"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
