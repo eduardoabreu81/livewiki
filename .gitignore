@@ -17,3 +17,8 @@ docs/benchmarks/
 docs/tasks/
 docs/handoffs/
 .playwright-mcp/
+# Root-anchored: these are local scratch areas, and left untracked they make
+# `pnpm publish -r` refuse the release with ERR_PNPM_GIT_UNCLEAN. Anchored so a
+# package that legitimately ships a benchmarks/ directory is unaffected.
+/benchmarks/
+/scratch/
