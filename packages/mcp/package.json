@@ -1,6 +1,7 @@
 {
   "name": "@livewiki/mcp",
   "version": "0.3.1",
+  "mcpName": "io.github.eduardoabreu81/livewiki",
   "private": false,
   "type": "module",
   "description": "MCP server exposing a livewiki repository wiki to any MCP client.",
