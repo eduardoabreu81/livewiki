@@ -177,22 +177,22 @@ describe("startWatcher wiring", () => {
 });
 
 /**
- * Skipped on the Windows CI runner only: there the separate-subprocess
- * scenario never receives the expected events — the spawned server's stderr
- * stays empty for the whole budget, so no sync and no contention are ever
- * reported. It passes on Linux, on macOS, and on Windows locally, so the skip
- * is scoped to CI rather than to the platform.
+ * Previously skipped on the Windows CI runner, where the spawned server's
+ * stderr stayed empty for the whole budget and neither a sync nor contention
+ * was ever reported. That was read as a Windows subprocess-harness quirk. It
+ * was not: the same symptom appeared on ubuntu-latest the moment its image
+ * moved to 20260823.283, on code that had not changed.
  *
- * What still covers the watcher on Windows: the queue tests (watch-queue.test.ts),
- * the wiring test above (a real fs.watch event reaching the queue), and the
- * in-process MCP watcher test in server.test.ts.
- *
- * Investigating the Windows subprocess harness is separate platform/test
- * hardening, not a product defect.
+ * Probes on the failing runner settled it — a spawned child there captures
+ * stderr and receives recursive fs.watch events, and the real server both
+ * syncs an uncontended write and reports contention on a held lock. What the
+ * test got wrong was WHEN it wrote: it treated `search.db` as "the server is
+ * watching", and a write landing before `startWatcher` runs is simply lost.
+ * Step 2b now waits for a warm-up write to reach the index, so the scenario
+ * cannot start against a server that is not watching yet — and the skip is
+ * gone, because Windows was never a platform defect either.
  */
-const skipOnWindowsCi = process.platform === "win32" && Boolean(process.env.CI);
-
-describe.skipIf(skipOnWindowsCi)(
+describe(
   "MCP server watcher recovers a contended sync with no further event",
   () => {
   it("retries by itself after the write lock is released", async () => {
@@ -222,6 +222,59 @@ describe.skipIf(skipOnWindowsCi)(
       () => `server stderr:
 ${stderr || "(empty)"}`,
     );
+
+    // 2b. Wait until the watcher is provably ARMED, not merely until the
+    //     startup rebuild finished. `search.db` appears in `openAndIndex`,
+    //     which createServer awaits ~480 lines before it reaches
+    //     `startWatcher` — so search.db is a proxy that leads the thing this
+    //     test depends on. A single write landing in that window is dropped,
+    //     and step 4 deliberately produces no second event, so the whole run
+    //     then waits on something that can never happen and the diagnosis
+    //     reads as an empty stderr. That is what made this test fail on the
+    //     Windows runner and, from ubuntu image 20260823.283, on Linux too.
+    //
+    //     A throwaway write turns the wait into an observable effect: the file
+    //     only reaches the index if a live watcher put it there.
+    //
+    //     It has to be RE-touched, not written once. A single warm-up can land
+    //     in that same gap and be lost exactly like the real one, which is the
+    //     bug this step exists to prevent — measured: written once, the test
+    //     passed alone on macOS and failed alone on ubuntu, and the two
+    //     swapped when the suite ran single-threaded. Retouching removes the
+    //     dependence on when the write happens to land.
+    //
+    //     One touch per debounce window plus margin: writing faster than the
+    //     watcher's 1.5s debounce would restart it forever and no sync would
+    //     ever run.
+    {
+      const armedBy = Date.now() + WRITE_LOCK_TIMEOUT_MS * 3;
+      let touches = 0;
+      let armed = false;
+      const warmupIndexed = (): boolean => {
+        try {
+          return indexedPaths().includes("src/warmup.ts");
+        } catch {
+          return false; // index momentarily locked by the watcher's own sync
+        }
+      };
+      while (Date.now() < armedBy && !armed) {
+        await writeModule("src/warmup.ts", ++touches);
+        const settleBy = Date.now() + 4_000;
+        while (Date.now() < settleBy && !armed) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          armed = warmupIndexed();
+        }
+      }
+      if (!armed) {
+        throw new Error(
+          `watcher never armed: ${touches} warm-up write(s) over ` +
+            `${WRITE_LOCK_TIMEOUT_MS * 3}ms never reached the index.\n` +
+            "Repeated writes rule out a lost single event, so this is the " +
+            "watcher not running at all — a product problem.\n" +
+            `server stderr:\n${stderr || "(empty)"}`,
+        );
+      }
+    }
 
     // 3. Hold the write lock so the watcher's sync cannot get it.
     const holder = openIndex(nodePath.join(repoRoot, ".livewiki", "index.db"));
