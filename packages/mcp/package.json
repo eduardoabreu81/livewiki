@@ -1,6 +1,6 @@
 {
   "name": "@livewiki/mcp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "mcpName": "io.github.eduardoabreu81/livewiki",
   "private": false,
   "type": "module",

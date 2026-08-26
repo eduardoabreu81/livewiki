@@ -3,7 +3,7 @@
   "name": "io.github.eduardoabreu81/livewiki",
   "title": "livewiki",
   "description": "Reads, searches, and safely writes a livewiki repository wiki: Markdown pages anchored to real code, with deterministic staleness detection and post-write verification.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "repository": {
     "url": "https://github.com/eduardoabreu81/livewiki",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "@livewiki/mcp",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "transport": {
         "type": "stdio"
       },

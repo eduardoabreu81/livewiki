@@ -27,7 +27,10 @@ to npm since 2026-08-12.
   before its first contending statement and classifies open-time
   `SQLITE_BUSY` as `WriteContentionError` phase `open`, so concurrent
   indexing can no longer surface a raw `database is locked`; no schema
-  change, no migration).
+  change, no migration), and **0.3.2** (2026-08-26 — distribution only: the
+  published `@livewiki/mcp` carries the `mcpName` the official MCP Registry
+  validates against, and a root `server.json` declares the server for it; no
+  code change, no schema change, no migration).
 - **#29 real page units** DONE (P0–P5, commit `6e5efdb`) — deterministic
   file+folder planner; one page per symbol-bearing product file plus one
   folder page per directory.
