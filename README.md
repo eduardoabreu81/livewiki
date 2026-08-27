@@ -158,6 +158,11 @@ Prefer manual wiring? Any stdio MCP client works:
 }
 ```
 
+The server is also published to the [official MCP
+Registry](https://registry.modelcontextprotocol.io) as
+`io.github.eduardoabreu81/livewiki`, so a client that resolves servers from the
+registry can find it by name instead of using the snippet above.
+
 ## Languages
 
 | Language | Anchored docs (symbols extracted) |
