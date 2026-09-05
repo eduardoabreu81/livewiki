@@ -1,55 +1,71 @@
 ---
-title: MCP source search to LLM agent documentation
+title: from source indexing to LLM-driven documentation
 owner: generated
 anchors:
   - packages/mcp/src/server.ts#createServer
+  - packages/mcp/src/server.ts#isWatchDenied
+  - packages/mcp/src/server.ts#startWatcher
+  - packages/mcp/src/search.ts#close
+  - packages/core/src/agent-bootstrap.ts#nextAgentBootstrapTask
+  - packages/mcp/src/search.ts#collectMarkdownFiles
+  - packages/core/src/agent-bootstrap.ts#renewAgentBootstrapClaim
   - packages/mcp/src/search.ts#indexPage
+  - packages/core/src/agent-bootstrap.ts#submitAgentBootstrapTask
+  - packages/mcp/src/search.ts#isFtsQueryError
+  - packages/core/src/baseline-operations.ts#acceptBaseline
+  - packages/mcp/src/search.ts#openAndIndex
+  - packages/core/src/baseline-operations.ts#bootstrapBaseline
+  - packages/mcp/src/search.ts#queryTerms
+  - packages/core/src/baseline-operations.ts#migrateBaselineKey
+  - packages/mcp/src/search.ts#reindexAll
+  - packages/core/src/baseline-operations.ts#relocateBaselineEntry
+  - packages/core/src/db.ts#assertExistingIndexIsUsable
+  - packages/core/src/llm/index.ts#createLlmClient
+  - packages/core/src/llm/probe.ts#formatProbeFailure
+  - packages/core/src/llm/probe.ts#probeProvider
+  - packages/core/src/llm/base.ts#DEFAULT_LLM_TIMEOUT_MS
+  - packages/core/src/llm/base.ts#isRetryableStatus
   - packages/core/src/llm/base.ts#LlmTimeoutError
-updated: 2026-08-16
+  - packages/core/src/llm/base.ts#LlmTimeoutError.constructor
+updated: 2026-09-05
 modules:
   - mcp-src
   - core-src
   - llm
+quality: degraded
 ---
 
-# MCP source search to LLM agent documentation
+> **Draft page** — "Source to LLM: how the MCP server indexes a wiki and hands deterministic task metadata to the LLM layer" was written automatically and checked against the code, but its wording may be rougher than the other pages.
 
-This page explains how the livewiki MCP server exposes the repository's documentation tooling over standard I/O, keeps its full-text search index fresh on file changes, and lets a coding agent drive deterministic documentation tasks through the core package's LLM provider seam.
+# Source to LLM: how the MCP server indexes a wiki and hands deterministic task metadata to the LLM layer
+
+This page explains the end-to-end path that begins when the MCP (Model Context Protocol) server is created and ends when the LLM layer is asked to produce or refine documentation for an indexed repository.
 
 ## Purpose
 
-<!-- lw:anchors packages/mcp/src/server.ts#createServer -->
+<!-- lw:anchors packages/mcp/src/server.ts#createServer packages/mcp/src/server.ts#isWatchDenied packages/mcp/src/server.ts#startWatcher -->
 
-A developer using a coding agent with livewiki wants the agent to be able to read, search, and update the project's documentation on demand through normal agent tool calls, without exposing the repository's internal bookkeeping or trusting the agent with arbitrary writes. The MCP source package (`packages/mcp/src`) is the entry point that makes this possible: it assembles a Model Context Protocol (MCP) server exposing six tools over standard I/O, and it keeps the full-text search layer backed by a separate `.livewiki/search.db` on disk. The server then hands validated agent work to the core package, whose LLM provider seam turns that work into durable documentation.
+A person working in a repository first wants their coding agent to be able to produce and maintain the livewiki documentation for that repository. The agent does not read the whole codebase; instead it talks to the livewiki MCP server, which exposes tools that index the source, search the wiki, and — critically — hand the agent deterministic task metadata (which files to document, in what order) without leaking provider configuration, model names, API keys, or the need to drive an external agent process. That division is what the flow described here preserves: the MCP server owns ordering and validation, the LLM layer owns the actual content generation from a configured provider.
 
-`createServer` is the factory that builds the server instance.
-
-```ts
-export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
-```
-
-It takes an optional options object and resolves to a fully wired `McpServer`, which is the object the outer stdio entry point connects to an MCP transport so an LLM client such as Claude Code can call its tools. The server identifies itself to that client with the version read from the package's own `package.json`, so the handshake reports the release the client actually installed. Among them are the agent-queue tools, where a task is handed out under an exclusive claim and its lease can be renewed explicitly. The `livewiki_resolve_debt` path also inspects the ledger outcome: when the reconciliation aborts because the wiki snapshot was unstable, it returns an error carrying `ledgerApplied: false` instead of reporting the debt as resolved — the baseline was accepted on disk, but the debt tables were not reconciled. The `livewiki_impact` tool opens the index through `openIndexReadOnly`: a blast-radius query never creates, migrates or relabels the index, and an index that is missing or on a different schema fails with an actionable message instead of a raw SQLite error. When every unfinished task is already leased, the queue answers `busy` instead of advancing, and the server skips its search rebuild because the run has not finished.
+The flow starts when `createServer` builds the MCP server that the agent connects to over stdin. `createServer` is the entry point that wires all six tools (quickstart, read, search, write, debt, verify) into the MCP tool registry. From there the server exposes the search and indexing surface that keeps the wiki queryable and fresh. `startWatcher` runs a filesystem watcher that reindexes when source files change, and `isWatchDenied` is the predicate that filters which filesystem events may trigger that reindexing. These three symbols together define the entry boundary: without a server there is no tool surface, and without the watcher the index drifts away from the working tree. The flow's purpose is therefore to put an agent in front of an always-current searchable inventory of the repository, and to make that inventory available to the LLM layer that turns it into documentation.
 
 ## Ordered flow
 
-<!-- lw:anchors packages/mcp/src/search.ts#indexPage -->
+<!-- lw:anchors packages/mcp/src/search.ts#close packages/core/src/agent-bootstrap.ts#nextAgentBootstrapTask packages/core/src/agent-bootstrap.ts#renewAgentBootstrapClaim packages/mcp/src/search.ts#collectMarkdownFiles packages/mcp/src/search.ts#indexPage packages/mcp/src/search.ts#isFtsQueryError packages/core/src/baseline-operations.ts#bootstrapBaseline packages/mcp/src/search.ts#openAndIndex packages/mcp/src/search.ts#queryTerms packages/core/src/baseline-operations.ts#migrateBaselineKey packages/mcp/src/search.ts#reindexAll packages/core/src/baseline-operations.ts#relocateBaselineEntry packages/core/src/agent-bootstrap.ts#submitAgentBootstrapTask packages/core/src/baseline-operations.ts#acceptBaseline -->
 
-The end-to-end flow begins with livewiki's full-text search foundation, then uses it to serve agent tool calls, and finally hands validated agent work back to the core package's deterministic documentation machinery.
+1. **Server creation and tool registration.** `createServer` instantiates the MCP server and exposes the six tools to the connected agent. The agent then calls the search or write tools, which are the only way the agent can interact with the wiki content.
 
-1. **Build the initial search index.** The search layer walks the repository's Markdown output and populates the separate `.livewiki/search.db` SQLite FTS5 index so search results are available before the first agent query.
-2. **Start the MCP server and attach its watcher.** `createServer` builds the server, and the watcher begins observing the repository so later file changes can be picked up. This is the point where the server is connected to a standard I/O transport, allowing an LLM client to invoke its tools.
-3. **Serve search queries.** When an agent calls the full-text search tool, the search layer converts the user's query into searchable terms for the FTS5 engine.
-4. **Keep the search index and page source in sync.** When files change, the watcher schedules a synchronization run, and the changed Markdown files are collected for reindexing.
-5. **Index an individual page.** For each collected page, `indexPage` writes its content into the search index.
+2. **Index opening and (re)indexing.** When a search or write tool first needs the index, `openAndIndex` opens the SQLite database at the repository's `.livewiki/search.db` path and, if needed, populates it. `openAndIndex` calls `reindexAll` to rebuild the full-text index from every Markdown file under the wiki root. `collectMarkdownFiles` walks that directory and returns the list of candidate `.md` paths for `reindexAll` to process.
 
-```ts
-export function indexPage(idx: SearchIndex, wikiPath: string, content: string): void {
-```
+3. **Per-file ingestion.** `indexPage` takes one wiki page (its path and raw Markdown content), tokenizes it, and writes the rows into the two-table FTS5 (SQLite full-text search) schema — one table for the page, one for the identifier-split tokens. If the page content changes later, `indexPage` replaces the prior rows so the index never carries stale fragments.
 
-It takes the search index, the wiki-relative page path, and the page's Markdown content, and returns nothing; its effect is a new or updated FTS5 row for that page.
+4. **Queueing work for an agent.** With the index fresh, the flow moves to the deterministic batch plan that tells the agent what to document. The agent-bootstrap queue owns this. `nextAgentBootstrapTask` pops the next task for the repository, `renewAgentBootstrapClaim` extends the calling agent's lease on a task it has already claimed (so a slow agent is not dispossessed), and `submitAgentBootstrapTask` records the agent's finished artifact back onto the queue for validation. Each of these functions takes the repository root and returns or records an `AgentQueueResult`-shaped task.
 
-6. **Turn agent-provided Markdown into ordered documentation work.** Once the agent can read and search the wiki, the documentation machinery in `packages/core/src/agent-bootstrap.ts` takes its submitted Markdown and runs it through livewiki's own queue: the agent supplies Markdown, while livewiki owns ordering, bounded attempts, validation, and transactional writes.
-7. **Apply baseline lifecycle operations when a task advances documentation.** As work lands, the baseline machinery records the repository's documentation authority, so subsequent validation has a stable recorded state to compare against.
+5. **Baseline lifecycle around the queue.** The baseline is the versioned snapshot (`livewiki/.baseline.json`) of what symbol version each page documents; it is what makes a clean clone validate the same evidence without the SQLite projection. The queue work is bracketed by baseline operations: `bootstrapBaseline` creates the initial baseline for a repository, `migrateBaselineKey` rewrites a symbol key inside the baseline when a symbol is renamed, and `relocateBaselineEntry` moves a baseline page entry when the page itself moves. `acceptBaseline` is the commit point that promotes a written page's symbol versions into the accepted baseline. The ordering invariant is that baseline transitions happen around agent-submitted tasks, never interleaved with them.
+
+6. **Querying the index.** When the agent asks `livewiki_search`, `queryTerms` splits the raw query string into its identifier-aware terms (camelCase, PascalCase, acronym runs, snake_case, kebab) and runs the FTS5 MATCH against the two-table schema. `isFtsQueryError` is the predicate used to detect a malformed FTS query so the tool can return a helpful error instead of a raw SQLite failure.
+
+7. **Closing the index.** When the server shuts down, `close` releases the open SQLite database handle so the process can exit cleanly and no file lock is left behind.
 
 ## Diagram
 
@@ -59,30 +75,15 @@ It takes the search index, the wiki-relative page path, and the page's Markdown 
 
 ## Invariants
 
-Each stage of this flow must hold specific conditions for the handoff to the next stage to be sound.
-
-- **Search freshness at server start.** Before the server can answer a search tool call, the initial reindexing must have populated `.livewiki/search.db` with every collected Markdown page; the database is the only source a search query consults, so an empty or partial index silently under-serves the agent.
-- **Watch exclusion is applied before scheduling.** Changed filenames are checked before they are counted as pending reindexing work; only files that survive that guard may flow through the scheduling and batching path.
-- **Batched, not ad-hoc, reindexing.** Watcher events signal pending work; actual index mutation converges through the batched synchronization run, rather than each event mutating the database independently while an earlier batch is still running.
-- **One page, one index row.** `indexPage` records each page under its wiki-relative path, so a page's search row is consistently addressable and replaceable across reindexing runs.
-- **Baseline state precedes validation.** For agent bootstrap work, the baseline must be bootstrapped before migration, relocation, or acceptance can meaningfully run: each later operation assumes a baseline record already exists to update.
-- **Queue ownership stays with livewiki.** The coding agent supplies Markdown, but ordering, bounded attempts, validation, and transactional writes are owned by the core package; the agent does not get to choose or skip queue steps.
+At the entry boundary, the MCP server must expose exactly the six documented tools, and the watcher must only trigger reindexing for paths that `isWatchDenied` does not filter. The search index is a separate `.livewiki/search.db` database — never a virtual table inside the main `.livewiki/index.db` — so a schema bump in one cannot corrupt the other. Within the index, each wiki page has exactly one row in the page table, and its token rows reference that row; reindexing a page atomically replaces both. The agent-bootstrap queue must never hand the same task to two agents: claims are exclusive and renewed by lease. Baseline operations are ordered around queue submissions and must not run concurrently with them; the baseline stays the single repository authority for symbol versions even when the SQLite projection is absent. The LLM layer never receives the agent's provider configuration or credentials — the MCP server only forwards deterministic task metadata and the agent's own supplied Markdown artifact.
 
 ## Failure and recovery
 
-<!-- lw:anchors packages/core/src/llm/base.ts#LlmTimeoutError -->
+<!-- lw:anchors packages/core/src/db.ts#assertExistingIndexIsUsable packages/core/src/llm/index.ts#createLlmClient packages/core/src/llm/probe.ts#probeProvider packages/core/src/llm/probe.ts#formatProbeFailure packages/core/src/llm/base.ts#DEFAULT_LLM_TIMEOUT_MS packages/core/src/llm/base.ts#isRetryableStatus packages/core/src/llm/base.ts#LlmTimeoutError packages/core/src/llm/base.ts#LlmTimeoutError.constructor -->
 
-The most visible recovery machinery in the cited source lives on the LLM provider side, where a slow or failing provider must not hang or silently corrupt documentation runs.
+When the search database at a path already exists but may have been created by a newer or older build, `assertExistingIndexIsUsable(db: Database.Database, dbPath: string): void` is the fail-closed gate `openAndIndex` runs before trusting that file; it takes the open database and its path and validates that the schema is one this build can read, throwing rather than silently reading a mismatched schema. On a malformed FTS query, `isFtsQueryError` lets the search tool return a user-facing diagnostic instead of surfacing a raw SQLite error. In the agent-bootstrap queue, a claim that is not renewed before its lease expires is re-offerable to another agent — that is the recovery path for a crashed or hung agent. The baseline operations are transactional at the commit point, so a crashed `acceptBaseline` leaves the previous accepted baseline intact rather than a half-promoted one.
 
-`LlmTimeoutError` is the dedicated error type raised when a provider call exceeds its time budget.
-
-```ts
-export class LlmTimeoutError extends Error {
-```
-
-It extends the standard `Error` so a timeout can be caught specifically and distinguished from a provider-returned failure, giving callers a clean branch to handle a hung request without mistaking it for a refusal or a bad payload.
-
-The supplied source excerpt is truncated at the file-heading level: for most of the symbols in this flow it shows signatures and contract prose but not the full function bodies. Consequently, the concrete retry counts, rollback edges, or fail-open versus fail-closed branching inside the synchronization, reindexing, or baseline operations are not visible in this excerpt; the prose above covers only the recovery paths that the quoted signatures and package-level contracts establish. No additional rollback behavior is asserted beyond what these visible pieces show.
+On the LLM side, the failure modes are provider-specific and are handled before any paid run. `createLlmClient(repoRoot: string, config: LivewikiConfig): LlmClient` is the factory that takes the repository root and validated configuration and returns a client — either an Anthropic Messages adapter or an OpenAI-compatible adapter — and the two adapters share a common fetch/retry/timeout wrapper in `base.ts`. Before the first real generation, `probeProvider` runs a connectivity probe against the endpoint so a provider that silently changed behavior is caught before it bills a run; `formatProbeFailure` turns the probe's result into a readable message for the user. The shared wrapper defines `DEFAULT_LLM_TIMEOUT_MS` (300,000 ms) as the default ceiling for a single provider call, and `isRetryableStatus` decides which HTTP status codes warrant a retry rather than an immediate failure. When a call exceeds the timeout, the wrapper throws `LlmTimeoutError`, whose constructor records which provider and how long it waited, so the caller can attribute the failure precisely. The visible evidence does not show a retry loop that eventually gives up with a different error type, nor a fallback that switches providers mid-run; the recovery story is that timeouts surface as `LlmTimeoutError`, non-retryable statuses fail fast, and retryable statuses are retried within the shared wrapper before any error reaches the caller.
 
 ## Related pages
 
@@ -90,9 +91,3 @@ The supplied source excerpt is truncated at the file-heading level: for most of 
 - [core-src](../core-src/index.md)
 - [llm](../llm/index.md)
 - [How it works](index.md)
-
-<!-- livewiki:topics:start -->
-## Concept topics
-
-- [Testing](../topics/testing-f41eeea7.md)
-<!-- livewiki:topics:end -->

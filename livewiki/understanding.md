@@ -2,22 +2,21 @@
 title: livewiki
 owner: generated
 kind: understanding
-updated: 2026-08-12
+updated: 2026-09-05
 ---
 
 # livewiki
 
-livewiki is an agent-first living documentation tool that keeps a Markdown wiki inside a code repository. It is built for teams that want LLM-authored docs held honest by deterministic checks: symbol pages anchor to real code, staleness is measured from tree-sitter hashes without spending tokens, and a verify pass re-reads every page from disk to reject broken links. The product is consumed three ways — through the livewiki CLI for scaffolding and commands, through an MCP server that exposes the same tooling to LLM clients, and through shared engine code that every surface depends on.
+livewiki is a code-anchored documentation tool for developers, turning GitHub repositories into wiki sites via its command-line interface. It scaffolds wikis, installs templates, and indexes source code, then drives its core LLM client layer to generate documentation from language models. The CLI commands coordinate with core modules to produce documentation that knows when it has gone stale.
 
 ## Where to look in the code
 
-- packages/cli — the livewiki command-line package, bundling manifest, docs, TypeScript config, and Vitest test runner.
-- packages/cli/src/commands — every livewiki subcommand registered on the root Commander program.
-- packages/cli/templates — inert scaffolding files shipped by the CLI for bootstrapping new projects.
-- packages/cli/templates/claude-code — the Claude Code settings.local.json scaffold the CLI drops into new projects.
-- packages/cli/templates/github-actions — the docs-debt.yml GitHub Actions workflow the CLI ships as ready-made CI.
-- packages/cli/skills/document-as-you-go — the SKILL.md defining the document-as-you-go workflow that prompts capturing decisions inline while coding.
-- packages/mcp — the Model Context Protocol package that exposes livewiki's tooling over a standardized tool-calling interface.
-- packages/mcp/src — the MCP server source root, an stdio server that serves LLM clients such as Claude Code.
-- packages/core — the shared engine package: TypeScript sources, configuration, and test harness other packages depend on.
-- packages/core/src/llm — the LlmClient interface, shared GenerateResult types, and the single fetch/retry/timeout wrapper every provider uses.
+- packages/cli: the command-line interface package where users interact with the tool.
+- packages/cli/src/commands: one file per subcommand, registering onto the shared Commander program.
+- packages/core: holds essential configuration and the core business logic foundation.
+- packages/core/src/llm: the client layer that turns validated configuration into LLM content generation.
+- packages/cli/skills/bootstrap-wiki: turns a plain GitHub repository into a wiki site.
+- packages/cli/skills/document-as-you-go: turns writing activity into documentation practice.
+- packages/cli/templates: scaffolding templates, including GitHub Actions workflow and Claude Code settings.
+- packages/mcp: a scaffold for the Model Context Protocol server package.
+- .github/workflows: continuous-integration configuration for the product.

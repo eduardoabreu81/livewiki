@@ -1,34 +1,14 @@
-flowchart LR
-  classDef io fill:#eef,stroke:#446,stroke-width:1px
-  classDef internal fill:#efe,stroke:#464,stroke-width:1px
-  classDef surface fill:#fee,stroke:#644,stroke-width:1px
-
-  caller[update / loadWorkPackage / CLI / finalizeRun / viewer]:::surface
-  recordUpdateMetric[recordUpdateMetric]:::surface
-  snapshotMetrics[snapshotMetrics]:::surface
-  listUpdateMetrics[listUpdateMetrics]:::surface
-  clearMetricsForTests[clearMetricsForTests]:::surface
-  readMetrics[readMetrics]:::internal
-  writeMetrics[writeMetrics]:::internal
-  metricsPath[metricsPath]:::internal
-  safeIo[safe-io\nresolveAndValidate / writeText / mkdir]:::io
-  fs[(node:fs/promises\nreadFile)]:::io
-  ledger[.livewiki/update_metrics.json]:::io
-
-  caller --> recordUpdateMetric
-  caller --> snapshotMetrics
-  caller --> listUpdateMetrics
-
-  recordUpdateMetric --> readMetrics
-  recordUpdateMetric --> writeMetrics
-  snapshotMetrics --> readMetrics
-  listUpdateMetrics --> readMetrics
-  clearMetricsForTests --> writeMetrics
-  clearMetricsForTests --> safeIo
-
-  readMetrics --> metricsPath
-  readMetrics --> fs
-  metricsPath --> safeIo
-  writeMetrics --> safeIo
-  safeIo --> ledger
-  fs --> ledger
+graph TD
+    W[recordUpdateMetric] --> R[readMetrics]
+    R --> M[metricsPath]
+    W --> P[preserveCorruptLedger]
+    P --> B[backupRelPath]
+    W --> WR[writeMetrics]
+    S[snapshotMetrics] --> R
+    S --> WC[warnCorruptOnRead]
+    L[listUpdateMetrics] --> R
+    L --> WC2[warnCorruptOnRead]
+    C[clearMetricsForTests] --> WR
+    WR --> SA[safeIo.writeTextAtomic]
+    M --> SR[safeIo.resolveAndValidate]
+    P --> SR

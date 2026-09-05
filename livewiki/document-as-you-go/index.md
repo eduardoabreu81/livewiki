@@ -5,7 +5,7 @@ owner: generated
 
 # packages/cli/skills/document-as-you-go
 
-This directory hosts a single SKILL.md file that defines the document-as-you-go skill for the livewiki CLI, a workflow that prompts developers to capture and record decisions, context, and design rationale inline as code is written rather than treating documentation as a separate post-task step. By packaging the guidance in a skill module under the CLI's skills directory, livewiki makes the practice directly invokable from the command-line tooling so teams can weave continuous documentation into their development loop without leaving the workflow they already use.
+`document-as-you-go` is the livewiki skill that turns the act of writing into the act of documenting. It instructs the CLI agent to capture project knowledge incrementally, drafting wiki pages in lockstep with code changes rather than treating documentation as a separate, retroactive phase. The folder’s `SKILL.md` encodes this workflow so that any contributor working through the command-line interface can maintain a living, accurate wiki without breaking flow.
 
 ## Files
 

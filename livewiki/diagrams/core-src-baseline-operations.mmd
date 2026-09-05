@@ -1,0 +1,17 @@
+graph TD
+    A[baseline-operations.ts] --> B[baseline.ts]
+    A --> C[parser.ts]
+    A --> D[symbols.ts]
+    A --> E[safe-io.ts]
+    A --> F[db.ts]
+    A --> G[indexer.ts]
+    A --> H[createGitReader]
+    H --> I[runGit]
+    A --> J[loadFreshSymbols]
+    J --> C
+    J --> D
+    A --> K[loadActiveSymbols]
+    K --> F
+    A --> L[assertSymbolsStillCurrent]
+    L --> C
+    L --> D

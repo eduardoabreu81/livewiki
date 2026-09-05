@@ -2,51 +2,51 @@
 
 ## What this repository is
 
-livewiki is an agent-first living documentation tool that keeps a Markdown wiki inside a code repository. It is built for teams that want LLM-authored docs held honest by deterministic checks: symbol pages anchor to real code, staleness is measured from tree-sitter hashes without spending tokens, and a verify pass re-reads every page from disk to reject broken links. The product is consumed three ways — through the livewiki CLI for scaffolding and commands, through an MCP server that exposes the same tooling to LLM clients, and through shared engine code that every surface depends on.
+livewiki is a code-anchored documentation tool for developers, turning GitHub repositories into wiki sites via its command-line interface. It scaffolds wikis, installs templates, and indexes source code, then drives its core LLM client layer to generate documentation from language models. The CLI commands coordinate with core modules to produce documentation that knows when it has gone stale.
 
 *(Synthesized from the verified wiki pages — see `livewiki/understanding.md`.)*
 
-The repository README also states: livewiki keeps technical documentation next to the code it describes. It builds a Markdown wiki, detects what changed, and checks that references to code and other pages still resolve. An LLM writes the prose; livewiki plans the work, tracks documentation debt, preserves human edits, and validates the result.
+The repository README also states: **Code-anchored documentation that knows when it is stale.**
 
 *(Purpose excerpt from the repository README: `README.md` — one evidence input, not the authority.)*
 
 **Entry points and surfaces**
 
-- packages/cli — the livewiki command-line package, bundling manifest, docs, TypeScript config, and Vitest test runner.
-- packages/cli/src/commands — every livewiki subcommand registered on the root Commander program.
-- packages/cli/templates — inert scaffolding files shipped by the CLI for bootstrapping new projects.
-- packages/cli/templates/claude-code — the Claude Code settings.local.json scaffold the CLI drops into new projects.
-- packages/cli/templates/github-actions — the docs-debt.yml GitHub Actions workflow the CLI ships as ready-made CI.
-- packages/cli/skills/document-as-you-go — the SKILL.md defining the document-as-you-go workflow that prompts capturing decisions inline while coding.
-- packages/mcp — the Model Context Protocol package that exposes livewiki's tooling over a standardized tool-calling interface.
-- packages/mcp/src — the MCP server source root, an stdio server that serves LLM clients such as Claude Code.
-- packages/core — the shared engine package: TypeScript sources, configuration, and test harness other packages depend on.
-- packages/core/src/llm — the LlmClient interface, shared GenerateResult types, and the single fetch/retry/timeout wrapper every provider uses.
+- packages/cli: the command-line interface package where users interact with the tool.
+- packages/cli/src/commands: one file per subcommand, registering onto the shared Commander program.
+- packages/core: holds essential configuration and the core business logic foundation.
+- packages/core/src/llm: the client layer that turns validated configuration into LLM content generation.
+- packages/cli/skills/bootstrap-wiki: turns a plain GitHub repository into a wiki site.
+- packages/cli/skills/document-as-you-go: turns writing activity into documentation practice.
+- packages/cli/templates: scaffolding templates, including GitHub Actions workflow and Claude Code settings.
+- packages/mcp: a scaffold for the Model Context Protocol server package.
+- .github/workflows: continuous-integration configuration for the product.
 
 **Fastest local path:** see the "Quick start" section of `README.md`.
 
 ## What you'll find in this wiki
 
-- **[packages/core/src/llm](llm/index.md)** — The `packages/core/src/llm/` directory is the engine's seam to external large-language-model providers: it defines the `LlmClient` interface and shared `GenerateResult` types, supplies a single fetch/retry/timeout wrapper used by every…
-- **[packages/cli/src/commands](commands/index.md)** — This directory holds every `livewiki` subcommand registered on the root Commander program in the `@livewiki/cli` package.
-- **[packages/mcp/src](mcp-src/index.md)** — This directory is the source root of the `@livewiki/mcp` package, the Model Context Protocol (MCP) server that exposes livewiki's documentation tooling to LLM clients such as Claude Code over stdio.
-- **[packages/cli/templates/claude-code](claude-code/index.md)** — This directory holds a Claude Code template shipped by the CLI: a single `settings.local.json` scaffold that consumers receive when scaffolding a Claude Code–style project from the CLI.
-- **[packages/cli](cli/index.md)** — The `packages/cli` directory hosts the command-line interface package for the project, bundling its manifest (`package.json`), documentation (`README.md`), TypeScript configuration (`tsconfig.json`), and Vitest test runner setup…
-- **[packages/core](core/index.md)** — The `packages/core` directory is the package that holds the shared engine of the livewiki project: the TypeScript sources, configuration, and test harness that other packages depend on.
+- **[packages/core/src/llm](llm/index.md)** — The `llm` directory implements livewiki's LLM client layer: code that turns a validated repository configuration into a working interface for generating content from a language model.
+- **[packages/cli/src/commands](commands/index.md)** — This directory contains the command-layer implementations of the livewiki CLI: each file registers one subcommand onto the shared Commander program in the `@livewiki/cli` package.
+- **[packages/cli/skills/bootstrap-wiki](bootstrap-wiki/index.md)** — `bootstrap-wiki` is a command skill for the livewiki CLI that turns a plain GitHub repository into a livewiki wiki site.
+- **[packages/cli/templates/claude-code](claude-code/index.md)** — This directory holds the template for a local Claude Code settings file (`settings.local.json`) that is meant to be copied into a user’s project when scaffolding.
+- **[packages/cli](cli/index.md)** — This directory is the command-line interface (CLI) package for the livewiki project.
+- **[packages/core](core/index.md)** — `packages/core` is the foundation of the livewiki monorepo, providing the essential configuration and documentation for the package that holds the core business logic.
 
 Use this wiki to choose a task, inspect the repository architecture, query focused pages from an agent, and keep the documentation up to date as the code changes.
 
 ## Understand the product
 
-- [Testing](topics/testing-f41eeea7.md)
+- [CLI Commands and Core LLM Coordination](topics/cli-commands-and-core-llm-coordination-2166f507.md)
 - Browse the complete [Concept topics](topics/index.md) index.
 
 ## Work by intent
 
 - **Change product behavior:** start with [Tasks](tasks.md).
 - **Follow end-to-end behavior:**
-  - [Turning a CLI command into an LLM call](flows/cli-src-to-llm.md)
-  - [MCP source search to LLM agent documentation](flows/mcp-src-to-llm.md)
+  - [From CLI Source to Core Source: How livewiki Commands Drive Core Operations](flows/cli-src-to-core-src.md)
+  - [cli-src to llm](flows/cli-src-to-llm.md)
+  - [from source indexing to LLM-driven documentation](flows/mcp-src-to-llm.md)
   - Browse the complete [How it works](flows/index.md) index.
 - **Inspect implementation relationships:** open the [Architecture overview](architecture/overview.md).
 - **Maintain tests, fixtures, tooling, benchmarks, or repository documentation:** open the [Auxiliary areas](auxiliary/index.md) inventory.
@@ -71,6 +71,6 @@ Use this wiki to choose a task, inspect the repository architecture, query focus
 
 ## Repository facts
 
-- **240 files** documented
-- **31 folders** covered
-- **1447 code symbols** indexed
+- **262 files** documented
+- **33 folders** covered
+- **1572 code symbols** indexed

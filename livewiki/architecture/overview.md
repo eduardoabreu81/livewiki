@@ -5,7 +5,7 @@ owner: generated
 
 # Architecture overview
 
-This repository has **240 files** documented and **1447 code symbols** indexed, organized into **31 folders** with **9 documented dependencies** between them.
+This repository has **262 files** documented and **1572 code symbols** indexed, organized into **33 folders** with **9 documented dependencies** between them.
 
 The diagrams below are rebuilt by `livewiki init`; the folder pages they link to are written by `livewiki init --batch` or by hand.
 
@@ -25,7 +25,7 @@ End-to-end behavior across the codebase: [How it works](../flows/index.md)
 
 ### packages/core/src/llm
 
-**10** files, **30** documented code symbols
+**10** files, **31** documented code symbols
 
 Representative paths:
 
@@ -53,37 +53,21 @@ Representative paths:
 
 Pages: [folder page](../commands/index.md)
 
-Depends on: [packages/core/src/llm](../llm/index.md), [packages/mcp/src](../mcp-src/index.md), [packages/core/src](../core-src/index.md), [packages/cli/src](../cli-src/index.md)
+Depends on: [packages/core/src/llm](../llm/index.md), [packages/core/src](../core-src/index.md), [packages/cli/src](../cli-src/index.md), [packages/mcp/src](../mcp-src/index.md)
 
 Used by: [packages/cli/src](../cli-src/index.md)
 
-<a id="mcp-src"></a>
-
-### packages/mcp/src
-
-**8** files, **45** documented code symbols
-
-Representative paths:
-
-- `packages/mcp/src/agent-bootstrap-e2e.test.ts`
-- `packages/mcp/src/index.ts`
-- `packages/mcp/src/phase5-e2e.test.ts`
-
-Pages: [folder page](../mcp-src/index.md)
-
-Depends on: [packages/core/src](../core-src/index.md)
-
-Used by: [packages/cli/src/commands](../commands/index.md)
-
 <a id="bootstrap-wiki"></a>
 
-### Bootstrap wiki folder
+### packages/cli/skills/bootstrap-wiki
 
 **1** file, **0** documented code symbols
 
 Representative paths:
 
 - `packages/cli/skills/bootstrap-wiki/SKILL.md`
+
+Pages: [folder page](../bootstrap-wiki/index.md)
 
 Depends on: none
 
@@ -157,6 +141,22 @@ Depends on: none
 
 Used by: none
 
+<a id="dot-ruff_cache"></a>
+
+### .ruff_cache
+
+**1** file, **0** documented code symbols
+
+Representative paths:
+
+- `.ruff_cache/CACHEDIR.TAG`
+
+Pages: [folder page](../dot-ruff_cache/index.md)
+
+Depends on: none
+
+Used by: none
+
 <a id="github-actions"></a>
 
 ### packages/cli/templates/github-actions
@@ -195,7 +195,7 @@ Used by: none
 
 ### (repository root)
 
-**6** files, **0** documented code symbols
+**7** files, **0** documented code symbols
 
 Representative paths:
 
@@ -244,7 +244,7 @@ Used by: none
 
 ## Auxiliary areas
 
-This repository has **18 auxiliary areas** for tests, fixtures, tooling, benchmarks, or repository documentation. Open the complete [Auxiliary areas](../auxiliary/index.md) inventory.
+This repository has **20 auxiliary areas** for tests, fixtures, tooling, benchmarks, or repository documentation. Open the complete [Auxiliary areas](../auxiliary/index.md) inventory.
 
 ## Diagrams
 

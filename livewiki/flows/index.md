@@ -7,6 +7,8 @@ owner: generated
 
 Each page below explains one principal end-to-end flow across the codebase, with its companion diagram.
 
-### [Turning a CLI command into an LLM call](cli-src-to-llm.md)
+### [From CLI Source to Core Source: How livewiki Commands Drive Core Operations](cli-src-to-core-src.md)
 
-### [MCP source search to LLM agent documentation](mcp-src-to-llm.md)
+### [cli-src to llm](cli-src-to-llm.md)
+
+### [from source indexing to LLM-driven documentation](mcp-src-to-llm.md)

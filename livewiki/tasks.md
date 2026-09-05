@@ -9,13 +9,15 @@ Choose an end-to-end behavior or a product area. Tests, fixtures, tooling, and d
 
 ## Concept topics
 
-### [Testing](topics/testing-f41eeea7.md)
+### [CLI Commands and Core LLM Coordination](topics/cli-commands-and-core-llm-coordination-2166f507.md)
 
 ## End-to-end behavior
 
-### [Turning a CLI command into an LLM call](flows/cli-src-to-llm.md)
+### [From CLI Source to Core Source: How livewiki Commands Drive Core Operations](flows/cli-src-to-core-src.md)
 
-### [MCP source search to LLM agent documentation](flows/mcp-src-to-llm.md)
+### [cli-src to llm](flows/cli-src-to-llm.md)
+
+### [from source indexing to LLM-driven documentation](flows/mcp-src-to-llm.md)
 
 ## Implementation reference
 
@@ -23,11 +25,7 @@ Choose an end-to-end behavior or a product area. Tests, fixtures, tooling, and d
 
 ### [packages/cli/src/commands](commands/index.md)
 
-### [packages/mcp/src](mcp-src/index.md)
-
-### Bootstrap wiki folder
-
-Page not written yet — run `livewiki batch` to generate it.
+### [packages/cli/skills/bootstrap-wiki](bootstrap-wiki/index.md)
 
 ### [packages/cli/templates/claude-code](claude-code/index.md)
 
@@ -36,6 +34,8 @@ Page not written yet — run `livewiki batch` to generate it.
 ### [packages/core](core/index.md)
 
 ### [packages/cli/skills/document-as-you-go](document-as-you-go/index.md)
+
+### [.ruff_cache](dot-ruff_cache/index.md)
 
 ### [packages/cli/templates/github-actions](github-actions/index.md)
 

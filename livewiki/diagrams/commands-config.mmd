@@ -1,0 +1,18 @@
+flowchart LR
+    A[registerConfig] --> B[runConfigFlow]
+    A --> C[showConfig]
+    B --> D[runConfigWizard]
+    D --> E[promptForPreset]
+    D --> F[promptRequired]
+    D --> G[selectPreset]
+    D --> H[planInstall and applyInstall]
+    D --> I[probeProvider]
+    F --> J[readLineInput]
+    E --> K[processIo]
+    K --> J
+    C --> L[loadConfig and applyDefaults]
+    C --> M[resolveProviderFromConfig]
+    C --> N[readCredentialStatusSync]
+    D --> O[loadConfig and saveConfig]
+    B --> P[emitError]
+    A --> Q[isConfigured and decideBareInvocation]

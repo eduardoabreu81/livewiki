@@ -5,4 +5,4 @@ owner: generated
 
 # Concept topics
 
-- [Testing](testing-f41eeea7.md)
+- [CLI Commands and Core LLM Coordination](cli-commands-and-core-llm-coordination-2166f507.md)

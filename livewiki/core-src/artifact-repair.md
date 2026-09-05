@@ -1,33 +1,35 @@
 ---
-title: Mechanical artifact repair
+title: Mechanical Repair of Stage-4 and Topic Artifacts
 owner: generated
 anchors:
-  - packages/core/src/artifact-repair.ts#MECHANICAL_STAGE4_CODES
-  - packages/core/src/artifact-repair.ts#MECHANICAL_UPPER_BOUND_CODES
-  - packages/core/src/artifact-repair.ts#TOPIC_SECTION_HEADING_MAP
-  - packages/core/src/artifact-repair.ts#escapeFirstUnmatchedInlineDelimiter
-  - packages/core/src/artifact-repair.ts#removeLaterSectionAnchorOccurrences
-  - packages/core/src/artifact-repair.ts#repairStage4ArtifactMechanically
-  - packages/core/src/artifact-repair.ts#repairUpperBoundArtifactMechanically
-  - packages/core/src/artifact-repair.ts#sectionAncestorAt
-  - packages/core/src/artifact-repair.ts#stripManualControlMarkers
-  - packages/core/src/artifact-repair.ts#syncFrontmatterAnchorsList
+- packages/core/src/artifact-repair.ts#MECHANICAL_STAGE4_CODES
+- packages/core/src/artifact-repair.ts#MECHANICAL_UPPER_BOUND_CODES
+- packages/core/src/artifact-repair.ts#TOPIC_SECTION_HEADING_MAP
+- packages/core/src/artifact-repair.ts#escapeFirstUnmatchedInlineDelimiter
+- packages/core/src/artifact-repair.ts#normalizeTopicFrontmatterLists
+- packages/core/src/artifact-repair.ts#removeLaterSectionAnchorOccurrences
+- packages/core/src/artifact-repair.ts#repairStage4ArtifactMechanically
+- packages/core/src/artifact-repair.ts#repairUpperBoundArtifactMechanically
+- packages/core/src/artifact-repair.ts#sectionAncestorAt
+- packages/core/src/artifact-repair.ts#stripManualControlMarkers
+- packages/core/src/artifact-repair.ts#syncFrontmatterAnchorsList
+- packages/core/src/artifact-repair.ts#syncTopicRelatedLinks
 ---
 
-# Mechanical artifact repair
+# Mechanical Repair Pipeline for Generated Markdown Artifacts
 
-This module provides deterministic, content-safe fallbacks that the artifact pipeline can apply to a generated Markdown page before falling back to the expensive LLM repair loop.
+This module applies deterministic, fail-closed fixes for well-defined defects in generated Markdown artifacts without inventing content.
 
 ## When to use this page
 
-- **Audit** the closed set of validation codes each mechanical repairer is allowed to act on, and the shared constants that drive the fail-closed gate.
-- **Trace** how a stage-4 module page is rewritten for unclosed inline delimiters, missing/empty/duplicate section anchors, and invented manual control markers.
-- **Trace** how a flow or topic page (upper-bound contract) is rewritten for duplicate section anchors and frontmatter/section anchor-list drift.
-- **Reason** about the keeper-selection rules that decide which duplicate section-marker occurrence survives, including the required-section coverage safety net.
+- Understand how stage-4 artifacts (module pages) are repaired when validation reports specific, mechanical errors.
+- Learn how upper-bound artifacts (flow/topic pages) are repaired under a contract where citation keys only need to match between frontmatter and sections.
+- Debug why a repair returned `null` or which repair action was applied.
+- Extend the repair system with new salvage strategies for topic pages.
 
 ## How it fits
 
-`packages/core/src/artifact-repair.ts` sits inside `packages/core/src/` next to the artifact validator (`./artifact.js`) and the Markdown masking utility (`./markdown-mask.js`). It exposes two top-level repairers — `repairStage4ArtifactMechanically` for module pages and `repairUpperBoundArtifactMechanically` for flow/topic pages — and a small set of internal helpers that perform the actual byte-level rewrites. Each repairer accepts a list of `ArtifactValidationError`s produced by the validator plus the closed key list that the page must cite, and returns a transformed artifact plus a list of repair kinds applied. Both repairers re-run the full stage-4 validator before returning anything; if the rewritten artifact still fails validation, the repairer returns `null` and the caller is expected to fall back to the LLM repair path. The module is the last resort before that LLM path, so it is intentionally fail-closed: any unrecognized error code, any unrecoverable shape, or any failed re-validation yields `null` rather than a plausibly-fixed artifact.
+This module is part of the livewiki artifact generation pipeline, operating after the LLM produces a Markdown page and before final validation. It imports validators (`validateStage4Artifact`, `Stage4ValidationContext`) from `./artifact.js`, utilities for masking code spans (`maskCodeSpansPreservingLength`, `unclosedMarkdownDiagnostic`) from `./markdown-mask.js`, and shared types from `./prompts.js` and `./flows.js`. The repair functions are designed as last-slot fallbacks for defects that the LLM repair path fails to resolve; they only handle defects with unambiguous, content-safe fixes.
 
 ## Diagram
 
@@ -35,117 +37,57 @@ This module provides deterministic, content-safe fallbacks that the artifact pip
 %% livewiki/diagrams/core-src-artifact-repair.mmd
 ```
 
-## Closed-code sets for the two repairers
+## Stage-4 Mechanical Repair (Module Pages)
 
-<!-- lw:anchors packages/core/src/artifact-repair.ts#MECHANICAL_STAGE4_CODES packages/core/src/artifact-repair.ts#MECHANICAL_UPPER_BOUND_CODES -->
+<!-- lw:anchors packages/core/src/artifact-repair.ts#MECHANICAL_STAGE4_CODES packages/core/src/artifact-repair.ts#repairStage4ArtifactMechanically -->
 
-The two repairers only act on a hard-coded set of validation codes. Keeping the sets as exported constants lets the prompt-side directive map (`repair-contract.ts`) and the repairer share a single source of truth, so they cannot drift apart.
+The stage-4 repairer handles module pages where every symbol in the closed list must be cited. `MECHANICAL_STAGE4_CODES` defines the closed set of validation codes this repairer is allowed to act on—`unclosed_markdown`, `missing_closed_key`, `empty_section`, `duplicate_anchor`, and `model_invented_manual`. It is a single source of truth shared with the repair contract so the prompt directive map and this code can never drift apart.
 
-`MECHANICAL_STAGE4_CODES` is the closed set the stage-4 module repairer is allowed to touch — `unclosed_markdown`, `missing_closed_key`, `empty_section`, `duplicate_anchor`, and `model_invented_manual`. Any other error code in the input list causes the repairer to return `null` immediately, because the corresponding fix would require content invention rather than a mechanical rewrite.
+`export function repairStage4ArtifactMechanically(` is the main entry point. It accepts the artifact text, an array of validation errors, the closed key list, and an optional validation context; it returns a `MechanicalArtifactRepairResult` containing the repaired content and a list of applied repairs, or `null` if the repair is not possible. The function iterates over each error, and immediately returns `null` if any error code is outside the closed mechanical set, or if an error appears with an unexpected shape—this is the fail-closed gate that ensures only fully understood defects are touched.
 
-`MECHANICAL_UPPER_BOUND_CODES` is the closed set the upper-bound (flow/topic) repairer classifies directly — `duplicate_anchor` and `missing_closed_key`. Topic pages also have two context-derived salvages for malformed list syntax and Related-pages drift. Unknown codes are intentionally left untouched rather than treated as immediate aborts because the final `validateStage4Artifact` re-check is the safety net: any unrelated residual error still makes the repairer return `null`.
+For each accepted error, the function buckets the defect: `unclosed_markdown` sets a flag, `missing_closed_key` in a section with an offending key in the closed set is collected, `empty_section` markers matching the `lw:anchors` pattern are gathered, `duplicate_anchor` errors mentioning multiple section-marker occurrences are collected, and `model_invented_manual` errors with the specific offending whitespace are flagged. After classification, the function applies repairs in order. If unclosed inline delimiters exist, it repeatedly calls `unclosedMarkdownDiagnostic` and `escapeFirstUnmatchedInlineDelimiter`, aborting if the diagnostic is not inline-code or if the repair limit of 100 iterations is exceeded. For missing section keys, it appends an "Additional indexed symbols" section. For empty sections, it inserts placeholder prose after each marker. For duplicate anchors, it calls `removeLaterSectionAnchorOccurrences`. For invented manual markers, it calls `stripManualControlMarkers`. Finally, if no repairs were applied it returns `null`; otherwise it re-validates the transformed content with `validateStage4Artifact` and returns the result only if validation succeeds.
 
-## The topic section heading vocabulary
+## Upper-Bound Mechanical Repair (Flow and Topic Pages)
 
-<!-- lw:anchors packages/core/src/artifact-repair.ts#TOPIC_SECTION_HEADING_MAP -->
+<!-- lw:anchors packages/core/src/artifact-repair.ts#MECHANICAL_UPPER_BOUND_CODES packages/core/src/artifact-repair.ts#repairUpperBoundArtifactMechanically -->
 
-`TOPIC_SECTION_HEADING_MAP` maps the five recognized topic-page H2 heading strings to their canonical slug used by the required-section machinery in `topics.ts`. The companion `FLOW_SECTION_HEADING_MAP` handles the three flow-page sections. The map is passed into `removeLaterSectionAnchorOccurrences` and `sectionAncestorAt` so the same dedup helper can resolve which required section a given marker falls under, regardless of which page type it is operating on.
+The upper-bound repairer handles flow and topic pages, where the closed list defines the maximum set of keys that MAY be cited, but frontmatter and section markers only need to equal each other. `MECHANICAL_UPPER_BOUND_CODES` is the closed set of codes this repairer acts on—`duplicate_anchor` and `missing_closed_key`—and unrecognized codes are skipped rather than treated as failures, relying on the final mandatory full validation to catch unresolved issues.
 
-## Stage-4 module repair pipeline
+`export function repairUpperBoundArtifactMechanically(` is the entry point for this path. It takes the artifact, errors, closed key list, validation context, and optionally a `keySectionMap` (mapping keys to assigned sections) and a `headingMap` (H2 heading vocabulary); it returns the same result type as the stage-4 repairer or `null`. The function skips errors with codes outside `MECHANICAL_UPPER_BOUND_CODES`, then collects duplicate section keys, keys to add to the frontmatter anchors list (`missing_closed_key` with location `frontmatter`), and keys to remove from that list (`missing_closed_key` with location `section`).
 
-<!-- lw:anchors packages/core/src/artifact-repair.ts#repairStage4ArtifactMechanically -->
+After collecting, it deduplicates duplicate keys via `removeLaterSectionAnchorOccurrences`. For topic pages, it first runs `normalizeTopicFrontmatterLists` to convert malformed scalar frontmatter list fields; if the anchors field was converted, the frontmatter sync is skipped because the conversion already resolved those keys. Unless anchors were normalized, it calls `syncFrontmatterAnchorsList`. For topic pages, it then calls `syncTopicRelatedLinks`. If no repairs were applied, it returns `null`; otherwise it re-validates the full content with `validateStage4Artifact` and returns the result only if that succeeds.
 
-`repairStage4ArtifactMechanically` is the last-slot fallback for content-safe stage-4 defects observed in paid reruns. It walks the input errors once to bucket them by code, refuses anything outside `MECHANICAL_STAGE4_CODES`, then applies the corresponding fixes in a fixed order before re-validating the result. The shape of the exported function is:
+## Topic-Specific Salvage Operations
 
-```ts
-export function repairStage4ArtifactMechanically(
-  artifact: string,
-  errors: ReadonlyArray<ArtifactValidationError>,
-  closedKeyList: ReadonlyArray<string>,
-  context?: Readonly<Stage4ValidationContext>,
-): MechanicalArtifactRepairResult | null
-```
+<!-- lw:anchors packages/core/src/artifact-repair.ts#normalizeTopicFrontmatterLists packages/core/src/artifact-repair.ts#syncTopicRelatedLinks packages/core/src/artifact-repair.ts#syncFrontmatterAnchorsList -->
 
-It takes the raw artifact text, the validator's error list, the closed key list the page must cite, and an optional stage-4 validation context; it returns the rewritten artifact plus the list of repair kinds applied, or `null` if any step fails.
+These three functions provide deterministic repairs for defects observed in topic pages during paid evaluation runs, where the model wrote frontmatter fields incorrectly or omitted expected links. They each derive every expected value from the validation context or the artifact's own structure, never from error-message text.
 
-The pipeline runs in this order:
+`normalizeTopicFrontmatterLists` rewrites comma-joined scalar frontmatter fields (`modules: a, b, c`) into YAML block lists. It first splits the artifact on line boundaries and finds the closing `---` delimiter; if there is no frontmatter, it returns the content unchanged. For the `anchors` field, it masks code spans in the body, extracts all keys cited by section markers, and only converts when the scalar's items are distinct, closed-list members with no empty or whitespace-containing entries, and exactly match the set of section-cited keys. For `modules` and `flows`, it only converts when the items, in order, equal `context.expectedTopicModules` or `context.expectedTopicFlows` exactly. Any ambiguity returns `null`, and already-parseable flow-style lists (`[a, b]`) are left untouched.
 
-1. **Unclosed inline delimiter repair.** When at least one `unclosed_markdown` error is reported, the repairer repeatedly runs `escapeFirstUnmatchedInlineDelimiter` until the masked diagnostic returns `null`, capped at `MAX_INLINE_DELIMITER_REPAIRS` (100) iterations. If the first diagnostic is not an inline-code shape, the loop aborts with `null`.
-2. **Missing section anchors.** For each `missing_closed_key` (section) error whose offending key is in the closed set, the repairer appends an "Additional indexed symbols" section with a single anchor marker that lists the missing keys.
-3. **Empty anchored sections.** For each `empty_section` error whose offending text is a well-formed `lw:anchors` marker, the repairer re-uses the masked content to compute insertion offsets in reverse order, then splices a short explanation paragraph after each marker.
-4. **Duplicate section anchors.** A single `removeLaterSectionAnchorOccurrences` pass drops the later occurrences of every key reported by `duplicate_anchor` errors.
-5. **Invented manual markers.** `stripManualControlMarkers` removes any model-written manual control comments anywhere in the text.
+`syncFrontmatterAnchorsList` adds or removes keys from the top-level `anchors:` YAML block list while preserving all other bytes. It only works on plain block-list form: it requires the artifact to start with a `---` delimiter, locates the `anchors:` line, and collects list items until the next top-level key. It fails closed with `null` when the shape is unexpected, when a requested removal names a key not present, or when the frontmatter delimiters are missing. Removed items are dropped entirely; added keys are appended with the detected indentation prefix.
 
-After all of the above, the repairer returns `null` if no repairs were actually applied, and otherwise re-runs `validateStage4Artifact` against the rewritten content. If the validator still reports any error, the repairer returns `null`; the explicit fail-closed outcome is part of the contract, not a bug.
+`function syncTopicRelatedLinks(` appends missing accepted-evidence links to the `## Related pages` section. It builds the expected target list from the validation context: `index.md` labeled "Topics hub", `../<moduleId>/index.md` per accepted module, and both `../flows/<slug>.md` and `../diagrams/flow-<slug>.mmd` per accepted flow. It masks code spans, finds the Related pages section by its H2 heading, and extracts all actual local and external link targets. External links (http, https, mailto, anchors) are preserved; an unexpected local link aborts the whole repair with `null`. If all expected targets exist, it returns the content unchanged; otherwise it appends bullet links for each missing target, preserving the artifact's line-ending style.
 
-## Unclosed inline delimiter escape
+## Anchor Deduplication and Section Ancestry
 
-<!-- lw:anchors packages/core/src/artifact-repair.ts#escapeFirstUnmatchedInlineDelimiter -->
+<!-- lw:anchors packages/core/src/artifact-repair.ts#removeLaterSectionAnchorOccurrences packages/core/src/artifact-repair.ts#sectionAncestorAt packages/core/src/artifact-repair.ts#TOPIC_SECTION_HEADING_MAP -->
 
-`escapeFirstUnmatchedInlineDelimiter` finds the first raw backtick in a masked copy of the text and replaces it with the HTML entity `&#96;`, preserving the original backtick run length. The replacement is applied to the original text (not the masked copy), so the rendered output still contains a literal backtick while the source no longer opens an inline-code span. The helper returns `null` if no backtick is present, which the caller treats as "no further repair needed."
+Duplicated section markers are a common defect where a key appears in more than one `lw:anchors` marker. `removeLaterSectionAnchorOccurrences` matches the validator's order-preserving duplicate rule: the first real section-marker occurrence is canonical and later occurrences are removed, while marker-shaped examples inside Markdown code remain untouched. The function takes the text, the list of duplicate keys, and optional `keySectionMap` (keys mapped to their assigned sections) and `headingMap` (heading vocabulary); it returns the deduplicated text or `null` when dedup is impossible.
 
-## Invented manual-marker strip
+The function first masks code spans, finds all marker matches, and counts occurrences of each target key, returning `null` if any duplicate key does not appear at least twice. It then precomputes each marker's parsed key list and its ancestor section via `sectionAncestorAt`. For each duplicate key, the keeper is the first occurrence in its assigned section (when `keySectionMap` is supplied) or the first occurrence overall. When a `keySectionMap` is present, a coverage-preserving pass iterates over required sections (any section in the `headingMap` vocabulary); if a required section's markers would all be stripped, it attempts to reassign one duplicate key to an occurrence in that section, but only when the key's current keeper retains another surviving key. If no safe move is found, the function returns `null`, preserving a fail-closed stance for genuinely unfixable dedup scenarios. Finally, it reconstructs the text, dropping later occurrences of duplicate keys while keeping the first occurrence in document order.
 
-<!-- lw:anchors packages/core/src/artifact-repair.ts#stripManualControlMarkers -->
+`function sectionAncestorAt(` determines which required section contains a given character offset by scanning the masked text for H2 headings at or before that offset. It maps each heading title through the provided `headingMap`; an H2 outside the vocabulary resets the ancestor to `null`, while H3+ subsections do not reset it, matching the validator's allowance of H3+ subsections within required sections.
 
-`stripManualControlMarkers` removes only model-written manual control comments — the opening `lw:manual` HTML comment and its matching `lw:manual` closer — while leaving the surrounding content untouched. The helper matches every occurrence of either form, then returns `null` if none of the matches are the opening form (so a stray closing comment with no opener is not a meaningful repair). When at least one opener is present, the comments are stripped in reverse order so the remaining byte offsets stay valid.
+`export const TOPIC_SECTION_HEADING_MAP: Readonly<Record<string, string>> = {` maps a topic page's H2 heading text to its `TopicRequiredSection` identifier. It includes five sections: `purpose`, `when to use this page`, `behavioral contract`, `failure and recovery`, and `change map`. This map is used by `sectionAncestorAt` and the dedup coverage logic for topic pages; flow pages use an internal map with three sections (`purpose`, `ordered flow`, `failure and recovery`).
 
-## Required-section ancestry lookup
+## Inline and Manual-Marker Cleanup
 
-<!-- lw:anchors packages/core/src/artifact-repair.ts#sectionAncestorAt -->
+<!-- lw:anchors packages/core/src/artifact-repair.ts#escapeFirstUnmatchedInlineDelimiter packages/core/src/artifact-repair.ts#stripManualControlMarkers -->
 
-`sectionAncestorAt` walks every H2 heading (in the masked source) up to a given byte offset and returns the slug of the last one that appears in the supplied heading vocabulary. An H2 whose text is not in the vocabulary resets the ancestor to `null`; H3+ subsections do not reset it, matching the validator's own rule that H3+ subsections of a required section are allowed. The helper is consumed by `removeLaterSectionAnchorOccurrences` to decide which required section a given marker falls under.
+Unclosed Markdown inline-code spans and model-invented manual control comments are two distinct content-safe defects that prevent validation. `function escapeFirstUnmatchedInlineDelimiter(text: string): string | null {` preserves the rendered literal backtick while preventing the raw delimiter from being interpreted as an open inline-code span. It masks existing code spans in the text, finds the first raw backtick in the masked result, and measures the length of the backtick run. It then replaces that run with the HTML entity `&#96;` repeated the same number of times. If no raw backtick exists, it returns `null`.
 
-## Duplicate section-marker removal
-
-<!-- lw:anchors packages/core/src/artifact-repair.ts#removeLaterSectionAnchorOccurrences -->
-
-`removeLaterSectionAnchorOccurrences` implements the validator's order-preserving duplicate rule: the first section-marker occurrence is canonical and every later occurrence is removed. Marker-shaped examples inside Markdown code spans remain untouched because the helper scans the masked source rather than the raw text.
-
-When no `keySectionMap` is supplied, the behavior is the original "keep first occurrence" rule byte-for-byte; the stage-4 module path therefore sees no behavior change. When a map is supplied (Workstream A for flow pages, the topic counterpart for topic pages), the kept occurrence for a given key is the first one whose ancestor H2 section matches the key's assigned section. If no occurrence sits in the assigned section, the helper falls back to the first occurrence overall.
-
-The helper also enforces a coverage safety net: any required section (a section whose heading appears in the heading vocabulary) must retain at least one surviving marker after dedup. If honoring the assigned-section preference would strip a required section's last marker, the helper performs a "safe move" — reassigning one duplicate key to an occurrence in that section, provided the key's original keeper marker still retains another surviving key so the move cannot strip a second required section. A chain of moves that cannot honor every required section is left fail-closed and the function returns `null`, the same outcome the caller-side re-validation would produce.
-
-The replacement set is built by walking the markers in order, collecting the keys that survive (either because they are not duplicate targets, or because this is the kept occurrence), and emitting a replacement of the original marker text with the rebuilt marker. Replacements are applied in reverse offset order so each rewrite does not invalidate the offsets of the remaining ones.
-
-## Upper-bound (flow/topic) repair pipeline
-
-<!-- lw:anchors packages/core/src/artifact-repair.ts#repairUpperBoundArtifactMechanically -->
-
-`repairUpperBoundArtifactMechanically` is the mechanical fallback for pages whose contract is an upper bound on what may be cited — flow pages and topic pages. The closed list caps what may be cited, but frontmatter anchors and section-marker keys only need to equal each other, not the full closed list. Duplicate or one-sided anchor citations have unambiguous mechanical fixes, while topic-only repairs may normalize list syntax and restore the deterministic Related-pages set from the validation context without inventing content.
-
-```ts
-export function repairUpperBoundArtifactMechanically(
-  artifact: string,
-  errors: ReadonlyArray<ArtifactValidationError>,
-  closedKeyList: ReadonlyArray<string>,
-  context: Readonly<Stage4ValidationContext>,
-  keySectionMap?: ReadonlyMap<string, string>,
-  headingMap: Readonly<Record<string, string>> = FLOW_SECTION_HEADING_MAP,
-): MechanicalArtifactRepairResult | null
-```
-
-The function walks the error list once, ignoring codes outside `MECHANICAL_UPPER_BOUND_CODES` (they are left for the caller's LLM repair path; the final re-validation is the safety net). Recognized errors are bucketed into three lists: `duplicateSectionKeys`, `addToFrontmatter` (frontmatter keys that need to be added because they are already cited in a section marker), and `removeFromFrontmatter` (frontmatter keys that need to be removed because they are only in the frontmatter list with no section citing them).
-
-The pipeline runs in this order:
-
-1. **Duplicate section anchors.** When `duplicateSectionKeys` is non-empty, `removeLaterSectionAnchorOccurrences` is invoked with the supplied `keySectionMap` and `headingMap` (or `FLOW_SECTION_HEADING_MAP` by default). If the helper returns `null` or the unchanged text, the repairer returns `null`.
-2. **Topic list normalization.** For topic pages, comma-joined scalar `modules`, `flows`, and `anchors` values may be rewritten as YAML block lists. Module and flow items must equal the accepted context values in order. Anchor items must be distinct closed-list keys whose set exactly equals the section-marker keys; empty, whitespace-bearing, duplicated, unknown, or ambiguous items abort the repair.
-3. **Frontmatter anchor-list sync.** When either bucket of frontmatter changes is non-empty, `syncFrontmatterAnchorsList` is invoked. If the topic salvage already normalized `anchors`, the stale pre-normalization buckets are skipped because the parseable list has resolved them.
-4. **Topic Related-pages sync.** The topic hub, accepted module pages, accepted flow pages, and companion flow diagrams are derived from the validation context and appended when absent. External links are preserved, but any unexpected local link aborts the repair rather than being silently removed.
-5. **Re-validation.** As with the stage-4 repairer, the whole rewritten artifact is re-validated; any residual validator failure causes the function to return `null`.
-
-The helper leaves unsupported locations and codes untouched rather than treating them as immediate triggers, so a routine mechanical pass can still run. This does not weaken the contract: a co-occurring `missing_page_opening`, renamed section, wrong accepted order, or any other unresolved defect is caught by the mandatory full re-validation.
-
-## Frontmatter anchor-list sync
-
-<!-- lw:anchors packages/core/src/artifact-repair.ts#syncFrontmatterAnchorsList -->
-
-`syncFrontmatterAnchorsList` edits the top-level `anchors:` YAML list in the frontmatter block, preserving every other byte (indentation style, line endings, comments on unrelated lines). The function is exported only inside the module and is consumed by the upper-bound repairer.
-
-The helper walks the line-and-separator split of the artifact, locating the opening `---` delimiter, the closing `---` delimiter, the `anchors:` line, and the next top-level key (or the closing delimiter) that ends the list. It then matches each body line against `^([ \t]*-[ \t]+)(\S.*?)[ \t]*$` to identify list items, drops any whose key is in the keysToRemove set, and appends the keysToAdd keys using the same indentation prefix observed on the first kept item. If the keysToRemove list is non-empty but no removal actually happened, the function returns `null` rather than guessing the frontmatter shape.
-
-The helper bails with `null` when the artifact does not start with a `---` delimiter, when the closing delimiter is missing, when the `anchors:` key is absent, or when the list body is not the plain block-list form every stage-4/5 artifact writes. The intent is to refuse any ambiguous frontmatter rather than emit a plausibly-correct edit.
+`function stripManualControlMarkers(text: string): string | null {` removes only model-written manual control comments, never their content. It matches the comment sequence whose body names the token `lw:manual` (and its closing form) with a regular expression. If the text contains no non-closing manual marker, it returns `null`. Otherwise, it removes each matching comment by slicing the text from the end backward, returning the cleaned artifact. This is necessary because stage-4 validation forbids the copyable comment sequence even inside code examples, so every occurrence must be stripped for the repaired artifact to validate.
 
 ## Tests
 

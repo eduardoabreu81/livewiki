@@ -7,112 +7,125 @@ classDiagram
   class class_2["MockLlm"] {
     +generate()
   }
-  class class_3["FailingMockLlm"] {
+  class class_3["MockLlm"] {
+    +generate()
+  }
+  class class_4["FailingMockLlm"] {
     +calledModuleIds()
     +generate()
   }
-  class class_4["ValidMockLlm"] {
+  class class_5["ValidMockLlm"] {
     +calledModuleIds()
     +constructor()
     +generate()
   }
-  class class_5["FifteenNodeLlm"] {
+  class class_6["FifteenNodeLlm"] {
     +generate()
   }
-  class class_6["ModuleDiagramMockLlm"] {
+  class class_7["ModuleDiagramMockLlm"] {
     +generate()
   }
-  class class_7["ProgrammableMockLlm"] {
+  class class_8["ProgrammableMockLlm"] {
     +generate()
   }
-  class class_8["MockLlm"] {
+  class class_9["MockLlm"] {
     +generate()
   }
-  class class_9["OneModuleAlwaysTruncatesLlm"] {
+  class class_10["OneModuleAlwaysTruncatesLlm"] {
     +generate()
   }
-  class class_10["RelaxedTopicMockLlm"] {
+  class class_11["RelaxedTopicMockLlm"] {
     +generate()
   }
-  class class_11["Stage5MockLlm"] {
+  class class_12["Stage5MockLlm"] {
     +generate()
   }
-  class class_12["TopicMockLlm"] {
+  class class_13["TopicMockLlm"] {
     +generate()
   }
-  class class_13["OneModuleMockLlm"] {
+  class class_14["OneModuleMockLlm"] {
     +generate()
   }
-  class class_14["OneShotMockLlm"] {
+  class class_15["OneShotMockLlm"] {
     +generate()
   }
-  class class_15["ValidMockLlm"] {
+  class class_16["ValidMockLlm"] {
     +generate()
   }
-  class class_16["SurgicalFlowMockLlm"] {
+  class class_17["SurgicalFlowMockLlm"] {
     +generate()
   }
-  class class_17["SurgicalModuleMockLlm"] {
+  class class_18["SurgicalModuleMockLlm"] {
     +generate()
   }
-  class class_18["SurgicalTopicMockLlm"] {
+  class class_19["SurgicalTopicMockLlm"] {
     +generate()
   }
-  class class_19["TestRoleMockLlm"] {
+  class class_20["TestRoleMockLlm"] {
     +generate()
   }
-  class class_20["UnderstandingMockLlm"] {
+  class class_21["UnderstandingMockLlm"] {
     +generate()
   }
-  class class_21["MockLlm"] {
+  class class_22["UsagelessLlm"] {
     +generate()
   }
-  class class_22["EmptyPipelineError"] {
+  class class_23["MockLlm"] {
+    +generate()
+  }
+  class class_24["EmptyPipelineError"] {
     +constructor()
   }
-  class class_23["TaskError"] {
+  class class_25["TaskError"] {
     +constructor()
   }
-  class class_24["MissingProviderConfigError"] {
+  class class_26["MissingProviderConfigError"] {
     +constructor()
   }
-  class class_25["CredentialStoreError"] {
+  class class_27["CredentialStoreError"] {
     +constructor()
   }
-  class class_26["ExportError"] {
+  class class_28["SchemaAccessError"] {
+    +constructor()
+    +describe()
+  }
+  class class_29["WriteContentionError"] {
     +constructor()
   }
-  class class_27["FrontmatterParseError"] {
+  class class_30["ExportError"] {
     +constructor()
   }
-  class class_28["FullMockLlm"] {
+  class class_31["FrontmatterParseError"] {
+    +constructor()
+  }
+  class class_32["FullMockLlm"] {
     +generate()
   }
-  class class_29["DuplicateModuleIdError"] {
+  class class_33["DuplicateModuleIdError"] {
     +constructor()
   }
-  class class_30["ExactPartitionError"] {
+  class class_34["ExactPartitionError"] {
     +constructor()
   }
-  class class_31["UnknownPresetError"] {
+  class class_35["UnknownPresetError"] {
     +constructor()
   }
-  class class_32["ReadmeExportError"] {
+  class class_36["ReadmeExportError"] {
     +constructor()
   }
-  class class_33["CompareAndSwapConflictError"] {
+  class class_37["CompareAndSwapConflictError"] {
     +constructor()
   }
-  class class_34["InvalidRelativePathError"] {
+  class class_38["InvalidRelativePathError"] {
     +constructor()
   }
-  class class_35["PathOutsideAllowlistError"] {
+  class class_39["PathOutsideAllowlistError"] {
     +constructor()
   }
-  class class_36["WriteLockBusyError"] {
+  class class_40["WriteLockBusyError"] {
     +constructor()
   }
-  class class_37["ViewError"] {
+  class class_41["ViewError"] {
     +constructor()
   }
   class_1 -- class_2
@@ -151,3 +164,7 @@ classDiagram
   class_34 -- class_35
   class_35 -- class_36
   class_36 -- class_37
+  class_37 -- class_38
+  class_38 -- class_39
+  class_39 -- class_40
+  class_40 -- class_41

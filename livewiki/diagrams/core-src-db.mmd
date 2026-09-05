@@ -1,21 +1,12 @@
 graph TD
-    A[db.ts] --> B[SCHEMA_SQL]
-    A --> C[MIGRATION_SQL_V3]
-    A --> D[migrateV3ToV4]
-    A --> E[migrateV4ToV5]
-    A --> F[migrateV5ToV6]
-    A --> G[migrateV6ToV7]
-    A --> H[migrateV7ToV8]
-    A --> I[migrateV8ToV9]
-    A --> J[migrationsFor]
-    A --> K[postV3Migrations]
-    A --> L[openIndex]
-    J --> C
-    K --> D
-    K --> E
-    K --> F
-    K --> G
-    K --> H
-    K --> I
-    L --> J
-    L --> K
+    A[openIndex / bootstrapIndexHandle] -->|runs| B[SCHEMA_SQL]
+    A -->|decides| C[assertExistingIndexIsUsable]
+    C -->|reads version| D[readStoredVersion]
+    D -->|raises| E[SchemaAccessError]
+    A -->|fetches| F[migrationsFor + postV3Migrations]
+    F -->|includes| G[MIGRATION_SQL_V3]
+    F -->|pairs to| H[migrateV3ToV4 ... migrateV9ToV10]
+    A -->|catches| I[runWriteTransaction / isWriteContention]
+    I -->|throws| J[WriteContentionError]
+    K[openIndexReadOnly] -->|validates| C
+    K -->|reads| D

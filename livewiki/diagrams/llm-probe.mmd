@@ -1,0 +1,6 @@
+graph TD
+    A[probeProvider] --> B[createLlmClient]
+    A --> C[client.generate]
+    C --> D{response analysis}
+    D --> E[formatProbeFailure]
+    E --> F[Human-readable message]

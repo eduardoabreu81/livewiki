@@ -1,22 +1,15 @@
-graph TD
-    A[createServer] --> B[openAndIndex]
-    A --> C[McpServer instance]
-    A --> D[startWatcher]
-    A --> E[Core modules]
-    D --> F[reindexAllPages]
-    D --> G[runIndexer]
-    D --> H[runLedger]
-    C --> I[All 8 tool handlers]
-    I --> J[safeIo]
-    I --> K[runStatus]
-    I --> L[computeBlastRadius]
-    I --> M[nextAgentBootstrapTask]
-    I --> N[submitAgentBootstrapTask]
-    I --> O[acceptBaseline]
-    E --> B
-    E --> J
-    E --> K
-    E --> L
-    E --> M
-    E --> N
-    E --> O
+flowchart LR
+    Server[server.ts] --> McpSDK[McpServer]
+    Server --> Tools[Tool registrations]
+    Server --> Search[search.ts]
+    Server --> Watch[startWatcher]
+    Watch --> Queue[watch-queue.ts]
+    Watch --> FS[node:fs watch]
+    Watch --> CoreIndex[core/indexer]
+    Watch --> CoreLedger[core/anchor-ledger]
+    Watch --> Search
+    Server --> CoreIO[core/safe-io]
+    Server --> WikiDoc[core/wiki-document]
+    Tools --> WikiDoc
+    Tools --> CoreIO
+    Tools --> Search

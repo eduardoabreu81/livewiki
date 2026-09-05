@@ -1,8 +1,23 @@
 flowchart LR
-    A[Caller code] --> B[OpenAiCompatAdapter.generate]
-    B --> C[resolveThinkingMode]
-    B --> D[requestWithRetry]
-    D --> E[HTTP /chat/completions endpoint]
-    E --> F[normalizeFinishReason]
-    F --> B
-    B --> G[GenerateResult]
+    subgraph Adapter["OpenAiCompatAdapter"]
+        Constructor["constructor"]
+        Generate["generate"]
+        ResolveThinking["resolveThinkingMode"]
+    end
+    subgraph SharedHelpers["Shared base.ts utilities"]
+        Retry["requestWithRetry"]
+        Timeout["withTimeoutMs"]
+    end
+    subgraph Normalizers["Output normalizers"]
+        NormalizeUsage["normalizeUsage"]
+        NormalizeFinish["normalizeFinishReason"]
+    end
+    subgraph External["Provider endpoint"]
+        Chat["POST /chat/completions"]
+    end
+    Generate --> ResolveThinking
+    Generate --> Retry
+    Generate --> NormalizeUsage
+    Generate --> NormalizeFinish
+    Constructor --> Timeout
+    Retry --> Chat

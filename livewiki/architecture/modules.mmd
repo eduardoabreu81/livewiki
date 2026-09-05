@@ -2,12 +2,14 @@ graph LR
   cli_src["cli-src"]
   commands["commands"]
   cli_src --> commands
-  commands --> cli_src
   core_src["core-src"]
+  cli_src --> core_src
+  commands --> cli_src
   commands --> core_src
+  llm["llm"]
+  commands --> llm
   mcp_src["mcp-src"]
   commands --> mcp_src
-  llm["llm"]
   core_src --> llm
   llm --> core_src
   mcp_src --> core_src

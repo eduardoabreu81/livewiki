@@ -1,5 +1,5 @@
 ---
-title: Batch Pipeline Orchestration for livewiki Documentation Generation
+title: Batch Pipeline Orchestrator
 owner: generated
 anchors:
   - packages/core/src/batch.ts#EmptyPipelineError
@@ -61,272 +61,141 @@ anchors:
   - packages/core/src/batch.ts#tryWriteModuleDiagramAndVerify
   - packages/core/src/batch.ts#understandingAttemptDiagnostic
   - packages/core/src/batch.ts#verifyIssuesToValidationErrors
+  - packages/core/src/batch.ts#writeArtifactAtomic
 ---
 
-# Batch Pipeline Orchestration for livewiki Documentation Generation
+# Batch Pipeline Orchestrator
 
-This page documents how the batch pipeline orchestrates the full documentation generation process, from repository scanning through coordinated LLM-driven page writing with recovery and failure handling.
+This file orchestrates the entire livewiki batch documentation pipeline—running the four-stage coordinated documentation process that scans a repository, identifies modules, prioritizes them, and generates model-written wiki pages with transactional write-and-verify semantics.
 
 ## When to use this page
 
-- Understand how `runBatch`, `resumeBatch`, and `runOnly` drive the four-stage documentation pipeline (scan, module identification, prioritization, coordinated writing)
-- Learn how the circuit breaker policy decides when to abort a run after consecutive or excessive failures
-- Discover how `--only` re-runs a single task while preserving manual content and respecting ownership rules
-- Explore the recovery tiers — surgical repair, relaxed rounds, and bounded retry slots — that rescue tasks from common LLM and validation failures
+- **Trace how a full batch run flows end-to-end**: follow `runBatch` through scanning, page-unit planning, prioritization, and the stage-4/5 generation loops.
+- **Understand resumability and failure handling**: see how `resumeBatch` continues interrupted runs and how the circuit breaker, rollback, and repair-slot mechanics protect against cascading failures.
+- **Learn the `--only` single-task re-run path**: examine `runOnly` and how it preserves human-owned content while retrying a specific module, flow, topic, or understanding task.
+- **Inspect the write-and-verify contract**: understand atomic artifact writes, verification gating, and how staged rollback protects repository consistency.
 
 ## How it fits
 
-`batch.ts` is the central conductor of the livewiki documentation engine. It sits in `packages/core/src/` and coordinates every other subsystem: the indexer (`indexer.js`), module planner (`modules.js`), page-unit planner (`page-units.js`), prompt builders (`prompts.js`), artifact normalizer (`artifact.js`), verifier (`verify.js`), and persistence layers (`batch-state.js`, `manifest.js`, `documentation-commit.js`). The file exports three public entry functions — `runBatch`, `resumeBatch`, and `runOnly` — all delegating to the private `orchestrate` function that implements the complete pipeline.
+`batch.ts` is the central nervous system of the livewiki batch documentation pipeline (the "Phase 3, stage 4" of the multi-phase architecture). It coordinates many lower-level subsystems: the indexer (stage 1), the page-units planner which determines real file/folder page units (stage 2), module prioritization (stage 3), and then hands off to model-driven generation stages plus the flow and topic semantic layers of stage 5.
 
-The module enforces the project's documentation contracts: it refuses to rewrite human-owned pages, preserves manually written blocks byte-for-byte, writes pages transactionally with rollback on verification failure, and maintains a checkpoint system so interrupted runs can resume where they left off. Stage 5 extends the same machinery to flow diagrams, topic pages, and a repository-wide understanding synthesis, each with its own gated task queue and budget constraints.
+The file consumes artifacts from modules like `page-units.js` (the planner), `modules.js` (IDs and edges), and `prompts.js` (prompt builders), and it writes wiki pages transactionally via the `tryWriteAndVerify` machinery. It maintains run state in the SQLite checkpoint database (`batch_runs`, `batch_tasks`) so runs can be resumed or selectively re-run with `--only`, and it tracks token usage and cost through `batch-state.ts` types propagated to the final `BatchRunResult` surface consumed by CLI commands in `packages/cli`.
 
-## Batch Entry Points and Modes
-<!-- lw:anchors packages/core/src/batch.ts#runBatch packages/core/src/batch.ts#resumeBatch packages/core/src/batch.ts#runOnly packages/core/src/batch.ts#statusToExitCode -->
+## Part 1 (symbols 1–15)
+<!-- lw:anchors packages/core/src/batch.ts#EmptyPipelineError packages/core/src/batch.ts#EmptyPipelineError.constructor packages/core/src/batch.ts#TaskError packages/core/src/batch.ts#TaskError.constructor packages/core/src/batch.ts#accumulateUsage packages/core/src/batch.ts#aggregateTotals packages/core/src/batch.ts#attemptFolderGeneration packages/core/src/batch.ts#attemptStage4Generation packages/core/src/batch.ts#attemptStage5Generation packages/core/src/batch.ts#attemptTopicGeneration packages/core/src/batch.ts#attemptUnderstandingGeneration packages/core/src/batch.ts#buildFairTruncatedSource packages/core/src/batch.ts#buildFlowDocContext packages/core/src/batch.ts#buildModuleDocContext packages/core/src/batch.ts#buildResult -->
 
-The batch execution pipeline is entered through three small public functions that each normalize their caller's intent into a single internal `mode` value, then delegate to a shared `orchestrate` helper. This indirection keeps the entry surface minimal and lets each mode be expressed as a one-line configuration difference rather than a separate code path.
+This section of `packages/core/src/batch.ts` covers the error-handling infrastructure and the core attempt-generation machinery that powers the batch documentation pipeline. These symbols form the foundation of how the batch system sends generation requests to the LLM, handles failures, validates outputs, and tracks usage and costs across multiple attempts.
 
-`runBatch` is the standard full-run entry point. It accepts a `BatchOptions` object and returns a `Promise<BatchRunResult>`, spreading the caller's options and forcing `mode: "run"` before handing control to `orchestrate`. This mode performs the complete batch, from initial session setup through every queued item.
+The file begins by defining two custom error classes that distinguish error types within the batch pipeline. `EmptyPipelineError` extends `Error` with the signature:
 
-`resumeBatch` behaves identically in shape but stamps `mode: "resume"` onto the options. This mode is the continuation path: instead of starting fresh, `orchestrate` locates the previously persisted batch state and picks up from where the last run stopped, reusing the stored session and progress markers so interrupted batches can be completed without redoing finished work.
-
-`runOnly` is the selective-entry variant. Before delegating, it enforces a precondition: if the caller did not supply an `onlyTarget`, it throws an `Error` explaining that the field is required. Once validated, it passes the options through with `mode: "only"`, instructing `orchestrate` to execute just the single named target (in the current batch or a fresh one) and return that item's outcome, ignoring all other batch members.
-
-The shared `orchestrate` function (not shown in this slice) receives the mode-tagged options and switches on that mode to select the appropriate execution strategy — whether that means creating a new session, resuming from the last checkpoint, or isolating one target. All three entry points funnel through it, which is why they share the same return type and option shape.
-
-Once a batch finishes, `statusToExitCode` translates the result's terminal status into a process exit code suitable for shell scripting and CI integration:
-
-```ts
-export function statusToExitCode(
-  status: BatchRunResult["status"],
-): 0 | 1 | 2 {
-  if (status === "completed") return 0;
-  if (status === "completed_with_failures") return 1;
-  return 2; // aborted
+```typescript
+export class EmptyPipelineError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EmptyPipelineError";
+  }
 }
 ```
 
-This function takes the `status` field of a `BatchRunResult` and returns a numeric `0`, `1`, or `2`. A fully successful run (all items passed) maps to `0`, a run that finished but saw one or more item failures maps to `1`, and any interrupted or canceled run maps to `2`. The mapping is deliberately coarse — it collapses the richer status vocabulary into just three exit codes — so that callers can branch on outcome without parsing the full result object. Note that the `return 2` branch catches every non-success status, including ones like "aborted," so the default fallthrough is both the error path and the catch-all.
+This class takes a message string and creates an error whose `name` property identifies it as an empty-pipeline failure. The batch system throws this when it discovers there is no work to process — for example, when no modules or pages qualify for documentation — allowing callers to distinguish a legitimate "nothing to do" condition from other failures.
 
-## Configuration and Orchestration Setup
-<!-- lw:anchors packages/core/src/batch.ts#orchestrate packages/core/src/batch.ts#resolveOutputTokenBudget packages/core/src/batch.ts#safeJsonParse packages/core/src/batch.ts#emptyUsage packages/core/src/batch.ts#aggregateTotals packages/core/src/batch.ts#accumulateUsage packages/core/src/batch.ts#EmptyPipelineError packages/core/src/batch.ts#EmptyPipelineError.constructor packages/core/src/batch.ts#TaskError packages/core/src/batch.ts#TaskError.constructor -->
+Similarly, `TaskError` provides a structured error type:
 
-`orchestrate` is the single entry point that drives an entire batch run. Its job is to turn the caller's `OrchestrateOpts` and the repository's `.livewiki/config.json` into a coordinated sequence of stages — scan, plan, generate, repair, and report — while persisting every decision and every meter of usage to the SQLite index at `.livewiki/index.db`. It resolves the filesystem root, opens the database, and then normalizes the configuration into a flat set of local constants that every downstream stage reads from, so no stage has to re-read config or re-derive defaults.
-
-The function begins by resolving the absolute repository root and recording the wall-clock time of *this* invocation in `invocationStartedAt` — distinct from the run's original `started_at` so that a late `--only` debt-payment round reports its real duration. It then ensures `.livewiki` exists, validates and opens `index.db`, and loads configuration via `loadConfig` and `applyDefaults`, choosing the effective language from `opts.language`, then config, then `"en"`.
-
-Next, `orchestrate` resolves the full set of tunables using a consistent precedence: option overrides the config file, which overrides a built-in default. It extracts `configuredExtraIgnores` from config (only forwarded to the indexer on a fresh `run` — resume and `--only` never rescan). It validates `maxRepairAttempts`, `maxIncompleteRetries`, and `batchConcurrency`, throwing on non-integer or out-of-range values. It then flips a series of feature toggles — `surgicalRepair`, `relaxedRound`, `moduleDiagramsEnabled`, `deepHierarchy`, `concernTopics`, `understandingSynthesis`, `communityDetection` — each defaulting to `true` (or `false` for module diagrams, which default off to preserve byte-identical output). It resolves the output token budget and strategy, the context character budget, the rationale-character cap, and the thinking mode. For module diagrams specifically, it builds a `FlowDiagramBudget` only when that feature is enabled, using the module's own node and edge limits from config.
-
-If the LLM is needed — for any mode other than a pure `--no-refine` path — and no client was injected, `orchestrate` validates the config for batch use and creates a client via `createLlmClient`. When `preflight` is not disabled, it runs a single bounded probe through `probeProvider`; if the probe fails or leaks thinking, it throws with a message that mentions setting `"preflight": false` to bypass (not recommended).
-
-With configuration settled, the function establishes the batch run identity. On `mode === "run"` it inserts a new row into `batch_runs` with a JSON snapshot of the key settings, and captures the new `runId`. On `resume` or `only`, it loads the most recent run id, throwing if none exists. For a fresh run it invokes `runIndexer` (forwarding the configured extra ignores) and `runLedger` to scan the repository; resume and `--only` skip this. It then reads the documentation baseline: if unavailable it collects an inventory of obligations and either errors (if any exist) or writes an empty baseline; if incompatible it refuses to advance.
-
-The function then loads the active symbols and active file paths from the index, building `symbolCountByPath` — the set of active files is the single source of truth for all planning. It hoists file-level import resolution above stage 2: `collectImportsForFiles` gathers raw edges, and `resolveImportEdges` (given workspace packages, tsconfig, Go module path, and Rust crate name) produces one authoritative `resolvedImportEdges` set reused by later stages.
-
-Stage 2 builds the real page units: folder units and file units produced by `planPageUnits`, driven by file paths, symbol counts, and sizes. It converts these into `Module` objects, then runs a deterministic partition check with `makeUniqueDeterministicIds` and `assertExactPathPartition`. If the partition assertion fails, it marks the run `aborted` with `emptyUsage()` totals and rethrows. Otherwise it persists a stage-2 task checkpoint (always `done`, since the planner is deterministic) and optionally attaches a `communityCrossCheck` report when that diagnostic is enabled.
-
-Stage 3 projects module edges from the hoisted imports and prioritizes modules, re-applying uniqueness as defense in depth. Stage 4 sets up the coordinated documentation loop: a `stage4Queue` that orders file modules first (by their folder's priority, then symbol count, then id) followed by folder modules in priority order. It resolves `--only` targets — `flow:`, `topic:`, `understanding`, and the `file:`/`folder:` aliases — and filters `tasksToRun` accordingly, throwing if an `--only` target matches nothing. A critical guard follows: if the planner found units but `tasksToRun` is empty outside `only` mode, it throws `EmptyPipelineError`.
-
-Before entering the stage-4 loop, `orchestrate` synchronizes class diagrams via `syncClassDiagrams`, accumulates any stage-2 usage from the checkpoint into `stageUsageTotals`, and declares the shared mutable state (`cb`, `failures`, `degradedPages`, `failedModuleIds`, `moduleUsage`) plus the per-module task runner `runStage4ModuleTask`. That runner — extracted so the sequential and worker-pool drivers share identical code — loads or creates the task, restores prior usage/diagnostic history, determines the wiki path (folder pages at `livewiki/<folder>/index.md`, file pages at `livewiki/<id>.md`), appends a deterministic test pointer via `withTestsPointer`, and checks the page owner: `human`, `untrusted`, and `unparseable` are refused with `TaskError`-style checkpoints, while `generated` and `mixed` pages in non-`only` modes trigger `recoverStage4TaskArtifacts`. Every stage-4 task writes its own checkpoint with cumulative usage and diagnostics, and the whole loop is guarded by a circuit breaker that aborts the run if any task reports a rollback failure.
-
-## Task Creation and Recovery
-<!-- lw:anchors packages/core/src/batch.ts#createOrGetTask packages/core/src/batch.ts#getOrCreateTask packages/core/src/batch.ts#resetTaskToPending packages/core/src/batch.ts#recoverStage4TaskArtifacts packages/core/src/batch.ts#finalizeRun packages/core/src/batch.ts#buildResult packages/core/src/batch.ts#drainPendingMetrics -->
-
-Every batch run begins by materializing its work into durable rows in `batch_tasks`, because the entire recovery story hinges on those rows surviving across process restarts. The entry point is `createOrGetTask`, which routes to `getOrCreateTask` in every mode except `"only"`:
-
-```ts
-function createOrGetTask(
-  db: import("better-sqlite3").Database,
-  runId: number,
-  stage: BatchStage,
-  target: string,
-  mode: "run" | "resume" | "only",
-): { id: number; attempt: number; checkpoint_json: string | null } | null {
+```typescript
+class TaskError extends Error {
+  public readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+    this.name = "TaskError";
+  }
+}
 ```
 
-It takes the database connection plus the run, stage, and target identifiers, and returns either a task record (with its attempt counter and checkpoint) or `null` in `"only"` mode, which means only stage 4 runs and no prior-stage tasks are created.
+This class takes a machine-readable `code` and a human-readable `message`, storing the code as a public readonly property. The batch system uses `TaskError` to report operation-level failures with a stable identifier that callers can branch on programmatically.
 
-`getOrCreateTask`, the workhorse underneath, first tries to read an existing row matching the triple `(run_id, stage, target)`. If found, it parses the stored checkpoint JSON to recover the attempt count — so a resumed run continues from where it left off rather than starting fresh. If no row exists, it inserts a new task with status `'pending'` and returns the fresh row with attempt `0` and no checkpoint. This idempotent lookup-and-insert is what allows the same batch invocation to be re-run safely.
+The usage-accounting helpers implement the contract that every LLM call in this pipeline must record its token consumption and cost, even when the provider reports nothing. `aggregateTotals` combines two `StageUsage` objects:
 
-Once a task is created, the recovery machinery takes over. The most involved piece is `recoverStage4TaskArtifacts`, which attempts to reconstruct the artifacts a stage-4 task produced in a previous session:
-
-```ts
-async function recoverStage4TaskArtifacts(opts: {
-  absRoot: string;
-  module: Module;
-  wikiPath: string;
-  folderUnit?: FolderUnit;
-  fileUnit?: FileUnit;
-  existing: string | null;
-  pathRoleConfig?: import("./modules.js").PathRoleConfig;
-  moduleDiagrams: boolean;
-  moduleMaxDiagramNodes: number;
-  moduleMaxDiagramEdges: number;
-}): Promise<TaskCheckpoint["artifacts"] | null> {
+```typescript
+function aggregateTotals(a: StageUsage, b: StageUsage): StageUsage {
+  const costUsd =
+    a.costUsd === null || b.costUsd === null
+      ? (a.costUsd ?? b.costUsd)
+      : a.costUsd + b.costUsd;
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    costUsd,
+    models: [...new Set([...a.models, ...b.models])],
+    usageIncomplete: Boolean(a.usageIncomplete || b.usageIncomplete),
+  };
+}
 ```
 
-This function takes the absolute repo root, the module being processed, the wiki path, the optional folder or file units, the previously written page content (if any), and configuration about diagrams. It returns either a validated artifacts object or `null` when recovery is not possible.
+This function takes two stage-usage records and returns a merged one, summing input and output tokens, combining model lists without duplicates, and propagating the `usageIncomplete` flag if either operand had incomplete usage.
 
-Recovery proceeds through several gates. First, if `existing` is `null` there is nothing to recover. For folder units, it delegates to `recoverDocumentationReceipt`, rebuilding the receipt artifact from the folder's evidence. For file units, it fetches the module's symbol keys via `getModuleSymbolRows`, checks that the current contract baseline still matches via `hasCurrentContractBaseline`, and then normalizes the existing content with `normalizeStage4Artifact`. Only if normalization succeeds does it validate the content against the closed symbol keys with `validateStage4Artifact`, passing a `relaxed` flag when the artifact was accepted under degraded quality, and expecting a module diagram when `moduleDiagrams` is set. A failed validation returns `null`, meaning the task will be redone rather than trusted.
+`accumulateUsage` performs a similar aggregation but operates incrementally, folding one attempt's usage into an accumulator:
 
-If the content passes validation, the function builds the artifacts object with the wiki path and a SHA-256 hash of the page. When diagrams are enabled, it also reads the `.mmd` file for the module's slug, validates its Mermaid syntax with `validateMermaidSyntax`, and enforces node and edge limits via `countFlowDiagramElements`. Any failure at this stage also yields `null`. This layered validation means a previously completed task is only resumed when its output is provably consistent with the current contract.
-
-When recovery fails or a task must restart, `resetTaskToPending` is the tool that brings the task back to a clean state:
-
-```ts
-function resetTaskToPending(db: import("better-sqlite3").Database, taskId: number): void {
+```typescript
+function accumulateUsage(
+  acc: StageUsage,
+  entry: Pick<UsageAttempt, "usage" | "usageKnown" | "costUsd">,
+  _pricingOverride: Parameters<typeof calculateCostUsd>[3],
+): StageUsage
 ```
 
-It takes the database and a task ID, and updates the row to status `'pending'` with the current timestamp, discarding any previous completion state. This is the escape hatch that forces a task to be re-executed even if a checkpoint existed.
+This function takes an accumulator stage-usage record and a single attempt entry (which may or may not have provider-reported usage). When `usageKnown` is false — meaning the provider returned no usage data, as happens on timeout or certain errors — it flags the accumulator as `usageIncomplete` rather than fabricating zero tokens. When usage is known, it adds the attempt's input and output tokens to the running totals, updates the cost with null-safe addition, and appends the model to the list if not already present.
 
-After all tasks for a run complete, `finalizeRun` writes the run's terminal summary:
+The bulk of this section is the attempt-generation functions, each of which encodes the same multi-stage lifecycle: build an evidence context, construct a prompt (either initial or repair), call the LLM, handle provider errors and non-completion stop reasons, normalize the raw text, validate the artifact, and return a structured result that records usage and outcome for the caller's orchestration logic.
 
-```ts
-function finalizeRun(
-  db: import("better-sqlite3").Database,
-  absRoot: string,
-  runId: number,
-  status: "completed" | "completed_with_failures" | "aborted",
-  opts: {
-    totals: StageUsage;
-    byStage: Record<string, StageUsage>;
-    byModule: BatchRunResult["byModule"];
-    modulesRefined: Array<{ id: string; paths: string[]; displayTitle?: string }>;
-    tasksDone: number;
-    tasksFailed: number;
-    invocationStartedAt: number;
-    degradedPages?: string[];
-  },
-): void {
-```
+`attemptUnderstandingGeneration(opts: { attemptNumber: number; evidenceBlock: string; language: Language; llmClient: LlmClient; promptKind: "initial" | "repair"; priorCandidate: string; priorErrors: UnderstandingAttemptError[]; pricing: import("./pricing.js").PricingOverride | undefined; thinking?: "disabled" | "adaptive" | "omit" | undefined; repairAttemptContext?: { attempt: number; total: number } }): Promise<UnderstandingAttemptResult>` selects between `buildUnderstandingPrompt` and `buildUnderstandingRepairPrompt` depending on `promptKind`, passing along prior candidate text and errors to the repair variant. The function then calls `llmClient.generate` with the prompt system and user text, capping output at `UNDERSTANDING_MAX_OUTPUT_TOKENS` and optionally passing the `thinking` parameter.
 
-It takes the database, the repo root, the run ID, the final status, and a bundle of execution statistics. It updates `batch_runs` with the status, finish timestamp, and a serialized summary that aggregates totals, per-stage and per-module usage, task counts, refined modules, and any degraded pages. As a side effect, in-session cost accounting fires a best-effort write to the activity ledger via `recordUpdateMetric`, recording token and cost totals along with wall-clock duration; this write is pushed onto `pendingMetricWrites` so it can be flushed later without ever obstructing the run's outcome.
+If the generation throws, the function distinguishes `LlmTimeoutError` (mapped to `llm_timeout`) from all other errors (mapped to `llm_call_failed`), returning in both cases a result with unknown usage, an empty normalized raw text, no diagnostic candidate, and an `llm_error` diagnostic outcome. After a successful call, it computes cost from usage and records a `usageEntry` that marks usage as unknown whenever the provider returned `null`, mirroring the timeout contract. When the stop reason is `length` or `incomplete` — meaning the provider stopped before a normal completion — the function returns a validation error with code `truncated_by_token_limit` or `incomplete_generation`, retaining the raw text only for diagnostics and explicitly never offering it as a repair input. Otherwise, it normalizes the raw artifact via `normalizeStage4Artifact`; if normalization fails, it maps the errors into a structured validation-error array and returns a `normalization_failed` outcome. On successful normalization, it validates the artifact with `validateUnderstandingArtifact`, and if validation finds problems, it returns an `artifact_validation_failed` outcome. Only when both normalization and validation pass does the function return the artifact as content-bearing, with a null diagnostic outcome.
 
-The pending accounting writes are drained by `drainPendingMetrics`, which awaits all of them with `Promise.all` and clears the queue. This guarantees that the ledger is fully updated before the process exits, while still keeping the accounting path fire-and-forget during finalization.
+`attemptFolderGeneration(opts: { attemptNumber: number; absRoot: string; folder: FolderUnit; fileUnits: readonly FileUnit[]; symbolCountByPath: ReadonlyMap<string, number>; existingPagePaths: ReadonlySet<string>; language: Language; llmClient: LlmClient; promptKind: "initial" | "repair"; priorPurpose: string; priorErrors: ReadonlyArray<{ code: string; message: string }>; pricing: import("./pricing.js").PricingOverride | undefined; thinking?: "disabled" | "adaptive" | "omit" | undefined; maxRepairAttempts: number; consumedSlots: number }): Promise<FolderAttemptResult>` follows a similar flow but targets folder-purpose paragraphs rather than code documentation. This function first builds its evidence by reading from disk the openings of file pages that already exist (determined by `existingPagePaths`), using `safeIo.readText` to read each page and `extractModuleOpeningDigest` to summarize it into an opening block. It then constructs a context block via `buildFolderPurposeContext` that combines the folder metadata, file inventory, symbol counts per path, and the digested openings. The prompt selection mirrors the understanding flow: repair mode calls `buildFolderPurposeRepairPrompt` with prior purpose and errors plus a `{ attempt: consumedSlots, total: maxRepairAttempts }` context object; initial mode calls `buildFolderPurposePrompt`. The function pre-initializes a `base` result object with empty fields and null artifact/diagnostic values so every return path can spread it and override only what changed. After the LLM call, the error handling matches the understanding flow's contract — timeouts produce an `llm_timeout` error, other throws an `llm_call_failed` — with both marking usage unknown. The stop-reason check treats `length` and `incomplete` as validation failures with code `folder_purpose_invalid_shape`, embedding the provider's truncated text as the raw purpose for diagnostics. Otherwise it validates the raw purpose paragraph with `validateFolderPurpose`, returning a validation-failed result or, on success, trimming the text and storing it in the result's `purpose` field with the raw text retained.
 
-Finally, `buildResult` assembles the in-memory result object that the batch runner returns to its caller, packaging the run ID, status, usage totals, per-module breakdown, failures, and the circuit-breaker flag together:
+`attemptStage4Generation(opts: AttemptOpts): Promise<Stage4AttemptResult>` is the workhorse for module-page generation and encodes a multi-branch strategy. The function first rebuilds the full documentation context on each attempt via `buildModuleDocContext`, because both initial and repair prompts need the same closed-key list, symbols table, and truncated source. When `promptKind` is `initial` and `opts.oversizedFile` is `true`, the function delegates entirely to `generateOversizedFilePage`, which runs a plan-then-write pipeline: an opening pass, a plan pass, per-section passes with complete source slices, and deterministic assembly. The assembled page then flows through the *same* normalization and validation steps as a single-call page — the contract never relaxes for the pipeline. If normalization fails, the function returns a `normalization_failed` outcome; if relaxation is enabled, it marks the candidate degraded *before* validation via `markDegradedArtifact`, so what validation sees is byte-for-byte what writes to disk. When validation fails on an oversized pipeline result, the function tries a mechanical repair immediately via `repairStage4ArtifactMechanically` (because the char-budget guard prevents oversized candidates from ever becoming repair inputs, so the normal repair-slot mechanical fallback would never run). If the mechanical repair succeeds — meaning every error had a supported deterministic fix — the function returns the repaired content. Otherwise it returns the candidate with an `artifact_validation_failed` outcome.
 
-```ts
-function buildResult(
-  runId: number,
-  status: BatchRunResult["status"],
-  totals: StageUsage,
-  byModule: BatchRunResult["byModule"],
-  failures: BatchRunResult["failures"],
-  circuitBreakerTriggered: boolean,
-  tasksDone: number,
-  tasksFailed: number,
-): BatchRunResult {
-```
+For non-oversized single-call attempts, the function resolves the output token budget with `resolveOutputTokenBudget` based on the configured strategy and ceiling, adjusting for the number of closed-list keys. Before building the prompt in repair mode, the function checks `opts.surgicalRepair`; when eligible, it calls `prepareSurgicalRepair` to build a `SurgicalRepairPlan` targeting only the error-scoped sections, then uses `buildSurgicalRepairPrompt` — otherwise it falls back to the full-context `buildRepairPrompt` with the prior candidate, errors, and context. Initial mode calls `buildStage4Prompt` directly. The LLM call and error handling follow the same contract as the other attempt functions, including the unknown-usage semantics on any throw.
 
-It takes the run ID, status, stages usage, per-module results, failure list, a circuit-breaker flag, and task counts, and returns the structured `BatchRunResult` ready for the caller to surface.
+After a successful generation, the function normalizes the raw text. When a surgical plan is active, it splices the candidate's content into the original failed page via `spliceSections`, targeting only the named sections from the plan. If the splice returns `null` — meaning the model changed content outside those sections — the function fails with the *original* prior errors, keeping the original failed page as the next repair input so the base never drifts. When relaxation is enabled, it marks the candidate degraded before validation, again ensuring the validated artifact is the written artifact. When module diagrams are enabled, the function extracts the inline diagram from the page via `extractInlineModuleDiagram`, validates that the page carries a real mermaid block with code `module_diagram_placeholder` if absent, enforces size limits with `flow_diagram_too_large`, and checks Mermaid syntax with `invalid_flow_diagram`; on any failure it returns an `artifact_validation_failed` outcome without an artifact. Successful extraction replaces the candidate with the page content (the placeholder line replaced) and stores the diagram source separately for downstream writing. Finally, the function validates `candidateContent` against the closed key list; on failure, if `opts.allowMechanicalFallback` is set, it attempts `repairStage4ArtifactMechanically` and returns the mechanically repaired content when non-null; otherwise it returns a validation-failed result. Success returns the final candidate with a null diagnostic outcome, preserving surgical outcome and module-diagram source when applicable.
 
-## Content Generation Pipeline
-<!-- lw:anchors packages/core/src/batch.ts#attemptUnderstandingGeneration packages/core/src/batch.ts#attemptFolderGeneration packages/core/src/batch.ts#attemptStage4Generation packages/core/src/batch.ts#attemptStage5Generation packages/core/src/batch.ts#attemptTopicGeneration packages/core/src/batch.ts#runSemanticTopicStage packages/core/src/batch.ts#runUnderstandingStage packages/core/src/batch.ts#generateOversizedFilePage -->
+The context builders prepare the evidence that every attempt function consumes. `buildModuleDocContext(absRoot: string, module: Module, charBudget: number, rationaleMaxChars = 0): Promise<ModuleDocContext>` takes the repository root, the module descriptor, a character budget for source context, and an optional cap for rationale evidence. The function calls `getModuleSymbolRows` to enumerate the module's symbols, sorts their keys into `closedKeyList`, and renders a markdown `symbolsTable` listing each key, kind, and signature. It carves `rationaleEvidence` inside the character budget via `getRationaleEvidenceForPaths`, capping it at `rationaleMaxChars`, then subtracts that from `charBudget` to yield the source budget. It delegates the actual source excerpting to `buildFairTruncatedSource`, and returns all four pieces — the closed key list, symbols table, truncated source, and rationale evidence — as a single `ModuleDocContext`.
 
-The content generation pipeline in `batch.ts` is the execution engine that drives the batch run from a high-level plan down to written, verified wiki pages. It is organized as a series of stage entry points that share a common shape: each resolves a task record from the database, attempts LLM-driven content generation with a bounded repair loop, and finally commits or fails each artifact with full bookkeeping in `batch_tasks`. This section explains how the pipeline moves through semantic topic planning (stage 5) and understanding generation, and how it handles oversized files as a special case.
+`buildFairTruncatedSource(absRoot: string, paths: ReadonlyArray<string>, charBudget: number): Promise<string>` takes the repository root, a list of file paths, and a character budget, returning a concatenated source excerpt where each file gets a fair share. The function reads every path from disk and skips unreadable ones. It first computes the full untruncated layout (with per-file headers) and returns it immediately if it fits within budget. When the total exceeds budget, it divides the budget equally across files (with a 128-character minimum share per file), reserves header space within each share, and truncates each file's body so the `bodyBudget` characters contribute to its share. The comments note this fairness exists because sequential first-fit truncation systematically starved later files of context, which strongly correlated with invented anchors — giving every path visible source context reduces hallucinated heading references.
 
-## Semantic Topic Planning (`runSemanticTopicStage`)
+The remaining symbols in this section — `buildFlowDocContext` and `buildResult` — appear in the file's later orchestration stretches; their full bodies fall outside this section's source budget, but `buildFlowDocContext` is the counterpart to `buildModuleDocContext` for flow-diagram pages, assembling flowchart-relevant evidence from a module's flow documents, while `buildResult` assembles the final structured outcome of a batch stage from the parts the attempt functions produced.
 
-`runSemanticTopicStage` is the orchestrator for the semantic topic stage (stage 5 in the batch run). It takes a large options object that fully specifies the run context — database handle, run ID, module/edge inventory, LLM client, language, pricing, token budgets, repair limits, and several recovery-tier toggles. Its role is twofold: first, produce an accepted topic plan, then execute one generation task per topic in that plan, tracking usage, failures, and circuit-breaker conditions throughout.
+## Part 2 (symbols 16–30)
+<!-- lw:anchors packages/core/src/batch.ts#buildSurgicalEvidenceSlice packages/core/src/batch.ts#buildTopicDocContext packages/core/src/batch.ts#computeCostFromUsage packages/core/src/batch.ts#createOrGetTask packages/core/src/batch.ts#diagnosticAttempt packages/core/src/batch.ts#drainPendingMetrics packages/core/src/batch.ts#emptyUsage packages/core/src/batch.ts#extractManualBlocksBySection packages/core/src/batch.ts#finalizeRun packages/core/src/batch.ts#forceOwnerInFrontmatter packages/core/src/batch.ts#generateOversizedFilePage packages/core/src/batch.ts#getFileIdsForModule packages/core/src/batch.ts#getModuleSymbolRows packages/core/src/batch.ts#getOrCreateTask packages/core/src/batch.ts#getRationaleEvidenceForPaths -->
 
-The function begins by building a planning inventory via `buildTopicPlanningInventory`, which gathers the repository's modules, flows, and their anchors. From this it computes `activeAnchors` (all module and flow anchors), `topicModulePaths` (module ID → source paths, used later for prose evidence), and `hasCrossModuleBasis` (true when there are at least two product-role modules or a flow spanning three modules). Small or weakly indexed repositories — fewer than five anchors, or no cross-module basis — become a deterministic no-op that returns an empty result rather than spending a paid planner call.
+This part of the file continues the batch-pipeline story by covering the remaining helpers that prepare evidence for topic pages, compute costs, track task state in the database, and finalize a run. The symbols here break into five responsibilities: cost/usage accounting, database task handling, manual-block extraction, evidence assembly for topic documentation, and run finalization with metric draining. The narrative flows from low-level utilities up to the function that assembles a full topic context.
 
-For repositories that pass the gate, the function locates or creates the planner task in `batch_tasks` (stage 5, target `"topic-plan"`). In `--only` mode it requires an existing task and throws if none exists; otherwise it reuses a prior checkpoint if present, and only creates a new task when the inventory basis is sufficient. If a prior checkpoint already holds a completed `topicPlan`, the function reuses it as `result.candidates` and skips planning entirely.
+## Cost Accounting and Task State
 
-When planning must run, the function increments `result.taskCount` and starts the planner task. Workstream B is central here: `proposeTopicPlanDeterministically` produces the initial candidate set with no LLM call, so the plan is always valid by construction. The `planValidationOpts` carries `maxTopics`, `maxAnchors`, `maxSourceChars`, and `rationaleMaxChars` (the latter ensuring the planner's source-budget estimate matches what the generator later appends). After computing caller centrality, the deterministic proposals are split into `pinnedConcernCandidates` (origin `"concern"`) and `refinePool` (everything else). Concern candidates are pinned because a documented D2 issue showed the LLM refine pass incorrectly re-scoping deployment topics — so only non-concern proposals are eligible for refinement.
+`emptyUsage()` returns a fresh `StageUsage` record with zeroed token counters, a `null` cost, an empty model list, and `usageIncomplete` set to `false`. This gives callers a stable seed for accumulating usage across a stage or run; it exists so that no stage accidentally shares a mutable usage object.
 
-If the refine pool is non-empty and `noRefine` is unset, the function builds a refine prompt via `buildTopicRefinePrompt` and calls the LLM with a budget resolved by `resolveOutputTokenBudget`. It validates three possible outcomes: a `length`/`incomplete` stop reason degrades silently to the deterministic plan; a valid refined plan with no pinned concerns replaces the candidates; and a valid refined plan with pinned concerns triggers a re-merge (refined first, then pinned) followed by full re-validation — if that merged plan is valid, concerns keep their `origin` marker by evidence hash. Any validation failure or LLM error (including timeouts) records a diagnostic and degrades back to the already-valid deterministic plan; an LLM refine failure is never treated as a planning failure.
+`computeCostFromUsage(usage, override)` takes a usage object (possibly `null` for unknown usage) and an optional pricing override, then returns the same type as `calculateCostUsd` — a number or `null`. The function treats `null` usage as uncomputable cost, returning `null` rather than a zeroed estimate; it then tries the override map first if the model is present, falls back to the built-in pricing table via `lookupPricing`, and produces a cost via `calculateCostUsd` when the model is priced.
 
-The optional LLM refine pass over the deterministic plan follows the same usage accounting as every other call: the attempt is recorded as known only when the provider reported usage, so a refine answered without a usage block lands as unknown rather than as a zero-token call. A refine failure never fails planning — the deterministic plan is already valid.
+Task persistence sits on SQLite through two helpers. `getOrCreateTask(db, runId, stage, target)` takes the database, run id, batch stage, and target string, then returns an object with `id`, `attempt`, and `checkpoint_json`. It queries `batch_tasks` for an existing row by run, stage, and target; if found, it parses the checkpoint (if any) via `safeJsonParse` to recover the attempt counter, otherwise it inserts a new `pending` row with the current timestamp and returns the new id with attempt zero. `createOrGetTask(db, runId, stage, target, mode)` wraps that logic with a mode flag: when mode is `"only"` it returns `null` immediately because that mode runs only a specific stage, and for `"run"` or `"resume"` it delegates to `getOrCreateTask`. This distinction keeps the pipeline honest — a `"only"` invocation must not create or reuse task records for stages it will not execute.
 
-After planning, the function filters candidates by `onlyIdentity` if set (matching evidence hash or slug, throwing if none found), then scaffolds the topics index with `ensureTopicsIndexScaffold`. The execution loop then iterates over each target candidate. For each topic, it gets or creates the task in the database and checks the existing wiki page's frontmatter owner: human, mixed, untrusted, or unparseable ownership immediately sets `refused_owned_topic` and preserves the page. If the owner is `"generated"` and not in `--only` mode, it tries `recoverDocumentationReceipt` to salvage a previously committed artifact.
+## Manual-Block Extraction and Frontmatter Ownership
 
-The generation loop itself runs up to `1 + maxRepairAttempts` slots. Each slot determines `promptKind` (`"initial"` or `"repair"`), checks for an unrepairable error set to abort without burning a call, and increments the attempt counter. A key robustness fix wraps `attemptTopicGeneration` in a try/catch: `buildTopicDocContext` can throw the hard `topicMaxSourceChars` guard before any LLM call, and that exception must fail only this task (with code `context_build_exception`) rather than kill the whole run. A successful attempt records usage, updates `priorCandidate` and `priorErrors`, and dispatches on the outcome: LLM errors set `llm_error` and continue unless it's a timeout; incomplete/truncated generations reset state and continue; a valid artifact goes through `tryWriteAndVerify`. Rollback failure, a write/verify exception, or verify issues each have their own short-circuit path, while a clean write assigns `artifacts` and exits the loop.
+The pipeline writes wiki pages, and users may want to hand-edit sections that the generator must preserve. `extractManualBlocksBySection(content: string): Map<string | null, string[]>` scans the page content for paired marker comments (opening and closing HTML comments that delimit manual regions), pairs each opening marker with its matching closer, and records the raw slice between them. It also parses every Markdown heading to compute a slug, then assigns each manual block to the heading that most recently precedes its start offset. The result maps each section slug (or `null` for blocks above the first heading) to a list of block content strings. This read-only pass is what later lets the generator honor human ownership by keeping those exact blocks untouched on rewrite.
 
-When the bounded loop exhausts without artifacts and `relaxedRound` is enabled and the topic is relaxed-eligible, the function makes one additional relaxed attempt with `relaxed: true`, wider validation, and `surgicalRepair: false`. Success here marks the page as `degraded` and completes the task; a verify rejection still keeps the original `repair_exhausted` path because verify never relaxes. If no artifacts and no task error remain, the task fails with `repair_exhausted`.
+`forceOwnerInFrontmatter(content: string, owner: "generated" | "mixed"): string` guarantees that a page’s frontmatter declares its ownership state. It first confirms the content starts with a YAML `---` fence; if not, it returns the content unchanged. On a valid fence it locates the closing delimiter, then either replaces an existing `owner:` line with the given value (preserving indentation via regex capture) or, when no owner key exists, injects a new `owner:` line immediately after the opening fence. The function returns the full content with the updated frontmatter, and it is what the pipeline invokes before persisting a page so the `generated` versus `mixed` state is explicit and machine-checkable.
 
-The final step per topic commits via `commitDocumentationTask` on success (a durable-commit failure sets `durable_commit_failed`), then writes the checkpoint (done or failed) with full usage and diagnostic histories. The failure path increments `fails` and pushes a retry command; the success path increments `done` and resets the consecutive-failure counter. The circuit breaker trips — stopping the whole stage — when rollback failed, when three consecutive failures occur, or when more than half of the first three attempts failed, recording the trigger state in the result.
+## Evidence Assembly for Topic Context
 
-## Topic Generation Attempts (`attemptTopicGeneration`)
+Two functions build the factual backbone that topic planners and section writers rely on.
 
-For each topic candidate, `attemptTopicGeneration` performs a single bounded generation attempt. It is a thin wrapper over the prompt/validate/write flow used by the repair loop; the batch loop calls it repeatedly with different `promptKind` and `priorCandidate`/`priorErrors` values to drive refinement. The function receives the candidate evidence, the source character budget, the rationale cap, and the module path map for context building, and returns a `Stage4AttemptResult` that the caller merges into its checkpoint.
+`getModuleSymbolRows(absRoot, module)` takes the project root and a `Module` object, returning an array of `ModuleSymbolRow`. It opens the index database, resolves the module’s file ids through `getFileIdsForModule`, then queries active symbols joined to those files for key, name, kind, signature, and line range. When the module has no files it returns an empty array; the SQL itself guards against an empty IN clause with a `NULL` fallback.
 
-## Understanding Generation (`attemptUnderstandingGeneration` / `runUnderstandingStage`)
+`getRationaleEvidenceForPaths(absRoot, paths, maxChars)` takes the project root plus a readonly list of paths and a character cap, returning a single string of evidence. After an early exit for a non-positive budget or no paths, it resolves the index database, selects rationale rows (symbol key, kind, text, line) joined to files by path in the given order, and hands the sorted rows to `renderRationaleEvidence`, which formats and truncates the text to the cap.
 
-`attemptUnderstandingGeneration` is a single-attempt generator for understanding artifacts. It accepts the evidence block, language, and the initial/repair prompt kind, then builds the corresponding prompt — `buildUnderstandingPrompt` for the first attempt or `buildUnderstandingRepairPrompt` (with prior candidate, prior errors, and an 8,000-character budget) for repairs. The LLM call is wrapped to translate both timeouts (`llm_timeout`) and other failures (`llm_call_failed`) into structured result objects with `usageEntry` but no artifact, so callers can record usage and move on without crashing. On a truncated or incomplete stop reason, the function records a `truncated_by_token_limit` or `incomplete_generation` validation error but still returns the raw text as `normalizedRaw` so the caller sees the partial output. Otherwise it runs `normalizeStage4Artifact` on the raw content; a normalization failure produces a structured validation error, and success yields the artifact plus its validation errors for further processing.
+The larger assembler is `buildTopicDocContext`:
 
-`runUnderstandingStage` mirrors the shape of `runSemanticTopicStage` but for understanding content: it iterates over target identities, gets or creates stage tasks, runs the bounded repair loop through `attemptUnderstandingGeneration`, and writes/verifies artifacts via `tryWriteAndVerify` with the same ownership checks and circuit-breaker logic. Each successful attempt commits the artifact and records usage; failures set `taskError` with an appropriate code and produce a checkpoint with diagnostic history.
-
-## Folder and Oversized-File Generation (`attemptFolderGeneration` / `generateOversizedFilePage`)
-
-`attemptFolderGeneration` and `generateOversizedFilePage` cover two edge cases in the pipeline. `attemptFolderGeneration` follows the same bounded-generation shape but targets folder index pages — building a prompt from the folder's module inventory, generating, validating, and writing the page with the identical repair and rollback semantics as topic generation. `generateOversizedFilePage` is a specialized entry path: when a source file exceeds the normal character budget, this function produces a page that is either a stub or a degraded summary rather than a full generation, since the content context cannot fit within budget. Both functions return structured results with usage and validation details so the outer stage loop can uniformly record them in checkpoints and the circuit breaker.
-
-## Stage 4 and 5 Attempts (`attemptStage4Generation` / `attemptStage5Generation`)
-
-`attemptStage4Generation` and `attemptStage5Generation` are the generic per-task generators for stages 4 and 5 respectively. They accept the task context (candidate evidence, language, LLM client, token budget, and repair context) and perform one LLM call to produce the artifact, followed by validation against the stage's schema. The batch loop invokes these in a repair loop identical to the topic path — initial attempt, then repair attempts with prior errors — and dispatches on each attempt's outcome: a valid artifact proceeds to `tryWriteAndVerify`; truncation resets state for another attempt; and LLM errors either fail the task immediately (on timeout) or allow a retry. Together, these functions give the pipeline a uniform "generate → validate → write/verify → checkpoint" rhythm across every content type, with recovery tiers and silent degradation isolating any single page's failure from the run as a whole.
-
-## Page Assembly and Context Building
-<!-- lw:anchors packages/core/src/batch.ts#buildModuleDocContext packages/core/src/batch.ts#buildTopicDocContext packages/core/src/batch.ts#buildFlowDocContext packages/core/src/batch.ts#buildFairTruncatedSource packages/core/src/batch.ts#buildSurgicalEvidenceSlice packages/core/src/batch.ts#getFileIdsForModule packages/core/src/batch.ts#getModuleSymbolRows packages/core/src/batch.ts#getRationaleEvidenceForPaths packages/core/src/batch.ts#computeCostFromUsage -->
-
-The section covers the context-assembly layer of the batch pipeline: building the inputs that downstream stages (planning, drafting, and anchor resolution) consume. Every context object shares the same philosophy — the model must see a bounded, honest slice of the repository: a closed list of canonical symbol keys it may cite, a compact symbols table with signatures, a truncated source excerpt, and (where relevant) rationale evidence. The functions here differ in *what* they assemble — module, topic, or flow context — but they share helpers for fair source truncation and surgical evidence slicing.
-
-`buildModuleDocContext` is the entry point for module-level page generation:
-
-```ts
-export async function buildModuleDocContext(
-  absRoot: string,
-  module: Module,
-  charBudget: number,
-  rationaleMaxChars = 0,
-): Promise<ModuleDocContext>
-```
-
-It takes the project root, a `Module` descriptor, a total character budget, and an optional rationale cap; it returns an object containing `closedKeyList`, `symbolsTable`, `truncatedSource`, and `rationaleEvidence`. It first calls `getModuleSymbolRows` to fetch all active symbols for the module's files, then derives two artifacts from those rows: a sorted `closedKeyList` (the canonical keys the model may anchor) and a `symbolsTable` formatted as `- key (kind): signature` lines. It then calls `getRationaleEvidenceForPaths` with the module's paths and `rationaleMaxChars`, and — critically — carves the source budget from whatever remains: `sourceBudget = Math.max(0, charBudget - rationaleEvidence.length)`. That ensures rationale never pushes the total over budget. Finally it calls `buildFairTruncatedSource` with that remaining budget and assembles the return object.
-
-`getModuleSymbolRows` is the query layer behind module context:
-
-```ts
-async function getModuleSymbolRows(
-  absRoot: string,
-  module: Module,
-): Promise<ModuleSymbolRow[]>
-```
-
-It opens the index database, resolves the module's file IDs via `getFileIdsForModule`, then selects `key, name, kind, signature, start_line, end_line` for all active symbols in those files. When no files exist it returns an empty array (using a `NULL` fallback in the `IN` clause to avoid an SQL syntax error). `getFileIdsForModule` itself is a straightforward helper:
-
-```ts
-async function getFileIdsForModule(absRoot: string, module: Module): Promise<number[]> {
-```
-
-It maps `module.paths` to database file IDs by selecting `id` from `files WHERE path IN (...)`. Both functions open and close the index DB in a `finally` block, so callers never leak connections.
-
-`getRationaleEvidenceForPaths` fetches stored rationale annotations for a set of paths:
-
-```ts
-async function getRationaleEvidenceForPaths(
-  absRoot: string,
-  paths: ReadonlyArray<string>,
-  maxChars: number,
-): Promise<string>
-```
-
-It takes the project root, the paths to query, and a maximum character count; it returns a formatted string of rationale evidence, or an empty string when `maxChars` is non-positive or no paths are given. The function joins the rationale table with files, orders by path and line, and hands the rows to `renderRationaleEvidence` (defined elsewhere), which applies the character bound.
-
-`buildFairTruncatedSource` is the shared source-excerpt builder used by both module and flow contexts:
-
-```ts
-export async function buildFairTruncatedSource(
-  absRoot: string,
-  paths: ReadonlyArray<string>,
-  charBudget: number,
-): Promise<string>
-```
-
-It takes the project root, a list of file paths, and a budget; it returns a string of concatenated file contents with per-file headers. The fairness mechanism addresses a concrete failure mode: sequential first-fit truncation gave later files zero context, which correlated with hallucinated anchors (`// === path ===` headers mark each file). The function first reads every readable path into memory, skipping unreadable ones. If the untruncated total fits within budget, it returns the full assembly directly. Otherwise it divides the budget into equal shares per file — with a floor of 128 chars per file — and truncates each file's body to its share minus header overhead. A trailing `"// ... (truncated by budget)"` comment marks cuts, and a final hard cap handles the rare case where truncation markers push the result just over budget. The result is a context where every module file gets *some* representation, so the model can describe each surface accurately.
-
-`buildTopicDocContext` builds context for a topic candidate:
-
-```ts
+```typescript
 export async function buildTopicDocContext(
   absRoot: string,
   candidate: TopicCandidate,
@@ -336,54 +205,180 @@ export async function buildTopicDocContext(
 ): Promise<TopicDocContext>
 ```
 
-It takes the project root, a topic candidate, a character budget, an optional rationale cap, and an optional map of module IDs to paths; it returns a `TopicDocContext` with `symbolsTable`, `moduleDigest`, `truncatedSource`, `rationaleEvidence`, and `proseEvidence`. The function queries the index for all active symbols matching the candidate's `seedKeys`, sorts them by key, and formats the symbols table. It then builds a module/flow digest by reading each referenced module page and flow page, extracting opening digests via `extractModuleOpeningDigest` (with an honest `"Page unavailable"` fallback). For source, it reads each symbol's file (caching lines per path) and renders exact span excerpts via `renderTopicSourceSpan` — the same span math used by the planner estimate, so the two never drift. It then queries rationale rows for the symbol files, bounded by `rationaleMaxChars`, and throws if rationale plus source exceeds the budget — a guard that never fires on rationale alone because the preceding logic accounts for it.
+This function takes the project root, a `TopicCandidate` describing seed keys, modules, and flows to document, plus a character budget and an optional rationale cap and module path map; it returns a `TopicDocContext` with a symbols table, module digest, and three evidence slices. The flow opens the index database, loads every active symbol named by the candidate’s seed keys, sorts them by key, and builds a plain-text symbols table of `- key (kind): signature` lines. It then assembles a digest by reading the existing wiki page for each candidate module and each flow page, extracting each page’s opening digest text with `extractModuleOpeningDigest`.
 
-The prose-evidence path is a follow-up for prose-tier files (Dockerfile, compose files, launchers, docs) that have no symbol keys and thus cannot appear in the closed list. Without their content, the model could not describe deployment surfaces honestly — a real observed failure where the "deployment" topic came out about the CLI because `cli.py` owned every key. When `modulePaths` is provided, the function collects the candidate modules' files, selects those with zero active symbols, and excerpts them from the budget *left over* after anchors and rationale. Each prose block carries a header instructing the model to describe but never cite it as an anchor (`// === path (prose file — no canonical keys; describe, never cite as an anchor) ===`), capped per file by `TOPIC_PROSE_FILE_MAX_CHARS`. The hard throw stays unreachable because the carving order guarantees the total fits.
+For source evidence, the function reads each symbol’s file (caching line arrays across symbols of the same file) and renders an exact source span per symbol via `renderTopicSourceSpan`, joined with `TOPIC_SOURCE_SPAN_SEPARATOR`. The rationale evidence is loaded separately — only when `rationaleMaxChars` is positive — and bounded by that argument, and the function throws if the combined rationale and source spans exceed `charBudget`. The final slice handles prose-tier files (indexed files with zero active symbols, like docs or configs) when `modulePaths` is supplied: it gathers candidate paths, filters down to prose files with a NOT EXISTS clause against active symbols, and carves excerpts from the leftover budget, tagging each with a header that instructs the model to describe rather than cite. All evidence is then returned as a single object holding `symbolsTable`, `moduleDigest`, `truncatedSource`, `rationaleEvidence`, and `proseEvidence`.
 
-`buildSurgicalEvidenceSlice` is a focused variant for producing a compact, cited-only evidence slice:
+## Surgical Evidence and Oversized-File Page Generation
 
-```ts
-async function buildSurgicalEvidenceSlice(
-  absRoot: string,
-  symbolsTable: string,
-  citedKeys: readonly string[],
-): Promise<string>
-```
+`buildSurgicalEvidenceSlice(absRoot, symbolsTable, citedKeys)` takes the root, the markdown symbols table built elsewhere, and a readonly list of cited keys, returning a string that pairs the exact table rows for those keys with the corresponding source spans. It parses the table by filtering lines beginning with `- key (`, respects a shared `SURGICAL_EVIDENCE_MAX_CHARS` budget by first accounting for the row block, then opens the index database to look up each active symbol’s file and line range. For every cited key it reads the source file, renders the span with `renderTopicSourceSpan`, truncates when the span would exceed the remaining budget, and joins the spans with `TOPIC_SOURCE_SPAN_SEPARATOR`. The final string prefers the source spans when no rows matched, otherwise the row block, and the function closes the database in a `finally`.
 
-It takes the project root, a pre-built symbols table, and the list of keys actually cited in a draft; it returns either an empty string (when no keys are cited), a rows-only block, a spans-only block, or both joined. When called, it filters the symbols table lines down to those whose keys appear in `citedKeys`, then computes a span budget as `SURGICAL_EVIDENCE_MAX_CHARS` minus the rows block length. It queries the index for active symbols matching the cited keys (joining `files` for paths), sorts them by key, and reads each file to render source spans; spans that exceed the remaining budget are truncated with a `"// ... (truncated by budget)"` comment, and the loop stops once the budget is exhausted. The function closes the DB in a `finally` block. This helps stage-4 anchor resolution: the model sees only the evidence relevant to what it actually cited, not the whole module.
+`generateOversizedFilePage` orchestrates a three-pass LLM generation for a single overly large file. It takes options for the root, module, language, an LLM client, and a character budget plus pricing and optional reasoning settings, and returns an object with the generated raw text, the token usage, and any LLM error code. The function’s local `call` wrapper accumulates usage across sub-calls while tracking whether every sub-call reported usage — a `null` usage from any provider turns the whole pipeline’s total into “unknown” rather than a silent partial sum — and the `usageKnown`/`accountedCalls` guards ensure a zero-call timeout never masquerades as a real zero-token run. Pass 0 asks the model for an opening block with one retry on length-limited or incomplete stops, failing the page outright if no usable `# heading` block emerges. Pass 1 requests a file section plan parsed by `parseFilePlan`, retries once, and falls back to the deterministic source-order plan via `deterministicFallbackPlan` so the pipeline never dies on an unparseable plan. Pass 2 iterates over each planned section, extracts that section’s complete source slice from the full file (up to a 30,000-character cap) with `extractSectionSource`, builds a section-scoped table from the current symbols table, and asks the model for prose bounded by that slice. The final page is assembled deterministically via `assembleFilePage` from the opening, plan, and per-section prose. All errors collapse into structured returns: a timeout yields an `llm_timeout` code with the sub-call usage already measured, and any other failure yields `llm_call_failed`; both surface the partially accounted usage, never a fabricated total.
 
-`buildFlowDocContext` assembles context for a flow candidate:
+## Finalization and Metric Draining
 
-```ts
-async function buildFlowDocContext(
-  absRoot: string,
-  candidate: FlowCandidate,
-  modules: ReadonlyArray<Module>,
-  charBudget: number,
-): Promise<FlowDocContext>
-```
+`finalizeRun(db, absRoot, runId, status, opts)` commits a batch run’s terminal state to SQLite. It takes the database, root, run id, one of the completed/aborted statuses, and a rich options object containing token totals by stage and module, refined modules, task counts, the wall-clock start of the invocation, and optional degraded pages. The function builds a `BatchRunSummary`, writes the status plus finish timestamp and serialized summary into `batch_runs`, then mirrors the run’s token totals into the append-only activity ledger through `recordUpdateMetric` — a deliberate fire-and-forget write wrapped in try/catch and queued onto `pendingMetricWrites` so accounting can never affect the run’s outcome or exit code. The comment explicitly notes this is the roadmapped in-session cost accounting touchpoint.
 
-It takes the project root, a flow candidate, the full module list, and a character budget; it returns `closedKeyList`, `symbolsTable`, `moduleOpenings`, and `truncatedSource`. The function builds a sorted `closedKeyList` directly from `candidate.seedKeys`, queries the index for those keys' active symbols, and formats the symbols table. It then walks the candidate's `moduleIds` in order, reading each module's `index.md` and extracting an opening digest — again with an explicit `page unavailable` marker rather than an invented summary. Finally, it collects the candidate modules' files in walk order (deduplicated via a `seenFiles` set) and feeds them to `buildFairTruncatedSource`, which applies the same fair per-file share as the module path.
+Finally, `drainPendingMetrics()` simply awaits all writes still queued in the module-level `pendingMetricWrites` array, splicing it empty so the next run starts with a clean slate. This is the shutdown hook callers invoke after `finalizeRun` to guarantee queued metric writes have flushed before the process exits.
 
-Rounding out the section is `computeCostFromUsage`, a pure utility used wherever callers need to price a generation:
+## Part 3 (symbols 31–45)
+<!-- lw:anchors packages/core/src/batch.ts#injectManualBlocksBySection packages/core/src/batch.ts#isArtifactVerifyCode packages/core/src/batch.ts#isDeferredBaselineIssue packages/core/src/batch.ts#isRelaxedEligible packages/core/src/batch.ts#orchestrate packages/core/src/batch.ts#prepareSurgicalRepair packages/core/src/batch.ts#readOwnerFromFrontmatter packages/core/src/batch.ts#recoverStage4TaskArtifacts packages/core/src/batch.ts#resetTaskToPending packages/core/src/batch.ts#resolveOutputTokenBudget packages/core/src/batch.ts#resumeBatch packages/core/src/batch.ts#rollbackWrittenArtifacts packages/core/src/batch.ts#runBatch packages/core/src/batch.ts#runOnly packages/core/src/batch.ts#runSemanticTopicStage -->
+
+The third part of `batch.ts` is where the orchestration of a whole batch run comes together. This is the central nervous system of the file. The code in this section is a single, massive `orchestrate` function that is driven by three thin, exported wrappers: `runBatch`, `resumeBatch`, and `runOnly`. Each of these three functions is an entry point that simply validates its specific preconditions and then delegates to `orchestrate` with a different `mode` value. `runBatch` and `resumeBatch` pass `"run"` and `"resume"` respectively, while `runOnly` first throws an error if no `opts.onlyTarget` is provided and otherwise passes `"only"`.
 
 ```ts
-function computeCostFromUsage(
-  usage: { inputTokens: number; outputTokens: number; model: string } | null,
-  override: import("./pricing.js").PricingOverride | undefined,
-): ReturnType<typeof calculateCostUsd>
+export async function runBatch(opts: BatchOptions): Promise<BatchRunResult> {
+  return orchestrate({ ...opts, mode: "run" });
+}
 ```
 
-It takes a token-usage object (or `null`) and an optional pricing override, and returns a cost in USD (or `null` when the usage is unknown or the model is unpriced). Unknown usage short-circuits to `null` before any lookup — there is nothing to price, and a zeroed estimate would be indistinguishable from a genuinely free call. Otherwise the function first tries the override — if the model is present there, it prices via `calculateCostUsd` with that override — and falls back to `lookupPricing(usage.model)`; a missing table entry returns `null`, and a hit delegates to `calculateCostUsd` again. This gives callers a single, predictable pricing path that honors per-run overrides without breaking on unknown models.
+```ts
+export async function resumeBatch(opts: BatchOptions): Promise<BatchRunResult> {
+  return orchestrate({ ...opts, mode: "resume" });
+}
+```
 
-The per-attempt generators feed that path. Each of `attemptStage4Generation`, `attemptStage5Generation`, `attemptTopicGeneration`, `attemptUnderstandingGeneration`, and `attemptFolderGeneration` records a usage entry whose `usageKnown` flag mirrors what the provider actually reported: a response carrying no usage block yields `usage: null`, `usageKnown: false`, and a null cost, exactly like the client-timeout path. Nothing marks an attempt as measured merely because the call did not throw, so the aggregate flags the run as incomplete instead of booking a real zero-token call. `generateOversizedFilePage`, which sums several sub-calls into one page, applies the same rule to the sum: if any sub-call went unreported, or none was accounted for at all, the pipeline's usage is unknown rather than a partial total presented as complete.
+```ts
+export async function runOnly(opts: BatchOptions): Promise<BatchRunResult> {
+  if (!opts.onlyTarget) {
+    throw new Error("onlyTarget is required for runOnly");
+  }
+  return orchestrate({ ...opts, mode: "only" });
+}
+```
 
-## Write Verification and Repair
-<!-- lw:anchors packages/core/src/batch.ts#tryWriteAndVerify packages/core/src/batch.ts#tryWriteFlowAndVerify packages/core/src/batch.ts#tryWriteModuleDiagramAndVerify packages/core/src/batch.ts#verifyIssuesToValidationErrors packages/core/src/batch.ts#isArtifactVerifyCode packages/core/src/batch.ts#isDeferredBaselineIssue packages/core/src/batch.ts#rollbackWrittenArtifacts packages/core/src/batch.ts#prepareSurgicalRepair packages/core/src/batch.ts#isRelaxedEligible -->
+These three symbols take a set of user-supplied options (`BatchOptions`) and return a structured `BatchRunResult`. The `runOnly` function is the strictest, requiring a specific target for a focused re-run or a single-page generation.
 
-The write path for any artifact is built around a single invariant: **a candidate that fails verification must never persist on disk**. Everything downstream — the three `tryWrite*` entry points, the rollback helper, and the error-classification utilities — exists to defend that invariant while preserving anything a human already owns. Each entry point follows the same four-stage arc: prepare the candidate (preserving manual blocks and `owner` declarations), write it, verify it, and on any failure roll it back hard.
+## The Orchestrate Function: One Run, One Plan
 
-The core routine is `tryWriteAndVerify`, the single-page variant. Its first two steps mutate the incoming `newContent` before any write happens. If `existing` is non-null (the page already on disk), it calls `injectManualBlocksBySection(existing, newContent)` to re-insert any human-written manual blocks into the positions they occupied in the original page — blocks from sections that vanished in the new content are appended at the end of the page rather than lost. If the existing page's frontmatter declares `owner: mixed`, it calls `forceOwnerInFrontmatter(finalContent, "mixed")`, because the LLM always emits `owner: generated` and the classification must not silently downgrade a page the human marked as mixed. Only then does the function snapshot the existing content and move to the transaction:
+The `orchestrate` function is where the entirety of the batch's execution is planned and driven from a single source of truth.
+
+```ts
+async function orchestrate(opts: OrchestrateOpts): Promise<BatchRunResult> {
+```
+
+This function accepts `OrchestrateOpts` (which is `BatchOptions` plus an internal `mode` string) and returns the final `BatchRunResult`. It represents a single invocation of a batch operation and orchestrates the sequence of database, repository, and language-model operations that define it.
+
+### Step 1: Setup, Configuration, and Run Identity
+
+The function begins by preparing its working environment and gathering a coherent set of policies from its inputs. It calculates `absRoot` as an absolute path to the repository root and records `invocationStartedAt`, a wall-clock timestamp for *this* invocation (crucial for `--only` rounds that may happen days later). It then ensures `.livewiki/` exists and opens the SQLite index database at its expected location: `safeIo.mkdir` creates the directory, and `openIndex` opens the database. Several configuration layers are then collapsed into a single effective policy for the run. `loadConfig(absRoot)` reads config from disk if it wasn't injected into `opts`, and `applyDefaults(config)` fills in any missing values. Every policy is resolved from three tiers: command-line options (highest priority), the resolved configuration file, and a hard-coded default. The code resolves these in sequence for things like retry budgets, concurrency, and toggles for newer features, each with its own `validate…`-style error-checking:
+
+- **`maxRepairAttempts`** — maximum attempts to repair failed verifications (opts > config > default 2).
+- **`maxIncompleteRetries`** — maximum retries for incomplete results (opts > config > default 2).
+- **`batchConcurrency`** — the worker-pool size for stage 4 generation; must be an integer between 1 and 16.
+- **`surgicalRepair`** — toggles whether repairs use a targeted (mode-aware) or full retry strategy.
+- **`relaxedRound`** — toggles a final circuit-breaker round that accepts degraded completions rather than declaring a failure.
+- **`moduleDiagramsEnabled`** and **`deepHierarchy`** — toggles for experimental diagram generation and deep dependency analysis.
+- **`concernTopics`**, **`understandingSynthesis`**, and **`communityDetection`** — toggles for newer analysis features.
+- **`stage4MaxOutputTokens`** — a token budget cap for generation, resolved via `resolveOutputTokenBudget`.
+- **`outputTokenStrategy`** — selecting between a fixed token budget or a dynamic one based on context.
+- **`charBudget`** and **`rationaleMaxChars`** — control the size of the page-context window and the bounded explanation block carved from it.
+
+After the configuration is resolved, the function determines whether an LLM client is needed and creates one if none was injected by the caller. This is gated by `needsLlm`, which is true for any full mode (`run`/`resume`/`only`) or a non-refine invocation. If a client must be created, the function calls `validateConfigForBatch` to confirm the config is usable, then creates the client. As part of client creation, it triggers a *preflight* probe to catch provider misconfigurations early: `probeProvider(absRoot, resolvedConfig)` fires one bounded request to test the provider's actual behavior (e.g., unexpected thinking-mode defaults), and if the probe fails (or leaks thinking), the entire run aborts immediately by throwing an error with the `formatProbeFailure` message. Only injected clients (used by tests or stubs) skip the probe.
+
+With a policy established, the code records the run's identity in the database. For a fresh `run`, it inserts a new row into the `batch_runs` table with the snapshot of its `config_json` (the effective policies being used). For `resume` and `only` modes, it selects the most recent `batch_runs` row by the highest `id`. If none exists, the run cannot proceed and throws an error.
+
+### Step 2: Preparing the Data — Indexing, Baselines, and the Plan
+
+Now that a run is being tracked, `orchestrate` gathers every piece of repository state it needs. If this is a fresh `run` mode (not a `resume`/`only`), it must build the index from scratch. The code calls `runIndexer` to scan the repository files, passing any configured ignore patterns. It then calls `runLedger` to record the state of the files. This walk is skipped for `resume`/`only` as they operate on the pre-existing SQLite snapshot. Next, before proceeding to the main stages, the function enforces the "documentation baseline" contract. It calls `readBaseline` and handles three outcomes:
+
+- `unavailable`: The function checks whether an anchored wiki exists with obligations via `collectBaselineDocumentationInventory`. If so, it throws an error telling the operator to run `livewiki baseline bootstrap`. If there are no obligations, it initializes an empty baseline using `writeBaselineCompareAndSwap`.
+- `incompatible`: The baseline format is no longer valid; the code throws an error that disables automatic batch advancement.
+- `available` (or any other): The function can proceed with an existing, compatible baseline.
+
+The core planning data structures are then loaded from the SQLite database via a series of `SELECT` queries. A query loads all `active` symbols (as `symbolRow[]`), and another loads the paths of all `active` files. The union of these becomes the inventory for planning; a map is built from each file path to the count of symbols it contains. Since all this data will be used later by the analysis and generation phases, the code resolves the crucial, bidirectional import graph for all known files. A helper function `collectImportsForFiles` reads raw import strings from all relevant files, and `resolveImportEdges` resolves these strings (relative paths and workspace packages) to concrete file paths within the repository. This resolution is performed only once so all downstream stages use the same consistent view of the repository's dependency structure.
+
+With file-level dependencies understood, the code proceeds to its most fundamental planning step: **partitioning the repository's files into real "page units"**. The planner `planPageUnits` takes the inventory (file paths, symbol counts, and byte sizes) and identifies which files and folders represent units a human would care to read about. The planner only operates on the deterministic data (no LLM involvement) and produces two collections of "page units": `folderUnits` (representing directories) and `fileUnits` (representing symbol-bearing files). Both collections are indexed by their ids for further use. This deterministic partition has a guaranteed property: each file exists in exactly one folder unit, and every file in the repo is accounted for by the `fileUnits` (down to the level of individual files). The code then constructs `modules` (an array of `Module` objects) from the top-level folder units, and separately keeps `fileModules` for the file-level detail. These real-units are the sole input to all subsequent analysis and generation stages.
+
+### Step 3: Gatekeeping — the Stage-2 Diagnostics and the Exact Partition
+
+Before document generation can begin, the batch run must validate its plan and record a checkpoint that a human can audit. A database record is created for the stage itself via `createOrGetTask(db, runId, 2, "modules", opts.mode)`. If a stage-2 record exists (or is just created), it's marked as `done` because the planner is deterministic and needs no LLM. Within this record, the code also stores an optional diagnostic report. If the `communityDetection` feature is enabled, it runs a cross-check to compare the deterministic folder-partition against an alternative partition derived from the import graph (via `detectFileCommunities` and `comparePartitions`). Any errors during this diagnostic are silently swallowed by a try/catch, leaving `communityCrossCheck` as undefined. The checkpoint is then serialized and written to the `batch_tasks` table.
+
+The code then runs its "exact-partition" gate as a defensive check. It wraps the partition in a try/catch block and calls several helper functions to enforce the plan's invariants. `makeUniqueDeterministicIds` guarantees stable ids, and `assertExactPathPartition` throws an `ExactPartitionError` if any file is missing or double-counted. If any of these invariants are violated, the code throws; critically, it does *not* leave the database in a `running` state. In the catch block, it updates the `batch_runs` row to a terminal `aborted` status, filling in a breakdown of usage (all zeros) and the error message, before re-throwing the exception.
+
+### Step 4: Prioritization and the Stage-4 Generation Queue
+
+The deterministic plan is not yet in an order that reflects user priority or dependencies. The code creates this order in a few steps.
+
+First, it converts the raw, file-level import edges into module-level *edges*. It calls `resolveModuleEdges(modules, importsByFile, knownFiles, resolvedImportEdges)` to create a graph of the *modules* to be documented. The prioritization happens with `prioritizeModules(modules, edges, resolvedConfig.pathRoles)`, which assigns each module an order in a new `ordered` list. As a line of defense in depth, it calls `makeUniqueDeterministicIds` and `assertUniqueModuleIds` again on `ordered` before proceeding.
+
+With an order, the function assembles the queue of work for the expensive stage-4 document generation. Before that, however, it must decide what to run. The run's `opts.onlyTarget` field may specify a *subset* of this large queue. The `onlyTarget` string can take several forms, which are parsed into distinct identifiers:
+
+- If `onlyTarget` starts with `"flow:"`, it's a *flow task* target, parsed into `onlyFlowSlug`.
+- If it starts with `"topic:"`, it's parsed into `onlyTopicIdentity`.
+- If it is exactly the constant `UNDERSTANDING_ONLY_TARGET`, the run only pays down *understanding synthesis* debt (`onlyUnderstanding`).
+- Otherwise, the target may be an alias for a specific page unit id. An `onlyAlias` helper maps prefixed `"file:"` and `"folder:"` aliases to the internal ids defined during partitioning; for example, `"file:" + repoPath` maps to the corresponding file unit id, or the original string if no match is found.
+
+Finally, the queue `tasksToRun` is derived. When an `onlyTarget` is present but none of the special handlers (flow/topic/understanding) apply, it filters the full `stage4Queue` down to the module(s) whose id matches `onlyAlias`. If no module matches, an error is thrown to prevent silent no-ops. In stark contrast, if there is *no* `onlyTarget` but the `stage4Queue` is empty while the planner found modules, the pipeline shouldn't proceed: a guard against `EmptyPipelineError` triggers.
+
+At the same time, the database state for *existing* tasks is prepared. For `run` mode, the database should reflect all previous runs, and for `only` mode, the code may need to re-run an already-completed document. The section also handles the state of tasks. When a stage-4 task is a `run` mode or a re-run, the `getOrCreateTask` call within the loop acquires a handle.
+
+If an `opts.onlyTarget` is specified and a task row exists for it (`get…WHERE run_id = ? AND target = ?`), the code resets its status to `pending`. This is crucial because stage-4's `orchestrate` loop will only run tasks that are in a `pending` state. After the plan is ordered and the queue set, the run prepares for the generation itself by cleaning up stale files and recording prior usage. `syncClassDiagrams` deletes class diagrams that are no longer part of the current plan (since the plan is deterministic, any diagram not part of it is stale). The code then accumulates stage-2 usage from the checkpoint to report an accurate total usage breakdown at the end of the run.
+
+### The Stage-4 Worker: `runStage4ModuleTask`
+
+The orchestration function then performs one of its most critical internal operations: defining a worker that handles a single page unit task. To ensure the sequential and concurrent worker-pool execution paths share the exact same logic, the code defines a contained function that processes a single unit.
+
+For a given task, a `Module` object, the code extracts the `task` from the database or creates one. It captures the current time `startedAt`, the `attempt` number, and any pre-existing `usageHistory` or `diagnosticHistory`. Before any expensive work occurs, it calls the frontmatter trust-check: `safeIo.readText` attempts to read the target wiki page from disk. Then `readOwnerFromFrontmatter(existing)` returns a `PreOwnerCheck` value indicating the file's ownership state (e.g., `"human"`, `"mixed"`, `"generated"`, `null`, or an invalid/unparseable state). This check drives a policy gate:
+
+- If the page is owned by `human` (`readOwnerFromFrontmatter` returns `"human"`), the task refuses to proceed and records an error code `refused_human_page`.
+- If the owner marker is `"untrusted"` or entirely absent (`"untrusted"` is the state for missing/invalid), the task also refuses (rule #6 — do not touch untrusted pages).
+- In the `"unparseable"` case, the frontmatter failed to parse cleanly, so the task refuses to touch it for safety.
+
+If the ownership is acceptable, the worker can attempt to recover existing artifacts from a previous, interrupted attempt. This recovery is coordinated by a separate function `recoverStage4TaskArtifacts`, which is invoked only for full modes (`"run"`/`"resume"`) and only when the owner is `"generated"` or `"mixed"`. The recovery step pulls diagrams, and other prior artifacts out of a database checkpoint so the new attempt can start from the old state rather than regenerating all that deterministic content.
+
+Beyond these safeguards, a worker also builds a deterministic `wikiPath` string for its target module id. Folder units (`folderUnitById`) get pages at `livewiki/<module.id>/index.md`, while file units (`fileUnitById`) get `livewiki/<module.id>.md`. Because the documentation should never invent facts about test files, the worker uses `withTestsPointer` to deterministically append a path string for any paired or likely test files.
+
+The worker function closes over mutable objects (`cb`, `failures`, etc.) and is designed so that all mutations happen via synchronous operations. This guarantees safety when executed concurrently by the worker pool.
+
+## The Database-Resident Helpers
+
+This long `orchestrate` function does not implement every behavior itself; it relies on several dedicated helper functions, each addressing a specific lifecycle concern.
+
+### `readOwnerFromFrontmatter` — The Trust Check Gate
+
+Before a page is to be overwritten with a new LLM generation, the system must know if a human has taken ownership. This function reads the raw text of the wiki file and returns a `PreOwnerCheck` describing its ownership.
+
+```ts
+function readOwnerFromFrontmatter(content: string | null): PreOwnerCheck {
+```
+
+This function receives the file content (or `null` if the file doesn't exist) and returns a classification of its frontmatter owner status. It handles the `null` case by returning a value indicating a new page (which is safe to write). It uses a tolerant parser that understands LF/CRLF/BOM-based files; if a standard parse fails, it returns `"unparseable"` to signal that the file's structure is unknown.
+
+### `recoverStage4TaskArtifacts` — Resume From Where We Left Off
+
+When a task must be retried, we must preserve the artifacts (like diagrams) that were generated, because they are both deterministic and expensive to rebuild. The function is structured to handle a resume.
+
+```ts
+async function recoverStage4TaskArtifacts(opts: {
+```
+
+It takes an options object that includes `absRoot`, the `module`, its `wikiPath`, any `folderUnit` or `fileUnit`, the content of the existing page, and various configuration flags (like `moduleDiagramsEnabled`, `moduleMaxDiagramNodes`). The function is `async`, returning a promise; a return value of `null` signals that no artifacts could be located. Internally, its primary job is locating diagram data in the database (in a checkpoints or separate tables). Its second job is retrieving the raw files (e.g., mermaid diagrams and svg files) that have been previously written and mapping them back into a predictable structure (`artifacts`) that the generator can inject.
+
+### `resetTaskToPending` and `rollbackWrittenArtifacts` — Housekeeping and Atomicity
+
+The orchestration loop relies on database state changes
+
+## Part 4 (symbols 46–60)
+<!-- lw:anchors packages/core/src/batch.ts#runUnderstandingStage packages/core/src/batch.ts#safeJsonParse packages/core/src/batch.ts#sectionRangeOf packages/core/src/batch.ts#slugifyHeadingText packages/core/src/batch.ts#statusToExitCode packages/core/src/batch.ts#summarizeLlmDiagnosticError packages/core/src/batch.ts#summarizeVerifyDiagnosticErrors packages/core/src/batch.ts#topicAttemptDiagnostic packages/core/src/batch.ts#topicPlanDiagnostic packages/core/src/batch.ts#tryWriteAndVerify packages/core/src/batch.ts#tryWriteFlowAndVerify packages/core/src/batch.ts#tryWriteModuleDiagramAndVerify packages/core/src/batch.ts#understandingAttemptDiagnostic packages/core/src/batch.ts#verifyIssuesToValidationErrors packages/core/src/batch.ts#writeArtifactAtomic -->
+
+This section covers the writing, verification, and diagnostic machinery that sits between generation and durable commit. It is the last mile of every artifact-producing stage: candidate content is placed on disk atomically, validated by the repository verifier, and rolled back if it fails, while structured diagnostics record what happened for the checkpoint and progress reporting. Several helpers here are shared across the understanding and topic flows, so they are the linchpin that turns a raw LLM candidate into a trustworthy, committed artifact.
+
+## Protecting Human Content and Recording What Happened
+
+The file first establishes a set of small utility functions used by the write-and-verify pipeline and by the orchestrators above it. `safeJsonParse<T>` wraps `JSON.parse` in a try/catch and returns `null` on any malformed input — it is the tolerant reader for `checkpoint_json` blobs pulled from `batch_tasks` rows, so a corrupt checkpoint degrades to "no prior state" instead of crashing the run.
+
+Three functions produce the diagnostic records that populate each task's `diagnosticHistory`: `understandingAttemptDiagnostic(attempt, promptKind, result)` takes the attempt number, whether the prompt was `"initial"` or `"repair"`, and a `UnderstandingAttemptResult`, and returns a `DiagnosticAttempt` capturing the stop reason (if any), the outcome (`success`, `incomplete_generation`, `truncated_by_token_limit`, or a repair code), the first `DIAGNOSTIC_MAX_ERRORS` validation errors each trimmed to `DIAGNOSTIC_TEXT_CAP` characters, a count of how many errors were truncated away, and — when a candidate text exists — its character length and SHA-256 so an operator can fetch the exact bytes that failed. `topicAttemptDiagnostic` does the same for stage-4 `Stage4AttemptResult` values, additionally recording `surgicalOutcome` and a `relaxed: true` flag when the repair used the relaxed-validation path. `topicPlanDiagnostic` is a third variant for plan-generation attempts, taking outcome, candidate text, and `TopicPlanValidationError[]` directly rather than wrapping a whole result object. All three stamp `finishedAt: Date.now()` and omit empty stop-reason fields, so checkpoint JSON stays small.
+
+Two helpers normalize external error shapes into the shared `DiagnosticErrors` contract. `summarizeLlmDiagnosticError` converts a single LLM error object (its `code` and `message`) into a one-element error list with `location: "global"`, capping the message text. `summarizeVerifyDiagnosticErrors` maps an array of `VerifyIssue` objects into at most `DIAGNOSTIC_MAX_ERRORS` summarized entries — each carrying the issue code, a location of `"frontmatter"` for `broken_anchor` issues versus `"body"` otherwise, an optional `offending` path trimmed to the cap, and a capped detail message — plus a `truncatedErrorCount`. Both keep the persisted diagnostic history bounded and human-readable even when the underlying failures are verbose.
+
+Two further helpers serve the checkpoint and reporting layers. `slugifyHeadingText` lowercases a heading string, strips diacritics via NFD normalization, removes non-word characters, and joins whitespace runs into single hyphens — producing the stable slug used to match headings when relocating manual blocks. `statusToExitCode` maps the aggregate `BatchRunResult["status"]` to a process exit code: `"completed"` returns `0`, `"completed_with_failures"` returns `1`, and anything else (notably `"aborted"`) returns `2`, so shell callers can distinguish clean success, partial failure, and interruption. `verifyIssuesToValidationErrors` filters a `VerifyIssue` array down to codes that are part of the artifact repair contract (dropping baseline-file and removed-anchor findings, which are repository audits rather than candidate-shape problems) and re-labels them as `ArtifactValidationError` with the same frontmatter-versus-body location rule — this is the bridge the generation attempt layer uses when it must feed verifier feedback back into the repair prompt as `priorErrors`.
+
+Finally, `sectionRangeOf(headingOffset)` closes over a parsed list of headings and, given the byte offset of one heading, returns the end offset of its section — found by scanning for the next heading at an equal or shallower level, or the end of the document if none exists. This is the geometric primitive the manual-block re-insertion logic needs to know where a section stops so a preserved block can be injected just before the next heading.
+
+## The Atomic Write-and-Verify Transaction
+
+The heart of this section is `tryWriteAndVerify`, which implements the single write-and-verify transaction every understanding-page candidate must pass before it can be committed:
 
 ```ts
 async function tryWriteAndVerify(
@@ -395,13 +390,15 @@ async function tryWriteAndVerify(
 ): Promise<WriteResult>
 ```
 
-It takes the repo root, the wiki-relative path, the prepared content, the previous content (or `null` for a brand-new page), and a flag that relaxes the rejection threshold from errors-only to any severity; it returns a `WriteResult` describing either the accepted artifacts, the rejected issues, or a rollback failure.
+It takes the repository root, the wiki page path, the new candidate content, the previously existing page text (or `null` for a fresh page), and an optional flag controlling whether warnings as well as errors should cause rejection; it returns a `WriteResult` describing either success with artifact hashes or failure with the offending issues, an exception message, or a rollback failure reason.
 
-The write itself is all-or-nothing. All three `tryWrite*` entry points write their artifacts through a local helper that calls `safeIo.writeTextAtomic` (staged temp file plus rename) instead of a plain write, because the write→verify→rollback arc assumes a write either lands whole or is undone: a process killed mid-write left a truncated page that the next run reads as valid content, and no rollback can catch that. Two details make it safe under the stage-4 worker pool: the lock is per artifact path, so concurrent writes to different pages neither serialize nor collide on the shared default lock; and the staged temp file lands in `.livewiki/tmp/` rather than beside the page, because the snapshot hash walks `livewiki/` and reads every entry it lists, which would race the rename and fail on a temp file that is already gone.
+The function begins not by writing but by protecting human-owned content. If an `existing` page is present, `injectManualBlocksBySection(existing, newContent)` extracts the manually authored blocks from the old page (tracking which heading-slug section each belonged to) and splices them into the new content at the end of their matching sections — and any section that existed only in the old page has its blocks appended at the end of the new page rather than being silently dropped. If the injection succeeds it becomes `finalContent`. Then, if the old page's frontmatter declared `owner: mixed`, `forceOwnerInFrontmatter` rewrites the new page's owner back to `mixed`, because the LLM always emits `owner: generated` but a mixed declaration must survive regeneration or the next run would classify the page differently.
 
-The write and the verify run inside **one** `try/catch`. If the write or `runVerify` throws, the catch handler calls `rollbackWrittenArtifacts` on the single entry `{ path: wikiPath, snapshot }`, restoring the original bytes. A throw here is treated exactly like a rejection: the page is rolled back best-effort, and the function reports either the rollback failure or the original exception. If verification completes, the function filters the reported issues to those that target this `wikiPath`, are not deferred baseline issues, and meet the severity threshold (`rejectAnySeverity` or `severity === "error"`). Any match triggers the rejection branch, which rolls back with `guardedRemoval` disabled — meaning even a delete of a newly-created file is unconditional — and returns the broken issues. Only a clean page passes through to produce `pageHash = sha256(finalContent)` and return `ok: true`.
+Only after those preservations does the actual transaction begin, with the old page saved as the `snapshot`. The write, verification, and rollback all live in one try/catch: `writeArtifactAtomic` places `finalContent` on disk using a content-addressed lock file and a temp directory so the write is atomic even on crash, then `runVerify(absRoot)` runs the full repository verifier over the updated tree. If either call throws — the write failed, the verifier crashed — the catch block calls `rollbackWrittenArtifacts` to restore the page from its snapshot (with `true` for the best-effort flag since the candidate was never confirmed valid), and returns an `ok: false` result carrying either a `rollbackFailed` reason if restoration itself failed or an `exception` message.
 
-`tryWriteFlowAndVerify` is the same four-stage arc widened to a transaction of **three** artifacts. Its signature reads:
+When verification returns normally, the function filters its `issues` for findings on `wikiPath` that are not deferred baseline issues and that meet the severity gate — `rejectAnySeverity ? true : i.severity === "error"`, so the understanding flow uses the default error-only gate while callers that pass `true` demand a perfectly clean page. If any such issue exists the candidate is rejected, and the comment in the source stresses this is not optional: `rollbackWrittenArtifacts` restores the snapshot, and if that rollback fails the function returns `rollbackFailed: { reason }` so the orchestrator knows the invalid content may still be on disk and must treat it as terminal. On a clean sweep it returns `ok: true` with `artifacts` holding the page path and the SHA-256 of `finalContent` — the exact bytes that will later be committed to the durable receipt.
+
+`tryWriteFlowAndVerify` and `tryWriteModuleDiagramAndVerify` are near-identical transactions for the flow and module-diagram stages, which write two artifacts — a wiki page and a Mermaid diagram source — as one unit:
 
 ```ts
 async function tryWriteFlowAndVerify(
@@ -414,9 +411,7 @@ async function tryWriteFlowAndVerify(
 ): Promise<FlowWriteResult>
 ```
 
-It takes the repo root, the page path, the diagram path, the new page content, the raw diagram source, and the previous page (or null); it returns a `FlowWriteResult` describing the accepted pair and hub, the rejected issues, or a rollback failure. Step 1 is byte-for-byte identical to the single-page variant: manual-block repositioning and `owner: mixed` restoration, so both entry points share the same review-finding #7b semantics. Before writing, it snapshots not just the page and the diagram (`safeIo.readText` with a `null` fallback when the diagram is new) but also the flows hub at `livewiki/flows/index.md`, and initializes `hubWritten = false`. Inside the transaction it writes the page, writes the diagram (appending a trailing newline if the source lacks one), then calls `syncFlowsIndexHub` with the freshly loaded flow presentations; only if that sync reports `outcome === "written"` does it set `hubWritten` so the hub joins the rollback set. Then it runs the verifier. The exception path rolls back the page, the diagram, and — only if `hubWritten` — the hub. The rejection filter here is noticeably stricter than the single-page gate: it rejects the pair on **any** issue — error or warning — targeting either written path, a deliberate asymmetry documented as R10.1 item B; issues on other paths never block. A rejection rolls back all three artifacts and returns the issues; a clean run returns hashes of the final page content and the normalized diagram source.
-
-`tryWriteModuleDiagramAndVerify` is the middle variant, a page-plus-diagram pair without the hub:
+and
 
 ```ts
 async function tryWriteModuleDiagramAndVerify(
@@ -429,99 +424,51 @@ async function tryWriteModuleDiagramAndVerify(
 ): Promise<ModuleDiagramWriteResult>
 ```
 
-It takes the same shape of inputs as the flow variant — repo root, page and diagram paths, page content, diagram source, existing page — and returns a `ModuleDiagramWriteResult`. Step 1 reuses the identical manual-block and `owner: mixed` mechanism. It snapshots the page and the diagram, then writes both inside one `try/catch`, with rollback of both on any exception. The rejection filter targets error-severity issues on either the page path or the diagram path only (the stage-4 gate: warnings never block), and rollback is mandatory for both artifacts. Success returns both hashes plus the diagram path.
+Each takes the repo root, the page and diagram paths, the generated page content and diagram source, and the prior page text; both return a result type carrying success artifacts or failure details. Each begins with the identical manual-block injection and `owner: mixed` restoration seen in `tryWriteAndVerify`, because rule #6 applies uniformly no matter which artifact pair is being replaced. Each snapshots the existing page and reads the current diagram text (possibly `null`) for rollback.
 
-Underpinning all three entry points is the rollback helper:
+The two diverge in what joins the transaction. The module-diagram pair writes the page first and the diagram second inside the try block, then runs the verifier; its rejection gate looks only for `severity === "error"` issues on either written path — warnings never block a module diagram. The flow pair takes the same page-then-diagram writes but additionally rewrites the flows hub at `livewiki/flows/index.md` via `syncFlowsIndexHub` after loading current presentations; `hubWritten` records whether the sync actually rewrote the file, and only that hub snapshot enters the rollback set (a skipped-owner hub was never touched and must not be restored). The flow gate is deliberately stricter than the module and understanding gates: *any* issue — error or warning — on either written path rejects the pair, an asymmetry the source comment flags as a stage-4 design decision, and the rollback set includes the hub if it was written. In both functions, any exception during the multi-write-and-verify block triggers a best-effort rollback of every artifact in the transaction, and a failed rollback surfaces as `rollbackFailed` so the caller knows the invalid pair may persist.
 
-```ts
-async function rollbackWrittenArtifacts(
-  absRoot: string,
-  entries: ReadonlyArray<{ path: string; snapshot: string | null }>,
-  guardedRemoval: boolean,
-): Promise<string[]>
-```
+Each success path returns the pair's paths and hashes — the `pageHash` derived from the final content after block injection and owner restoration, and the `diagramHash` over the source bytes after a trailing newline is ensured if missing.
 
-It takes the repo root, a list of `{ path, snapshot }` pairs, and a flag controlling whether newly-created files are protected from deletion; it returns an array of human-readable failure reasons, empty on complete success. For each entry, a non-null snapshot means the file previously existed, so it restores the old bytes via `safeIo.writeText`. A null snapshot means the file is new; when `guardedRemoval` is true, it first `lstat`s the path and skips deletion unless the target is a regular file (the guard used on exception paths, where a concurrent writer might own the file), while a false flag removes unconditionally (the guarantee used on rejection paths, where the invalid candidate must not linger). Every restore or removal failure is captured as a reason string; the caller treats a non-empty reason array as a terminal `rollbackFailed` outcome.
+## Orchestrating the Understanding Stage
 
-Two classification helpers feed the severity filters and the repair pipeline. `isDeferredBaselineIssue` decides whether a verification finding is the special case that never blocks a write:
+The stage-coordination function `runUnderstandingStage` pulls all of these pieces together into the full stage-5 pipeline for a single evidence hash:
 
 ```ts
-function isDeferredBaselineIssue(issue: VerifyIssue): boolean {
-  return issue.code === "baseline_entry_without_anchor";
-}
+async function runUnderstandingStage(opts: {
+  db: import("better-sqlite3").Database;
+  runId: number;
+  absRoot: string;
+  modules: Module[];
+  ordered: Module[];
+  pathRoleConfig: import("./modules.js").PathRoleConfig | undefined;
+  llmClient: LlmClient;
+  language: Language;
+  pricing: import("./pricing.js").PricingOverride | undefined;
+  thinking: "disabled" | "adaptive" | "omit" | undefined;
+  maxRepairAttempts: number;
+  mode: "run" | "resume" | "only";
+}): Promise<UnderstandingStageResult>
 ```
 
-It takes a `VerifyIssue` and returns `true` when the finding describes a baseline entry missing an anchor — a deferred audit item, not a candidate-shape error — so every entry point in this section excludes it from its `broken` set. `isArtifactVerifyCode` narrows the opposite direction: it identifies which verifier codes describe defects the model can actually repair in the artifact's own shape:
+It takes the database handle, the run ID, the repository root, the module list and its topological order, an optional path-role config, the LLM client, language, pricing override, thinking mode, the bounded repair-attempt budget, and the run mode; it returns an `UnderstandingStageResult` tallying usage, task counts, failures, per-task usage, and whether a rollback failed.
 
-```ts
-function isArtifactVerifyCode(
-  code: VerifyIssue["code"],
-): code is Extract<ArtifactValidationError["code"], VerifyIssue["code"]> {
-  return code === "broken_anchor" ||
-    code === "broken_internal_link" ||
-    code === "invalid_mermaid_diagram" ||
-    code === "manual_block_altered" ||
-    code === "think_block_present" ||
-    code === "missing_wiki_path";
-}
-```
+The function first builds the understanding evidence from the modules, ordering, and optional path-role config, then checks `hasUnderstandingBasis(evidence)`. Repositories with no accepted module/flow/topic pages and no README purpose have nothing to synthesize understanding from: in `"only"` mode that is an error (the operator asked for work with nothing to work on), but in normal batch mode it is a deterministic no-op that returns the empty result without spending any LLM calls — mirroring the topics stage's small-repo guard. When evidence exists, it is hashed to produce the deduplication target for the batch-tasks table.
 
-It takes a verifier issue code and returns a type predicate confirming, when true, that the code also exists in the `ArtifactValidationError` domain — the closed set of errors the repair contract understands. Codes outside this list — baseline-compatibility findings, removed-anchor audits, anything else the model cannot fix by editing the candidate — are deliberately excluded.
+Task lookup distinguishes the three modes. In `"only"` mode the function re-runs synthesis against the *current* evidence unconditionally: `getOrCreateTask` ensures a stage-5 row exists (creating it if the evidence hash drifted since the original run) and `resetTaskToPending` clears any prior completion so the work actually happens. Otherwise it queries for an existing stage-5 task with this target; if one is found with a checkpoint whose status is `"done"`, the evidence is unchanged since that success and the stage returns immediately with zero LLM calls. Any other existing task resumes from its checkpoint's attempt count and usage history; a missing task is created fresh.
 
-`verifyIssuesToValidationErrors` bridges from the verifier's output into that repair contract:
+The retry loop runs at most `1 + maxRepairAttempts` slots. Attempt 0 (or any attempt after a full reset) uses the `"initial"` prompt kind; after a failed candidate the next slot is `"repair"` and receives the prior candidate text and prior validation errors as repair context, with the slot and total attempt budget passed along. Each `attemptUnderstandingGeneration` call returns a usage entry that is appended to the checkpoint's `usageHistory` and accumulated into both the task's and the run's running usage totals; the function also pushes a diagnostic record built by `understandingAttemptDiagnostic`. After each attempt the code branches on the failure class: an LLM error updates `priorErrors` to a synthetic `llm_error` and clears the prior candidate, and a `llm_timeout` short-circuits the whole task as failed (it is not model-repairable) while other LLM errors merely loop into the next repair slot; `incomplete_generation` and `truncated_by_token_limit` outcomes clear both the candidate and error history because the text is unusable as repair fodder; and a `null` artifact (no candidate produced at all) continues to the next slot.
 
-```ts
-function verifyIssuesToValidationErrors(
-  issues: ReadonlyArray<VerifyIssue>,
-): ArtifactValidationError[] {
-```
+A candidate that survives those checks enters `tryWriteAndVerify`. A rollback failure is terminal for the task. A write/verify exception is also terminal — the candidate was already rolled back inside the helper, and since the failure is infrastructural rather than model-fixable the stage breaks out *without* burning further repair slots, recording a `write_verify_exception` with that reasoning in its message. A verify rejection feeds the issues back as the next repair round's `priorErrors`, mapping each to a code, its `detail` as the message, and a frontmatter-or-body location plus the offending path when present. Only a clean write produces the `artifacts` that end the loop.
 
-It takes the full list of verifier issues and returns the subset expressible as `ArtifactValidationError`. For each issue whose code passes `isArtifactVerifyCode`, it maps the code to a location (`"frontmatter"` for `broken_anchor`, `"body"` otherwise), keeps the detail message, and attaches the offending wiki path when present. Issues that are not artifact codes are dropped entirely — they are repository-audit failures, not candidate defects, and must not be fed back into a repair loop that would futilely edit the candidate.
+If the bounded loop exhausted its slots without producing artifacts and no terminal error was set, the stage attempts a deterministic salvage. When the last candidate is non-empty, its errors are all from the mechanically fixable class — `purpose_too_long`, `surface_too_long`, or `code_span_forbidden` (a known failure family for models that cannot count characters and for MiniMax-M3's persistent inline-code habit on this page kind) — `salvageUnderstandingCandidate` clips the offending formatting and trailing clauses, and the rebuilt page goes back through `tryWriteAndVerify`. The salvage re-validates the whole contract, so any residual violation keeps the failure; only a clean write adopts the salvaged artifacts, and anything else falls through to `repair_exhausted`.
 
-`prepareSurgicalRepair` is the entry point to that loop, scoping a repair to only the sections that failed:
-
-```ts
-async function prepareSurgicalRepair(
-  absRoot: string,
-  priorCandidate: string,
-  priorErrors: ReadonlyArray<ArtifactValidationError>,
-  symbolsTable: string,
-): Promise<SurgicalRepairPlan | null>
-```
-
-It takes the repo root, the previously rejected candidate content, the validation errors from that rejection, and the symbols-table text; it returns a `SurgicalRepairPlan` with the base page, the target section slugs, and an evidence slice — or `null` when no surgical repair is possible. It first calls `surgicalRepairTargetSections(priorErrors)` to derive which H2 sections the errors implicate; if that returns `null` (the errors are not section-localized), the whole repair is abandoned. It normalizes the prior candidate via `normalizeStage4Artifact` (aborting on failure), splits the content into H2 sections with `splitH2Sections`, and aborts unless every target section slug is present. The key work is extracting **anchor keys**: it scans each targeted section's raw text for `lw:anchors` comment markers, collecting the cited keys, then passes the sorted key list to `buildSurgicalEvidenceSlice` to pull the relevant symbol documentation from the symbols table. The resulting plan — base content, target slugs, and evidence — lets a later stage regenerate only the broken sections rather than the whole file.
-
-Finally, `isRelaxedEligible` decides whether a page kind may take the relaxed re-verification path after repair:
-
-```ts
-function isRelaxedEligible(
-  pageKind: "module" | "flow" | "topic",
-  errors: ReadonlyArray<ArtifactValidationError>,
-): boolean {
-  return errors.length > 0 && collectUnclassified(pageKind, errors).length === 0;
-}
-```
-
-It takes the page kind and the validation errors from the prior rejection, and returns `true` only when errors exist **and** every one of them is classifiable for that page kind (no unclassified remainder). A page with any error the classifier cannot map to a repair strategy is barred from the relaxed path, forcing the strict recovery route instead.
-
-## Manual Content Preservation and Diagnostics
-<!-- lw:anchors packages/core/src/batch.ts#readOwnerFromFrontmatter packages/core/src/batch.ts#forceOwnerInFrontmatter packages/core/src/batch.ts#extractManualBlocksBySection packages/core/src/batch.ts#slugifyHeadingText packages/core/src/batch.ts#injectManualBlocksBySection packages/core/src/batch.ts#sectionRangeOf packages/core/src/batch.ts#summarizeLlmDiagnosticError packages/core/src/batch.ts#summarizeVerifyDiagnosticErrors packages/core/src/batch.ts#diagnosticAttempt packages/core/src/batch.ts#understandingAttemptDiagnostic packages/core/src/batch.ts#topicAttemptDiagnostic packages/core/src/batch.ts#topicPlanDiagnostic -->
-
-The pipeline's batch rewrite must never silently destroy content a human wrote by hand. Two mechanisms cooperate to guarantee this: a frontmatter `owner` marker that declares whether a page may be regenerated at all, and the `lw:manual` block markers that fence off human-authored fragments so the generator can surgically splice them back into freshly generated output. The functions below implement both halves, plus a family of diagnostics builders that report what each LLM attempt produced and how it failed.
-
-**Owner detection and enforcement.** `readOwnerFromFrontmatter(content: string | null): PreOwnerCheck` inspects a document's frontmatter to answer one question: is this page owned by the generator, by a human, or is its provenance untrusted? It strips a UTF-8 BOM if present, accepts both LF and CRLF line endings after the leading `---` (defending against generators that save with Windows or `git autocrlf` conventions), and normalizes to LF before parsing. If the `owner` key is missing, is not a string, or holds a value other than `generated`, `mixed`, or `human`, the function reports `"untrusted"` — the caller must then refuse to overwrite. A `null` input or a missing/`unparseable` frontmatter also maps to a sentinel the caller treats as forbidden. The reviewer revision admits `owner: mixed` as a valid state: the page may be regenerated only in part, and any manual blocks within it must survive byte-for-byte.
-
-`forceOwnerInFrontmatter(content: string, owner: "generated" | "mixed"): string` rewrites that ownership claim. Given a document that already opens with `---`, it locates the closing `---` of the frontmatter block, then either replaces an existing `owner: ...` line (matching any value via a multiline regex) or, if no `owner:` line exists, injects one immediately after the opening delimiter. If the string does not start with a frontmatter fence or the closing marker is absent, it returns the content unchanged rather than risking a malformed write. This is the surgical counterpart to `readOwnerFromFrontmatter`: read before deciding, force-write when the page is deemed safe to regenerate.
-
-**Extracting manual sections from the old document.** `extractManualBlocksBySection(content: string): Map<string | null, string[]>` scans the existing page for every `lw:manual` start and `<!-- /lw:manual -->` end marker, recording their offsets in a sorted list. It simultaneously collects all markdown headings (levels 1–6) with their offsets, slugified via `slugifyHeadingText(text: string): string` — a lowercase, accent-stripped, punctuation-removed, whitespace-collapsed-to-hyphen form that lets the matcher compare headings across documents regardless of formatting drift. Walking the sorted marker hits, the function pairs each start with the next end; for each pair it determines the section by finding the heading whose offset immediately precedes the start marker, then slices the content between the markers (inclusive of both marker comment tokens) and appends that block to the list for its section slug. Blocks that appear before any heading are keyed under `null`. The result is a map from "which section this block lives in" to "the exact text to reinsert".
-
-**Re-inserting the blocks into new output.** `injectManualBlocksBySection(existing: string, newContent: string): string | null` is the inverse operation. It first extracts the blocks from the old document; if none exist it returns `null` (no change needed). Otherwise it finds headings in the freshly generated `newContent` — again with slugs, offsets, and heading levels — and defines `sectionRangeOf(headingOffset: number): { endOffset: number }` to compute where a given heading's section ends: at the offset of the next heading of the same or lower level, or at the end of the document if no such successor exists. For each extracted section, the function locates the corresponding heading in the new content by its slug. If found, it inserts the block at the end of that section; if the section no longer exists in the new version, or the block had no preceding heading (`null` slug), it appends the block to the end of the page so the human content is never lost. All insertions are collected as `(offset, text)` pairs, sorted by offset in descending order, and spliced into the new content one by one — descending order guarantees earlier insertions do not shift the offsets of later ones. The joined blocks preserve their original blank-line separation, and the returned string is the new page with every manual block restored in place.
-
-**Diagnostics builders.** The remaining functions shape structured records of what happened during LLM-driven generation attempts, so operators can understand failures without re-reading raw transcripts. `understandingAttemptDiagnostic(attempt: number, promptKind: "initial" | "repair", result: UnderstandingAttemptResult): DiagnosticAttempt` builds a record for a single understanding-stage attempt: it caps the validation errors at `DIAGNOSTIC_MAX_ERRORS`, truncates each message to `DIAGNOSTIC_TEXT_CAP` characters, counts how many errors were truncated, includes the candidate character count and SHA-256 hash when a candidate was produced, and snapshots `Date.now()` as the finish time. `topicAttemptDiagnostic(attempt: number, promptKind: "initial" | "repair", result: Stage4AttemptResult): DiagnosticAttemptWithSurgical` parallels this for the topic stage but also folds in a surgical outcome flag if present. `topicPlanDiagnostic(attempt: number, promptKind: "initial" | "repair", outcome: DiagnosticOutcome, candidate: string, errors: readonly TopicPlanValidationError[], stopReason?: StopReason, rawStopReason?: string): DiagnosticAttempt` covers the planning stage, assigning every error a `"global"` location since plan validation is not section-scoped. Two summarizers share the same capping and truncation logic for different error shapes: `summarizeLlmDiagnosticError(error: { code: string; message: string }): DiagnosticErrors` wraps a single LLM-reported error with a `"global"` location, and `summarizeVerifyDiagnosticErrors(issues: ReadonlyArray<VerifyIssue>): DiagnosticErrors` maps verification issues to `"frontmatter"` or `"body"` locations based on the `broken_anchor` code, optionally attaching the offending wiki path. Finally, `diagnosticAttempt(input: { attemptResult: Stage4AttemptResult; promptKind: "initial" | "repair"; outcome: DiagnosticOutcome; errors: DiagnosticErrors; budgetConsumed?: boolean }): DiagnosticAttemptWithSurgical` is the general-purpose constructor used by callers that already have a summarized error list; it merges the attempt number from the usage entry, preserves stop-reason and raw-stop-reason fields only when defined, records mechanical-repair and relaxed-attempt flags, and computes candidate statistics, with a `budgetConsumed` flag for the case where the recovery budget ran out. Together these builders give every failed or partial attempt a compact, machine-readable fingerprint — who tried, how far they got, what they produced, and what went wrong — that the orchestration layer can log, compare, and act on.
+With artifacts in hand and no prior task error, the stage calls `commitDocumentationTask` to durably record the verified artifact under the repository-authority receipt. If that commit throws, the task fails with `durable_commit_failed` — the content is verified on disk but the authority record that would let future runs recover or resume it could not be written, which must surface to the operator. Finally the stage persists a checkpoint: a failure writes `status: "failed"` with the error, attempt count, timestamps, usage and diagnostic history into `checkpoint_json`, increments the run's `fails` count, and records a failure entry carrying the task ID, the evidence-hash target, the error, and the `livewiki batch --only understanding <runId>` retry command for the operator; a success writes `status: "done"` with the same history plus the artifacts, increments `done`, and the task's usage is appended to `usageByTask` keyed by the evidence target. Either way the returned result lets the outer batch driver roll these per-stage counts into the run's aggregate report.
 
 ## Tests
 
 Covered by `packages/core/src/batch.test.ts` (same-name test file on disk).
+Likely also exercised by `packages/core/src/batch-atomic-writes.test.ts` (name-prefix match, not verified).
 Likely also exercised by `packages/core/src/batch-community.test.ts` (name-prefix match, not verified).
 Likely also exercised by `packages/core/src/batch-concurrency.test.ts` (name-prefix match, not verified).
 Likely also exercised by `packages/core/src/batch-context.test.ts` (name-prefix match, not verified).
@@ -532,3 +479,4 @@ Likely also exercised by `packages/core/src/batch-stage5.test.ts` (name-prefix m
 Likely also exercised by `packages/core/src/batch-surgical-repair.test.ts` (name-prefix match, not verified).
 Likely also exercised by `packages/core/src/batch-test-role.test.ts` (name-prefix match, not verified).
 Likely also exercised by `packages/core/src/batch-understanding.test.ts` (name-prefix match, not verified).
+Likely also exercised by `packages/core/src/batch-unknown-usage.test.ts` (name-prefix match, not verified).

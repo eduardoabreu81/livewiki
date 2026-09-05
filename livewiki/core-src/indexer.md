@@ -1,30 +1,31 @@
 ---
-title: Indexer pipeline — walking, hashing, and persisting symbols
+title: Incremental Source Indexing Engine
 owner: generated
 anchors:
-  - packages/core/src/indexer.ts#BINARY_SNIFF_BYTES
-  - packages/core/src/indexer.ts#MAX_FILE_BYTES
-  - packages/core/src/indexer.ts#ensureLivewikiDir
-  - packages/core/src/indexer.ts#formatHuman
-  - packages/core/src/indexer.ts#grammarStateEqual
-  - packages/core/src/indexer.ts#orchestrateIndex
-  - packages/core/src/indexer.ts#run
+- packages/core/src/indexer.ts#BINARY_SNIFF_BYTES
+- packages/core/src/indexer.ts#MAX_FILE_BYTES
+- packages/core/src/indexer.ts#ensureLivewikiDir
+- packages/core/src/indexer.ts#formatHuman
+- packages/core/src/indexer.ts#grammarStateEqual
+- packages/core/src/indexer.ts#orchestrateIndex
+- packages/core/src/indexer.ts#reconcilePlan
+- packages/core/src/indexer.ts#run
 ---
 
-# Indexer pipeline — walking, hashing, and persisting symbols
+# Incremental Source Indexing Engine
 
-This page is responsible for the livewiki indexer: the module that walks a repository, reads each file, normalises line endings, hashes content, parses symbols with tree-sitter, and upserts the results into the SQLite ledger inside a single atomic transaction.
+This page documents the core indexing engine that walks a repository, parses source files, and persists extracted symbols, calls, and rationales to a SQLite database.
 
 ## When to use this page
 
-- **Run an incremental index** of a repo to refresh symbols, calls, and rationales without re-parsing unchanged files.
-- **Investigate skip reasons** — why a file was skipped as binary or oversized, and which thresholds control that.
-- **Audit EOL migration behaviour** to understand how legacy CRLF-era hashes are silently migrated on the first post-upgrade run.
-- **Inspect human-readable index output** when an integration calls `run` and needs to render a friendly summary.
+- Understand how the `livewiki index` command turns a repository into a searchable symbol database.
+- Debug concurrency issues when multiple processes (CLI, editor hooks, MCP server) index the same database simultaneously.
+- Learn how the indexer handles incremental updates, EOL normalization, grammar-set changes, and binary/large file filtering.
+- Trace the two-phase flow that keeps async file I/O outside the synchronous SQLite write transaction.
 
 ## How it fits
 
-The file `packages/core/src/indexer.ts` sits at the top of the core package's indexing layer. It depends on the safe-IO allowlist (`safe-io`), the repository walker (`walker`), the hash/EOL helpers (`hashes`), the tree-sitter parser pipeline (`parser`), the symbol/call/rationale extractors (`symbols`), the SQLite handle (`db`), and the call resolver (`call-resolution`). The exported entry point is `run`, which callers (CLI, hooks, tests) invoke to refresh the ledger; everything else in the file is helper machinery that supports that single function. On disk, the file lives next to its test counterpart under `packages/core/src/`.
+The indexer is the heart of livewiki's Phase 1: it converts raw repository files into structured rows in `index.db`. It sits between the file walker (`walker.js`) and the database layer (`db.js`), using the parser (`parser.js`), symbol extractor (`symbols.js`), and call resolver (`call-resolution.js`). Its results feed the later phases that build prose documentation and track symbol movement across versions. The module is invoked by CLI commands, editor hooks, and the MCP server's file watcher — all of which may run concurrently against the same database.
 
 ## Diagram
 
@@ -32,58 +33,71 @@ The file `packages/core/src/indexer.ts` sits at the top of the core package's in
 %% livewiki/diagrams/core-src-indexer.mmd
 ```
 
-## Pipeline entry point and work-area bootstrap
-
-`run` is the single exported entry point of `indexer.ts` — the funnel through which every caller (the CLI, post-commit hooks, and the test suite) refreshes the on-disk ledger for a repository. It takes a repository root, which may be absolute or relative (the function resolves it internally via `nodePath.resolve`), and an optional `IndexOptions` object that can carry extra ignore globs and a `quiet` flag. It returns an `IndexResult`, a small record summarising what happened during the run, so callers can either render the outcome themselves or hand it straight to `formatHuman`.
-
-The reason `run` exists as a single funnel rather than as a bag of helpers is idempotence: the source-level comment states the contract in plain words ("rodar 2x sem mudanças no repo é barato"), and the implementation is structured to honour it. Inside `run`, after recording a monotonic start time, the function follows a fixed sequence:
-
-1. Resolves the absolute repo root so every downstream path is anchored to the same place, regardless of how the caller spelled the input.
-2. Bootstraps the work area by calling `ensureLivewikiDir`, which is responsible for making sure the `.livewiki/` cache directory exists before the walker and the database open. `.livewiki/` is the directory that holds the SQLite ledger; the wiki itself lives under `livewiki/` and is a separate concern (created later by `livewiki init`, Phase 3).
-3. Resolves the database path through the safe-IO allowlist (`safeIo`) so the indexer cannot accidentally write outside the repository.
-4. Walks the repository (via the `walker` dependency) to produce the list of files to consider.
-5. Opens the SQLite handle, delegates to `orchestrateIndex`, and guarantees `db.close()` runs in a `finally` block so the handle is always released — even if orchestration throws.
-
-```ts
-export async function run(repoRoot: string, opts: IndexOptions = {}): Promise<IndexResult> {
-```
-
-`ensureLivewikiDir` is the work-area bootstrap step. It takes the resolved absolute repo root and a `quiet` flag, and returns `Promise<void>`. Its job is narrow: ensure that `.livewiki/` exists, swallow the "already exists" race that happens when two concurrent invocations both try to create the directory, and — only when `livewiki/` itself does not yet exist and the caller is *not* in quiet mode — print a one-line informational note pointing the human at `livewiki init` (Phase 3). The `quiet` flag exists so that hooks (post-commit, post-merge) can call `run` without spamming the terminal with a "wiki doesn't exist yet" message on every commit.
-
-```ts
-async function ensureLivewikiDir(absRoot: string, quiet: boolean): Promise<void> {
-```
-
-Together, `run` and `ensureLivewikiDir` form the entry surface: `run` owns the lifecycle and orchestration, `ensureLivewikiDir` owns the precondition that the cache directory exists before any I/O starts.
-
-<!-- lw:anchors packages/core/src/indexer.ts#run packages/core/src/indexer.ts#ensureLivewikiDir -->
-
-These anchors identify indexed symbols whose implementation is part of this module.
-
-## File-level safety thresholds
-
-The indexer carries two module-level constants that gate every per-file read inside `orchestrateIndex`. They are deliberately tiny and side-effect-free: just integers exported at the top of the file so tests and other modules can refer to them by name, and so changing the threshold is a one-line edit that the test suite can lock in.
-
-```ts
-export const MAX_FILE_BYTES = 1024 * 1024;
-export const BINARY_SNIFF_BYTES = 8 * 1024;
-```
-
-`MAX_FILE_BYTES` is the upper size cap, set to 1 MiB (1024 × 1024 bytes). It is checked *before* the file is read into memory, via `stat.size`, so the indexer never accidentally allocates a multi-megabyte buffer for a giant generated file. Files that exceed it are skipped and counted in `result.filesSkippedTooLarge`; the reason this matters is that reading such a file would both waste RAM and slow the parse loop disproportionately. The check is one-sided: there is no minimum-size filter, so an empty file (0 bytes) is allowed through and indexed as a zero-symbol prose tier.
-
-`BINARY_SNIFF_BYTES` is the binary-detection window, set to 8 KiB (8 × 1024 bytes). It controls how much of the leading prefix the indexer inspects for a NUL byte — the conventional "this is not text" sentinel. After the file is read as UTF-8, `rawContent.slice(0, BINARY_SNIFF_BYTES).includes("\0")` is the actual guard: any NUL byte inside that leading 8 KiB window marks the file as binary, the file is skipped before the parse, and the counter `filesSkippedBinary` is incremented. The check is also one-sided: it inspects a *prefix* only, not the whole file, so a binary blob whose first 8 KiB happen to be ASCII would not be caught — that is the deliberate trade-off between coverage and cost. The constant exists as a named export so the test suite can assert the threshold without hard-coding the number in two places.
-
-Both constants are pure values with no behavioural branches: changing them changes the thresholds, nothing else. They are referenced from `orchestrateIndex`'s Phase A loop and are surfaced in the rendered summary via `formatHuman` whenever the corresponding skip counters are non-zero.
+## File filters and size caps
 
 <!-- lw:anchors packages/core/src/indexer.ts#MAX_FILE_BYTES packages/core/src/indexer.ts#BINARY_SNIFF_BYTES -->
 
-These anchors identify indexed symbols whose implementation is part of this module.
+The indexer applies two safety filters before ever reading a file's full contents, both defined as exported constants so callers and tests can reference the exact limits.
 
-## Incremental hashing, EOL migration, and grammar-set drift detection
+```typescript
+export const MAX_FILE_BYTES = 1024 * 1024;
+```
 
-This section is the heart of the indexer: how `orchestrateIndex` decides what to re-parse, what to skip, and how it detects the three "silent staleness" shapes the tool exists to prevent.
+`MAX_FILE_BYTES` caps the upper bound of file size: any file whose stat report exceeds 1 MiB is skipped entirely without a read, incrementing the `filesSkippedTooLarge` counter. The check happens on `stat` before any I/O, so oversized files never waste memory.
 
-```ts
+```typescript
+export const BINARY_SNIFF_BYTES = 8 * 1024;
+```
+
+`BINARY_SNIFF_BYTES` defines the leading window for binary detection: after reading a file's text, the indexer checks whether that window contains a NUL byte (`\0`). If so, the file is treated as binary regardless of its extension and skipped, incrementing `filesSkippedBinary`. This is a one-sided check — only the first 8 KiB are inspected, so a file with its first NUL after that point still passes through as text.
+
+## Orchestrating a full index run
+
+<!-- lw:anchors packages/core/src/indexer.ts#run packages/core/src/indexer.ts#ensureLivewikiDir -->
+
+`run` is the public entry point that ties together every stage of an indexing pass. A caller supplies a repository root and optional settings (extra ignore patterns, quiet mode) and receives a structured `IndexResult` describing what happened.
+
+```typescript
+export async function run(repoRoot: string, opts: IndexOptions = {}): Promise<IndexResult> {
+```
+
+`run` takes the repository path and an options object, and returns a promise of `IndexResult` with per-category counters.
+
+The function starts by resolving `repoRoot` to an absolute path, then ensures the `.livewiki/` cache directory exists via `ensureLivewikiDir`. It resolves the database location through `safe-io` (which re-validates the path allowlist and symlink safety), then invokes `walkRepo` to enumerate files honoring `.gitignore` plus any extra ignores. Finally it opens the SQLite database and delegates to `orchestrateIndex` inside a `try/finally` that always closes the database handle — even when parsing fails, the connection is released.
+
+```typescript
+async function ensureLivewikiDir(absRoot: string, quiet: boolean): Promise<void> {
+```
+
+`ensureLivewikiDir` takes the absolute repository root and a quiet flag, and returns nothing — it ensures `.livewiki/` exists and optionally prints a note.
+
+It first attempts an allowlisted `mkdir` on `.livewiki/`. If that fails, it checks whether the directory actually exists via a stat call; only when stat also fails does it re-throw an error. Next it checks whether the human-facing `livewiki/` directory (created by Phase 3) exists. If it does not and `quiet` is false, it emits a one-line note suggesting `livewiki init` — but the index proceeds anyway with exit code 0, and quiet mode (used by editor hooks) suppresses the note entirely.
+
+## Reconciling plans against fresh database state
+
+<!-- lw:anchors packages/core/src/indexer.ts#reconcilePlan -->
+
+`reconcilePlan` is the pure decision function that protects the database from concurrent-writer races. It answers one question: given what a plan predicted during the async planning phase and what the `files` row actually says right now, what should the write phase do?
+
+```typescript
+export function reconcilePlan(
+  plan: Pick<FilePlan, "hash" | "eolMigration" | "grammarReprocess" | "prevHash">,
+  fresh: FileRow | undefined,
+  ctx: { grammarReprocessStillPending: boolean },
+): PlanDecision {
+```
+
+`reconcilePlan` takes a plan subset, the fresh file row (or `undefined`), and context about whether grammar reprocessing is still pending; it returns a `PlanDecision` of kind `insert`, `update`, or `converged`.
+
+The function returns `insert` when no fresh row exists. It computes `grammarReprocess` as the plan's flag ANDed with `ctx.grammarReprocessStillPending` — if another writer already applied the current grammar state, the reprocess is no longer needed. When the fresh row is active, its hash matches the plan's hash, and no reprocess is pending, it returns `converged`: another writer already applied these exact bytes, so this run has nothing to do. Otherwise it returns `update` with the fresh row, carrying three re-qualified flags: `reactivated` (true when the fresh row is not active), `eolMigration` (plan's flag ANDed with the check that the fresh hash still equals the plan's previous hash), and the recomputed `grammarReprocess`. This re-qualification is what distinguishes "nobody touched this line" from "another writer got here first" — the two cases need different write decisions.
+
+## The two-phase index pipeline
+
+<!-- lw:anchors packages/core/src/indexer.ts#orchestrateIndex -->
+
+`orchestrateIndex` implements the core pipeline: it reads the planning snapshot, runs async file I/O, then applies all writes inside one synchronous transaction. The two-phase shape exists because better-sqlite3 transactions cannot contain `await`, and holding the write lock across 0.5–15 seconds of file parsing would block every other writer.
+
+```typescript
 async function orchestrateIndex(
   db: import("better-sqlite3").Database,
   repoRoot: string,
@@ -92,106 +106,39 @@ async function orchestrateIndex(
 ): Promise<IndexResult> {
 ```
 
-`orchestrateIndex` takes the open SQLite handle, the resolved repo root, the list of walked file entries (path + detected language), and the monotonic start time recorded by `run`. It returns a populated `IndexResult` whose `durationMs` field is computed from `startedAt` so the caller can render the actual wall-clock cost of the run.
+`orchestrateIndex` takes an open database, the repository root, the walked file list, and a start timestamp; it returns a promise of `IndexResult`.
 
-The pipeline runs in two phases. **Phase A** is the asynchronous outer loop: for each walked entry, `orchestrateIndex` calls `stat` to learn the size, applies the `MAX_FILE_BYTES` gate, reads the file as UTF-8, applies the NUL-byte binary sniff inside the `BINARY_SNIFF_BYTES` window, normalises line endings once via `normalizeEol` (the CRLF→LF flip is invisible to everything downstream — the hash, the tree-sitter parse, and the symbol/call/rationale extraction all consume the same normalised string), and finally computes `sha256(content)`. **Phase B** is a synchronous SQLite transaction that drains the collected `FilePlan` array in one shot; the split exists because `better-sqlite3` transactions cannot contain `await`, so all I/O and CPU-bound parsing must finish before the DB writes begin.
+Before Phase A, the function reads the planning snapshot: a map of path → file row from `SELECT * FROM files`. This snapshot is deliberately NOT authoritative for any write — its only jobs are letting Phase A skip unchanged files without parsing and bounding the delete sweep. It also reads `meta.grammar_state`, comparing the stored grammar state against the current one via `grammarStateEqual`. When the state changed, it pre-loads the set of file IDs that have active symbols (used to decide which zero-symbol files need directed re-parsing).
 
-Before Phase A, `orchestrateIndex` reads a `path → FileRow` map from `files`. This is the **planning** snapshot, and it is explicitly not the authority for any write — see "Concurrent writers" below. Its two jobs are to let Phase A skip unchanged files without parsing them, and to bound the delete sweep to paths this run actually compared against the walk.
+Phase A iterates the walked files with serial `await` calls (parallelism does not help on SSD I/O or single-core CPU). For each entry it stats the file; if that fails it warns and skips. It applies the size cap (comparing `stat.size` against the `MAX_FILE_BYTES` upper bound), reads the file as UTF-8, and rejects binary content whose leading window contains a NUL byte. It normalizes EOL characters once via `normalizeEol` — every downstream consumer (hash, parser, extractors) uses that single normalized string. It computes the SHA-256 hash, looks up the previous row, and decides among three non-parse paths: unchanged (hash matches, no grammar reprocess needed, row not reactivated), grammar reprocess (hash matches but the grammar set changed and the file is a candidate), or legacy EOL migration (stored hash matches raw bytes or a CRLF-expanded variant but not the normalized hash). For files that need parsing, it checks `grammarForExtension`; files with no grammar are indexed as zero-symbol (tier 2 of the coverage ladder). On grammar-mapped files it attempts `parseSource`, extracts symbols with byte ranges, calls, and — unless the file is likely generated — rationales. Parse failures warn but do not abort the run. Successful plans are pushed into the `plans` array.
 
-The hash comparison drives three branches per file:
+Phase B opens a `BEGIN IMMEDIATE` transaction via `runWriteTransaction("index", writeAll)` — immediate, not deferred, so writers queue at the boundary instead of colliding mid-mutation. Inside the transaction the function re-reads `files` fresh (the decisive state, safe because the lock is held), reads the legacy-window flag `eol_hashes_normalized`, and re-reads `grammar_state` to compute `grammarReprocessStillPending`. It prepares all insert/update/delete statements once, then loops over plans. For each plan it calls `reconcilePlan` against the fresh row: `converged` increments the unchanged counter and skips; `insert` performs a file INSERT; `update` soft-deletes old active symbols (counting reactivation, EOL migration, grammar reprocess, or ordinary update on separate axes), then re-inserts today's symbols with per-symbol EOL realignment where the legacy window and matching CRLF-expanded hashes prove code identity. Calls and rationales are deleted and re-inserted wholesale per file — they have no identity worth preserving. A final sweep marks files absent from the walk as deleted, iterating the planning snapshot as the candidate set but reading each row's current state from `freshFiles` so a concurrent writer's new file is never swept. The transaction then runs `resolveCalls`, stamps `last_indexed_at`, closes the legacy window with `eol_hashes_normalized`, and records the current grammar state.
 
-- **Hash match, no grammar drift, row already `active`** — fast path. The file is counted as `filesUnchanged` and skipped entirely; no parse, no write.
-- **Hash match but the row is `status='deleted'`** — flagged `reactivated`, and the fast path is deliberately *not* taken. A file that returns to the walk (restored, renamed back, un-ignored) must go back to `active` even though its bytes never moved; skipping it would leave the row and its symbols invisible to every consumer that filters on `status='active'`. Falling through to the normal parse path is what makes the revival correct: only the symbols the file actually has today are re-inserted as active, so a symbol that a previous generation of the same file soft-deleted stays deleted.
-- **Hash mismatch that matches the legacy raw-bytes hash** (or, on files containing zero `\r\n`, the legacy CRLF-expanded hash) — flagged `eolMigration`. The on-disk bytes are provably identical modulo line endings, so only the hash *algorithm* changed (the old ledger stored `sha256(rawContent)`, the new one stores `sha256(normalizeEol(rawContent))`). The file counts as unchanged but is re-parsed and its anchors are realigned in Phase B against the new normalised hash.
-- **Hash mismatch that does not match either legacy shape** — normal `filesUpdated` path: parse, then upsert symbols, calls, and rationales.
+The function returns an assembled `IndexResult` with `filesScanned` from the walk length, all per-category counters accumulated during both phases, and `durationMs` measured from the start timestamp.
 
-`grammarStateEqual` is the helper that powers grammar-set drift detection. Before the file loop closes, `orchestrateIndex` reads the freshly built `grammarState()` (an `ext → grammar` map plus a `vendored .wasm` artefact-identity map) and compares it against the `meta.grammar_state` value persisted by the previous run, via `grammarStateEqual`. When the two states differ, three change shapes are covered: a *grammar added* case (files indexed before the new grammar landed hold zero symbols under a prose label while the tier is now anchored), a *grammar removed or remapped* case (`map[ext]` differs — remap leaves symbols parsed with the wrong grammar stale, removal requires dropping them), and a *grammar version bumped* case (the ext→grammar map is identical, only the `artifacts` map moves because the vendored `.wasm` identity changed).
+## Grammar state comparison and human-readable output
 
-```ts
+<!-- lw:anchors packages/core/src/indexer.ts#grammarStateEqual packages/core/src/indexer.ts#formatHuman -->
+
+The grammar upgrade mechanism and the CLI summary output each have their own small helper.
+
+```typescript
 function grammarStateEqual(a: GrammarState, b: GrammarState): boolean {
 ```
 
-`grammarStateEqual` takes two `GrammarState` records — each carrying an extension-to-grammar map and a vendored-artefact identity map — and returns `true` only when both maps have the same number of keys and every key maps to the same value. The comparison is field-by-field and intentionally ignores key insertion order: the stored JSON is not guaranteed to round-trip keys in any particular order, so a sorted-membership test is the only honest way to detect "same set of grammars" without producing phantom drift on every run.
+`grammarStateEqual` takes two `GrammarState` objects and returns a boolean indicating whether their extension maps and artifact maps are structurally identical.
 
-When drift is detected, files that previously held zero symbols get a *directed re-parse* under the new grammar so the upgrade is visible in `result.filesReprocessedGrammar` rather than silently stale. Pre-feature databases (no stored `grammar_state`) only get the zero-symbol re-parse — files that already have symbols stay as indexed, and precision for them starts with the *next* state change.
+It compares the `.map` objects (extension → grammar) and `.artifacts` objects (grammar → wasm identity) by key count and per-key value. Field-by-field comparison is required because stored JSON key order is not guaranteed to match a fresh in-memory build. This function is what lets the indexer detect grammar additions, removals, remappings, and version bumps — each of which may require re-parsing previously indexed files.
 
-<!-- lw:anchors packages/core/src/indexer.ts#orchestrateIndex packages/core/src/indexer.ts#grammarStateEqual -->
-
-These anchors identify indexed symbols whose implementation is part of this module.
-
-## Parsing, plan collection, and transactional upsert
-
-For every file that needs parsing, Phase A invokes `parseSource` only when `grammarForExtension(ext)` returns a grammar; otherwise the file is indexed as a zero-symbol prose tier (no warning). A successful parse yields `symbols`, `calls`, and `rationales`, with rationales suppressed for files that look generated (header sniff). Parse failures are surfaced as a non-fatal warning and the file proceeds with zero extracted data.
-
-All parsed files are pushed into a `FilePlan` array that the Phase B transaction drains. The transaction opens by re-reading the state it is about to decide from: the `files` map, `meta.eol_hashes_normalized`, and `meta.grammar_state`. Those reads happen *inside* the transaction, after the write lock is held, so nothing they say can move before `COMMIT`.
-
-Then, per file in a fixed order:
-
-0. Reconcile the plan against the row that exists now (`reconcilePlan`), which decides insert, update, or converged.
-1. Mark previously active symbols as `deleted` (soft delete — preserves the content hash for moved-symbol detection).
-2. Update or insert the `files` row with the new hash, size, mtime, and language label.
-3. For each new symbol, insert the active row; for EOL migrations, realign `anchors.symbol_hash_at_doc` to the new hash in the same transaction so the ledger never sees the raw→normalised transition.
-4. Wholesale-replace the file's `calls` and `rationales` (these have no move-tracking identity).
-5. For files present in the previous DB but absent from the current walk, mark the file row and its active symbols as `deleted` and bump `filesDeleted` / `symbolsDeleted` accordingly. Rows that are **already** `deleted` are skipped outright: re-marking them wrote the same value back, re-counted the same history on every run so `removed` never converged, and burned four statements per row. Their history is preserved, never purged — only a real `active → deleted` transition is counted.
-
-A file whose row was `deleted` and is back in the walk goes through step 2 like any other update, because `updateFile` already sets `status = 'active'`; the reactivation therefore needs no statement of its own. It is counted on `result.filesReactivated`, an axis orthogonal to the content buckets: the same file still lands in `filesUnchanged` when its bytes are identical, or in `filesUpdated` when they also moved.
-
-The transaction also runs `resolveCalls`, writes `last_indexed_at`, closes the EOL legacy window by recording `eol_hashes_normalized`, and persists the current `grammar_state` so the next run can diff it. Because all of this happens inside one transaction, the index is atomic: readers never see a partial reindex, and a run that fails part-way leaves nothing behind — including the `files` rows and `sqlite_sequence` counter its earlier statements had already touched.
-
-## Concurrent writers
-
-More than one process indexes the same `index.db` in normal use: a CLI invocation, an editor hook, and the MCP server's watcher all call this module. The shape that made that unsafe was a snapshot read before the async phase and consumed after it:
-
-```
-SELECT * FROM files          ← planning snapshot
-…0.5s–15s of read + parse…   ← another writer commits in here
-BEGIN DEFERRED               ← no lock yet
-INSERT INTO files …          ← decided from the stale snapshot
-                             → UNIQUE constraint failed: files.path
-```
-
-That reproduced 100% of the time with 2, 3 and 5 concurrent processes: exactly one writer won and the rest died on that `INSERT`. It was never corruption — the loser's transaction rolled back whole and a later run converged — but it made concurrent indexing a coin toss with an exit code attached, and the error named a database constraint for what was really "another process indexed first".
-
-The write phase now runs through `runWriteTransaction`, so it takes the transaction as **IMMEDIATE**: writers queue at `BEGIN`, one at a time, instead of discovering the conflict halfway through their own mutation. Phase A stays outside, so the lock is never held across I/O. `reconcilePlan` then decides each file from the fresh row rather than the planning snapshot:
-
-- **no row** → insert;
-- **row present, active, already at this plan's hash** (and no grammar re-parse still pending) → **converged**: another writer applied these exact bytes while this run was parsing. Nothing is written. It is a success, not a conflict — the file *is* indexed, correctly, at the content read from disk;
-- **anything else** → update against the fresh row's id.
-
-Two planning flags are re-qualified there, because each describes work that made sense against a row that may have since moved. An `eolMigration` only holds while the row still carries the hash it was diagnosed against — otherwise "only the hash algorithm changed" is no longer proven, and claiming it would count a real content change as unchanged while realigning anchors to it. A `grammarReprocess` only holds while `meta.grammar_state` is still stale, since a writer that committed ahead stamped the current state along with the re-parsed symbols.
-
-A fresh row whose hash matches neither the planning snapshot nor this plan means a concurrent writer indexed different bytes than the ones this run read. The plan is applied anyway: it reflects bytes that really were on disk, and the next run re-reads disk and converges either way. Picking a winner there would need a re-read inside the transaction, which is exactly the async work Phase A exists to keep out of the write lock.
-
-The delete sweep is split across the two states for the same reason. It iterates the **planning** snapshot as its candidate set — a path another writer created after this run's walk was never absent from disk as far as this run can tell, so sweeping the fresh map instead would let a slow writer soft-delete a file a faster one had just indexed — and reads each row's id and status from the **fresh** map, so a concurrently deleted row is not re-counted and a concurrently reactivated one is not deleted off a stale id.
-
-### What the counters mean under contention
-
-`filesAdded`, `filesUpdated` and `filesDeleted` report work **this run performed**. A run that planned an insert and found, under the write lock, that another writer had already applied the same bytes reports the file in `filesUnchanged` — the file is indexed and correct, it was simply not this run's write. So across a racing set of writers each unit of real work is claimed exactly once, and no run reports work it did not do. `filesReactivated`, `filesReprocessedGrammar` and `symbolsAdded` follow the same rule: they count only when this run actually wrote.
-
-### Waiting, and giving up
-
-Queueing at `BEGIN` means waiting, and the wait is bounded by `busy_timeout` (see `openIndex`). When it runs out, `runWriteTransaction` raises a `WriteContentionError` naming the blocked phase and telling the user to wait for the running writer — never a raw `SQLITE_BUSY` surfacing as "database is locked". The database is still correct in that case: the writer that held the lock committed its own work in full.
-
-Measured after the change: 2, 3 and 5 concurrent processes over ten trials each — 100 processes — all exit 0, with a final logical state identical to a single writer's and a later run that changes nothing. The timeout is reachable, but only well past realistic use: five processes each inserting 200 new files into the same repo queue past 30 s, and the four that give up say so actionably while the index the winner left is complete and a fixpoint.
-
-The `legacyWindow` flag is the gate for per-symbol EOL realignment: it is open only on the first post-upgrade run (when `meta.eol_hashes_normalized` is absent) and closed by the transaction itself, so steady-state normalised operation pays zero extra hashing cost. While open, an updated file captures the old key→hash map; for each re-inserted symbol whose stored hash does not match the new one, the indexer re-cuts the slice from the normalised text and compares `sha256(expandEolToCrlf(slice))` against the old hash. A match means the code is identical modulo line endings and triggers the same in-transaction anchor realignment; a miss follows the normal `changed` debt path.
-
-## Human-readable result rendering
-
-After `orchestrateIndex` commits its transaction and returns the populated `IndexResult`, the caller hands that record to `formatHuman` whenever a human-friendly rendering is needed. The function is intentionally side-effect-free — it does no I/O, touches no globals, and never throws on a well-formed `IndexResult` — so it is safe to call from CLI, hooks, and tests alike.
-
-```ts
+```typescript
 export function formatHuman(result: IndexResult): string {
 ```
 
-`formatHuman` takes the `IndexResult` produced by `run` and returns a multi-line string built line by line. The output always carries three baseline lines: the header `livewiki index: OK in <durationMs>ms`, a `files:` tally using the `+new ~updated =unchanged -removed` convention (so a developer can scan a single line and see whether the run was a no-op or a real change), and a `symbols:` tally distinguishing *added* from *marked deleted*. On top of those baselines, `formatHuman` emits three *conditional* lines: a `grammar upgrade:` line that appears only when `result.filesReprocessedGrammar > 0` (so the developer knows an unchanged file was deliberately re-parsed because the grammar set moved), a `reactivated:` line that appears only when `result.filesReactivated > 0` (a previously removed file is back in the walk — a state transition the `+new ~updated =unchanged -removed` tally cannot express on its own), and a `skipped:` line that appears only when either binary or oversized skips occurred (so a quiet run stays quiet, and a noisy run points the human at the right counter).
+`formatHuman` takes an `IndexResult` and returns a multi-line human-readable summary string.
 
-The reason this lives in its own exported function rather than inline in `run` is that the indexer is also called programmatically — by hooks, by tests, and by other tooling — where the caller wants the raw `IndexResult` and renders it itself. Exporting `formatHuman` lets every caller pick the rendering it needs without duplicating the formatting logic.
-
-<!-- lw:anchors packages/core/src/indexer.ts#formatHuman -->
-
-These anchors identify indexed symbols whose implementation is part of this module.
+It always prints an OK line with the duration and a files line (`+new`, `~updated`, `=unchanged`, `-removed`), followed by a symbols line. It conditionally appends lines for grammar-upgrade re-parses, reactivated files, and skipped binary/oversized files — each only when the relevant counter is nonzero, so a clean incremental run stays concise.
 
 ## Tests
 
 Covered by `packages/core/src/indexer.test.ts` (same-name test file on disk).
+Likely also exercised by `packages/core/src/indexer-reconcile.test.ts` (name-prefix match, not verified).

@@ -1,15 +1,25 @@
-flowchart TD
-  caller["Repair pipeline caller"] --> s4["repairStage4ArtifactMechanically"]
-  caller --> ub["repairUpperBoundArtifactMechanically"]
-  s4 --> codes4["MECHANICAL_STAGE4_CODES"]
-  ub --> codesUB["MECHANICAL_UPPER_BOUND_CODES"]
-  s4 --> esc["escapeFirstUnmatchedInlineDelimiter"]
-  s4 --> strip["stripManualControlMarkers"]
-  s4 --> rem["removeLaterSectionAnchorOccurrences"]
-  ub --> rem
-  ub --> sync["syncFrontmatterAnchorsList"]
-  rem --> anc["sectionAncestorAt"]
-  rem --> headingMap["TOPIC_SECTION_HEADING_MAP / flow default"]
-  s4 --> validator["validateStage4Artifact"]
-  ub --> validator
-  validator --> mask["markdown-mask helpers"]
+flowchart LR
+    subgraph ArtifactRepair["artifact-repair.ts"]
+        A[MECHANICAL_STAGE4_CODES]
+        B[MECHANICAL_UPPER_BOUND_CODES]
+        C[repairStage4ArtifactMechanically]
+        D[repairUpperBoundArtifactMechanically]
+        E[removeLaterSectionAnchorOccurrences]
+        F[sectionAncestorAt]
+        G[stripManualControlMarkers]
+        H[escapeFirstUnmatchedInlineDelimiter]
+        I[normalizeTopicFrontmatterLists]
+        J[syncFrontmatterAnchorsList]
+        K[syncTopicRelatedLinks]
+        L[TOPIC_SECTION_HEADING_MAP]
+    end
+    C --> E
+    C --> G
+    C --> H
+    D --> E
+    D --> F
+    D --> I
+    D --> J
+    D --> K
+    E --> F
+    D --> L

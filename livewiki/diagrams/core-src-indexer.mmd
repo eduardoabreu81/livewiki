@@ -1,36 +1,15 @@
-flowchart LR
-  caller([Caller])
-  subgraph indexer[indexer.ts]
-    run["run"]
-    ensureLivewikiDir["ensureLivewikiDir"]
-    orchestrateIndex["orchestrateIndex"]
-    grammarStateEqual["grammarStateEqual"]
-    formatHuman["formatHuman"]
-    MAX_FILE_BYTES["MAX_FILE_BYTES"]
-    BINARY_SNIFF_BYTES["BINARY_SNIFF_BYTES"]
-  end
-  subgraph deps[Dependencies]
-    walker[walker.ts]
-    parser[parser.ts]
-    symbols[symbols.ts]
-    hashes[hashes.ts]
-    safeIo[safe-io.ts]
-    db[db.ts]
-    callRes[call-resolution.ts]
-    fs[(node:fs/promises)]
-  end
-  caller --> run
-  run --> ensureLivewikiDir
-  run --> safeIo
-  run --> walker
-  run --> orchestrateIndex
-  orchestrateIndex --> parser
-  orchestrateIndex --> symbols
-  orchestrateIndex --> hashes
-  orchestrateIndex --> grammarStateEqual
-  orchestrateIndex --> db
-  orchestrateIndex --> callRes
-  orchestrateIndex --> fs
-  orchestrateIndex -.uses thresholds.-> MAX_FILE_BYTES
-  orchestrateIndex -.uses thresholds.-> BINARY_SNIFF_BYTES
-  orchestrateIndex --> formatHuman
+graph TD
+    A[run] --> B[ensureLivewikiDir]
+    A --> C[safe-io resolve DB path]
+    A --> D[walkRepo]
+    A --> E[orchestrateIndex]
+    E --> F[initParser]
+    E --> G[Phase A: read + hash + parse files]
+    G --> H[grammarStateEqual]
+    G --> I[parseSource / symbols.js]
+    E --> J[Phase B: write transaction]
+    J --> K[reconcilePlan per file]
+    K --> L[insert/update/delete SQL statements]
+    L --> M[resolveCalls]
+    L --> N[store meta: grammar_state]
+    E --> O[formatHuman result]

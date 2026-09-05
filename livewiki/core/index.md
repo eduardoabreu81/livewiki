@@ -5,7 +5,7 @@ owner: generated
 
 # packages/core
 
-The `packages/core` directory is the package that holds the shared engine of the livewiki project: the TypeScript sources, configuration, and test harness that other packages depend on. With `package.json`, `tsconfig.json`, and `vitest.config.ts` present and no exported symbols detected here, this folder currently serves as the structural home for the core compile and unit-test setup rather than as a runtime entry point.
+`packages/core` is the foundation of the livewiki monorepo, providing the essential configuration and documentation for the package that holds the core business logic. It contains the TypeScript build configuration (`tsconfig.json`), the testing setup (`vitest.config.ts`), package metadata (`package.json`), and a `README.md` for orientation. This directory establishes the structural and tooling baseline that other packages build upon, ensuring the core module compiles cleanly, tests run consistently, and developers have a clear entry point to understand its role in the broader wiki system.
 
 ## Files
 

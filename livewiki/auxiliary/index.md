@@ -11,6 +11,7 @@ Reference inventory for tests, fixtures, tooling, benchmarks, and repository doc
 
 - [packages/core/src](../core-src/index.md)
 - [packages/cli/src](../cli-src/index.md)
+- [packages/mcp/src](../mcp-src/index.md)
 
 ## Test fixtures
 
@@ -36,3 +37,4 @@ Reference inventory for tests, fixtures, tooling, benchmarks, and repository doc
 
 - [docs](../docs/index.md)
 - [docs/plans](../plans/index.md)
+- [docs/releases](../releases/index.md)

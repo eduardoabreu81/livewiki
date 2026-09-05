@@ -5,7 +5,7 @@ owner: generated
 
 # packages/cli/templates/claude-code
 
-This directory holds a Claude Code template shipped by the CLI: a single `settings.local.json` scaffold that consumers receive when scaffolding a Claude Code–style project from the CLI.
+This directory holds the template for a local Claude Code settings file (`settings.local.json`) that is meant to be copied into a user’s project when scaffolding. The template serves as a starting point so that, after the CLI generates a new project, the user has a preconfigured local settings file for Claude Code (Anthropic’s coding assistant) without having to create it manually. Since the file is inert until instantiated, this folder is purely a packaging location for that scaffolding asset within the CLI’s template collection.
 
 ## Files
 

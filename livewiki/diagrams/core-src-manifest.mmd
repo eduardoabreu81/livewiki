@@ -1,31 +1,30 @@
 flowchart LR
-  subgraph manifest_ts[packages/core/src/manifest.ts]
-    BUILD["buildManifest"]
-    HASH["computeSnapshotHash"]
-    LIST["listFiles"]
-    READ["readManifest"]
-    WRITE["writeManifestIfChanged"]
-    EQ["manifestsEqual"]
-    PEQ["pendingBatchEqual"]
-    CONST["MANIFEST_VERSION<br/>MANIFEST_REL_PATH"]
-  end
-  safeIo["safe-io.js"]
-  hashes["hashes.js (sha256)"]
-  batch["batch-state.js<br/>(PendingBatchRef)"]
-  disk[("livewiki/.manifest.json")]
-  livewikiDir[("livewiki/ tree")]
-
-  WRITE --> READ
-  WRITE --> EQ
-  EQ --> PEQ
-  READ --> safeIo
-  WRITE --> safeIo
-  READ --> disk
-  WRITE --> disk
-  HASH --> LIST
-  HASH --> hashes
-  LIST --> livewikiDir
-  BUILD --> CONST
-  WRITE --> BUILD
-  HASH --> WRITE
-  PEQ --> batch
+    subgraph PublicAPI["Public API"]
+        readManifest --> parseManifest
+        writeManifestIfChanged --> serializeManifest
+        writeManifestIfChanged --> manifestsEqual
+        writeManifestState --> buildManifest
+        recordArtifactReceipt --> upsertArtifactReceipt
+        removeArtifactReceiptsForPaths --> buildManifest
+        refreshArtifactReceiptHashes --> buildManifest
+    end
+    subgraph Internals["Internal helpers"]
+        manifestsEqual --> pendingBatchEqual
+        manifestsEqual --> artifactReceiptsEqual
+        buildManifest --> normalizeArtifactReceipts
+        upsertArtifactReceipt --> normalizeArtifactReceipts
+        parseManifest --> normalizeArtifactReceipts
+        computeSnapshotHash --> listFiles
+        writeManifestState --> isConcurrentWrite
+        recordArtifactReceipt --> isConcurrentWrite
+        removeArtifactReceiptsForPaths --> isConcurrentWrite
+        refreshArtifactReceiptHashes --> isConcurrentWrite
+        isConcurrentWrite --> yieldToConcurrentWriter
+    end
+    subgraph Storage["Safe I/O"]
+        writeManifestIfChanged --> safeIoWrite["safeIo.writeTextAtomic"]
+        writeManifestState --> safeIoWrite
+        recordArtifactReceipt --> safeIoWrite
+        removeArtifactReceiptsForPaths --> safeIoWrite
+        refreshArtifactReceiptHashes --> safeIoWrite
+    end

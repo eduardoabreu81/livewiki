@@ -1,0 +1,25 @@
+graph TD
+    subgraph Exports
+        WATCH_DEBOUNCE_MS
+        WATCH_PERMANENT_ATTEMPTS
+        WATCH_RETRY_BASE_MS
+        WATCH_RETRY_MAX_MS
+        isWriteContention
+        createSyncQueue
+    end
+    subgraph createSyncQueue
+        state[Pending/running flags]
+        timer[Single timer]
+        runFn[User-supplied run]
+        policy[scheduleAfterFailure]
+    end
+    WATCH_DEBOUNCE_MS --> createSyncQueue
+    WATCH_PERMANENT_ATTEMPTS --> createSyncQueue
+    WATCH_RETRY_BASE_MS --> createSyncQueue
+    WATCH_RETRY_MAX_MS --> createSyncQueue
+    isWriteContention --> createSyncQueue
+    createSyncQueue --> state
+    createSyncQueue --> timer
+    createSyncQueue --> runFn
+    createSyncQueue --> policy
+    policy --> isWriteContention

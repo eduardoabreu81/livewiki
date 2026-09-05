@@ -5,7 +5,7 @@ owner: generated
 
 # .github/workflows
 
-This directory holds the GitHub Actions workflow definitions that drive the repository's automated checks: a cross-platform continuous-integration pipeline that builds and tests the project on multiple operating systems, and a docs-debt workflow that tracks and reports outstanding documentation gaps. Together they encode the project's automated quality gates so contributors get consistent feedback on every change.
+This directory holds the repository’s continuous-integration configuration for the livewiki product. The `cross-platform-ci.yml` workflow defines the automated build and test pipeline that runs across different operating systems to verify code changes, while `docs-debt.yml` tracks documentation obligations, ensuring that documentation gaps are surfaced as part of the development process. Together, these workflow files enforce project quality gates without requiring manual intervention.
 
 ## Files
 

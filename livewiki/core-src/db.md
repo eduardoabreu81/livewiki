@@ -1,35 +1,73 @@
 ---
-title: SQLite Schema and Index Migration
+title: SQLite Index Schema and Migration Pipeline
 owner: generated
 anchors:
 - packages/core/src/db.ts#CURRENT_SCHEMA_VERSION
 - packages/core/src/db.ts#MIGRATION_SQL_V3
 - packages/core/src/db.ts#SCHEMA_SQL
 - packages/core/src/db.ts#SCHEMA_VERSION_KEY
+- packages/core/src/db.ts#SchemaAccessError
+- packages/core/src/db.ts#SchemaAccessError.constructor
+- packages/core/src/db.ts#SchemaAccessError.describe
+- packages/core/src/db.ts#WRITE_LOCK_TIMEOUT_MS
+- packages/core/src/db.ts#WriteContentionError
+- packages/core/src/db.ts#WriteContentionError.constructor
+- packages/core/src/db.ts#assertExistingIndexIsUsable
+- packages/core/src/db.ts#bootstrapIndexHandle
+- packages/core/src/db.ts#isWriteContention
 - packages/core/src/db.ts#migrateV3ToV4
 - packages/core/src/db.ts#migrateV4ToV5
 - packages/core/src/db.ts#migrateV5ToV6
 - packages/core/src/db.ts#migrateV6ToV7
 - packages/core/src/db.ts#migrateV7ToV8
 - packages/core/src/db.ts#migrateV8ToV9
+- packages/core/src/db.ts#migrateV9ToV10
 - packages/core/src/db.ts#migrationsFor
 - packages/core/src/db.ts#openIndex
+- packages/core/src/db.ts#openIndexReadOnly
 - packages/core/src/db.ts#postV3Migrations
+- packages/core/src/db.ts#readStoredVersion
+- packages/core/src/db.ts#runWriteTransaction
 ---
 
-# SQLite Schema and Index Migration
+# SQLite Index Schema and Migration Pipeline
 
-This page details the SQLite database schema, its creation, and the versioned migration path that keeps an existing index compatible with new features.
+This module manages the livewiki SQLite index database at `<repoRoot>/.livewiki/index.db`, handling schema creation, versioned migrations, write-lock contention, and read-only access.
 
 ## When to use this page
 
-- Understand the tables and indexes that make up the livewiki index database and what each one stores.
-- Learn how the database is opened, initialized, and upgraded from an older schema version.
-- Modify or extend the schema by adding a new table, column, or index and the corresponding migration function.
+- Understand how livewiki's derived index database is structured and versioned.
+- Trace how schema migrations are discovered and applied from an older index version.
+- Learn how write transactions handle SQLite's single-writer constraint and contention errors.
+- See how read-only commands validate an existing index without ever modifying it.
 
 ## How it fits
 
-`packages/core/src/db.ts` is the single owner of the SQLite index database (`<repoRoot>/.livewiki/index.db`). It declares the full schema as SQL, a set of versioned migration functions, and the routine that opens a database and applies the necessary migrations. This database is a derived cache: all data can be rebuilt by reindexing the repository, and the source of truth is the markdown in the repository. The module is consumed by indexers and other core components that need to read or write the index.
+The livewiki system derives a SQLite index from repository markdown, storing files, symbols, call graphs, rationales, documentation debt, batch runs, and manual blocks. Per SPEC rule #3, this database is purely cache — deleting `.livewiki/` only requires a `reindex`. This module provides the `db` layer that all indexers, CLI commands, editor hooks, and the MCP server's watcher rely on for opening, migrating, and querying the index. It sits between the safe-io validated path handling and higher-level indexer logic.
+
+```mermaid
+graph TD
+    A[openIndex] --> B[bootstrapIndexHandle]
+    A --> C[isWriteContention]
+    C --> D[WriteContentionError]
+    B --> E[assertExistingIndexIsUsable]
+    B --> F[SCHEMA_SQL]
+    B --> G[migrationsFor]
+    B --> H[postV3Migrations]
+    F --> I[Schema v3 Tables]
+    G --> J[MIGRATION_SQL_V3]
+    H --> K[migrateV3ToV4]
+    H --> L[migrateV4ToV5]
+    H --> M[migrateV5ToV6]
+    H --> N[migrateV6ToV7]
+    H --> O[migrateV7ToV8]
+    H --> P[migrateV8ToV9]
+    H --> Q[migrateV9ToV10]
+    E --> R[readStoredVersion]
+    R --> S[SchemaAccessError]
+    T[openIndexReadOnly] --> R
+    T --> S
+```
 
 ## Diagram
 
@@ -37,165 +75,107 @@ This page details the SQLite database schema, its creation, and the versioned mi
 %% livewiki/diagrams/core-src-db.mmd
 ```
 
-## Schema Definition and Versioning
+## Constants and schema baseline
 
-<!-- lw:anchors packages/core/src/db.ts#CURRENT_SCHEMA_VERSION packages/core/src/db.ts#SCHEMA_VERSION_KEY packages/core/src/db.ts#SCHEMA_SQL -->
+<!-- lw:anchors packages/core/src/db.ts#CURRENT_SCHEMA_VERSION packages/core/src/db.ts#SCHEMA_VERSION_KEY packages/core/src/db.ts#SCHEMA_SQL packages/core/src/db.ts#MIGRATION_SQL_V3 -->
 
-The module's purpose is to define the durable, reproducible shape of the index. It does this by declaring the current schema version, the key used to track that version, and the SQL that creates the complete database from scratch.
+The module begins by defining constants that anchor all version handling. `CURRENT_SCHEMA_VERSION` is an `export const` holding the integer `10` — the highest schema revision this build understands. `SCHEMA_VERSION_KEY` is an `export const` string `"schema_version"` used as the `meta` table row key that records which revision an index currently holds.
 
-`CURRENT_SCHEMA_VERSION` is a constant set to `10`, representing the latest schema revision the code understands. `SCHEMA_VERSION_KEY` is the string `"schema_version"`, used as the primary key in the `meta` table to store the database's current version. These two constants allow `openIndex` to detect when a database on disk is older than the code expects and to trigger the upgrade path.
+The `SCHEMA_SQL` export is a large `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` block describing the full current shape: `files`, `symbols`, `meta`, `anchors`, `debt`, `undocumented`, `batch_runs`, `batch_tasks`, `doc_pages`, `manual_blocks`, `calls`, and `rationales`. These idempotent statements add missing tables without altering existing ones — crucial because a migrated database and a from-scratch database must converge to identical shape. Notably, the `idx_batch_tasks_claim` index is deliberately absent from `SCHEMA_SQL` because its column `lease_expires_at` does not exist on pre-v10 databases when this block executes.
 
-`SCHEMA_SQL` is a large SQL string that creates every table and index with `IF NOT EXISTS` guards, making it idempotent — it runs safely on a brand-new database or an existing one. The schema covers the core indexing tables (`files`, `symbols`, `meta`), documentation work tracking (`anchors`, `debt`, `undocumented`), batch execution state (`batch_runs`, `batch_tasks`), generated documentation pages (`doc_pages`, `manual_blocks`), the symbol call graph (`calls`), and intent evidence (`rationales`). Each table is designed for a specific data lifecycle: `symbols` uses a partial unique index so that soft-deleted rows (status `'deleted'`) do not block re-inserting the same key; `debt` uses a partial index on unresolved rows to efficiently find open documentation work. `batch_tasks` carries `claim_id` and `lease_expires_at`, the per-execution claim the agent bootstrap queue uses to hand one task to exactly one executor. The schema is the canonical definition, and migration functions reuse the same statements where possible so a migrated database converges to the same shape as a fresh one.
+`MIGRATION_SQL_V3` is an `export const` runnable SQL string performing the v2→v3 light migration: it adds `debt.symbol_key`, recreates the `symbols` table to replace an inline UNIQUE constraint with a partial unique index respecting soft-deleted rows, and builds the open-debt partial index.
 
-One index is deliberately absent from `SCHEMA_SQL`: `idx_batch_tasks_claim` spans `lease_expires_at`, and `SCHEMA_SQL` runs *before* migrations, so on a pre-v10 database `CREATE INDEX` would reference a column that does not exist yet. `openIndex` creates that index after the migration step instead, where both the from-scratch and the migrated path already have the column.
+## Write lock and contention handling
 
-## Legacy Migration SQL (v2 → v3)
+<!-- lw:anchors packages/core/src/db.ts#WRITE_LOCK_TIMEOUT_MS packages/core/src/db.ts#WriteContentionError packages/core/src/db.ts#WriteContentionError.constructor packages/core/src/db.ts#isWriteContention packages/core/src/db.ts#runWriteTransaction -->
 
-<!-- lw:anchors packages/core/src/db.ts#MIGRATION_SQL_V3 -->
+SQLite permits exactly one writer at a time, and livewiki invokes indexing concurrently (CLI, editor hook, MCP watcher). To avoid a second writer discovering conflict halfway through its mutation, the indexer begins a write phase with `BEGIN IMMEDIATE`; a second writer queues rather than failing early. `WRITE_LOCK_TIMEOUT_MS` is an `export const` set to 30,000 (milliseconds), covering a full write transaction of the writer ahead in line — measured worst case is about 5.5 seconds for 300 new files, so 30s leaves headroom for a cold first index while still failing in a human timeframe for a wedged writer. It governs reads in the same connection too, protecting readers from checkpointing writers.
 
-This section covers the first migration, which is expressed as a plain SQL string because it handles structural table changes that are difficult to express as idempotent JavaScript.
+`WriteContentionError` is an `export class` extending `Error` with a `readonly code = "INDEX_WRITE_CONTENTION"`. Its constructor `constructor(readonly phase: string, cause: unknown)` builds a message telling the user another process holds the write lock and which phase (`phase`) was blocked. This class takes the phase name and the original cause, producing a human-actionable instruction rather than raw "database is locked".
 
-`MIGRATION_SQL_V3` upgrades a database from version 2 to version 3. It adds a `symbol_key` column to the `debt` table, which survives anchor removal and helps resolve orphaned debt rows. It also rebuilds the `symbols` table without the inline `UNIQUE` constraint on `key` (which the original schema declared as part of the table definition, not a separate index, so it cannot be dropped) and replaces it with a partial unique index that only applies to active rows. Finally, it recreates the `idx_debt_open` partial index that keys open documentation work by symbol, page, and event. The `INSERT INTO symbols_new ... SELECT FROM symbols` pattern preserves all existing rows during the table reconstruction.
+`isWriteContention` is an `export function` that takes an `unknown` error value and returns a boolean; it extracts a `code` property and checks for `"SQLITE_BUSY"`, `"SQLITE_BUSY_SNAPSHOT"`, or `"SQLITE_BUSY_TIMEOUT"`. `SQLITE_BUSY_SNAPSHOT` is listed for completeness but not expected — it means a DEFERRED transaction read first and then tried to write, bypassing the busy handler; callers using `BEGIN IMMEDIATE` prevent this by design.
 
-## Post-V3 Migration Functions
+`runWriteTransaction` is an `export function` with signature `runWriteTransaction<T>(phase: string, tx: { immediate: () => T }): T`; it takes a phase name and a transaction object holding an `immediate` function, then invokes `tx.immediate()`. If that throws, the function checks `isWriteContention(err)`; on contention it throws a new `WriteContentionError`; every other error passes through untouched because it genuinely is an index error.
 
-### v3 → v4: Batch Run Audit
+## Schema access validation errors
 
-<!-- lw:anchors packages/core/src/db.ts#migrateV3ToV4 -->
+<!-- lw:anchors packages/core/src/db.ts#SchemaAccessError packages/core/src/db.ts#SchemaAccessError.constructor packages/core/src/db.ts#SchemaAccessError.describe packages/core/src/db.ts#readStoredVersion -->
 
-This migration extends the `batch_runs` table with audit fields needed for the Phase 3 token accounting and resilient batch execution.
+When the existing index cannot be used as-is, the appropriate fix is a human action (rerun indexing, upgrade LiveWiki, delete cache) rather than a retry. `SchemaAccessError` is an `export class` extending `Error` that encodes one of four problems: `"missing_database"` (no `.livewiki/index.db`), `"missing_version"` (file exists but no `schema_version` row), `"older_index"` (older than this build — needs migration), `"newer_index"` (newer than this build — requires upgrading LiveWiki).
 
-`export function migrateV3ToV4(db: Database.Database): void`
-This function takes a database handle and returns nothing, adding columns to the `batch_runs` table to capture more information about each batch run.
+Its constructor is `constructor(kind: SchemaAccessProblem, stored: number | null, dbPath: string)`; it takes the problem kind, the stored version integer (or `null`), and the database path, and constructs a human-readable message via the static helper, then records `kind`, `stored`, and `current = CURRENT_SCHEMA_VERSION` as public fields. The message for older/newer indexes includes both the stored and current version numbers, giving the user concrete guidance.
 
-The function checks the existing columns of `batch_runs` using `PRAGMA table_info` and only adds the missing ones (`finished_at`, `started_by`, `summary_json`) via `ALTER TABLE` because SQLite has no `ADD COLUMN IF NOT EXISTS`. It also creates the indexes on `batch_runs.status` and `batch_tasks(run_id, status)` with `IF NOT EXISTS` so that status queries on old runs remain fast. The `started_by` column records whether a CLI or an agent initiated the run, while `summary_json` stores an aggregate snapshot for reporting without reprocessing tasks.
+The private static method `describe(kind: SchemaAccessProblem, stored: number | null, dbPath: string): string` takes the same three arguments and returns one of four tailored instructions. It switches over `kind`: `"missing_database"` instructs running `livewiki index` (read-only commands never create the index); `"missing_version"` explains the provenance cannot be determined and recommends deleting plus rebuilding; `"older_index"` tells the user to run `livewiki index` to migrate; `"newer_index"` advises upgrading LiveWiki.
 
-### v4 → v5: Call Graph Table
+`readStoredVersion` is a `function` taking a `better-sqlite3` database handle and returning `number | null`; it runs a `SELECT value FROM meta WHERE key = ?` with `SCHEMA_VERSION_KEY`. If no row exists it returns `null`; if the stored string fails `Number.parseInt` it also returns `null` — meaning an unparseable value is treated as absence for migration-eligibility purposes.
 
-<!-- lw:anchors packages/core/src/db.ts#migrateV4ToV5 -->
+## Existing index usability gate
 
-This migration introduces the `calls` table, which stores raw call sites between symbols to support blast-radius analysis.
+<!-- lw:anchors packages/core/src/db.ts#assertExistingIndexIsUsable -->
 
-`export function migrateV4ToV5(db: Database.Database): void`
-This function takes a database handle and returns nothing, creating the `calls` table and its indexes if they do not already exist.
+`assertExistingIndexIsUsable` is a `function` that takes an already-open database handle plus its path and returns `void`; it decides whether an existing index file may be initialized and migrated further. This check runs read-only — every probe is a `SELECT`, so a rejection leaves the file byte-for-byte untouched.
 
-The function reuses the same `CREATE TABLE IF NOT EXISTS calls` and `CREATE INDEX IF NOT EXISTS` statements present in `SCHEMA_SQL` rather than duplicating them. An edge has no identity worth preserving across a re-parse, so call rows are recomputed wholesale when a file is reindexed. The `resolved_callee_key` column is populated later by a separate resolution pass and stays `NULL` for callees that could not be confidently mapped to a single symbol.
+It first counts user objects in `sqlite_master`, excluding `sqlite_*` internal entries, and returns early if that count is zero (effectively empty — indistinguishable from a fresh file). With domain objects present, it verifies a `meta` table exists; absence means unknown provenance, so it closes the handle and throws `SchemaAccessError("missing_version", null, dbPath)`. Next it calls `readStoredVersion`; a `null` result likewise throws `missing_version`. Finally, if the stored version exceeds `CURRENT_SCHEMA_VERSION`, it closes and throws `newer_index` — an older version is allowed to pass since migrations will follow.
 
-### v5 → v6: Rationale Evidence Table
+## Index bootstrap flow
 
-<!-- lw:anchors packages/core/src/db.ts#migrateV5ToV6 -->
+<!-- lw:anchors packages/core/src/db.ts#bootstrapIndexHandle packages/core/src/db.ts#openIndex -->
 
-This migration adds the `rationales` table, which stores intent evidence extracted from tagged comments and docstrings.
+`openIndex` is the writer's `export function` with signature `openIndex(dbPath: string): Database.Database`; it takes a filesystem path and returns an open, migrated `better-sqlite3` handle. The caller (indexer) has already validated the path through safe-io and created the `.livewiki/` directory. This function captures `existedBefore` via `nodeFsSync.existsSync(dbPath)` before constructing `new Database(dbPath)`, because once opened the file exists either way. It sets `busy_timeout = WRITE_LOCK_TIMEOUT_MS` as the FIRST statement — before the compatibility gate, journal mode, or any DDL — because position matters: previously placed after `journal_mode`, the driver's default 5s timeout applied to earlier statements, which is a fifth of the promised wait.
 
-`export function migrateV5ToV6(db: Database.Database): void`
-This function takes a database handle and returns nothing, creating the `rationales` table and its indexes if they are not already present.
+Everything after busy_timeout can contend with another process, yet none of it runs inside `runWriteTransaction`. `openIndex` therefore wraps `bootstrapIndexHandle` in a try/catch; if `isWriteContention` detects contention it closes the handle (preventing a Windows `-wal` file lock) and throws `WriteContentionError("open", err)`. Any other error propagates unchanged.
 
-The function reuses the `CREATE TABLE IF NOT EXISTS rationales` and `CREATE INDEX IF NOT EXISTS` statements from `SCHEMA_SQL`, so a from-scratch database and a migrated one converge to the same structure. A `symbol_key` of `NULL` is allowed for file-level rationales that positional attribution could not attach to one symbol, and `content_hash` holds the SHA-256 of the normalized text for a future "rationale changed" signal.
+`bootstrapIndexHandle` is a `function` taking the open handle, path, and `existedBefore` flag; it returns `void` and performs the mutable half of initialization. It runs the compatibility gate FIRST by calling `assertExistingIndexIsUsable` when the file existed — rejecting mutates nothing, before journal mode or DDL. Then it sets `journal_mode = WAL`, `foreign_keys = ON`, `synchronous = NORMAL`. Because `SCHEMA_SQL` carries a v9 index expression referencing columns a pre-v8 database lacks, `bootstrapIndexHandle` checks whether `debt` lacks `symbol_key` or `doc_page_id`; if so it creates a temporary legacy `idx_debt_open` on `(anchor_id, event)` so `CREATE INDEX IF NOT EXISTS` stays safe until migrations replace it. After `db.exec(SCHEMA_SQL)`, it reads `schema_version` from `meta`. With no row, it inserts `CURRENT_SCHEMA_VERSION` directly. With a stored lower version, it iterates `migrationsFor` (discriminating a string via `db.exec` versus a function by direct call) then `postV3Migrations`, and finally updates `schema_version`. It ends by creating `idx_batch_tasks_claim` — the one index excluded from `SCHEMA_SQL` because `lease_expires_at` exists only after migration or from-scratch creation.
 
-### v6 → v7: Call Confidence Column
-
-<!-- lw:anchors packages/core/src/db.ts#migrateV6ToV7 -->
-
-This migration adds a `confidence` column to the `calls` table to tag each call edge as either extracted or inferred.
-
-`export function migrateV6ToV7(db: Database.Database): void`
-This function takes a database handle and returns nothing, adding a `confidence` column to `calls` if it is missing.
-
-Because `SCHEMA_SQL` already includes the column, a fresh database must not re-add it; the function checks the actual columns of `calls` via `PRAGMA table_info` and only runs `ALTER TABLE calls ADD COLUMN confidence TEXT NOT NULL DEFAULT 'inferred'` when the column is absent. Existing rows keep the default `'inferred'`, which is conservative because a pre-v7 edge has no recorded extraction shape and is therefore treated as a name guess.
-
-### v7 → v8: Durable Debt Page Reference
-
-<!-- lw:anchors packages/core/src/db.ts#migrateV7ToV8 -->
-
-This migration adds `debt.doc_page_id`, a durable page reference for debt rows, so that a debt item remains actionable even if its anchor row is later removed.
-
-`export function migrateV7ToV8(db: Database.Database): void`
-This function takes a database handle and returns nothing, adding a `doc_page_id` column to the `debt` table and backfilling it from existing anchor rows.
-
-The function first checks whether `debt` already has the column, adding it via `ALTER TABLE` if not. It then runs an `UPDATE` that backfills `doc_page_id` from the `anchors` table for any debt rows that have an `anchor_id` but no `doc_page_id`, leaving rows with a dangling anchor reference untouched so that CLI and MCP debt surfaces do not show unactionable rows.
-
-### v8 → v9: Deduplicate Open Debt
-
-<!-- lw:anchors packages/core/src/db.ts#migrateV8ToV9 -->
-
-This migration cleans up the `debt` table so that each open documentation work unit is keyed uniquely by symbol, page, and event.
-
-`export function migrateV8ToV9(db: Database.Database): void`
-This function takes a database handle and returns nothing, running a transaction that removes duplicate open debt rows and invalidates stale `'deleted'` rows.
-
-The function drops the old `idx_debt_open` index, then deletes duplicate open rows that share the same `symbol_key`, `doc_page_id`, and `event` (keeping only the lowest `id`). It also deletes open `event = 'deleted'` rows whose symbol is now `'active'`, because those debt items are no longer valid. Finally, it recreates `idx_debt_open` with the current definition. The whole operation runs inside `db.transaction()` so that a failure leaves the database unchanged. Resolved rows are never touched because they are historical payment records.
-
-## Selecting and Applying Migrations
+## Version-to-migration selection
 
 <!-- lw:anchors packages/core/src/db.ts#migrationsFor packages/core/src/db.ts#postV3Migrations -->
 
-This section covers the two functions that decide which migrations to run for a database at a given version. The first handles the single legacy SQL migration, while the second returns the ordered list of post-V3 JavaScript functions.
+The migration pipeline is split into two selection functions so tests remain deterministic and SQL strings versus JavaScript functions execute differently. `migrationsFor` is an `export function` whose signature `migrationsFor(fromVersion: number, toVersion: number)` takes two version integers and returns an array where each element is either a SQL string or `(db) => void` function. Currently it only pushes `MIGRATION_SQL_V3` when `fromVersion < 3 && toVersion >= 3`, serving the pre-v3 path.
 
-`export function migrationsFor(
-  fromVersion: number,
-  toVersion: number,
-): Array<string | ((db: Database.Database) => void)>`
-This function takes the current database version and the target version, and returns an array of migration steps (either SQL strings or functions) needed to move from the first to the second. It currently only pushes `MIGRATION_SQL_V3` when `fromVersion < 3` and `toVersion >= 3`, because that is the only migration that must be applied as raw SQL.
+`postV3Migrations` is an `export function` with signature `postV3Migrations(fromVersion: number, toVersion: number)` taking two version integers and returning an array of `(db) => void` functions. It conditionally pushes each migration step for destination versions above the start: `migrateV3ToV4` for crossing 4, `migrateV4ToV5` for 5, and so on through `migrateV9ToV10`. Each entry runs only when the source is below the destination threshold, matching the guard logic in `bootstrapIndexHandle`.
 
-`export function postV3Migrations(
-  fromVersion: number,
-  toVersion: number,
-): Array<(db: Database.Database) => void>`
-This function takes the current database version and the target version, and returns an array of migration functions that must run after the legacy SQL migration. It pushes a migration function for each version boundary crossed, in order: `migrateV3ToV4`, `migrateV4ToV5`, `migrateV5ToV6`, `migrateV6ToV7`, `migrateV7ToV8`, `migrateV8ToV9`, and `migrateV9ToV10`. These functions are separated so that deterministic tests can control which migrations run, and because the caller executes SQL strings and JavaScript functions differently.
+## Migration v3 to v4
 
-### v9 → v10: Claim and Lease Columns on `batch_tasks`
+<!-- lw:anchors packages/core/src/db.ts#migrateV3ToV4 -->
 
-`migrateV9ToV10` adds `claim_id` and `lease_expires_at` to `batch_tasks`, guarding each `ALTER TABLE` behind `PRAGMA table_info` because SQLite has no `ADD COLUMN IF NOT EXISTS` and `SCHEMA_SQL` already carries both columns on a from-scratch database. It also creates `idx_batch_tasks_claim`.
+`migrateV3ToV4` is an `export function` taking a `better-sqlite3` handle and returning void; it extends `batch_runs` with Phase-3 run-audit columns and creates backing indexes. This is a JavaScript function rather than a pure SQL string because `SCHEMA_SQL` already carries the current shape; on a from-scratch database the columns exist, so idempotence demands checking `PRAGMA table_info(batch_runs)` before each `ALTER TABLE ADD COLUMN` since SQLite lacks `ADD COLUMN IF NOT EXISTS`.
 
-Existing rows are deliberately left with `NULL` in both columns. A pre-v10 database holds no claim information, so any row it left in `'running'` reads as unclaimed and is immediately re-claimable — which is exactly the crash-recovery behavior that existed before the claim was introduced.
+The function collects existing column names into a `Set`, then conditionally adds `finished_at INTEGER`, `started_by TEXT NOT NULL DEFAULT 'cli'`, and `summary_json TEXT`. It then executes `CREATE INDEX IF NOT EXISTS` statements for `idx_batch_runs_status`, `idx_batch_tasks_run_id`, and `idx_batch_tasks_status` — making `batch status <run>` O(1).
 
-## Database Opening and Initialization
+## Migrations v4 to v6 — new tables
 
-<!-- lw:anchors packages/core/src/db.ts#openIndex -->
+<!-- lw:anchors packages/core/src/db.ts#migrateV4ToV5 packages/core/src/db.ts#migrateV5ToV6 -->
 
-This section explains the core routine that opens (or creates) the index database, applies any pending migrations, and records the schema version.
+Both `migrateV4ToV5` and `migrateV5ToV6` are `export function`s taking a database handle and returning void, each introducing one new table plus its indexes. Each reuses the identical `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` statements found in `SCHEMA_SQL` rather than duplicating definitions, guaranteeing a from-scratch database and a migrated one converge to the same shape.
 
-`export function openIndex(dbPath: string): Database.Database`
-This function takes the filesystem path to the database file and returns an open, migrated, write-enabled SQLite database handle.
+`migrateV4ToV5` creates the `calls` table for symbol call graphs: raw, deterministic call sites extracted per file, with `resolved_callee_key` left `NULL` for callees the resolver could not confidently match. Backing indexes cover `file_id`, `caller_key`, and `resolved_callee_key`. `migrateV5ToV6` creates `rationales` for intent evidence from tagged comments and docstrings, with `symbol_key` nullable for file-level entries; indexes cover `file_id` and `symbol_key`.
 
-The function first derives the directory from `dbPath` and creates a `better-sqlite3` `Database` instance without recursive `mkdir`, so it fails closed if the `.livewiki/` directory disappears between setup and open. `busy_timeout = WRITE_LOCK_TIMEOUT_MS` is then the **first** statement issued on that handle — before the compatibility gate, before `journal_mode`, before any DDL. Position is load-bearing, not just the value: the pragma used to sit after `journal_mode`, so every statement ahead of it ran on the driver's own 5 s default, a fifth of the wait this function exists to grant. The remaining pragmas follow: WAL journal mode for concurrent access, `foreign_keys = ON` for referential integrity, and `synchronous = NORMAL` for a good durability/performance trade-off.
+## Migrations v6 to v7 — column addition
 
-Everything after that pragma runs inside a contention boundary. The compatibility gate, the journal-mode change, `SCHEMA_SQL`, the migrations, the version stamp and the claim index are all persistent operations, and none of them runs inside `runWriteTransaction` — so a `SQLITE_BUSY` there used to reach the user as a bare `database is locked` with nothing to act on, while every other write phase reported an actionable error. `openIndex` now classifies its own phase the same way: `SQLITE_BUSY`, `SQLITE_BUSY_SNAPSHOT` and `SQLITE_BUSY_TIMEOUT` become `WriteContentionError` with `phase: "open"`, keeping the original SQLite error as `cause`, and the handle is closed on that path so a caller that reports the error does not leave the file pinned on Windows. Anything that is not contention — an incompatible schema, corruption, a constraint — propagates untouched.
+<!-- lw:anchors packages/core/src/db.ts#migrateV6ToV7 -->
 
-The journal-mode change deserves its own note: SQLite never consults the busy handler for it, so it returns `SQLITE_BUSY` immediately and no timeout could ever have absorbed it. That case is classified rather than retried; there is no sleep and no retry loop anywhere in this path.
+`migrateV6ToV7` is an `export function` taking a database handle and returning void; it adds `calls.confidence` tagging each call-graph edge as `'extracted'` or `'inferred'`. As with other column additions it is a JS function checking `PRAGMA table_info(calls)` because `SCHEMA_SQL` already carries the column for fresh databases. If `confidence` is absent it executes `ALTER TABLE calls ADD COLUMN confidence TEXT NOT NULL DEFAULT 'inferred'` — `'inferred'` is the conservative default because a pre-v7 edge has no recorded extraction shape.
 
-The `busy_timeout` value is set explicitly rather than inherited. The driver's own default is 5 s, which is shorter than a single large write transaction — measured at about 5.5 s to insert 300 new files with their symbols, calls and rationales — so a queued writer used to die while the writer ahead of it was doing ordinary work. `WRITE_LOCK_TIMEOUT_MS` is 30 s: long enough for a cold first index on a large repo, short enough that a genuinely wedged writer is noticed in a human timeframe. SQLite allows exactly one writer at a time and `livewiki index` really is run concurrently — a CLI invocation, an editor hook, and the MCP server's watcher all reach for the same file — so this value is the length of the writer queue, not a workaround.
+## Migrations v7 to v10 — debt and batch task columns
 
-Because `SCHEMA_SQL` references the v9 `idx_debt_open` index expression (which needs `symbol_key` and `doc_page_id` columns that pre-v8 databases lack), the function first checks whether a `debt` table exists and, if so, whether it is missing either column. In that case it creates a temporary legacy index on `(anchor_id, event)` using the same name, so that the subsequent `CREATE INDEX IF NOT EXISTS` in `SCHEMA_SQL` is safe until the migrations add the columns.
+<!-- lw:anchors packages/core/src/db.ts#migrateV7ToV8 packages/core/src/db.ts#migrateV8ToV9 packages/core/src/db.ts#migrateV9ToV10 -->
 
-After running `SCHEMA_SQL`, the function reads the `schema_version` value from the `meta` table. If there is no version row, it inserts the current `CURRENT_SCHEMA_VERSION`.
+`migrateV7ToV8` is an `export function` taking a database handle and returning void; it makes `debt` rows durable even when the original `anchors` row disappears. Checking `PRAGMA table_info(debt)`, it conditionally adds `doc_page_id INTEGER`, then backfills from still-existing anchor rows using an `UPDATE ... SELECT` so `debt.doc_page_id` holds the page reference even after the anchor is edited out.
 
-The compatibility gate for a newer database runs **first**, immediately after the handle is opened and before `journal_mode`, the legacy-index bootstrap, `SCHEMA_SQL`, any migration or any version write. It runs only for a file that existed **before** this call — captured with `existsSync` before the handle, since once SQLite opens the path the distinction is gone — and delegates to `assertExistingIndexIsUsable`, which reads and never writes.
+`migrateV8ToV9` is an `export function` taking a database handle and returning void; it deduplicates open debt rows that legitimate page-plus-section anchors created, and invalidates open `'deleted'` rows whose symbol is active again. The entire operation runs inside `db.transaction`: it drops `idx_debt_open`, deletes duplicate open rows keeping only the smallest `id` per `(symbol_key, COALESCE(doc_page_id, -1), event)` group, deletes open `'deleted'` rows where an active `symbols` row with the same key exists, and recreates `idx_debt_open`. Resolved rows are historical payment records and remain untouched.
 
-That helper defines "effectively empty" strictly: **zero user objects in `sqlite_master`** (SQLite's own `sqlite_*` entries excluded). Such a file carries no state whose provenance could be in question and is treated exactly like a brand-new one. The absence of `schema_version` is deliberately **not** used as that evidence, because a file can hold a fully populated `debt` or `batch_runs` table and still have lost its version row.
+`migrateV9ToV10` is an `export function` taking a database handle and returning void; it adds `batch_tasks.claim_id` and `batch_tasks.lease_expires_at` for the agent bootstrap queue's one-task-per-executor claims. It is idempotent via `PRAGMA table_info` because `SCHEMA_SQL` already carries both columns on fresh databases. Existing pre-v10 rows deliberately retain `NULL` in both columns — any row left `'running'` becomes immediately re-claimable, replicating pre-existing crash-recovery semantics. It finally creates `idx_batch_tasks_claim` on `(run_id, status, lease_expires_at)`.
 
-With objects present, two refusals follow. A missing `meta` table, or a `meta` without `schema_version`, is `missing_version`: which migrations the file has already been through cannot be determined, and stamping CURRENT there would declare work complete that never ran — `CREATE TABLE IF NOT EXISTS` adds missing tables but never adds missing COLUMNS to tables that already exist, so a v3-shaped `debt` would end up labelled v10 without `symbol_key` or `doc_page_id`. The index is derived data, so the message says to delete it and run `livewiki index`. A version **higher** than `CURRENT_SCHEMA_VERSION` is `newer_index`. Placement is the property, not just the check: rejecting after those steps still re-journalled the file and recreated dropped tables and indexes, which is the opposite of failing closed. The guard matters because every migration list is keyed on `fromVersion < X`: a database from a newer build selects zero migrations, so without the guard it fell through to the update below and rewrote `schema_version` *downwards* — relabelling, say, a v10 index as v9 while leaving the tables exactly as the newer build had left them. Migrations are never run in reverse, and a version lower than the one already recorded is never written.
+## Read-only index opener
 
-Otherwise, when the stored version is lower, it applies the migrations from `migrationsFor(stored, CURRENT_SCHEMA_VERSION)` (running each entry either as `db.exec` on a string or by invoking it as a function), then every function from `postV3Migrations(stored, CURRENT_SCHEMA_VERSION)` in order, and finally updates the `meta` table to the current version.
+<!-- lw:anchors packages/core/src/db.ts#openIndexReadOnly -->
 
-After the migration step — and only there — it creates `idx_batch_tasks_claim`. That index spans `lease_expires_at`, a column a pre-v10 file does not have while `SCHEMA_SQL` is running; creating it last is what lets both the from-scratch path (column from `SCHEMA_SQL`) and the migrated path (column from `migrateV9ToV10`) converge on the same indexes. It then returns the ready-to-use database handle. The function deliberately does not validate the path because the caller has already passed it through safe-io.
+`openIndexReadOnly` is an `export function` with signature `openIndexReadOnly(dbPath: string): Database.Database`; it takes a filesystem path and returns a read-only `better-sqlite3` handle for an existing index. Unlike `openIndex`, it creates nothing, runs no DDL, applies no migration, and never writes `schema_version`. This matters because a pending migration would turn every plain read into a write queueing behind the write lock (measurably `SQLITE_BUSY` after the full timeout), and an older build could otherwise migrate or relabel a newer database.
 
-`openIndex` is the **writer's** entry point: it creates the file, runs DDL, migrates, and stamps the version. Commands that only query must not do any of that, and use `openIndexReadOnly` instead.
-
-`export function openIndexReadOnly(dbPath: string): Database.Database` opens an **existing** index for querying only. It creates nothing, runs no `SCHEMA_SQL`, applies no migration, creates no index, and never writes `schema_version`. It opens with `readonly: true`, applies only session-scoped pragmas (`busy_timeout`; notably **not** `journal_mode`, which rewrites the file header), then validates the recorded version and refuses with an instruction when it cannot serve the query honestly: `missing_database` (run `livewiki index`), `missing_version`, `older_index` (run `livewiki index` to migrate), or `newer_index` (update LiveWiki).
-
-Two problems motivated the split. A pending migration turned every read into a write that waits on the write lock — measured as `SQLITE_BUSY` after the full busy timeout while another process held a transaction, where a plain read-only connection answered in about 2 ms. And a build whose `CURRENT_SCHEMA_VERSION` was lower than the database's would migrate, or relabel, an index belonging to a newer build. `readonly: true` is safe on a WAL database even when no `-wal`/`-shm` sidecars exist: SQLite materialises the shared memory it needs without modifying the database.
-
-`SchemaAccessError` carries `kind`, `stored` and `current`, and its message names the corrective action rather than surfacing a raw SQLite error or a misleading "database is locked".
-
-## Running a Write Transaction
-
-`runWriteTransaction(phase, tx)` is how the writers in this codebase execute a `db.transaction(...)`. It does two things.
-
-It takes the transaction as **IMMEDIATE**. Under the default DEFERRED, a transaction holds no lock at `BEGIN` and only reaches for it at its first write, so two writers both entered their mutation and the second discovered the conflict mid-flight — after it had already decided what to write from state that had since moved. IMMEDIATE puts the contention at the boundary: writers queue at `BEGIN`, one at a time, and whichever gets in can read decisive state knowing it cannot change before `COMMIT`.
-
-It also classifies the failure. `SQLITE_BUSY` reaching the user as "database is locked" says nothing about what to do, so it becomes a `WriteContentionError` carrying `code = "INDEX_WRITE_CONTENTION"`, the `phase` that was blocked, the original error as `cause`, and a message that says to wait for the running writer and try again. Every other failure passes through untouched, because it is a real error about the repo or the index. `SQLITE_BUSY_SNAPSHOT` is handled for completeness but should never appear: it means a DEFERRED transaction read first and then tried to write against a snapshot another writer had already invalidated, and the busy handler is never consulted for it — no timeout can absorb it. Seeing it means a write transaction lost its immediate boundary.
+It first checks file existence via `nodeFsSync.existsSync`, throwing `SchemaAccessError("missing_database", null, dbPath)` if absent. After constructing `new Database(dbPath, { readonly: true })`, it sets only `busy_timeout = 5000` session-scoped (no `journal_mode` which rewrites the header). The remainder sits in a try/catch: it reads the stored version, then throws `missing_version`, `older_index`, or `newer_index` appropriately — but crucially it returns the handle on a version match. On any thrown error it closes the handle before rethrowing, preventing resource leaks.
 
 ## Tests
 
 Covered by `packages/core/src/db.test.ts` (same-name test file on disk).
+Likely also exercised by `packages/core/src/db-schema-access.test.ts` (name-prefix match, not verified).

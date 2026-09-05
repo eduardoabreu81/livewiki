@@ -1,48 +1,437 @@
 {
   "version": 2,
   "lastDocumentedCommit": null,
-  "snapshotHash": "f47af76d076948b6bcfdf975b5005b3caa3b68a12d10d466575cc5f3d9cfbbdc",
-  "updatedAt": "2026-08-16T19:11:14.777Z",
+  "snapshotHash": "4d576928ec990852903d3cd308fbcaeb5d83cce9d0391800c33ef5db1c9e2782",
+  "updatedAt": "2026-09-05T16:31:21.683Z",
   "pendingBatch": null,
   "artifactReceipts": [
     {
+      "taskId": "flow:cli-src-to-core-src",
+      "evidenceHash": "940056e168241930b77fed2ce9ff79c242df44275253c3a00f582b0a8d60041c",
+      "contract": "flow-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/diagrams/flow-cli-src-to-core-src.mmd",
+          "hash": "dfda4954af4ed7b22e41fb19ec7bffc624270a04808e7e6b8acc84799a79ce01"
+        },
+        {
+          "path": "livewiki/flows/cli-src-to-core-src.md",
+          "hash": "079bd37182e1bc3bb4309b726dc51cfcfeffb8f31624279a779dfdc26ccb391b"
+        }
+      ]
+    },
+    {
       "taskId": "flow:cli-src-to-llm",
-      "evidenceHash": "2ed7fde7aeb77a43d253cbaaee69ca4fef1cedcfe88f593f664bb5c052d832c6",
+      "evidenceHash": "1d9c0d49fd28873d3d11a0e51748c18aa177c091d71595087a0d3b97edd424af",
       "contract": "flow-v1",
       "artifacts": [
         {
           "path": "livewiki/diagrams/flow-cli-src-to-llm.mmd",
-          "hash": "5524d6387538edd427011f75eeef846392e013d386be6d3997f42f20a1edc63f"
+          "hash": "9c69732a447862099d1c30730ab18e7d4923fa193f4032faa34ed533148caa1c"
         },
         {
           "path": "livewiki/flows/cli-src-to-llm.md",
-          "hash": "67f6b396fdb70609a6d7764c3c42bc1acbfbe721ebf68cd857d00ab1de22414c"
+          "hash": "6866d898e17139e0aa78016280fa9a71a49602d41ed85258805661869b7c6eb8"
         }
       ]
     },
     {
       "taskId": "flow:mcp-src-to-llm",
-      "evidenceHash": "3af6088798671f7858d468abb9308317b2d5ab21116be9c1fd1b9631414b7f3d",
+      "evidenceHash": "1ecea93f6c27ace61d44cad3a37c9cc6d9da9c222b72b929ffc3b80ace7dde3d",
       "contract": "flow-v1",
       "artifacts": [
         {
           "path": "livewiki/diagrams/flow-mcp-src-to-llm.mmd",
-          "hash": "7dc54b394a9fde9f3b18d92f9a59f0c89ee00af0bd1a14c7e9624b2a08ce628d"
+          "hash": "c8d36305a1b4ab99257ee497c5f06b2f08ae2b99089d101358cff88714d7f0e2"
         },
         {
           "path": "livewiki/flows/mcp-src-to-llm.md",
-          "hash": "bba7bc01cebd9156ea8ee21b7e7e4d3d3775d2804ccbd52c16ecc5b37d24fd6f"
+          "hash": "0b9ebf12495de0f114cc64de88f15b4e5f0533016e8d806d0739b3f17fb7efb3"
         }
       ]
     },
     {
-      "taskId": "topic:f41eeea78a0d",
-      "evidenceHash": "5b805fe87504782c86d2fe68f23d660938c2f910248d4ad3d161a5b9f869b2fe",
+      "taskId": "folder:livewiki/bootstrap-wiki/index.md",
+      "evidenceHash": "82b71944c6ef3ed5224c3467e973c15f73c8aecf5d2337caf34d5ced824cbf49",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/bootstrap-wiki/index.md",
+          "hash": "c6a023513db621a5b177d17422396551cdee49cefb42d0ca71a63d2530b3ea7a"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/claude-code/index.md",
+      "evidenceHash": "d2148ed32bd7e861b5c7c48bdc11aaa54be3a7ba2b2df9261f190386e72f8a78",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/claude-code/index.md",
+          "hash": "27240171174fc05a3b37cc06bdcf75ee56031f1ba27806b1246bc2cb263cdc21"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/cli-scripts/index.md",
+      "evidenceHash": "445e7758bc0e7b75bf6068c306f6b5f634a7ddceb48c31a385bca8c2dd8af46f",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/cli-scripts/index.md",
+          "hash": "ad7fc87ce54c321b484fd1095e48ae408488e8a2839d8e5d11e8a7cf1b7ef919"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/cli-src/index.md",
+      "evidenceHash": "9c8889b7c0452e8a95075c611ef9cb860b384cc9001b0bb4c4e17b1a5e096eda",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/cli-src/index.md",
+          "hash": "1d00eede23aba1b9aa4544963321515740b7e6c7f3ba099f9bd949f92b9fcfee"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/cli/index.md",
+      "evidenceHash": "09d910bb87ca110a6bbeb6df971e487de81797b4bcad73612a7ddecbdd5fbfbc",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/cli/index.md",
+          "hash": "82116ad3de54752a9f188ccae5b8f4bd18c170588325bd26befc2fa1829f09b7"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/cmd/index.md",
+      "evidenceHash": "9137c879984288ea7f3e0499bd0b987ef625e5912dc32c5634605a867392442f",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/cmd/index.md",
+          "hash": "cf9beab775baf84c31e56cacdb561362e164ffeda86ab8821353fa051f877085"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/commands/index.md",
+      "evidenceHash": "905b6318b4c0022d177c8f26abbe27c1245169d50de2c00f5055af4867455ade",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/commands/index.md",
+          "hash": "e773fc3154ba79c4875ebc840ad1c6dbd54fb09147fb15f09b372c594dcfd774"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/core-src/index.md",
+      "evidenceHash": "91fd77b3f3b30bac5b52e2093970ec23ecdec17026d4088ad968560187520b55",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/core-src/index.md",
+          "hash": "810fd20b797ce3aaceda655620723ea88d462750b1084f0ec5172ff8c178d9e6"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/core/index.md",
+      "evidenceHash": "058cc6965c78cb46d33098852ab70f12811ee58dfade2b5a2546dfbc03d1b85b",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/core/index.md",
+          "hash": "d617768393e0d8da8c17c866ce1d015d4956159939efb60489e7ef95a09a85ef"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/docs/index.md",
+      "evidenceHash": "2027c5e1fc4f0de3691a580f1050955816b168c99ac31803a391d5d64bb0627c",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/docs/index.md",
+          "hash": "43b811a0fecb7c144bff394a98749411c8c3e778eff469093c4db6576ad19b64"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/document-as-you-go/index.md",
+      "evidenceHash": "3e92dad3f9ac2479a157b72420a3b0066c2ffc54ce12c82fc4eccb1c403c9449",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/document-as-you-go/index.md",
+          "hash": "1546407c64b9b42870e2aac7b8e8c54fc16b1f68d34033cbec6a68c5da53547f"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/dot-ruff_cache/index.md",
+      "evidenceHash": "e166e0c11570361bcad77cf34b64218ac5ba0ca7facef271050aa037246a1883",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/dot-ruff_cache/index.md",
+          "hash": "8676a91175bef32fe8fd72c841af66588935c13cd198936f39dd8e7e896e6dd8"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/fase2-repo-src/index.md",
+      "evidenceHash": "7c079d754f10eae7f549dae37b1fce9428e8e31c9cbfb0e89c398ddbb60999b0",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/fase2-repo-src/index.md",
+          "hash": "d3d44ac5f7b873fa038e7d6d88f662b09ba779dada459b5502a5971cdc5a2187"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/fixture-server/index.md",
+      "evidenceHash": "e323c983cf9f567c4d1602d24534b69b2c6810c5e0ce918ba362f2c738c42c09",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/fixture-server/index.md",
+          "hash": "07dc89a1f0eba7e11035f373694bc2b56f1fe565e4021bc57c37d91de539ba30"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/fixture/index.md",
+      "evidenceHash": "29ec8c0ad602d0b78cf5fdf0f805f5bae0fb0f43b9ff0476de66b988129218e1",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/fixture/index.md",
+          "hash": "cef179a8c9a717d0947063e748ac4ccaf6c5131a8343a85fba707c7fea276322"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/github-actions/index.md",
+      "evidenceHash": "3b0cd459c37e8ca0f0ed131d07670f372ddafcb4a2e4ba99a9d620962b2cf724",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/github-actions/index.md",
+          "hash": "3b2950ac7e80645fb9a80d317ffafa94c5287853310cbfb8653a3e6ef72ebb5e"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/lib/index.md",
+      "evidenceHash": "57eaff11515f1fb196ce422921264c5156e81bec16ead9867da363c264131935",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/lib/index.md",
+          "hash": "9ba8808e5639178a1e6f233b04be29bcb3f8244a662b4ccc547d8166f923ae69"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/llm/index.md",
+      "evidenceHash": "2a3c42fbbdf0bee1829d24a8a47d554e8b2f10436a19bc48293fe3fbfa661aa2",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/llm/index.md",
+          "hash": "0cc7c291e2e66e4bb0a0ba8dd7ccb3e927b112be61d7a4ebb487a0bc7e98864d"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/mcp-scripts/index.md",
+      "evidenceHash": "2d9368de512c854ce714d9f4578a42a53df69c0b47c03d155849f969714745b8",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/mcp-scripts/index.md",
+          "hash": "68150ada8381ea1304c1efab4769e0af703cab1a90cdea7c1df3fd57f5064453"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/mcp-src/index.md",
+      "evidenceHash": "8352fa4073a501e9a611e9a240186932899ee89a23868f9139a57d25a99f2656",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/mcp-src/index.md",
+          "hash": "79adbbae42eb7a8a7be8c64bd848b1d0a7f9e0ea26b81447e946fc6f34dd69e7"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/mcp/index.md",
+      "evidenceHash": "b35e621164eadfa4856b40ba1d3e04935a058c17bf7a2fe6aea46ef0f8d7d006",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/mcp/index.md",
+          "hash": "9ae0f5dbce1f5458d379d1da27ae5139740c7f33de5cd96f4f5e4baa560b9608"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/model/index.md",
+      "evidenceHash": "66c77f5ffb8a32f8c33d8f1c00778e95dd3865fc5ffda7cb47bd668cb82fb61f",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/model/index.md",
+          "hash": "8ad178465c8f8193755336b23ccb06439132f1b110a296a3b85e8a19cbf3c7a7"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/plans/index.md",
+      "evidenceHash": "cf5e7e68dd8cdc4271ebbfa1c09dcc12982658d4a20ccbdde485f1c8440e1e81",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/plans/index.md",
+          "hash": "e588d65d879c5827e313f90066960dd17fcfe2b6bae3e54bf29c091a2ce26fec"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/releases/index.md",
+      "evidenceHash": "660071b02cefad7ddd46daacb74a438b55dcf921102b30a7280ca48465361009",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/releases/index.md",
+          "hash": "b4c3594817746371fd4d08b1e41ab7c47a3bfecaaf711e59bc8193b8c9d24b2f"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/root/index.md",
+      "evidenceHash": "41f277bea8c47d28abc3f563175f46de018ca8cadf96a3f9fbef58ebbee9dc7c",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/root/index.md",
+          "hash": "f24adcdfa966e4ec33ff2224740b270fe7b186ff81b82cb716535fb2eafb65ad"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/sample-go-repo-server/index.md",
+      "evidenceHash": "cf752d7c999cc9e305c11026758a26202ed93fefdf3ae289f5b9e25ce55d20d8",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/sample-go-repo-server/index.md",
+          "hash": "81ee3fb5eaafb9a5f1e56b9ea86e76d8f35b969920b2682808cdc13a3acce78a"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/sample-go-repo/index.md",
+      "evidenceHash": "49570a555d34ac634a6bb88eb7902075cbd37a3c6b534c361534596fe5c88e99",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/sample-go-repo/index.md",
+          "hash": "206879b36e299c8187296ac190cf907bfd966f2fc2498aed8510b4d4b110eefb"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/sample-rust-repo-src/index.md",
+      "evidenceHash": "2b6b9d4a3b39d18a026efc8aadc214d5cef01a9e69f989fb9b425504412707ab",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/sample-rust-repo-src/index.md",
+          "hash": "fe0c247a0bf2aea7727c5aa5ab9a6ec856f07ed2de29287b11d2c0c64945c5f7"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/sample-rust-repo/index.md",
+      "evidenceHash": "d06740f3a30f0a762aa90b0bdddbfda8e65066f229c51f72cfe6c6a6ca8f066e",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/sample-rust-repo/index.md",
+          "hash": "d5ae16eb22ea9e983c96467acdf8a8b7564e6508023db0a86068cab4e955bf83"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/sample-ts-repo-src/index.md",
+      "evidenceHash": "ee0b3a831eaceaf39d22e6e5d0bd296d1681703c6829ddba5530487bfd7b5372",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/sample-ts-repo-src/index.md",
+          "hash": "786398438dbab81c8546532c37d6d6ef84673c29407e01185c25a6a2813c67b2"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/scripts/index.md",
+      "evidenceHash": "174eb1fc9a670a0caa2bc161dbeeb0299940589115fc68c7fb759c84bcc396b0",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/scripts/index.md",
+          "hash": "7f99ad154ef66e4544e788ae3ba9dbec64478779880dfeecd409feb999935420"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/templates/index.md",
+      "evidenceHash": "2a0ced6993f2a22bcdfd22a4f25d413931894e48424109e420d742c75476ada5",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/templates/index.md",
+          "hash": "0bd1caf6844b1598859b0bcfbb41dab4984d6c513245a67778e1cbfc9363cd87"
+        }
+      ]
+    },
+    {
+      "taskId": "folder:livewiki/workflows/index.md",
+      "evidenceHash": "3ec6246c953b8eca2a9d4e7413544bbabe7a4ca41133dd057f0a6b76cf33197d",
+      "contract": "folder-page-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/workflows/index.md",
+          "hash": "26c1729c578e22ccced5c0dd30f877523e3f795bf2afcad5b11157f511c10df3"
+        }
+      ]
+    },
+    {
+      "taskId": "topic:2166f5077116",
+      "evidenceHash": "dbb689f80cbabc89dc50c75cb83ca461521066f8208907311a356c0183cd54d8",
       "contract": "topic-v1",
       "artifacts": [
         {
-          "path": "livewiki/topics/testing-f41eeea7.md",
-          "hash": "baee76401d668228438ff3423448f3ae794dbccf052529f64bee5cc9178a3d12"
+          "path": "livewiki/topics/cli-commands-and-core-llm-coordination-2166f507.md",
+          "hash": "3a5c5ef15ace536c06ec786914460071dc3027869903b4bd00b68811fa70b012"
+        }
+      ]
+    },
+    {
+      "taskId": "understanding:14b85d82061d7103377919136078aa73a55a879e3e494ce422bb420af81ee3df",
+      "evidenceHash": "bb123a7db7079090cdba69a3318013cafcf78ecf9f0b9f2b06b3d0857ab18661",
+      "contract": "understanding-v1",
+      "artifacts": [
+        {
+          "path": "livewiki/understanding.md",
+          "hash": "4d11582759d36a1ebf00102de1b7a7d3583f0e2ac8fef8a5617c68b6e5c4cab1"
         }
       ]
     }

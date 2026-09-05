@@ -1,37 +1,40 @@
 ---
-title: Full-text search index over the wiki
+title: SQLite FTS5 full-text search index for wiki pages
 owner: generated
 anchors:
-  - packages/mcp/src/search.ts#close
-  - packages/mcp/src/search.ts#collectMarkdownFiles
-  - packages/mcp/src/search.ts#indexPage
-  - packages/mcp/src/search.ts#openAndIndex
-  - packages/mcp/src/search.ts#queryTerms
-  - packages/mcp/src/search.ts#reindexAll
-  - packages/mcp/src/search.ts#reindexAllPages
-  - packages/mcp/src/search.ts#removePage
-  - packages/mcp/src/search.ts#search
-  - packages/mcp/src/search.ts#snippetAround
-  - packages/mcp/src/search.ts#splitIdentifiers
-  - packages/mcp/src/search.ts#walk
+- packages/mcp/src/search.ts#SearchIndexUnavailableError
+- packages/mcp/src/search.ts#SearchIndexUnavailableError.constructor
+- packages/mcp/src/search.ts#close
+- packages/mcp/src/search.ts#collectMarkdownFiles
+- packages/mcp/src/search.ts#indexPage
+- packages/mcp/src/search.ts#isFtsQueryError
+- packages/mcp/src/search.ts#openAndIndex
+- packages/mcp/src/search.ts#queryTerms
+- packages/mcp/src/search.ts#reindexAll
+- packages/mcp/src/search.ts#reindexAllPages
+- packages/mcp/src/search.ts#removePage
+- packages/mcp/src/search.ts#search
+- packages/mcp/src/search.ts#snippetAround
+- packages/mcp/src/search.ts#splitIdentifiers
+- packages/mcp/src/search.ts#walk
 ---
 
-# Full-text search index over the wiki
+# SQLite FTS5 full-text search index for wiki pages
 
-This page is the searchable index that powers `livewiki_search` over every Markdown page under `livewiki/`.
+This page documents how the livewiki search module builds and queries a full-text index over wiki content using SQLite FTS5.
 
 ## When to use this page
 
-- **Open the FTS5 index on startup.** Use `openAndIndex` when the MCP server boots so `.livewiki/search.db` exists and is fully populated before any `search` call lands.
-- **Run a full-text query.** Use `search` with an FTS5 expression (`term*`, `"exact phrase"`, AND/OR) when a tool caller wants pages matching a query, optionally capped with `SearchOptions.limit`.
-- **Keep the index in sync with writes.** Use `indexPage` after a successful page write and `removePage` after a successful delete so the index mirrors on-disk state.
-- **Force a wholesale rebuild.** Use `reindexAllPages` after debounced sync batches (or any time the index might be stale) instead of tracking per-page diffs.
+- Understand how `livewiki_search` indexes wiki pages and answers full-text queries.
+- Learn why the index uses two FTS5 tables and how identifier splitting makes compound names searchable.
+- Trace how malformed queries versus broken-index failures are distinguished and reported.
+- See how the index is opened, rebuilt, incrementally updated, and closed over its lifecycle.
 
 ## How it fits
 
-`packages/mcp/src/search.ts` is the full-text indexing layer of the `livewiki` MCP server (`packages/mcp`). It is deliberately decoupled from the main `index.db`: the FTS5 search lives in its own `.livewiki/search.db` so the existing v4 schema stays untouched, the core package has no FTS5 dependency, and the search index can always be rebuilt from the wiki (the source of truth) if it ever corrupts. The module exposes a small `SearchIndex` handle wrapping a `better-sqlite3` `Database`; the server holds it, calls `indexPage` / `removePage` on each write/delete, and asks `search` for ranked hits when a `livewiki_search` tool call comes in.
+The `packages/mcp/src/search.ts` module implements the search capability exposed through the livewiki MCP (Model Context Protocol) server. It owns a separate `.livewiki/search.db` database rather than adding a virtual table to the main `.livewiki/index.db`, keeping core free of an FTS5 dependency and letting the search index be rebuilt wholesale from the wiki as source of truth. The module exposes open/index, incremental update, remove, rebuild, and query functions that the MCP server calls during startup, on page writes, and in response to search requests.
 
-The file's shape is: open the DB and seed the schema → rebuild from disk → keep it in sync via per-page updates → answer queries by fanning out across two FTS5 tables.
+The module uses two FTS5 tables sharing identical schema: `wiki_search` stores original page text, while `wiki_search_tokens` stores the same text transformed by identifier splitting. Searches query both tables and merge results, so both whole compounds and their component words produce matches. Snippets always come from the original-text table so readers see real content.
 
 ## Diagram
 
@@ -39,129 +42,139 @@ The file's shape is: open the DB and seed the schema → rebuild from disk → k
 %% livewiki/diagrams/mcp-src-search.mmd
 ```
 
-## Index lifecycle: open, rebuild, close
+## Index lifecycle and database setup
 
-<!-- lw:anchors packages/mcp/src/search.ts#openAndIndex packages/mcp/src/search.ts#close -->
+<!-- lw:anchors packages/mcp/src/search.ts#openAndIndex packages/mcp/src/search.ts#close packages/mcp/src/search.ts#reindexAll -->
 
-`openAndIndex` is the entry point that the MCP server calls once at startup. It resolves the repo root, asks `safe-io` for the validated path of `.livewiki/search.db` (the caller has already passed path validation), creates the file if missing, enables WAL journal mode, declares the two FTS5 virtual tables, and then triggers the first full rebuild before returning the handle. Because the second table is created with `IF NOT EXISTS` and the whole content is reindexed on every startup, no schema migration is needed for old databases.
+`openAndIndex` starts the search subsystem by resolving the repository root to an absolute path, validating the `.livewiki/search.db` location through safe-io, and ensuring the `.livewiki` directory exists. It then opens a better-sqlite3 connection, enables WAL journaling, and creates both FTS5 virtual tables with `CREATE VIRTUAL TABLE IF NOT EXISTS`, so old databases upgrade in place because a full reindex immediately follows.
 
-```ts
+```
 export async function openAndIndex(
   repoRoot: string,
-): Promise<SearchIndex>
+): Promise<SearchIndex> {
 ```
 
-`openAndIndex(repoRoot)` resolves the repo root, opens `.livewiki/search.db`, creates the FTS5 tables if missing, and returns a `SearchIndex` handle once the first rebuild is complete.
+The function takes a repository root path and returns an open index handle containing the database connection. After table creation it calls `reindexAll` to populate both tables from every wiki page, producing a fresh index on every startup.
 
-The lifecycle ends with `close`, which simply closes the underlying SQLite handle and must be called on shutdown so the WAL file is checkpointed cleanly.
+`reindexAll` accepts an open database and absolute repository root, performing an idempotent full rebuild: it first deletes all rows from both FTS5 tables to avoid orphan pages, then discovers markdown files under the `livewiki` directory via `collectMarkdownFiles`, reads each file's content as UTF-8, and writes dual inserts — original text into `wiki_search`, split form into `wiki_search_tokens` — inside a single transaction. Unreadable files are skipped silently, preserving whatever the index already has from earlier runs.
 
-```ts
+The dual-insert transaction guarantees both tables stay consistent for every page; because the module rebuilds on startup, this code path is the primary ingestion mechanism. The transaction wraps prepared insert statements so the hundreds of page inserts commit atomically rather than row by row.
+
+`close` releases the underlying database connection when the MCP server shuts down:
+
+```
 export function close(idx: SearchIndex): void {
 ```
 
-`close(idx)` closes the SQLite database backing the index; the caller is responsible for invoking it on server shutdown.
+It takes the index handle and closes its database, after which no further operations on that handle are valid.
 
-## Identifier splitting: making `resolveDebt` searchable
-
-<!-- lw:anchors packages/mcp/src/search.ts#splitIdentifiers packages/mcp/src/search.ts#queryTerms -->
-
-FTS5's default `unicode61` tokenizer treats `resolveDebt`, `ValidationError`, and `resolve_debt` as opaque single tokens, so a literal search for `debt` would miss `resolveDebt`. `splitIdentifiers` fixes that by rewriting identifier runs into the original token plus its parts, so both forms index.
-
-```ts
-export function splitIdentifiers(text: string): string {
-```
-
-`splitIdentifiers(text)` scans `text` for identifier runs (a letter followed by letters/digits/underscore), splits each run into parts — camelCase/PascalCase at lower→upper boundaries and at acronym runs like `HTTPServerError → HTTP Server Error`, snake_case on `_`, kebab-case is a no-op because FTS5 already splits on `-` — and returns the original token followed by the parts joined with spaces. Single-part runs (plain words) pass through untouched so prose is preserved.
-
-`queryTerms(query)` uses `splitIdentifiers` on the user's query to compute the lowercase pieces it later feeds to `snippetAround`.
-
-```ts
-function queryTerms(query: string): string[] {
-```
-
-`queryTerms(query)` extracts the individual searchable words of `query` by running every identifier run through `splitIdentifiers` and lowercasing each piece, returning them as an array of strings.
-
-## Disk walk: discovering markdown pages
+## Markdown file discovery
 
 <!-- lw:anchors packages/mcp/src/search.ts#collectMarkdownFiles packages/mcp/src/search.ts#walk -->
 
-Before FTS5 can be populated, the module needs the list of pages on disk. `collectMarkdownFiles` is the recursive directory walker that produces that list.
+The file-discovery stage finds every `.md` file beneath the wiki directory so the index can be populated. `collectMarkdownFiles` is the outward-facing asynchronous function that accepts a directory path and returns a promise of an array of absolute markdown file paths.
 
-```ts
+```
 async function collectMarkdownFiles(dir: string): Promise<string[]> {
 ```
 
-`collectMarkdownFiles(dir)` recursively descends from `dir` and returns the absolute paths of every `*.md` file under it.
+It maintains an output array and delegates traversal to the inner `walk` helper. `walk` reads the directory entries with their types; if the directory does not exist, the readdir rejection is caught and the walk returns quietly, treating a missing wiki as an empty collection. For each entry, directories recurse into `walk` while regular files whose names end in `.md` are pushed onto the output list. Symlinked directories are not followed because the code checks only the declared `isDirectory` type bit, and hidden files and non-markdown content are ignored by the extension filter.
 
-```ts
-async function walk(d: string): Promise<void> {
+## Identifier splitting
+
+<!-- lw:anchors packages/mcp/src/search.ts#splitIdentifiers -->
+
+The default FTS5 unicode61 tokenizer treats `resolveDebt`, `ValidationError`, and `resolve_debt` each as one opaque token, so a search for `debt` would never match wiki text containing `resolveDebt` unless the index also stores split forms. `splitIdentifiers` solves that by expanding identifier runs into their component words while keeping the original.
+
+```
+export function splitIdentifiers(text: string): string {
 ```
 
-`walk(d)` is the per-directory step that `collectMarkdownFiles` uses internally: it `readdir`s `d` with directory entries, recurses into subdirectories, and appends files whose name ends in `.md`. If `readdir` itself throws (for example the `livewiki/` directory does not yet exist on a fresh repo), `walk` returns silently and the caller treats that as an empty wiki rather than failing the rebuild.
+The function takes arbitrary text and returns the same text with each identifier run rewritten as the original token followed by its split parts. It works by matching identifier runs against `IDENTIFIER_RE`, then for each token splits on underscores, drops empty segments from leading, trailing, or doubled underscores, and applies two regex replacements: lower-or-digit to upper boundaries split camelCase words, and acronym-run boundaries split runs like `HTTPServerError` into `HTTP Server Error`. Parts are joined with spaces; a token yielding only one part is a plain word and passes through unchanged, so ordinary prose is never altered. The function is pure — identical input always yields identical output — which matters because it runs both at index time and again at query time.
 
-## Bulk rebuild: reindexAll and its public wrapper
+## Rebuild and incremental page operations
 
-<!-- lw:anchors packages/mcp/src/search.ts#reindexAll packages/mcp/src/search.ts#reindexAllPages -->
+<!-- lw:anchors packages/mcp/src/search.ts#reindexAllPages packages/mcp/src/search.ts#indexPage packages/mcp/src/search.ts#removePage -->
 
-Once the DB is open, the actual bulk indexing happens in `reindexAll`. It clears both FTS5 tables first so that pages removed since the last run do not linger as orphans, then walks the wiki, reads each file, and inserts each page into both tables inside a single transaction — the original content into `wiki_search`, and the content run through `splitIdentifiers` into `wiki_search_tokens`.
+`reindexAllPages` exposes the full-rebuild path to the server watcher so that after each debounced sync batch the search index is rebuilt wholesale instead of tracking per-page diffs:
 
-```ts
-async function reindexAll(db: Database.Database, absRoot: string): Promise<void> {
 ```
-
-`reindexAll(db, absRoot)` clears both FTS5 tables, walks the `livewiki/` tree under `absRoot`, reads every markdown page (skipping any that fail to read), and inserts each one into both `wiki_search` (original text) and `wiki_search_tokens` (split text) inside a single transaction so the two tables stay consistent. The whole pass is idempotent and the file-level comment notes a 1000-page repo reindexes in under a second.
-
-`reindexAllPages` is the exported wrapper that the server's sync watcher uses to trigger the same idempotent pass on demand — after each debounced sync batch it re-resolves `repoRoot` and calls `reindexAll(idx.db, absRoot)` instead of tracking per-page diffs.
-
-```ts
 export async function reindexAllPages(idx: SearchIndex, repoRoot: string): Promise<void> {
 ```
 
-`reindexAllPages(idx, repoRoot)` re-runs the startup rebuild against an existing `SearchIndex`, exposing the bulk rebuild to the sync watcher without forcing it to re-open the database.
+It takes the index handle and repository root, resolves the root to an absolute path, and delegates to the same internal `reindexAll` used at startup, preserving the idempotent, sub-second behavior for a 1000-page wiki.
 
-## Incremental updates: indexPage and removePage
+`indexPage` is the incremental update path called by `write_doc` when a single page changes:
 
-<!-- lw:anchors packages/mcp/src/search.ts#indexPage packages/mcp/src/search.ts#removePage -->
-
-After startup the index is kept in lockstep with writes via per-page updates. `indexPage` upserts a single page by deleting any existing rows for its `wiki_path` in both tables and inserting the fresh content (original + split) inside one transaction — FTS5 has no native UPSERT, so delete-then-insert is the standard pattern.
-
-```ts
+```
 export function indexPage(idx: SearchIndex, wikiPath: string, content: string): void {
 ```
 
-`indexPage(idx, wikiPath, content)` replaces the index entries for `wikiPath` with the new `content` in both FTS5 tables atomically.
+The function takes the index handle, the wiki-relative page path, and the new page content. Because FTS5 has no native UPSERT, it wraps DELETE-then-INSERT in a single transaction: first it removes any existing rows for that `wiki_path` from both tables so stale content cannot linger, then it inserts original text into `wiki_search` and split text into `wiki_search_tokens`. Running the four statements in one transaction means a crash mid-update cannot leave the two tables disagreeing about a page.
 
-```ts
+`removePage` deletes a page from the index when the wiki page disappears:
+
+```
 export function removePage(idx: SearchIndex, wikiPath: string): void {
 ```
 
-`removePage(idx, wikiPath)` deletes the row for `wikiPath` from both `wiki_search` and `wiki_search_tokens`. It is idempotent — deleting a path that is not present simply runs both DELETEs against zero rows.
+It takes the index handle and wiki-relative path, issuing delete statements against both FTS5 tables. The operation is idempotent — deleting a path that is not present is a no-op — and needs no transaction because the two deletes are independent and each is atomic on its own.
 
-## Querying: search and snippetAround
+## Query term extraction and snippet building
 
-<!-- lw:anchors packages/mcp/src/search.ts#search packages/mcp/src/search.ts#snippetAround -->
+<!-- lw:anchors packages/mcp/src/search.ts#queryTerms packages/mcp/src/search.ts#snippetAround -->
 
-`search` is the public query entry point. It fans out across the two FTS5 tables and merges the results: the raw FTS5 expression runs against `wiki_search` (so porter stemming semantics and exact-phrase queries behave exactly as FTS5 defines them), and the split expression runs against `wiki_search_tokens` (so identifiers broken into parts can still match). Hits from the original table come first, ranked; any unique-by-`wiki_path` extras from the tokens table are appended up to the limit.
+`queryTerms` and `snippetAround` support the search path when a hit comes from the split-tokens table rather than the original table.
 
-```ts
+`queryTerms` extracts the individual searchable words from a user query:
+
+```
+function queryTerms(query: string): string[] {
+```
+
+It takes the raw query string and returns an array of lowercase terms. The function matches each identifier run in the query, runs that token through `splitIdentifiers`, splits the expansion on spaces, and lowercases every piece. This yields the same vocabulary the split index stores, so it can locate matches inside original content.
+
+`snippetAround` builds a relevant excerpt when the raw FTS5 snippet cannot highlight a compound identifier:
+
+```
+function snippetAround(content: string, terms: string[]): string {
+```
+
+It takes the original page content and the query terms array, returning a snippet string with `<<` and `>>` markers around the first occurrence of any term, mirroring FTS5's own snippet format. The function lowercases the content for case-insensitive term location, scans for the earliest occurrence among all terms, and when no term appears returns the first 160 characters trimmed and ellipsized only if truncation occurred. When a term is found it takes up to 80 characters on each side of the match, prepends or appends `...` when clipping at the content edges, and wraps the matched span in the marker pair so callers can highlight it. The bounds clamp on both sides — the start never goes below zero and the end never exceeds the content length.
+
+## Search execution and error classification
+
+<!-- lw:anchors packages/mcp/src/search.ts#search packages/mcp/src/search.ts#isFtsQueryError packages/mcp/src/search.ts#SearchIndexUnavailableError packages/mcp/src/search.ts#SearchIndexUnavailableError.constructor -->
+
+The search path ties together both tables, snippet construction, and error classification. `search` is the public query entry point:
+
+```
 export function search(
   idx: SearchIndex,
   query: string,
   opts: SearchOptions = {},
-): SearchHit[]
+): SearchHit[] {
 ```
 
-`search(idx, query, opts)` returns up to `opts.limit` (default 20) `SearchHit` objects with the matched page's `wikiPath` and a highlighted `snippet`. Hits from `wiki_search` use FTS5's built-in `snippet(...)` with `<<`/`>>` markers. Hits that only matched `wiki_search_tokens` fall through to `snippetAround`, which highlights the first occurrence of any query term inside the original page content so the reader still sees real text. The FTS5 call is wrapped in a try/catch that classifies the failure instead of flattening it. A malformed FTS5 expression — an unterminated phrase, a bare operator, an unbalanced parenthesis, a filter on a column the user invented — is caller input with no matches, so `search` returns `[]`. Every other SQLite failure throws `SearchIndexUnavailableError`, which carries the original error as its `cause`.
+The function takes the index handle, an FTS5 expression supporting prefix terms, AND/OR operators, and quoted phrases, plus optional result-limit settings, and returns an array of hits each carrying a wiki path and a snippet. It first queries `wiki_search` with the raw query, asking FTS5 for the built-in snippet with `<<`/`>>` markers ordered by rank up to the limit. Those hits form the head of the result set, always shown first because they exhibit the original-tokenizer semantics.
 
-That split matters because the two outcomes are indistinguishable to a reader of the result: a closed handle, a corrupt file, or a dropped table used to come back as an empty array, reporting a healthy wiki with nothing to say when the truth was that search was broken.
+Only when the original-table hits come up short does the function consult `wiki_search_tokens`, querying with `splitIdentifiers(query)` so compound query terms can match their split index forms. It tracks seen wiki paths to deduplicate against the original-table results, and for each new path fetches the original content from `wiki_search` and builds the snippet via `snippetAround`, because the split table is match-only and never displayed. Both tables sort by FTS5 rank, and the merged list stops once it reaches the limit, defaulting to 20 when no option is supplied.
 
-`isFtsQueryError` is the classifier, and it is an allowlist over the error message rather than a check on the SQLite result code, because the code alone cannot decide. FTS5 query faults and `no such table` both arrive as `SQLITE_ERROR`. The recognized query-fault messages are `fts5: syntax error near …`, `unterminated string`, `unknown special query: …`, and `expected integer, got …`. `no such column: X` is ambiguous — a filter on a column the user named produces the same message as a schema that no longer has the column this module wrote — so it counts as a query fault only when `X` is not one of this module's own names (`wiki_path`, `content`, `wiki_search`, `wiki_search_tokens`, `rank`). Anything unrecognized propagates, so a new SQLite error shape can never silently become an empty result set.
+Error handling distinguishes user error from infrastructure failure. A malformed FTS5 expression is user input with no matches, so it returns an empty array rather than surfacing an exception. The catch block delegates to `isFtsQueryError` to make that call:
 
-```ts
-function snippetAround(content: string, terms: string[]): string {
+```
+export function isFtsQueryError(err: unknown): boolean {
 ```
 
-`snippetAround(content, terms)` slices a 160-character window around the first match of any lowercase `term` in `content` (case-insensitive) and wraps the matched span in `<<`/`>>` markers; if no term is found, it returns the first 160 characters trimmed with a trailing `...`.
+The function takes an unknown thrown value and returns true only when the error is caused by the query text itself. It requires an `Error` instance whose `code` property is exactly `SQLITE_ERROR` — a closed database handle throws a plain TypeError instead, which fails this check. It then matches the message against an allowlist of FTS5 syntax error shapes: `fts5: syntax error`, `unterminated string`, `unknown special query`, and `expected integer, got`. The allowlist is deliberate: anything unrecognized propagates as an index failure, so a new SQLite error shape can never silently become an empty result set. The ambiguous `no such column: X` message is resolved by checking whether the named column belongs to this module's own SQL names; if the user named an unknown column it is a query error, but if one of our columns is missing the index has drifted and must be treated as broken.
+
+Every other SQLite error — closed handle, corrupt file, missing table — throws `SearchIndexUnavailableError`, which declares that the index itself is unusable:
+
+```
+export class SearchIndexUnavailableError extends Error {
+```
+
+The class extends the built-in `Error` type. Its constructor takes an unknown cause, extracts a message when the cause is itself an `Error` or stringifies it otherwise, prefixes it with `search index is unavailable: `, sets the error name to `SearchIndexUnavailableError`, and attaches the original cause. This ensures the caller never mistakes a broken index for a healthy wiki with no matching pages.
 
 ## Tests
 

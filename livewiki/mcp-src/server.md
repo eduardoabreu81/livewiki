@@ -1,28 +1,26 @@
 ---
-title: LiveWiki MCP Server Implementation
+title: MCP server construction and watcher lifecycle
 owner: generated
 anchors:
   - packages/mcp/src/server.ts#createServer
   - packages/mcp/src/server.ts#isWatchDenied
   - packages/mcp/src/server.ts#startWatcher
-  - packages/mcp/src/watch-queue.ts#createSyncQueue
-  - packages/mcp/src/watch-queue.ts#isWriteContention
 ---
 
-# LiveWiki MCP Server Implementation
+# MCP server construction and watcher lifecycle
 
-This page documents the Model Context Protocol (MCP) server that exposes livewiki's tools over stdio, including the tool registry, verification flow, and the watcher that keeps search fresh.
+This page documents how the livewiki MCP server wires its Model Context Protocol tools, search index, and working-tree watcher into one process lifecycle.
 
 ## When to use this page
 
-- Understand how the server wires its 9 tools and manages error reporting.
-- Learn how the allowlist and verify steps gate write operations.
-- See how the recursive file watcher keeps the search index current.
-- Trace how the server cleans up on shutdown, including Windows-safe handle handling.
+- **Wire the livewiki tools into a new client or transport** — understand what `createServer` registers and what its caller must still provide.
+- **Debug index freshness** — trace how filesystem events become index rebuilds and why some paths never trigger them.
+- **Inspect or extend the watcher's shutdown ordering** — see why the watcher stops before the search index closes.
+- **Understand the tool registration surface** — review the responsibilities the server exposes without opening the transport.
 
 ## How it fits
 
-The server is the MCP front-end for livewiki, living in `packages/mcp/src/server.ts`. It imports core modules for safe-io, status, verify, the indexer, the anchor ledger, and the search index, then exposes this functionality through MCP tool definitions. The server registers tools that read pages, search with SQLite FTS5, list debt, compute blast radius, drive agent bootstrap tasks, write docs, and resolve debt — every write goes through `core/safe-io` per SPEC rule #1. The server also runs a recursive `fs.watch` on the repo root so tool responses reflect re-indexed state without a restart.
+This module is the MCP server construction layer for the livewiki project. It assembles the `McpServer` instance, registers the documented tools, and attaches the working-tree watcher that keeps the search index and anchor ledger current. It consumes the core packages through their stable interfaces, and delegates tool behavior to those packages rather than reimplementing wiki writes, verification, search, or debt resolution locally. A caller that wants an actual connection must still instantiate a transport after `createServer` returns.
 
 ## Diagram
 
@@ -30,62 +28,57 @@ The server is the MCP front-end for livewiki, living in `packages/mcp/src/server
 %% livewiki/diagrams/mcp-src-server.mmd
 ```
 
-## Watcher filter and debounce
+## Watcher filtering
 
-<!-- lw:anchors packages/mcp/src/server.ts#isWatchDenied packages/mcp/src/watch-queue.ts#createSyncQueue packages/mcp/src/watch-queue.ts#isWriteContention -->
+<!-- lw:anchors packages/mcp/src/server.ts#isWatchDenied -->
 
-The watcher exists so the MCP server's search results stay current without a restart. It watches the entire repo root recursively, but not every file event should trigger a re-index — `.git`, `.livewiki`, `node_modules`, and `dist` directory segments are all derived or bulky and must never retrigger the sync loop; binary/media/font extensions never carry symbols or prose. The filter is one-sided: it denies paths containing those segments or having those extensions, and lets everything else flow into the queue.
+The watcher sees events for every file in a repository, but only a small subset can affect documentation state. Filtering noisy paths before they enter the debounce keeps each filesystem burst from triggering pointless sync work. The same directory and extension sets are used for every event, so calls from different parts of the filesystem are judged consistently.
 
-`isWatchDenied(filename: string): boolean` takes a filename as it appears in a watch event and returns `true` when the event should be skipped. It splits the filename on both backslashes and forward slashes (since Windows emits one form and POSIX the other) and checks each segment against a denylist; it then checks the lowercased extension against a second set. The check is a simple deny — a path is denied if it matches any denied segment or any denied extension, otherwise it is allowed.
+```ts
+function isWatchDenied(filename: string): boolean {
+```
 
-Everything after the filter lives in `packages/mcp/src/watch-queue.ts`, split out so the part that can lose work is testable without a filesystem and without real timers. `createSyncQueue({ run, … }): SyncQueue` returns the pending-work state machine: `notify()` for "an event arrived", `stop()` for shutdown, and `snapshot()` exposing `pending` / `running` / `attempt` / `armedMs` for assertions.
+`isWatchDenied` takes a filename reported by the filesystem watcher and returns `true` when that event should be ignored. It performs two checks. First, the function splits the filename on both `/` and `\`, so it accepts forward-slash paths from POSIX systems and backslash paths from Windows without special casing either. If any segment of that split equals one of the denied directory names — `.git`, `.livewiki`, `node_modules`, or `dist` — the function returns `true`. The `.livewiki` segment is important because it contains the project's derived cache; watcher-triggered indexer or ledger writes must never retrigger another sync. After the segment check, the function uses `nodePath.extname` to extract the extension from the original filename string, lowercases it, and tests membership in the denied-extension set, which covers common binary, media, archive, font, and image formats. A filename whose extension is in that set is also ignored. The source shows the lower bound of the input is an absolute or relative string the watcher supplies; there is no transformation to normalize the path before the segment split beyond accepting either separator style.
 
-**What "the batch" is.** The sync is a whole-repo incremental pass — `runIndexer` walks the repo and skips unchanged files by hash — so pending work is not a list of paths to replay. It is one bit meaning "the index may be behind the working tree". That makes merging free and total: a run occurring after events A and B covers both. What must never happen is that bit being cleared by anything other than a run that actually **succeeded**.
-
-That is exactly what the old code did. It logged one line on failure and dropped the batch, with a comment saying the next event would retry. For every batch but one that was true; for the **last** event of a sequence there is no next event, so a failed sync left the index behind the working tree silently until someone happened to touch another file (P1, 2026-08-19).
-
-**Invariants.** At most one `run()` in flight — never a second queue. At most one timer armed: the debounce and the retry are the same timer, never two racing. `pending` is cleared only when a run starts and restored if that run fails, and events arriving mid-run set it again so they are merged into the next run instead of being swallowed by the one already going. After `stop()` no timer stays armed and no run is ever started.
-
-**Retry policy.** A failed run always keeps its work pending; what differs is the scheduling.
-
-- **Write contention** (`isWriteContention`, matching `WriteContentionError`'s `INDEX_WRITE_CONTENTION` code rather than `instanceof`, so it survives crossing a module boundary) retries with **no attempt limit**. Contention is transient by definition — it means another writer holds the lock, so someone *is* making progress — and giving up would leave the index behind with nothing scheduled to fix it, which is the bug being removed. The capped backoff is what keeps it from being a hot loop.
-- **Anything else** is a real error about the repo or the index, and repeating it forever is a hot loop. It retries `WATCH_PERMANENT_ATTEMPTS` (5) times, reporting the error every time, then stops scheduling itself with an explicit give-up line. The work still stays pending: the next filesystem event, or the next server start, picks it up. It is never silently dropped.
-
-Backoff is `WATCH_RETRY_BASE_MS * 2^(failures-1)` capped at `WATCH_RETRY_MAX_MS` — 1s, 2s, 4s, 8s, 16s, then 30s. No jitter: there is one queue per server, so there is no herd to spread out, and a predictable delay is what makes the policy assertable in a test.
-
-While backing off, an incoming event does **not** shorten the wait. The armed retry already covers it (the sync is whole-repo), and letting events reset the timer would turn a steady stream of edits into precisely the hot loop the backoff exists to prevent.
-
-## Watcher lifecycle and control
+## Watcher startup and shutdown
 
 <!-- lw:anchors packages/mcp/src/server.ts#startWatcher -->
 
-The watcher's purpose is to keep the index, ledger, and search in sync with the working tree for the server's entire lifetime. It must start without requiring a particular platform's recursive-watch support, and it must stop cleanly because a lingering sync could hold database handles past `close()` — the EBUSY lesson on Windows.
+Freshness without a restart requires a path from operating-system events to index rebuilds. `startWatcher` owns that wiring: it opens the OS watcher, translates change events into queue notifications, and returns a handle whose `stop` method releases the OS resources and drains pending sync work.
 
-`startWatcher(repoRoot, searchIdx, opts?): WatcherHandle` takes a repository root string and a `SearchIndex` and returns a handle with a `stop()` method. It is now only the `fs.watch` plumbing: it builds the sync (`runIndexer` → `runLedger` → `reindexAllPages`, all `{ quiet: true }`), hands it to `createSyncQueue`, and turns OS events into `queue.notify()`. On each event it filters via `isWatchDenied` (a `null` filename means "sync anyway"). Watch creation goes through `realpathSync.native` first because on Windows the temp root may arrive in 8.3 form while events use long names; any failure keeps the lexical path and the inability to watch degrades to no watcher with a single log line. The optional third argument is a test seam — it substitutes the sync and the queue's timers so tests drive time by hand instead of waiting on real ones.
+```ts
+export function startWatcher(
+  repoRoot: string,
+  searchIdx: SearchIndex,
+  opts: { sync?: () => Promise<void>; queue?: Partial<SyncQueueOptions> } = {},
+): WatcherHandle {
+```
 
-Its `stop()` is the clean shutdown path, and the order is load-bearing. It stops the **queue first**, which disarms any pending debounce *or retry* so no sync can start while the watch handle is being torn down. Then it awaits the OS-level watcher close via the `"close"` event (not just `close()`), which prevents late events being delivered to a dying handle. Only then does it await the queue's promise, so whatever sync was already running settles after the OS handle is released rather than while it is still held. A pending retry can therefore never fire after shutdown, and its timer is `unref`'d besides, so it can never be the reason a process stays alive.
+`startWatcher` takes the repository root to watch, the search index that must be rebuilt after changes, and an optional configuration object that lets tests substitute the sync function or adjust queue timing options; it returns a `WatcherHandle` with a `stop` method. The default sync, used when no override is provided, runs `runIndexer` with quiet output, then `runLedger` with quiet output, and finally `reindexAllPages` against the supplied search index. That order means the on-disk index database and anchor ledger are updated before the in-memory search index is rebuilt from the fresh state.
 
-## Server construction and tool registry
+The function creates the sync queue through `createSyncQueue` and passes the assembled sync as its `run` callback. That queue owns debounce and retry state, so this file only needs `queue.notify()` when an OS event is relevant. Before opening the watcher, the function attempts to canonicalize the repository root with `realpathSync.native(repoRoot)`. This resolves Windows 8.3 short-name aliases and normalizes casing so the path used to create the watcher matches the paths the operating system reports for events. If the canonicalization attempt throws, the outer `catch` keeps the original lexical `repoRoot`; this is an explicit fallback path, not a failure of startup.
+
+The watched root is opened with `watch(watchRoot, { recursive: true })`. On each event, the callback checks whether the reported filename is non-null and whether `isWatchDenied` rejects it; a null filename is treated as a request to sync anyway. Passing events call `queue.notify()` to arm the debounce and eventual sync. Two failure paths exist. A watch-creation failure — such as a platform or filesystem that does not support recursive watchers — is caught, sets `watcher` to `null`, and logs one message before returning a handle whose `stop` has no watcher to release. Runtime errors arrive through the watcher's `error` event, where the handler logs one message and calls `stop()`. In both cases the server continues with startup-rebuild semantics and no watcher-backed sync loop.
+
+The returned `stop` method must honor ordering constraints. It calls `queue.stop()` first and keeps the returned promise; the queue stops any pending debounce or retry so no new sync can start during teardown. If a watcher exists, the method awaits the OS-level close event before continuing, because `watcher.close()` only requests closure and Windows can still deliver events to a dying handle. Only after the OS handle has closed does the method await the queue's stopped promise, ensuring any in-flight sync is awaited only once the handle is released. This ordering prevents a later `search.db` close or temporary-directory removal from racing an active index handle, which matters on Windows.
+
+## Server assembly
 
 <!-- lw:anchors packages/mcp/src/server.ts#createServer -->
 
-`createServer(opts: CreateServerOptions = {}): Promise<McpServer>` takes an options object with an optional `repoRoot` (defaulting to `process.cwd()`) and an optional `verify` seam for tests, and returns a configured `McpServer` instance. It resolves the repo root, picks the verify implementation, opens and indexes the search index, then constructs the MCP server. It registers all 9 tools in order.
+Everything else in the module hangs off the server instance this function builds. `createServer` opens the search index, configures the protocol server's identity and capabilities, registers every documented tool, attaches the watcher, and augments the close path so all owned resources are released in a safe order.
 
-The identity the server announces in the MCP `initialize` handshake is `{ name: "livewiki", version: readPackageVersion() }`. The version is read from the package's own `package.json` (see `packages/mcp/src/version.ts`), never from a literal: it was hardcoded as `"0.0.0"` from 0.1.0 through 0.2.1 and no release ever updated it, so every client was told the wrong version of the server it was talking to. `src/version.ts` and `dist/version.js` sit at the same depth inside the package, which is why `../package.json` resolves in both the checkout and the published tarball.
+```ts
+export async function createServer(opts: CreateServerOptions = {}): Promise<McpServer> {
+```
 
-The tools break into read-only and write paths. Read-only tools — `livewiki_quickstart`, `livewiki_read`, `livewiki_search`, `livewiki_debt`, `livewiki_impact`, `livewiki_next_task`, `livewiki_renew_task_claim` — run inside try/catch blocks that convert errors into MCP error results without leaking absolute paths or repo contents. Each successful response also carries a `_hints` block (either as a JSON field or appended text block) so arbitrary MCP clients discover the livewiki loop on their own.
+`createServer` takes optional settings for the repository root and a verifier override and returns a promise that resolves to a configured `McpServer`. If `opts.repoRoot` is omitted, the process working directory is used; either way the path is passed through `nodePath.resolve` so later comparisons use an absolute form. The verifier defaults to the real `runVerify` from core, while `opts.verify` exists only as a test seam.
 
-The write tool `livewiki_write_doc` is the critical one. When no `taskId` is given, it performs a four-step flow: `safeIo.writeText` enforces the allowlist (paths must stay inside `livewiki/`), then `verify` runs on the repo and filters error-level issues touching this page, then it updates the FTS index incrementally via `indexPage`, and finally it records a `write_received` metric. If verify finds issues, `rollbackWrittenPage` unlinks the just-written file and the tool reports rejection with the first error's code and detail. If verify itself crashes, rollback still runs; if rollback fails, the tool reports that the disk may hold an unverified page.
+The function opens the search index before constructing the server, then creates an `McpServer` named `livewiki` with a version read from the package and a capability declaration limited to tools. Three small helper closures shape every tool response: `textResult` wraps text in the MCP content shape, `hintedTextResult` appends a workflow-adjacency hint block to plain-text successes, and `errorResult` produces an explicit error content shape. The hint table is static data keyed by tool name, so the suggestion block is additive and never alters the first text chunk.
 
-When a `taskId` is present from `livewiki_next_task`, the flow changes: `skipVerify` is forbidden, `claimId` becomes mandatory (a `taskId` without it is rejected as `InvalidParams`), the content goes through `submitAgentBootstrapTask` which validates the claim before anything else and then checks the task's full page contract, and on success the server reindexes all pages so companion deterministic-hub changes are visible in search. A submission whose claim was replaced or whose lease lapsed comes back as `stale_claim` with nothing written.
+Tool registration is a sequence of `server.tool` calls, one per exposed capability, each with a schema built from `zod` and a handler that delegates to a core package. Reads go through `readWikiDocument` with the repository root and the caller's path; searches call `doSearch` on the open index; debt status delegates to `runStatus`; impact delegates to `computeBlastRadius` for a specific symbol or `computeChangeImpact` when the caller passes an empty symbol key. Agent-bootstrap tasks, lease renewal, and submission delegate to the core agent-bootstrap module, with a full search rebuild after a completed or failed-completed bootstrap run and after a successful queue write. Writes take the longer path: document writes delegate to `writeWikiDocument`, which owns path canonicalization, allowlist enforcement, verification, and rollback; a successful write then updates the search index incrementally and records an activity-ledger metric. The write handler has visible rejection branches, including throws for a bootstrap task combined with `skipVerify`, a task without `claimId`, or a path reported as outside the `livewiki/` allowlist.
 
-The `livewiki_resolve_debt` path also inspects the ledger outcome: when the reconciliation aborts because the wiki snapshot was unstable, it returns an error carrying `ledgerApplied: false` instead of reporting the debt as resolved — the baseline was accepted on disk, but the debt tables were not reconciled. The `livewiki_impact` tool opens the index through `openIndexReadOnly`: a blast-radius query never creates, migrates or relabels the index, and an index that is missing or on a different schema fails with an actionable message instead of a raw SQLite error.
-
-A `livewiki_next_task` call can also come back with `status: "busy"` — every unfinished task is leased to another executor. The server treats that as "still running": it does not rebuild the search index, which it reserves for a genuinely finished run.
-
-`livewiki_renew_task_claim` is the explicit lease extension for a task that outlives its claim. It takes the `taskId` and `claimId` handed out by `livewiki_next_task` and returns the new `leaseExpiresAt`, or a `stale_claim` error when the lease already expired or another execution re-claimed the task. There is no heartbeat and no background timer — an executor that needs more time asks for it.
-
-The function also installs a custom `close` on the server. The override stops the watcher first (awaiting any in-flight sync), closes the search index, then delegates to the original `close`. This ordering prevents the same EBUSY failures that plagued Windows CI when tests removed temp directories immediately after a close.
+After the tools are registered, the function starts the watcher over the same repository root and search index. It then replaces `server.close` with an augmented version that stops the watcher first, awaits any in-flight sync, closes the search index, and finally calls the original close. This ordering is the same Windows-handle discipline used inside `watcherHandle.stop`: the index and ledger can hold file handles, so they must be done before the search index closes and the caller can remove temporary directories. The function returns the configured server without connecting any transport; the caller remains responsible for that step.
 
 ## Tests
 

@@ -1,0 +1,12 @@
+graph TD
+    A[documentation-commit.ts] --> B["validateArtifactHashes"]
+    A --> C["advanceContractBaseline (imported)"]
+    A --> D["recordArtifactReceipt (imported)"]
+    A --> E["canonicalJson"]
+    E --> F["compareText"]
+    B --> F
+    C --> E
+    D --> E
+    A --> G["recoverDocumentationReceipt"]
+    G --> E
+    G --> H["readManifest (imported)"]

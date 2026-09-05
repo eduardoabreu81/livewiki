@@ -6,10 +6,15 @@ graph LR
   _github_workflows --> _github_workflows_cross_platform_ci_yml
   _github_workflows_docs_debt_yml[".github/workflows/docs-debt.yml"]
   _github_workflows --> _github_workflows_docs_debt_yml
+  _ruff_cache[".ruff_cache"]
+  _ruff_cache_CACHEDIR_TAG[".ruff_cache/CACHEDIR.TAG"]
+  _ruff_cache --> _ruff_cache_CACHEDIR_TAG
   README_md["README.md"]
   SPEC_md["SPEC.md"]
   VISION_md["VISION.md"]
   docs["docs"]
+  docs_BENCHMARKS_md["docs/BENCHMARKS.md"]
+  docs --> docs_BENCHMARKS_md
   docs_ROADMAP_md["docs/ROADMAP.md"]
   docs --> docs_ROADMAP_md
   docs_plans["docs/plans"]
@@ -20,6 +25,16 @@ graph LR
   docs_plans --> docs_plans_2026_08_04_test_role_classification_md
   docs_plans_2026_08_07_real_repository_page_units_md["docs/plans/2026-08-07-real-repository-page-units.md"]
   docs_plans --> docs_plans_2026_08_07_real_repository_page_units_md
+  docs_releases["docs/releases"]
+  docs --> docs_releases
+  docs_releases_RELEASE_NOTES_v0_3_0_md["docs/releases/RELEASE-NOTES-v0.3.0.md"]
+  docs_releases --> docs_releases_RELEASE_NOTES_v0_3_0_md
+  docs_releases_RELEASE_NOTES_v0_3_1_md["docs/releases/RELEASE-NOTES-v0.3.1.md"]
+  docs_releases --> docs_releases_RELEASE_NOTES_v0_3_1_md
+  docs_releases_RELEASE_NOTES_v0_3_2_md["docs/releases/RELEASE-NOTES-v0.3.2.md"]
+  docs_releases --> docs_releases_RELEASE_NOTES_v0_3_2_md
+  docs_releases_RELEASE_NOTES_v0_3_3_md["docs/releases/RELEASE-NOTES-v0.3.3.md"]
+  docs_releases --> docs_releases_RELEASE_NOTES_v0_3_3_md
   package_json["package.json"]
   packages["packages"]
   packages_cli["packages/cli"]
@@ -34,12 +49,18 @@ graph LR
   packages_cli_scripts --> packages_cli_scripts_make_executable_mjs
   packages_cli_skills["packages/cli/skills"]
   packages_cli --> packages_cli_skills
+  packages_cli_skills_bootstrap_wiki["packages/cli/skills/bootstrap-wiki"]
+  packages_cli_skills --> packages_cli_skills_bootstrap_wiki
+  packages_cli_skills_bootstrap_wiki_SKILL_md["packages/cli/skills/bootstrap-wiki/SKILL.md"]
+  packages_cli_skills_bootstrap_wiki --> packages_cli_skills_bootstrap_wiki_SKILL_md
   packages_cli_skills_document_as_you_go["packages/cli/skills/document-as-you-go"]
   packages_cli_skills --> packages_cli_skills_document_as_you_go
   packages_cli_skills_document_as_you_go_SKILL_md["packages/cli/skills/document-as-you-go/SKILL.md"]
   packages_cli_skills_document_as_you_go --> packages_cli_skills_document_as_you_go_SKILL_md
   packages_cli_src["packages/cli/src"]
   packages_cli --> packages_cli_src
+  packages_cli_src_baseline_command_test_ts["packages/cli/src/baseline-command.test.ts"]
+  packages_cli_src --> packages_cli_src_baseline_command_test_ts
   packages_cli_src_batch_format_test_ts["packages/cli/src/batch-format.test.ts"]
   packages_cli_src --> packages_cli_src_batch_format_test_ts
   packages_cli_src_cli_batch_e2e_prose_tier_test_ts["packages/cli/src/cli-batch-e2e-prose-tier.test.ts"]
@@ -50,6 +71,8 @@ graph LR
   packages_cli_src --> packages_cli_src_cli_batch_e2e_test_ts
   packages_cli_src_cli_batch_stage5_e2e_test_ts["packages/cli/src/cli-batch-stage5-e2e.test.ts"]
   packages_cli_src --> packages_cli_src_cli_batch_stage5_e2e_test_ts
+  packages_cli_src_cli_concurrency_e2e_test_ts["packages/cli/src/cli-concurrency-e2e.test.ts"]
+  packages_cli_src --> packages_cli_src_cli_concurrency_e2e_test_ts
   packages_cli_src_cli_e2e_test_ts["packages/cli/src/cli-e2e.test.ts"]
   packages_cli_src --> packages_cli_src_cli_e2e_test_ts
   packages_cli_src_cli_export_e2e_test_ts["packages/cli/src/cli-export-e2e.test.ts"]
@@ -64,8 +87,12 @@ graph LR
   packages_cli_src --> packages_cli_src_cli_ts
   packages_cli_src_commands["packages/cli/src/commands"]
   packages_cli_src --> packages_cli_src_commands
+  packages_cli_src_commands_baseline_ts["packages/cli/src/commands/baseline.ts"]
+  packages_cli_src_commands --> packages_cli_src_commands_baseline_ts
   packages_cli_src_commands_batch_ts["packages/cli/src/commands/batch.ts"]
   packages_cli_src_commands --> packages_cli_src_commands_batch_ts
+  packages_cli_src_commands_config_ts["packages/cli/src/commands/config.ts"]
+  packages_cli_src_commands --> packages_cli_src_commands_config_ts
   packages_cli_src_commands_export_ts["packages/cli/src/commands/export.ts"]
   packages_cli_src_commands --> packages_cli_src_commands_export_ts
   packages_cli_src_commands_index_cmd_ts["packages/cli/src/commands/index-cmd.ts"]
@@ -86,12 +113,16 @@ graph LR
   packages_cli_src_commands --> packages_cli_src_commands_verify_ts
   packages_cli_src_commands_view_ts["packages/cli/src/commands/view.ts"]
   packages_cli_src_commands --> packages_cli_src_commands_view_ts
+  packages_cli_src_config_test_ts["packages/cli/src/config.test.ts"]
+  packages_cli_src --> packages_cli_src_config_test_ts
   packages_cli_src_index_ts["packages/cli/src/index.ts"]
   packages_cli_src --> packages_cli_src_index_ts
   packages_cli_src_install_test_ts["packages/cli/src/install.test.ts"]
   packages_cli_src --> packages_cli_src_install_test_ts
   packages_cli_src_output_ts["packages/cli/src/output.ts"]
   packages_cli_src --> packages_cli_src_output_ts
+  packages_cli_src_pack_test_ts["packages/cli/src/pack.test.ts"]
+  packages_cli_src --> packages_cli_src_pack_test_ts
   packages_cli_src_templates_test_ts["packages/cli/src/templates.test.ts"]
   packages_cli_src --> packages_cli_src_templates_test_ts
   packages_cli_src_update_format_test_ts["packages/cli/src/update-format.test.ts"]
@@ -120,6 +151,14 @@ graph LR
   packages_core --> packages_core_package_json
   packages_core_src["packages/core/src"]
   packages_core --> packages_core_src
+  packages_core_src_agent_bootstrap_boundary_test_ts["packages/core/src/agent-bootstrap-boundary.test.ts"]
+  packages_core_src --> packages_core_src_agent_bootstrap_boundary_test_ts
+  packages_core_src_agent_bootstrap_claim_test_ts["packages/core/src/agent-bootstrap-claim.test.ts"]
+  packages_core_src --> packages_core_src_agent_bootstrap_claim_test_ts
+  packages_core_src_agent_bootstrap_ts["packages/core/src/agent-bootstrap.ts"]
+  packages_core_src --> packages_core_src_agent_bootstrap_ts
+  packages_core_src_anchor_ledger_atomicity_test_ts["packages/core/src/anchor-ledger-atomicity.test.ts"]
+  packages_core_src --> packages_core_src_anchor_ledger_atomicity_test_ts
   packages_core_src_anchor_ledger_test_ts["packages/core/src/anchor-ledger.test.ts"]
   packages_core_src --> packages_core_src_anchor_ledger_test_ts
   packages_core_src_anchor_ledger_ts["packages/core/src/anchor-ledger.ts"]
@@ -140,6 +179,16 @@ graph LR
   packages_core_src --> packages_core_src_auxiliary_page_test_ts
   packages_core_src_auxiliary_page_ts["packages/core/src/auxiliary-page.ts"]
   packages_core_src --> packages_core_src_auxiliary_page_ts
+  packages_core_src_baseline_operations_test_ts["packages/core/src/baseline-operations.test.ts"]
+  packages_core_src --> packages_core_src_baseline_operations_test_ts
+  packages_core_src_baseline_operations_ts["packages/core/src/baseline-operations.ts"]
+  packages_core_src --> packages_core_src_baseline_operations_ts
+  packages_core_src_baseline_test_ts["packages/core/src/baseline.test.ts"]
+  packages_core_src --> packages_core_src_baseline_test_ts
+  packages_core_src_baseline_ts["packages/core/src/baseline.ts"]
+  packages_core_src --> packages_core_src_baseline_ts
+  packages_core_src_batch_atomic_writes_test_ts["packages/core/src/batch-atomic-writes.test.ts"]
+  packages_core_src --> packages_core_src_batch_atomic_writes_test_ts
   packages_core_src_batch_community_test_ts["packages/core/src/batch-community.test.ts"]
   packages_core_src --> packages_core_src_batch_community_test_ts
   packages_core_src_batch_concurrency_test_ts["packages/core/src/batch-concurrency.test.ts"]
@@ -166,6 +215,8 @@ graph LR
   packages_core_src --> packages_core_src_batch_test_role_test_ts
   packages_core_src_batch_understanding_test_ts["packages/core/src/batch-understanding.test.ts"]
   packages_core_src --> packages_core_src_batch_understanding_test_ts
+  packages_core_src_batch_unknown_usage_test_ts["packages/core/src/batch-unknown-usage.test.ts"]
+  packages_core_src --> packages_core_src_batch_unknown_usage_test_ts
   packages_core_src_batch_test_ts["packages/core/src/batch.test.ts"]
   packages_core_src --> packages_core_src_batch_test_ts
   packages_core_src_batch_ts["packages/core/src/batch.ts"]
@@ -192,6 +243,14 @@ graph LR
   packages_core_src --> packages_core_src_config_test_ts
   packages_core_src_config_ts["packages/core/src/config.ts"]
   packages_core_src --> packages_core_src_config_ts
+  packages_core_src_credentials_atomic_write_test_ts["packages/core/src/credentials-atomic-write.test.ts"]
+  packages_core_src --> packages_core_src_credentials_atomic_write_test_ts
+  packages_core_src_credentials_install_test_ts["packages/core/src/credentials-install.test.ts"]
+  packages_core_src --> packages_core_src_credentials_install_test_ts
+  packages_core_src_credentials_ts["packages/core/src/credentials.ts"]
+  packages_core_src --> packages_core_src_credentials_ts
+  packages_core_src_db_schema_access_test_ts["packages/core/src/db-schema-access.test.ts"]
+  packages_core_src --> packages_core_src_db_schema_access_test_ts
   packages_core_src_db_test_ts["packages/core/src/db.test.ts"]
   packages_core_src --> packages_core_src_db_test_ts
   packages_core_src_db_ts["packages/core/src/db.ts"]
@@ -204,6 +263,10 @@ graph LR
   packages_core_src --> packages_core_src_diff_preview_test_ts
   packages_core_src_diff_preview_ts["packages/core/src/diff-preview.ts"]
   packages_core_src --> packages_core_src_diff_preview_ts
+  packages_core_src_documentation_commit_test_ts["packages/core/src/documentation-commit.test.ts"]
+  packages_core_src --> packages_core_src_documentation_commit_test_ts
+  packages_core_src_documentation_commit_ts["packages/core/src/documentation-commit.ts"]
+  packages_core_src --> packages_core_src_documentation_commit_ts
   packages_core_src_export_test_ts["packages/core/src/export.test.ts"]
   packages_core_src --> packages_core_src_export_test_ts
   packages_core_src_export_ts["packages/core/src/export.ts"]
@@ -248,6 +311,8 @@ graph LR
   packages_core_src --> packages_core_src_imports_ts
   packages_core_src_index_ts["packages/core/src/index.ts"]
   packages_core_src --> packages_core_src_index_ts
+  packages_core_src_indexer_reconcile_test_ts["packages/core/src/indexer-reconcile.test.ts"]
+  packages_core_src --> packages_core_src_indexer_reconcile_test_ts
   packages_core_src_indexer_test_ts["packages/core/src/indexer.test.ts"]
   packages_core_src --> packages_core_src_indexer_test_ts
   packages_core_src_indexer_ts["packages/core/src/indexer.ts"]
@@ -276,10 +341,16 @@ graph LR
   packages_core_src_llm --> packages_core_src_llm_base_ts
   packages_core_src_llm_create_client_timeout_test_ts["packages/core/src/llm/create-client-timeout.test.ts"]
   packages_core_src_llm --> packages_core_src_llm_create_client_timeout_test_ts
+  packages_core_src_llm_credential_resolution_test_ts["packages/core/src/llm/credential-resolution.test.ts"]
+  packages_core_src_llm --> packages_core_src_llm_credential_resolution_test_ts
   packages_core_src_llm_index_ts["packages/core/src/llm/index.ts"]
   packages_core_src_llm --> packages_core_src_llm_index_ts
   packages_core_src_llm_openai_compat_ts["packages/core/src/llm/openai-compat.ts"]
   packages_core_src_llm --> packages_core_src_llm_openai_compat_ts
+  packages_core_src_llm_probe_test_ts["packages/core/src/llm/probe.test.ts"]
+  packages_core_src_llm --> packages_core_src_llm_probe_test_ts
+  packages_core_src_llm_probe_ts["packages/core/src/llm/probe.ts"]
+  packages_core_src_llm --> packages_core_src_llm_probe_ts
   packages_core_src_llm_types_ts["packages/core/src/llm/types.ts"]
   packages_core_src_llm --> packages_core_src_llm_types_ts
   packages_core_src_manifest_test_ts["packages/core/src/manifest.test.ts"]
@@ -400,6 +471,8 @@ graph LR
   packages_core_src --> packages_core_src_walker_test_ts
   packages_core_src_walker_ts["packages/core/src/walker.ts"]
   packages_core_src --> packages_core_src_walker_ts
+  packages_core_src_wiki_document_ts["packages/core/src/wiki-document.ts"]
+  packages_core_src --> packages_core_src_wiki_document_ts
   packages_core_test["packages/core/test"]
   packages_core --> packages_core_test
   packages_core_test_fixtures["packages/core/test/fixtures"]
@@ -486,6 +559,10 @@ graph LR
   packages_mcp_scripts --> packages_mcp_scripts_make_executable_mjs
   packages_mcp_src["packages/mcp/src"]
   packages_mcp --> packages_mcp_src
+  packages_mcp_src_agent_bootstrap_e2e_test_ts["packages/mcp/src/agent-bootstrap-e2e.test.ts"]
+  packages_mcp_src --> packages_mcp_src_agent_bootstrap_e2e_test_ts
+  packages_mcp_src_bin_e2e_test_ts["packages/mcp/src/bin-e2e.test.ts"]
+  packages_mcp_src --> packages_mcp_src_bin_e2e_test_ts
   packages_mcp_src_index_ts["packages/mcp/src/index.ts"]
   packages_mcp_src --> packages_mcp_src_index_ts
   packages_mcp_src_phase5_e2e_test_ts["packages/mcp/src/phase5-e2e.test.ts"]
@@ -500,6 +577,16 @@ graph LR
   packages_mcp_src --> packages_mcp_src_server_ts
   packages_mcp_src_stdio_ts["packages/mcp/src/stdio.ts"]
   packages_mcp_src --> packages_mcp_src_stdio_ts
+  packages_mcp_src_version_test_ts["packages/mcp/src/version.test.ts"]
+  packages_mcp_src --> packages_mcp_src_version_test_ts
+  packages_mcp_src_version_ts["packages/mcp/src/version.ts"]
+  packages_mcp_src --> packages_mcp_src_version_ts
+  packages_mcp_src_watch_queue_test_ts["packages/mcp/src/watch-queue.test.ts"]
+  packages_mcp_src --> packages_mcp_src_watch_queue_test_ts
+  packages_mcp_src_watch_queue_ts["packages/mcp/src/watch-queue.ts"]
+  packages_mcp_src --> packages_mcp_src_watch_queue_ts
+  packages_mcp_src_watcher_retry_e2e_test_ts["packages/mcp/src/watcher-retry-e2e.test.ts"]
+  packages_mcp_src --> packages_mcp_src_watcher_retry_e2e_test_ts
   packages_mcp_tsconfig_json["packages/mcp/tsconfig.json"]
   packages_mcp --> packages_mcp_tsconfig_json
   packages_mcp_vitest_config_ts["packages/mcp/vitest.config.ts"]
@@ -510,4 +597,5 @@ graph LR
   scripts --> scripts_clean_dist_mjs
   scripts_offline_inventory_t0_mjs["scripts/offline-inventory-t0.mjs"]
   scripts --> scripts_offline_inventory_t0_mjs
+  server_json["server.json"]
   tsconfig_base_json["tsconfig.base.json"]

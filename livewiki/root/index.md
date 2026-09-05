@@ -5,13 +5,14 @@ owner: generated
 
 # (repository root)
 
-This is the repository root for livewiki, holding top-level configuration and project charter rather than shipping code. `package.json` and `pnpm-workspace.yaml` set up the monorepo and its package manager, while `tsconfig.base.json` provides the shared TypeScript compiler settings inherited by every workspace. The documentation files establish intent and contract: `README.md` is the entry point for newcomers, `VISION.md` describes long-term direction, and `SPEC.md` codifies the specification the generator targets. Together they let the rest of the monorepo build against a single, consistent baseline.
+This directory is the repository root for the livewiki project, containing only configuration and documentation files rather than source code. The `package.json` and `pnpm-workspace.yaml` define workspace and dependency management for the monorepo, while `tsconfig.base.json` provides shared TypeScript compiler settings. The documentation files — `README.md`, `SPEC.md`, and `VISION.md` — describe the product’s goals, technical specification, and usage, respectively. `server.json` holds runtime configuration for the server component. Together, these files establish the project’s foundation and conventions that the actual implementation, located in other directories, builds upon.
 
 ## Files
 
 - `package.json` — not documented (re-export, configuration, or plain-text file)
 - `pnpm-workspace.yaml` — not documented (re-export, configuration, or plain-text file)
 - `README.md` — livewiki
+- `server.json` — not documented (re-export, configuration, or plain-text file)
 - `SPEC.md` — livewiki — MVP Specification
 - `tsconfig.base.json` — not documented (re-export, configuration, or plain-text file)
 - `VISION.md` — livewiki — Product Vision
@@ -20,5 +21,5 @@ This is the repository root for livewiki, holding top-level configuration and pr
 ## Navigate
 
 
-> Coverage note: this folder's source (6 files, ~126k chars) is too large to read in full; this page documents its main entry points.
+> Coverage note: this folder's source (7 files, ~130k chars) is too large to read in full; this page documents its main entry points.
 <!-- livewiki:navigate:end -->

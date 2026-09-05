@@ -5,7 +5,7 @@ owner: generated
 
 # packages/cli/templates
 
-This directory holds the inert template files that the livewiki CLI ships as scaffolding material for bootstrapping new projects. With only a placeholder README present, it serves as the staging area where future starter layouts, configuration samples, and generator inputs will live for users to consume via the command-line tooling.
+The `packages/cli/templates` directory holds the README that documents the scaffolding templates shipped with the livewiki CLI. When developers run the CLI to generate a new project, this folder is the canonical place where the template set is explained—its intended structure, usage conventions, and any customization notes live here as the entry point for template consumers. Its sole content file, `README.md`, serves as the human-readable guide for what the templates provide and how they are meant to be applied.
 
 ## Files
 

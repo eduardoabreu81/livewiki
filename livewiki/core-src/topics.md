@@ -1,5 +1,5 @@
 ---
-title: Topic planning
+title: Semantic Topic Planning for Linked Module Evidence
 owner: generated
 anchors:
   - packages/core/src/topics.ts#DEPLOYMENT_PATH_PATTERNS
@@ -35,233 +35,144 @@ anchors:
   - packages/core/src/topics.ts#validateTopicPlan
 ---
 
-# Topic planning
+# Semantic Topic Planning for Linked Module Evidence
 
-Topic planning produces the closed set of cross-module topic pages that stage 5 of the livewiki pipeline generates, deriving every module, flow, and source-anchor identity deterministically from the already-accepted page inventory.
+This file defines how the system plans, validates, and deterministically organizes topic pages that cross-link evidence from multiple modules and flows in the livewiki knowledge base.
 
 ## When to use this page
 
-- **Add** a new cross-cutting topic by extending the deterministic plan with an extra concern group (e.g. a new deployment-like surface) or by widening the anchor-evidence budget in `TopicPlanValidationOptions`.
-- **Diagnose** why a topic candidate was rejected or trimmed — `topic_plan_unknown_reference`, `topic_plan_auxiliary_disconnected`, `topic_plan_anchor_overlap`, `topic_plan_source_budget`, and the `topic_plan_*` validation codes emitted by `validateTopicPlan` map back to specific steps here.
-- **Reconcile** the planner-side source-char estimate against the generator-side `buildTopicDocContext` block — `renderTopicSourceSpan` and `estimateTopicSourceChars` are the shared math.
-- **Tune** import-graph clustering rules — the D2 spoke/overview fallback in `clusterModulesByImportGraph`, the `capClusterSize` 6-module budget, and the deterministic title/intent construction in `proposeTopicPlanDeterministically`.
+- Understand how topic pages get their anchor evidence and group structure without relying on free-form language model output.
+- Learn how the deterministic planner clusters related modules and selects source anchors to stay within configurable budgets.
+- See how topic plan proposals are validated against the closed inventory of modules, flows, and anchors.
+- Debug why a topic failed validation or was excluded from the final plan due to source character, anchor, or module limits.
 
 ## How it fits
 
-`packages/core/src/topics.ts` is the topic-planning module under `packages/core/src/`, the layer that turns accepted evidence into the structured plan that the generator batch loop then turns into prose. It sits between the inventory-building modules it depends on (`modules.ts` for `Module`, `PathRole`, `PathRoleConfig`, `classifyModuleRole`, `classifyPathRole`, and `matchesAnyPathPattern`; `frontmatter.ts` for `parseFrontmatter` and `getAnchors`; `flows.ts` for `FlowCandidate`; `db.ts` for `openIndex`; `hashes.ts` for `sha256`; `safe-io.ts` for filesystem reads; `rationale-evidence.ts` for the rationale block the generator also renders) and the LLM-planner call the batch driver makes: `validateTopicPlan` is what gates the LLM's JSON, while `proposeTopicPlanDeterministically` and `repairTopicPlanSourceBudgetMechanically` are the offline fallbacks that produce an equivalent `TopicCandidate[]` when the model refuses or converges on a bad batch.
+This module implements the "stage 5" semantic topic planning for the livewiki project. After earlier stages have produced a set of accepted pages—module documentation, flow diagrams, and source evidence—this file's job is to turn the accumulated evidence into one or more topic pages that tell a coherent cross-cutting story. It does this through two complementary mechanisms: a deterministic orchestrator (`proposeTopicPlanDeterministically`) that derives topic proposals entirely from the accepted evidence inventory without needing the language model, and a validation layer (`validateTopicPlan`) that any planner output—whether deterministic or language-model-generated—must pass before those proposals become real pages.
 
-The file owns the closed planner vocabulary (`TOPIC_GROUP_NAMES` — contract, state, output, failure — and `TOPIC_SOURCE_SPAN_SEPARATOR`), the shared evidence-span math between planner and generator (`renderTopicSourceSpan` / `estimateTopicSourceChars`), the inventory assembly (`buildTopicPlanningInventory` / `serializeTopicPlanningInventory`), the validation surface (`validateTopicPlan`, `parseProposal`, `toCandidate`, `normalizeGroups`, `compareProposalPreference`, `errorAt`, `addDuplicateError`, `isRecord`, `isStringArray`, `stripOuterJsonFence`), the deterministic clustering pipeline (`clusterModulesByImportGraph`, `capClusterSize`, `DEPLOYMENT_PATH_PATTERNS`, `collectConcernTopicClusters`, `selectTopicAnchors`, `assignTopicKeySections`, `proposeTopicPlanDeterministically`), the mechanical source-budget repair (`repairTopicPlanSourceBudgetMechanically`), and the per-page evidence helpers (`measureTopicAnchorEvidence`, `extractH2Titles`, `extractSectionBullets`, `extractOpeningSentence`, `classifyTopicSignals`, `uniqueSorted`, `normalizeLabel`).
+The file exposes shared evidence-span math (`renderTopicSourceSpan`, `estimateTopicSourceChars`) that must stay byte-exact with the generator side in batch.ts, so the planner's character estimates never drift from what the generator will actually measure. The surrounding repository builds the module and flow inventories in other core modules and feeds them into this planner. The deterministic path also implements the "Workstream B" clustering approach, which groups modules by import graph connectivity as a fallback that guarantees valid topic proposals even when the language model proposes none.
 
-## Inventory construction: closed, sorted evidence from accepted pages
-<!-- lw:anchors packages/core/src/topics.ts#buildTopicPlanningInventory packages/core/src/topics.ts#serializeTopicPlanningInventory packages/core/src/topics.ts#measureTopicAnchorEvidence packages/core/src/topics.ts#extractH2Titles packages/core/src/topics.ts#extractSectionBullets packages/core/src/topics.ts#extractOpeningSentence packages/core/src/topics.ts#classifyTopicSignals packages/core/src/topics.ts#uniqueSorted -->
+## Inventory Construction from Accepted Evidence
+<!-- lw:anchors packages/core/src/topics.ts#buildTopicPlanningInventory packages/core/src/topics.ts#extractOpeningSentence packages/core/src/topics.ts#extractH2Titles packages/core/src/topics.ts#extractSectionBullets packages/core/src/topics.ts#classifyTopicSignals packages/core/src/topics.ts#measureTopicAnchorEvidence packages/core/src/topics.ts#renderTopicSourceSpan packages/core/src/topics.ts#TOPIC_SOURCE_SPAN_SEPARATOR packages/core/src/topics.ts#uniqueSorted -->
 
-The inventory constructor begins by accepting pages as the single source of truth. `buildTopicPlanningInventory` takes a repository root, a list of modules, optional path-role and flow-slug filters, an import-edge list, and a map of flow candidates; it returns a `Promise<TopicPlanningInventory>` whose contents are derived strictly from the markdown files that already exist on disk and parse cleanly.
+The `buildTopicPlanningInventory` function is the orchestrator of the evidence-acceptance pipeline. It takes a proposed module set, optional path-role configuration, and optional flow candidates, and returns a `TopicPlanningInventory` — a filtered, deduplicated, and enriched snapshot of what the wiki actually contains on disk. The function works in four stages: it unions anchor evidence from file pages, assembles module records, collects flow records, and then filters everything through a single measurement pass that decides which anchors are truly "active."
 
-```ts
-export async function buildTopicPlanningInventory(opts: {
-  repoRoot: string;
-  modules: Module[];
-  pathRoleConfig?: PathRoleConfig;
-  allowedFlowSlugs?: ReadonlySet<string>;
-  edges?: ReadonlyArray<{ from: string; to: string }>;
-  flowCandidates?: ReadonlyArray<FlowCandidate>;
-}): Promise<TopicPlanningInventory>
-```
-
-In words: the function takes a repository root plus the planned modules, edges, and candidate flows, and returns an inventory object describing each accepted page.
-
-The module pass sorts `opts.modules` by id so the inventory is stable, then for each module it asks `safeIo.exists` whether `livewiki/<id>/index.md` is present — a missing folder page is silently skipped, since "no page" means "no evidence." If the file is readable, the source is parsed through `parseFrontmatter`; any parse error or a missing frontmatter block again causes the module to be skipped. The module's path role is resolved with `classifyModuleRole`, and its title is taken from frontmatter when present and trimmed, falling back to the module id.
-
-Anchors are gathered in two passes. First, `uniqueSorted(getAnchors(parsed.frontmatter))` reads the anchors declared on the folder page itself. Then the function resolves the sibling directory `livewiki/<id>` and, for every `.md` file other than `index.md`, attempts to read and parse it; any file that fails to parse or has no frontmatter contributes nothing. The union is run through `uniqueSorted` again so the final list is closed (no duplicates) and sorted. Each anchor key's path role is cached into `anchorRoles` via `classifyPathRole`, with later writes for the same key never overwriting an earlier classification — roles established while scanning modules are sticky.
+The pipeline starts with module discovery. `buildTopicPlanningInventory` sorts the incoming modules by id and, for each, checks whether a canonical folder page exists at `livewiki/<id>/index.md`; if the file is missing, unreadable, or malformed, the module is skipped entirely. For a surviving module it parses the frontmatter and extracts the anchor keys via `getAnchors`, but a comment in the source notes issue #29: anchors actually live on the *file pages* inside the folder's wiki directory, not on the folder page itself, which is an anchor-less synthesis. So the function lists every other `.md` file in `livewiki/<id>/`, parses each one's frontmatter, and unions all those anchors into the same array. Disk is the truth here — a failed file task leaves no page and contributes no evidence. The merged list is deduplicated and sorted by `uniqueSorted`, which takes a readonly array of strings, trims each value, drops empties, removes duplicates via a `Set`, and returns the sorted result.
 
 ```ts
-function uniqueSorted(values: readonly string[]): string[]
+function uniqueSorted(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort();
+}
 ```
 
-`uniqueSorted` takes a list of strings, trims each value and drops empties, deduplicates with a `Set`, and returns the survivors sorted; it is the small helper that closes and orders every list of keys and paths in this section.
+Before constructing the module record, the function assigns each anchor a path role. For every unique anchor it splits the key at the `#` to recover the source path, then calls `classifyPathRole` (with the optional `pathRoleConfig`) and stores the result in the shared `anchorRoles` map. Then it builds the record itself, pulling the title from frontmatter (falling back to the module id if absent), the sorted paths, and the role, along with several derived fields computed from the body and paths. The body-derived fields are:
 
-The body of the folder page is then mined for narrative evidence. `extractOpeningSentence` strips a leading `#`-level heading, splits on the first blank line, collapses whitespace, and returns the resulting paragraph unless it is empty or starts with `## ` (a section heading) — that rule keeps the "responsibility" field from accidentally holding the first H2.
+- **Responsibility** — from `extractOpeningSentence(parsed.body)`, which strips a leading H1, takes the first paragraph, collapses whitespace, and returns `null` if there is no paragraph or if that paragraph is itself an H2.
+- **When-to-use bullets** — from `extractSectionBullets(parsed.body, "When to use this page")`, which finds the matching `##` section (with the title regex-escaped) and collects every `-` or `*` list item under it.
+- **Section titles** — from `extractH2Titles(parsed.body)`, a simple regex scan for all `##` headings.
+- **Signals** — from `classifyTopicSignals(module.paths, parsed.body)`, which builds a lowercase "haystack" by joining the paths and the H2 titles, then runs five keyword regexes against it to tag the module as `configuration`, `persistence/state`, `validation/recovery`, `output`, and/or `entry/boundary`.
+- **Import neighbors** — computed from the `edges` option by flat-mapping each edge to the other endpoint when the module is on either side.
+
+After all modules are built, the flow stage mirrors the module logic but for `livewiki/flows`. The function lists `.md` files there (excluding `index.md`), derives each slug from the filename, skips any slug not in `allowedFlowSlugs` when that set is provided, and requires a matching diagram at `livewiki/diagrams/flow-<slug>.mmd`. Each eligible file is parsed; its frontmatter must include a string `title` and an array `modules`. Anchors are gathered the same way and any not already in `anchorRoles` get a path role. The record is completed with `flowCandidates` data looked up by slug — entry, boundary, and sink keys plus declared signals. Invalid pages are swallowed and simply left out of the plan.
+
+The final stage is the acceptance filter. The function calls `measureTopicAnchorEvidence` with every anchor key seen anywhere, which opens the SQLite index at `.livewiki/index.db` and queries for active symbols matching those keys:
 
 ```ts
-function extractOpeningSentence(body: string): string | null
+export async function measureTopicAnchorEvidence(repoRoot: string, keys: string[]): Promise<TopicAnchorEvidence> {
 ```
 
-`extractOpeningSentence` takes the page body and returns the first non-heading paragraph as a single-line string, or `null` when the page only has headings.
-
-The "When to use this page" bullets are pulled by `extractSectionBullets`, which locates an `## <title>` heading via a case-insensitive regex, captures everything up to the next `##` heading or end of document, and then walks the lines collecting `- …` / `* …` items, trimming each bullet.
-
-```ts
-function extractSectionBullets(body: string, title: string): string[]
-```
-
-`extractSectionBullets` takes the body and a section title and returns the trimmed list of bullet lines under that section, or an empty array if the section is absent.
-
-The full structural outline of the page comes from `extractH2Titles`, a one-line scanner over lines beginning with `## `; each match's captured title is trimmed and the result is an array in document order, which doubles as the `sections` field on the module evidence.
-
-```ts
-function extractH2Titles(body: string): string[]
-```
-
-`extractH2Titles` takes the body and returns every `##` heading in source order, with surrounding whitespace removed.
-
-`classifyTopicSignals` produces a small vocabulary tag set for the module: it joins the module's paths with the H2 titles (lowercased), and for each of five regex families — configuration, persistence/state, validation/recovery, output, entry/boundary — pushes the matching tag. The output is the intersection of "what this module's code paths are about" and "what its narrative sections talk about," without any scoring or ranking.
-
-```ts
-function classifyTopicSignals(paths: readonly string[], body: string): string[]
-```
-
-`classifyTopicSignals` takes the module's paths and body and returns a list of coarse signal labels drawn from a fixed vocabulary.
-
-`importNeighbors` is derived purely from `opts.edges`: every edge whose endpoint matches the module id contributes the other endpoint, and the union is run through `uniqueSorted` so the neighbor list is closed and sorted.
-
-The module record is then assembled with id, title, sorted paths, role, responsibility, when-to-use bullets, sections, closed anchor list, neighbors, and signals — all of which are themselves either arrays or primitive fields, never lazy references to disk.
-
-The flow pass mirrors the same disk-truth policy against `livewiki/flows/`. For every `.md` page other than `index.md`, the slug is taken as the filename without extension; if an `allowedFlowSlugs` set was supplied, any slug not in it is skipped, and the function additionally checks for `livewiki/diagrams/flow-<slug>.mmd` on disk — a flow without its Mermaid diagram is not accepted evidence. After reading and parsing, pages without a string `title` or with a non-array `modules` field are dropped, and any parse failure is silently swallowed ("invalid pages are not accepted evidence and remain outside the plan").
-
-For each accepted flow, `uniqueSorted(getAnchors(parsed.frontmatter))` closes and sorts the anchor list. New anchors that have not yet been seen by the module pass are routed through `classifyPathRole` and merged into `anchorRoles`, again without overwriting earlier classifications. The flow record then composes its `modules` field with `uniqueSorted(rawModules)` and pulls entry/boundary/sink keys and signal sets from the matching `FlowCandidate` supplied in `opts.flowCandidates`; absent candidates yield empty sets and an empty signal record, never invented values.
-
-Once both passes have run, `measureTopicAnchorEvidence` is awaited to learn which anchor keys are still backed by an active symbol span in `.livewiki/index.db`. The function builds a parameterised SQL query over the `symbols` table, joins through `files`, and filters on `s.status = 'active'` for every key in one round-trip. Each row's source file is read once and cached in a `Map`, so multiple anchors in the same file only pay one read; the rendered span length (via `renderTopicSourceSpan`) is recorded as `anchorSourceChars[row.key]`. A second query pulls every rationale row whose file path is in the touched set, ordered by path then start line, and groups them under `anchorRationaleRows[path]` so that downstream planning can show the human-readable explanations next to their symbols. The database handle is closed in a `finally` block, and the function returns both maps even when no keys match — the empty case is handled up front.
-
-```ts
-export async function measureTopicAnchorEvidence(repoRoot: string, keys: string[]): Promise<TopicAnchorEvidence>
-```
-
-`measureTopicAnchorEvidence` takes the repo root and a list of anchor keys, and returns per-key rendered source-character counts together with the rationale rows for each touched file.
-
-The final closure step is the "active filter": `activeKeys` is built from the keys actually present in `anchorSourceChars`, and the inventory is rebuilt so that every module's `anchors`, every flow's `anchors`/`entryKeys`/`boundaryKeys`/`sinkKeys`, and the `anchorRoles` map only retain keys that survived the measurement. This is the moment the inventory becomes "closed, sorted evidence from accepted pages" — anchors that point to vanished symbols, dropped flow pages, or unwritten file pages simply do not appear.
-
-```ts
-export function serializeTopicPlanningInventory(inventory: TopicPlanningInventory): string
-```
-
-`serializeTopicPlanningInventory` takes the inventory and returns a pretty-printed JSON string containing only the modules, flows, and `anchorSourceChars` — the rationale rows and role map are intentionally excluded from the wire form, since the inventory is meant to be diffed as a planning artifact, not as a complete evidence record.
-
-## Evidence span math shared with the generator
-<!-- lw:anchors packages/core/src/topics.ts#renderTopicSourceSpan packages/core/src/topics.ts#estimateTopicSourceChars packages/core/src/topics.ts#TOPIC_SOURCE_SPAN_SEPARATOR -->
-
-The shared span math is the bridge between the core's planning inventory and the generator that materializes topics, so two helpers do the work: one slices a window of source lines around a symbol and labels it, the other tallies how many characters those slices will consume once they are joined and have rationale appended.
-
-`TOPIC_SOURCE_SPAN_SEPARATOR` is the glue string between adjacent spans, defined as the two-character sequence `\n\n`. It appears as a first-class constant because `renderTopicSourceSpan` only ever produces one labelled block, yet the planning layer needs to know exactly how much inter-block padding will be inserted when several blocks are concatenated. Centralizing the literal means cost estimates and rendered output stay aligned: the separator used in the final string is the same one `estimateTopicSourceChars` charges for.
+This function takes a repository root and the anchor keys, and returns a `TopicAnchorEvidence` object holding two maps: `anchorSourceChars` (key → character count) and `anchorRationaleRows` (file path → rows of rationale evidence). It early-returns empty maps if `keys` is empty. Otherwise it joins the `symbols` and `files` tables to get each active symbol's source path and line span. For each row it lazily reads the source file once and caches the split lines in a `Map`, then calls `renderTopicSourceSpan` to compute the character length of the span. That helper takes a symbol object plus its file's lines and produces a comment-bordered excerpt, padding the start down by 6 lines and the end up by 10 (clamped to file bounds), and joins it with the `TOPIC_SOURCE_SPAN_SEPARATOR` constant — which is simply two newlines, though in practice the separator's role is carried by the comment banner itself.
 
 ```ts
 export function renderTopicSourceSpan(
   symbol: { key: string; path: string; startLine: number; endLine: number },
   lines: readonly string[],
-): string
+): string {
 ```
 
-`renderTopicSourceSpan` takes a symbol descriptor (its key, file path, and one-based start and end line numbers) together with the full line array of its containing file, and returns a single labelled string slice ready to be embedded in a topic prompt. It starts by clamping the visible window: the beginning is the symbol's first line minus six (so callers get a little context above the declaration), floored at zero; the end is the symbol's last line plus ten, capped at the total line count. The `Math.max(0, …)` and `Math.min(lines.length, …)` pair turns the request into a safe `slice` range, which is what the function then extracts and joins with single newlines. The returned string opens with a banner of the form `// === <key> (<path>:<start+1>-<end>) === <NL>`, where the reported start is `start + 1` so the header lines up with the original 1-based line numbers rather than the 0-based slice indices. The whole block is therefore self-describing: a reader of the generated topic sees which symbol this evidence belongs to and the inclusive line range it covers, and the planner can index into it by the same line numbers it stored.
+Given the symbol's key, path, and line range plus the file's line array, this function builds a fenced quote-style excerpt — a comment line naming the key and location, followed by the sliced lines joined with newlines — and returns that string; its length is what counts as the anchor's "source character" weight. For rationale evidence, the function collects the distinct paths from the matched rows, queries the `rationales` table for rows in those files, groups them per path, and returns everything in the `TopicAnchorEvidence`.
+
+Back in `buildTopicPlanningInventory`, the returned `anchorSourceChars` map is treated as the authoritative set of *accepted* anchors. Any module anchor not present in that map is filtered out, and the same filtering is applied to flow anchors, with entry/boundary/sink keys additionally constrained to the flow's surviving anchor set. Finally, `anchorRoles` is pruned to only the active keys, and the function returns the inventory with all four pieces: filtered modules, filtered flows, active roles, and the measurement maps that justify the acceptances.
+
+## Stable Inventory Serialization for the Planner Prompt
+<!-- lw:anchors packages/core/src/topics.ts#serializeTopicPlanningInventory -->
+
+`serializeTopicPlanningInventory` is the final stage of the inventory-building pipeline: it converts the fully assembled `TopicPlanningInventory` into a deterministic, human-readable string that gets embedded directly into the planner prompt. The function takes the inventory object and returns a JSON string with indentation:
+
+```typescript
+export function serializeTopicPlanningInventory(inventory: TopicPlanningInventory): string {
+  return JSON.stringify({ modules: inventory.modules, flows: inventory.flows, anchorSourceChars: inventory.anchorSourceChars }, null, 2);
+}
+```
+
+In plain terms, it accepts a structured inventory and returns a formatted text representation of its contents.
+
+The function operates in a single `JSON.stringify` call that selects exactly three fields from the inventory — `modules`, `flows`, and `anchorSourceChars` — and serializes them with a two-space indent. This explicit field selection is deliberate: it guarantees that only the data the planner needs reaches the prompt. The `modules` array lists every topic module; `flows` captures the cross-module execution sequences; and `anchorSourceChars` provides the stable character-position anchors that let the planner reference exact source locations. Together these three fields give the planner a complete, self-contained map of the topic system without pulling in incidental metadata or runtime state.
+
+The `null` second argument disables any value transformation, and the `2` indentation produces a multi-line layout that is easy for the planner to scan. That readable formatting matters for the prompt's role as a lingua franca between the inventory-building code and the language model — the model parses the serialized structure more reliably when it is properly spaced and nested. The output is deterministic because the inventory fields are already ordered by the steps that built them, so the same source tree always yields the same prompt text, which keeps planning results reproducible across runs.
+
+## Source Budget Estimation Shared with the Generator
+<!-- lw:anchors packages/core/src/topics.ts#estimateTopicSourceChars -->
+
+The `estimateTopicSourceChars` function is the shared arbiter of "how big will this topic really be?" for both planning-time and generation-time code paths. The topic-driven source budget must stay identical no matter which side of the pipeline asks, so this single function encodes the rule and both callers invoke it. Its job is to predict the exact character count a generated topic block will occupy in the final Markdown, given a set of keyed anchors and a planning inventory, plus (optionally) evidence rows rendered from rationale content.
+
+`export function estimateTopicSourceChars(keys: readonly string[], inventory: TopicPlanningInventory, rationaleMaxChars = 0): number` — it takes a list of anchor keys to include, the planning inventory that holds measured source sizes, and an optional cap on rationale characters; it returns a predicted total character count.
+
+The function proceeds in four distinct steps. First, it filters the supplied `keys` down to those that actually have a measured size in the inventory: `keys.filter((key) => inventory.anchorSourceChars[key] !== undefined)` yields the `measured` array. When nothing is measured — meaning no anchor in the requested set has known source-length data — the function short-circuits and returns `0`, because there is no basis for any estimate. This guard keeps callers from fabricating a nonzero budget for anchors whose sizes were never recorded during planning.
+
+Second, the function sums the measured sizes: `measured.reduce((sum, key) => sum + inventory.anchorSourceChars[key]!, 0)` accumulates each anchor's recorded character count. The non-null assertion is safe here precisely because the preceding filter already established that every key in `measured` has a value in `inventory.anchorSourceChars`. This base total represents the raw source the anchors themselves will occupy when emitted together.
+
+Third, it adds the separator overhead: `TOPIC_SOURCE_SPAN_SEPARATOR.length * (measured.length - 1)`. Between every pair of adjacent anchors in the emitted sequence there is exactly one separator character span (for example, whitespace or punctuation that delineates two anchors in the source), so `(measured.length - 1)` accounts for the gaps between `measured.length` anchors. This subtlety matters — without it, the budget would undercount every multi-anchor topic and the planner could misjudge whether the topic fits its allotted space.
+
+The final step handles optional rationale evidence. When `rationaleMaxChars > 0`, the function derives the distinct file paths from the measured keys by splitting each key on `"#"` and taking the filename prefix (`key.split("#", 1)[0] ?? ""`), de-duplicating via a `Set`, and sorting for deterministic ordering. For each such path it looks up the pre-rendered rationale rows in `inventory.anchorRationaleRows?.[path]` (using `flatMap` so missing entries contribute nothing), then calls `renderRationaleEvidence(rows, rationaleMaxChars)` to render those rows into a single string. The length of that rendered string is added to the running total, producing the final predicted character count that the function returns.
+
+Because the same estimate is used by the generator for deciding how a topic maps onto a target budget, and by the source-budget planner for laying out or trimming topics, any change to the estimation rule propagates consistently across both stages — the shared function is what keeps their two views of topic size from ever diverging.
+
+## Deterministic Module Clustering from the Import Graph
+<!-- lw:anchors packages/core/src/topics.ts#clusterModulesByImportGraph packages/core/src/topics.ts#capClusterSize -->
+
+`clusterModulesByImportGraph` is the entry point that turns a flat module inventory into ordered topic clusters. It accepts a `TopicPlanningInventory` and returns a `TopicModuleCluster[]`, where each cluster groups product modules (the topics a writer will actually produce) with the auxiliary modules they depend on, so downstream planning sees self-contained units.
 
 ```ts
-export function estimateTopicSourceChars(
-  keys: readonly string[],
-  inventory: TopicPlanningInventory,
-  rationaleMaxChars = 0,
-): number
+export function clusterModulesByImportGraph(inventory: TopicPlanningInventory): TopicModuleCluster[] {
 ```
 
-`estimateTopicSourceChars` takes the list of symbol keys the topic will include, the `TopicPlanningInventory` produced by earlier planning, and an optional `rationaleMaxChars` budget, and returns the total character count those evidence spans will occupy once rendered. It splits the requested keys into two groups: the ones whose `inventory.anchorSourceChars[key]` was actually measured, and any that were not. Only the measured keys drive the estimate; if none were measured the function short-circuits to `0`, which is the signal that planning has nothing to budget for. For the measured subset, it sums the per-symbol character counts and then adds `TOPIC_SOURCE_SPAN_SEPARATOR.length * (measured.length - 1)` to account for the blank line that will sit between each adjacent span. The minus one is intentional: a separator is placed *between* blocks, so `N` blocks incur `N - 1` separators.
+The algorithm proceeds in distinct phases. **Phase one — isolate product modules and build the import adjacency.** The function filters `inventory.modules` to only those with `role === "product"`, then builds a `Map` from each product module id to the ids of its product-only neighbors. It filters out self-imports and modules outside the product set, so the graph only ever connects product modules to each other. This deliberately ignores auxiliary modules at this stage, because the goal is to find communities of *topics* first, then attach dependencies later.
 
-When `rationaleMaxChars` is greater than zero, the function also charges for the rationale evidence that will be appended alongside the spans. It derives the unique file paths from the measured keys by splitting each key on `#` and taking the first segment, deduplicates and sorts them, then flattens `inventory.anchorRationaleRows` across those paths into a single row list. That list is fed to `renderRationaleEvidence(rows, rationaleMaxChars)`, and the resulting string's length is added to the running total. The sum of measured span characters, separators, and (optionally) rendered rationale is what the caller uses to decide whether the planned topic fits within its evidence budget before any actual rendering is attempted.
+**Phase two — find connected components with BFS.** The function iterates over product ids in sorted order (this determinism matters, see below) and runs a breadth-first search over the product adjacency. Every unvisited id seeds a queue; the search drains the queue, collecting ids into a component and enqueuing any unvisited product neighbors. When the queue empties, that component is sorted and pushed onto `components`. The result is a list of disjoint sets of product modules that are transitively connected by imports — a coarse community structure.
 
-## Type guards and error helpers
-<!-- lw:anchors packages/core/src/topics.ts#isRecord packages/core/src/topics.ts#isStringArray packages/core/src/topics.ts#errorAt packages/core/src/topics.ts#addDuplicateError packages/core/src/topics.ts#stripOuterJsonFence packages/core/src/topics.ts#normalizeLabel packages/core/src/topics.ts#normalizeGroups -->
+**Phase three — split components into multi-module groups, singletons, and then spoke groups.** Components with two or more members become candidates for their own cluster; those with exactly one node become "singletons". But a singleton isn't necessarily isolated in the real world — it may share a common auxiliary dependency with other singletons. So the function computes, for each singleton, the set of *auxiliary* modules it imports (its non-product, non-self neighbors). Two singletons are considered to "share a spoke" if their auxiliary neighbor sets overlap. The function then runs a union-find over singletons, merging any pair that shares an auxiliary neighbor. The resulting groups of size >= 2 form `spokeClusters`; the leftover singletons that weren't merged with anyone become `remainder`. This is the heuristic that captures the real-world case where several small product modules all load the same utility library — they're topically related even though they don't import each other directly.
 
-At the bottom of `topics.ts` sits a small utility layer that every validation routine above depends on. It does not decide policy on its own; instead it provides the safe predicates, error constructors, and string-canonicalization primitives that the rest of the module composes. Reading these helpers in the order they appear in the source shows the pipeline the validators rely on.
+**Phase four — attach auxiliary modules to each group.** `auxiliaryModules` is every module that isn't a product. For a given list of product module ids, `attachAuxiliary` collects every auxiliary module that imports at least one member of that product set, sorts those auxiliary ids, and builds a cluster. The `origin` tag marks clusters that came from spoke-sharing or the overview remainder, so the caller can distinguish these heuristic merges from pure connected components. Multi-module components get no `origin` tag; spoke clusters get `"spoke"`; the remainder (if it has at least two members) gets assembled as one `"overview"` cluster.
 
-The earliest helper is the structural predicate `isRecord`. Its signature is `function isRecord(value: unknown): value is Record<string, unknown>`. In plain terms it takes any unknown runtime value and tells the caller whether that value is a plain non-array, non-null object suitable for property access. The body checks three things in sequence: the value is not `null`, its `typeof` is `"object"`, and it is not an array. Only when all three hold does TypeScript treat the input as a `Record<string, unknown>`, which is the precondition every later step needs before reading keys.
+**Phase five — enforce size caps and sort deterministically.** Every cluster — whether from `multi`, `spokeClusters`, or `remainder` — passes through `capClusterSize` before being added to the result. The final list is sorted by the first product module id of each cluster, and within each phase the inputs were sorted at every step (component members, singleton lists, spoke group members, auxiliary ids). The combination of those sorts with the sorted output means the whole function is a pure function of its input — the same inventory always yields the same cluster order, which is essential for diff-friendly output in planning documents.
 
-Right next to it sits `isStringArray`, with the signature `function isStringArray(value: unknown): value is string[]`. It returns `true` only when the input is a real `Array.isArray` collection whose every element is a non-empty trimmed string. The `value.every` walk also rejects blanks via `item.trim() !== ""`, so callers can rely on the fact that anything passing this guard is a list of meaningful labels with no stray whitespace or non-string slots.
+`capClusterSize` is the local trimmer that keeps any single cluster from ballooning into an unmanageable planning unit. It accepts a `TopicModuleCluster` and returns a possibly smaller `TopicModuleCluster` with the same fields. Its rule: a cluster may hold at most six modules total. The first `while` loop drops auxiliary modules from the end of their list (they were sorted, so these are alphabetically last) until the total is within limit or no auxiliaries remain. The second loop then spills over into trimming product modules — but only down to two. The `productModuleIds.length > 2` guard means a cluster with a single product module and one auxiliary can never be shrunk below its essential content; the planner must handle whatever size remains. The function returns the trimmed id lists, losing the `origin` tag in the process (hence `attachAuxiliary` re-adds it afterward).
 
-The error layer begins with the factory `errorAt`, declared as `function errorAt(code: TopicPlanValidationCode, proposalIndex: number, message: string): TopicPlanValidationError`. It takes a validation code, the zero-based index of the offending proposal, and a human message, and returns the canonical `TopicPlanValidationError` shape `{ code, proposalIndex, message }`. Every error in the file is built through this single constructor, which keeps the shape uniform for the orchestrator downstream.
+## Concern-Grouped Topic Clusters for Deployment and Testing
+<!-- lw:anchors packages/core/src/topics.ts#DEPLOYMENT_PATH_PATTERNS packages/core/src/topics.ts#collectConcernTopicClusters -->
 
-The factory is consumed by `addDuplicateError`, whose signature is
+`collectConcernTopicClusters` is the mechanism that turns a flat `TopicPlanningInventory` of modules into grouped topic clusters by concern. It consumes inventory modules tagged with a role, builds clusters of product and auxiliary modules, and returns deterministic metadata used for the topic's title and intent.
 
-```ts
-function addDuplicateError(
-  seen: Map<string, number>,
-  value: string,
-  index: number,
-  code: "topic_plan_duplicate_title" | "topic_plan_duplicate_intent",
-  label: string,
-  errors: TopicPlanValidationError[],
-): void
-```
+The deployment-focused `DEPLOYMENT_PATH_PATTERNS` constant lists glob patterns that match deployment-related artifacts — Dockerfiles, docker-compose files, Windows batch/PowerShell scripts, and `scripts`/`deploy` directories — and serves as a candidate source for identifying modules of that concern.
 
-It encapsulates the entire "have I seen this string before?" flow. Given a `seen` map of previously observed values, the current `value`, its `index`, the appropriate duplicate `code`, a `label` for the message ("Title" or "Intent"), and the running `errors` array, it consults `seen.get(value)`. If a previous index is found, it pushes a new error built by `errorAt` saying that the current proposal duplicates an earlier one (offset by `+1` so the user sees one-based numbering). Otherwise it records the current index in the map so future duplicates can be detected. The function returns nothing — its job is the side effect on `seen` and `errors`.
+The function `export function collectConcernTopicClusters(` takes a `TopicPlanningInventory` and returns an array of objects each with `cluster`, `title`, `intentSignal`, and `surfaces`.
 
-The string helpers come next and they are all about getting noisy model output onto a canonical footing before any comparison happens. The first is `stripOuterJsonFence`, declared as `function stripOuterJsonFence(raw: string): string`. It takes a raw response string, trims it, and tries to peel off a single outer ```` ```json ... ``` ```` (or plain ```` ``` ... ``` ````) code fence by matching the pattern `^```(?:json)?\s*\n([\s\S]*?)\n```$/i`. If the regex captures an inner body it returns that body, also trimmed; if the input does not actually look like a fenced block it falls back to the trimmed original. This is the only thing standing between a model that wraps its JSON in a Markdown fence and the JSON parser above.
+The implementation walks through predefined concern-group rules, filtering modules that match each rule, and performs several passes to classify modules:
 
-Closely related is `normalizeLabel`, with the signature `function normalizeLabel(value: string): string`. It canonicalizes a label so that two strings the user would consider the same also compare equal. The chain runs `NFKD` normalization, strips the combining diacritic range `\u0300-\u036f`, lowercases, collapses any non-`[a-z0-9]` run into a single space, and trims. The result is a single-space, lowercase, accent-free form of the original — exactly what the duplicate detector needs.
+1. It identifies all "product" modules (those whose role is "product") across the inventory, then filters the matched modules down to those product IDs. If none of the matched modules are products, it looks for product modules whose import neighbors include any matched module — a fallback that still locates a product anchor for the concern.
+2. Once a product set is established, it derives "auxiliary" modules: matched modules that are not products but import from at least one product in the set. These auxiliary modules support the product and belong to the same concern cluster.
+3. The function computes a list of surface names — basenames of files matched by the rule (e.g., `Dockerfile`, `docker-compose.yml`) — deduplicates and sorts them, and keeps at most four. These surfaces provide concrete evidence for the concern's intent and are used to build a deterministic title; the inline comment notes that a deployment topic would otherwise be titled too generically and miss Docker-related wording, so the surfaces name the concern in the generated intent.
+4. For each concern that produced at least one product module, it pushes a result containing the modular cluster (sized via `capClusterSize`, with origin marked `"concern"`), the rule's title and intent signal, and the surfaces. Empty matches are skipped entirely.
 
-The grouping counterpart is `normalizeGroups`, declared as `function normalizeGroups(groups: TopicKeyGroups): TopicKeyGroups`. It does not change the shape of the input; it just rebuilds each of the four lists — `contract`, `state`, `output`, `failure` — by passing them through a `uniqueSorted` helper and returns a fresh object. The effect is that any group carried into the canonical form of a topic plan has duplicates removed and is sorted, so equality checks against other plans become a simple per-array comparison rather than a fragile order-sensitive one.
+The result is stable ordering of concern clusters, each guaranteed to have an anchor product and its supporting modules, with deterministic naming based on the actual files that triggered the match.
 
-Together these helpers form a thin foundation: `isRecord` and `isStringArray` guard the shape of parsed JSON; `normalizeLabel` and `normalizeGroups` put strings and arrays on a canonical footing; `stripOuterJsonFence` rescues the cases where the model wrapped its output in a code fence; and `errorAt` with `addDuplicateError` is the only path through which duplicate-related diagnostics enter the error list. The validation routines above this layer are essentially the orchestration of these primitives against a proposal.
+## Anchor Selection with Group Floors and Product Ratio
+<!-- lw:anchors packages/core/src/topics.ts#selectTopicAnchors packages/core/src/topics.ts#TOPIC_GROUP_NAMES -->
 
-## Clustering: import graph plus spoke/overview and concern fallback
-<!-- lw:anchors packages/core/src/topics.ts#clusterModulesByImportGraph packages/core/src/topics.ts#capClusterSize packages/core/src/topics.ts#DEPLOYMENT_PATH_PATTERNS packages/core/src/topics.ts#collectConcernTopicClusters -->
+The `selectTopicAnchors` function is the decision engine that turns a raw cluster of candidate topics into a final, balanced set of anchors grouped by their `TOPIC_GROUP_NAMES` categories. `TOPIC_GROUP_NAMES` is defined as the constant array `["contract", "state", "output", "failure"]`, which fixes the order in which groups are processed and guarantees that every returned `TopicKeyGroups` object always has all four keys present.
 
-`clusterModulesByImportGraph` is the structural clustering engine that decides which product modules belong together based on how they actually import one another. It takes a `TopicPlanningInventory` and returns an array of `TopicModuleCluster`s, where each cluster pairs a list of product modules with the auxiliary modules that reach into them.
-
-The function's signature is:
-
-```ts
-export function clusterModulesByImportGraph(inventory: TopicPlanningInventory): TopicModuleCluster[]
-```
-
-In words: it takes the full inventory of modules (both product and auxiliary roles) and returns the clusters it computed.
-
-The mechanism proceeds in four stages.
-
-**Stage 1 — Build a product-only import graph and find connected components.** The function first narrows `inventory.modules` down to those whose `m.role === "product"` and stores their ids in `productIds`. It then constructs a `productAdjacency` map that records, for each product module, the subset of its `importNeighbors` that are also product modules (excluding self-loops via `id !== m.id`). From that adjacency, a BFS over a queue of `[...productIds].sort()` walks every component; visited nodes are marked in `visited`, each BFS run accumulates its members into `component`, and the component is sorted before being pushed onto `components`. The deterministic `[...productIds].sort()` outer iteration is what guarantees the same component boundaries across runs.
-
-**Stage 2 — Split components into multi-member and singleton groups.** Anything whose component has `length >= 2` is kept as `multi` (these are tightly coupled product modules that obviously belong together). The remaining single-id components become `singletonIds` and are sorted. Singletons are product modules that import no other product modules and are imported by none — the building blocks for the heuristic stages that follow.
-
-**Stage 3 — Group singletons that share auxiliary "spokes."** Because a singleton has no product neighbors by construction, the function instead looks at its auxiliary neighbors: for each singleton `id`, `auxNeighborsBySingleton` collects those `importNeighbors` that are not product modules but exist in the inventory. A union-find-style `parent` map is seeded so each singleton is its own root, and `findRoot` flattens the tree with path compression. For every unordered pair `(i, j)` of singletons, the function unions their roots when their auxiliary-neighbor sets intersect (`[...left].some((neighbor) => right.has(neighbor))`). After all unions, `groupsByRoot` re-buckets each singleton under its root. The resulting groups are sorted internally and then by their first member; `spokeClusters` keeps groups of size `>= 2`, and the leftover singletons become `remainder` (flattened and sorted).
-
-**Stage 4 — Attach auxiliary modules, cap size, tag origin, and order the result.** `auxiliaryModules` collects every non-product module. The local `attachAuxiliary(productModuleIds, origin?)` helper builds a cluster by selecting those auxiliary modules whose `importNeighbors` overlap `productModuleIds`, sorts their ids, runs the cluster through `capClusterSize`, and stamps an optional `origin` of `"spoke"` or `"overview"` (multi-component clusters omit the origin tag entirely). The final `clusters` array concatenates: the `multi` clusters (originless), the `spokeClusters` (origin `"spoke"`), and — only when `remainder.length >= 2` — a single overview cluster built from `remainder` (origin `"overview"`). The whole array is sorted by `productModuleIds[0]` so the output ordering is stable.
-
-`capClusterSize` enforces a 6-item ceiling on each cluster. Its signature is:
-
-```ts
-function capClusterSize(cluster: TopicModuleCluster): TopicModuleCluster
-```
-
-In words: it takes a draft cluster and returns the same shape with overflow trimmed. The rule is "shrink auxiliary before product": the first `while` loop drops auxiliary ids from the tail while the combined size exceeds 6 and any auxiliary ids remain; only if that loop exhausts the auxiliary list (or stops) and the cluster is still over 6 with more than 2 product ids does the second loop trim product ids from the tail. The two-product floor preserves the smallest viable product grouping.
-
-`DEPLOYMENT_PATH_PATTERNS` is a closed list of glob patterns used by concern rules to recognise deployment-shaped evidence. Its signature is:
-
-```ts
-export const DEPLOYMENT_PATH_PATTERNS = [
-  "**/Dockerfile*",
-  "**/docker-compose*",
-  "**/*.bat",
-  "**/*.ps1",
-  "**/scripts/**",
-  "**/deploy/**",
-]
-```
-
-In words: it is an exported array of glob strings that the deployment concern rule pattern-matches against module paths to decide whether a module contributes "deployment" surfaces.
-
-`collectConcernTopicClusters` is the fallback pass that catches topics the import graph cannot express — concerns like deployment, configuration, or testing whose evidence lives in auxiliary files rather than in how product modules import each other. Its signature is:
-
-```ts
-export function collectConcernTopicClusters(
-  inventory: TopicPlanningInventory,
-): Array<{ cluster: TopicModuleCluster; title: string; intentSignal: string; surfaces: string[] }>
-```
-
-In words: it takes the same inventory and returns one entry per matched concern, each pairing a cluster with a rule-supplied title, intent signal, and up to four concrete surface basenames.
-
-The mechanism iterates the closed-list `CONCERN_GROUP_RULES`; for each `rule`, it gathers every module where `rule.matches(module)` is true, sorts their ids into `matched`, and short-circuits with `continue` when nothing matches. It then derives `productModuleIds` two ways: first by intersecting `matched` with `productIds`, and — only when that intersection is empty — by falling back to product modules whose `importNeighbors` reach into `matched`. If even the fallback produces no product ids, the rule contributes nothing. With a non-empty `productSet` in hand, the function collects auxiliary ids from `matched` that are not in `productSet` and that have at least one import neighbor in `productSet`, then runs the draft through `capClusterSize` and stamps `origin: "concern"`. Finally, `surfaces` flattens every matched module's `rule.surfacePaths(module)` results, takes the basename of each path via `path.split("/").pop()`, dedupes and sorts via `uniqueSorted`, and truncates to the first 4 entries — a deterministic evidence trail the planner can render in the topic's intent line. Each assembled `{ cluster, title, intentSignal, surfaces }` is pushed onto `results`, which the function returns in rule order.
-
-## Anchor selection and section routing
-<!-- lw:anchors packages/core/src/topics.ts#selectTopicAnchors packages/core/src/topics.ts#assignTopicKeySections -->
-
-This stage of the topic pipeline has a single job: given a cluster of modules and a ranked list of anchor candidates, decide which anchors survive the cut and which documentation section each survivor will land in. The work happens in two passes — first `selectTopicAnchors` produces the survivor set, then `assignTopicKeySections` routes every survivor to a section heading.
-
-`selectTopicAnchors` walks the cluster's product and auxiliary modules and pulls out a deduplicated `Entry` for every anchor key found. Each entry carries the anchor's source-character cost, whether it is a "product" anchor, its centrality score from the planning layer, and the topic group implied by the first dominant signal on its module. Entries are then bucketed into the four topic groups (`contract`, `state`, `output`, `failure`) plus an `unclassified` pool, and each bucket is sorted by a `rank` comparator that prefers higher centrality, then smaller source size, then lexicographic key.
+The selection mechanism operates in three distinct phases: flattening, floor assignment, and ratio-driven expansion.
 
 ```ts
 export function selectTopicAnchors(
@@ -272,81 +183,37 @@ export function selectTopicAnchors(
 ): TopicKeyGroups | null
 ```
 
-The function returns a `TopicKeyGroups` object listing the chosen keys per group, or `null` when the cluster has no candidates or fails the post-selection sanity check (at least five anchors). Internally it takes a topic module cluster, a planning inventory, a precomputed centrality map, and option flags for anchor count, source-character budget, and a product-ratio floor; the return is either the populated group map or `null`.
+`selectTopicAnchors` takes a cluster of modules, a planning inventory, a centrality map, and options, and returns a grouped set of topic keys or `null`. In plain terms: give it the modules you care about, the universe of candidate topics with their metadata, and a score for each topic, and it tells you which topics become anchors, categorized by group.
 
-Selection runs in two phases. Phase one guarantees each of the four groups a single "floor" pick: it first tries the group's own bucket, then the unclassified pool, then the globally best remaining entry from any bucket. Borrowing from a sibling group is safe because that sibling already locked in its floor pick earlier in the loop, so it can never be starved. Phase two is an additive fill that loops over groups while there is still budget under `opts.maxAnchors`. For each group it grabs the next-best unused entry from its combined pool (own bucket + unclassified), but only commits the pick when three checks pass: the projected source cost — computed exactly via `estimateTopicSourceChars` over the full picked set plus the candidate, not as an incremental delta — stays within `opts.maxSourceChars` when that cap is set, and adding the entry would not push the running product-to-total ratio below `opts.minimumProductAnchorRatio` (defaulting to `0.75`). Once any group accepts a pick, the budget counter, product counter, picked set, and per-group lists are updated and the round repeats. The loop terminates when no group can accept another anchor under these constraints.
+**Phase 1 — Flattening the cluster into entries.** The function first gathers the union of product and auxiliary module IDs from the cluster, builds a lookup map from those IDs to their module objects, and reads the minimum product-anchor ratio from options (defaulting to `0.75`). It then iterates over each module in the cluster and, for every module whose ID resolves in the inventory, derives a "dominant group" by scanning the module's signals through a `SIGNAL_TO_TOPIC_GROUP` map and taking the first signal that maps to a non-undefined group, or `null` if none do. For each anchor key in that module (sorted for deterministic order), the code deduplicates against a `seenKeys` set and pushes an `Entry` record capturing the key, the dominant group, the source-character count from the inventory, whether the anchor is marked as a product anchor, and its centrality score. If no entries survive this pass, the function returns `null` immediately — an empty cluster cannot produce anchor groups.
 
-`assignTopicKeySections` then turns that group structure into a section map. It iterates each group in a fixed order and slots the group's first key into the group's signature heading — `purpose` for `contract`, `when-to-use-this-page` for `state`, `failure-and-recovery` for `failure`, `change-map` for `output` — while every remaining key in the group, including those picked during the fill phase, is parked under `behavioral-contract`. Finally, any key in `candidate.seedKeys` that did not appear in the four groups still gets a home, defaulted to `behavioral-contract`, so a stray seed key never escapes the page unmapped.
+**Phase 2 — Assigning one floor pick per group.** The entries are bucketed into per-group lists (one list per name in `TOPIC_GROUP_NAMES`) plus a separate `unclassified` list for entries whose dominant group was `null`. A comparator, `rank`, orders any two entries by descending centrality, then ascending character count, then alphabetical key as a final tiebreaker. Each group's list and the unclassified list are sorted with this comparator. The function then walks the `TOPIC_GROUP_NAMES` order and, for each group, chooses its best entry: first from that group's own bucket (an entry not yet picked), falling back to the best unclassified entry, and finally to the single highest-ranked entry across *all* entries regardless of bucket. This fallback chain is deliberate — real clusters often concentrate anchors in just one or two signals, so the code guarantees each group gets at least one pick even if its own bucket is empty, while the earlier groups' floor picks ensure those leftovers never starve a later group. If no entry can be chosen at all, the function returns `null`.
+
+**Phase 3 — Ratio-gated expansion.** After securing the four floor picks, the function enters a loop that fills capacity up to `opts.maxAnchors`. It builds a combined pool per group (the group's own remaining entries plus the unclassified entries, ranked), then repeatedly scans groups in `TOPIC_GROUP_NAMES` order. For each group, it takes the top unpicked entry from that group's pool and evaluates two candidate-aware constraints before committing. First, it computes the *exact* source-character estimate for the would-be expanded set by calling `estimateTopicSourceChars` on the picked keys plus the new key — this is an exact total (spans, separators, and the rationale block) rather than an incremental sum, because the rationale block is bounded per file set with a global cap, so adding one anchor does not add a full rationale block's cost. If the estimate exceeds `opts.maxSourceChars` (when set), the entry is skipped. Second, it checks the product ratio: after tentatively incrementing both the total count and the product count (if the entry is a product anchor), it requires `nextProduct / nextTotal` to be at least the `minimumRatio`; otherwise the entry is rejected. Entries that pass both checks are added to the picked set and pushed into their group's result array, and the loop sets `progressed` to `true` so it revisits earlier groups on the next pass — a single failed entry earlier in the group list may succeed later once the ratio ceiling has shifted. The loop terminates when no progress is made in a full sweep or the total reaches the anchor cap. Finally, if the total picked count is under five — fewer than the group count plus one, which would make the grouping meaningless — the function returns `null`; otherwise it returns the populated `TopicKeyGroups` object.
+
+## Deterministic Planner Orchestration and Whole-Batch Validation
+<!-- lw:anchors packages/core/src/topics.ts#proposeTopicPlanDeterministically packages/core/src/topics.ts#validateTopicPlan packages/core/src/topics.ts#parseProposal packages/core/src/topics.ts#toCandidate packages/core/src/topics.ts#assignTopicKeySections packages/core/src/topics.ts#compareProposalPreference packages/core/src/topics.ts#normalizeGroups packages/core/src/topics.ts#stripOuterJsonFence packages/core/src/topics.ts#isRecord packages/core/src/topics.ts#isStringArray packages/core/src/topics.ts#errorAt packages/core/src/topics.ts#addDuplicateError packages/core/src/topics.ts#normalizeLabel -->
+
+The relationship between `proposeTopicPlanDeterministically` and `validateTopicPlan` forms the core of this file's contract: the former generates a batch of topic proposals that must be shaped as valid JSON before the latter can scrutinize them. `proposeTopicPlanDeterministically` begins by computing import clusters from the inventory and builds a map for module lookup. It then constructs a `selectOpts` object that carries over the caller's validation options (such as anchor limits and source-character budgets) so that anchor selection happens against the same constraints that validation will later enforce.
 
 ```ts
-export function assignTopicKeySections(candidate: TopicCandidate): TopicKeySectionMap
-```
-
-This function takes a `TopicCandidate` (whose `groups` field carries the keys produced by `selectTopicAnchors`) and returns a `TopicKeySectionMap` — a `Map` from anchor key to the required documentation section that key should occupy. The shape of the map is what later writers consume: one signature section per group, with every other selected anchor documented under `behavioral-contract`.
-
-## Deterministic plan construction with whole-plan validation
-<!-- lw:anchors packages/core/src/topics.ts#proposeTopicPlanDeterministically packages/core/src/topics.ts#compareProposalPreference packages/core/src/topics.ts#parseProposal packages/core/src/topics.ts#toCandidate packages/core/src/topics.ts#TOPIC_GROUP_NAMES -->
-
-Plan construction in this file is the step that turns raw planning inventory into a strictly ordered, validator-guarded list of topic proposals, and then promotes each surviving proposal into a full candidate. The constants and helpers involved exist to make that pipeline reproducible and to give the whole-plan validator something it can either accept or reject as a unit.
-
-The pipeline begins in `proposeTopicPlanDeterministically`, whose signature is:
-
-```
 export function proposeTopicPlanDeterministically(
   inventory: TopicPlanningInventory,
   centrality: ReadonlyMap<string, number>,
   opts: TopicPlanValidationOptions,
 ): TopicCandidate[]
 ```
+This function takes the inventory of modules and flows, a centrality map used for anchor selection, and the validation options, then returns a list of validated topic candidates.
 
-It takes the planning inventory, a precomputed centrality map, and the validator's options, and returns the final ordered list of `TopicCandidate` values. The first thing it does is to cluster the input modules by their import graph via `clusterModulesByImportGraph`, and to build a `Map` from module id to its evidence record so title lookups and role checks are O(1). Because the options passed to `selectTopicAnchors` must not carry `undefined` keys, the function rebuilds a `selectOpts` object that only copies the keys it actually has values for: `maxAnchors`, `maxSourceChars`, `minimumProductAnchorRatio`, and `rationaleMaxChars`. The local helper `flowsWithin` reduces the inventory's flow list to the at-most-two cross-module flows every module in the candidate participates in, sorted ascending by slug, so a candidate only claims flows it can actually cover.
+The function iterates over clusters, calling `selectTopicAnchors` for each to obtain groups of anchors. When a cluster yields groups, it derives a title: an overview-style title if the cluster originates from an overview, otherwise a combination of the first two product module titles. The intent string summarizes how many modules coordinate around the dominant signal from the cluster's product modules. For each cluster it also calls `flowsWithin` to find flows whose modules are entirely contained in the cluster, sorting and truncating to at most two. Each completed proposal carries its title, intent, sorted module list, flows, and anchor groups.
 
-Each cluster is then promoted to a proposal in a fixed order. The candidate's `moduleIds` are the union of product and auxiliary module ids, sorted. A title is built from the first product module's title, optionally joined with the second product module's title when there is one, or fall back to an overview title when the cluster has origin `"overview"`; the resulting string is hard-capped at 80 characters. The `intent` line is built from the cluster's first detected `signals` entry, with a fallback of `"cross-module behavior"`, and is itself capped at 160 characters. After `selectTopicAnchors` returns a non-null groups object, the candidate's `flows` are resolved through `flowsWithin`, and the proposal — `{ title, intent, modules, flows, groups }` — is pushed onto `proposals`.
+After the import clusters, the function handles concern-grouped candidate construction signaled as the D2 stage. When `opts.concernTopics` is not explicitly disabled, `collectConcernTopicClusters` yields additional clusters representing cross-cutting concerns like deployment or testing. Each of these goes through the same anchor selection and produces a proposal whose intent appends any surface names. Both the title and intent are truncated at the budget, mirroring the cluster-based proposals. A `concernProposalSet` tracks these constructed proposals so that their provenance can be restored after validation.
 
-Concern-grouped candidates (deployment, testing, and similar cross-cutting concerns) are produced in a second pass through `collectConcernTopicClusters`, which only runs when `opts.concernTopics` is not `false`. Each cluster is run against the same `selectTopicAnchors` so a concern with no usable anchors yields no candidate rather than a stub. The resulting `proposal` is added to both the global `proposals` array and to a `concernProposalSet`; the set is the only place where the file remembers which proposals came from the concern pass, and that reminder is what lets the function re-tag them after validation.
+The merged proposal list is sliced to `opts.maxTopics` before validation. This matters because `validateTopicPlan` rejects an oversized plan entirely with no proposal index on the error; slicing earlier preserves the valid prefix instead of discarding everything.
 
-Once both passes are merged, the full proposal list is sliced to `opts.maxTopics` before validation. Slicing first is what keeps the validator from rejecting a plan that would otherwise be valid, because `validateTopicPlan` rejects any plan larger than `maxTopics` outright and would discard even the valid prefix. The fixed-point loop then iterates: it serializes the surviving proposals into a `{ topics: … }` JSON envelope and runs `validateTopicPlan` against the whole plan. If validation succeeds, each validated candidate is re-tagged according to the source proposal at the same `planOrder` index — `concernProposalSet.has(proposals[candidate.planOrder]!)` flips the candidate's `origin` to `"concern"` — because validation strips construction metadata. If validation fails, the function collects the bad proposal indexes from the error list, removes them, and loops. The loop terminates either by returning the validated candidates, by returning an empty list when the plan becomes empty, or by returning `[]` when the errors carry no proposal indexes (a non-recoverable structural failure).
+The deterministic retry loop then serializes the proposals as JSON and hands the string to `validateTopicPlan`. The retry loop is the heart of the deterministic planner. On each iteration it converts the current proposals to a JSON object with a single `topics` property, validates that JSON, and inspects the result. Validation succeeds, the candidates are returned after re-tagging any that originated from concern groups: since `toCandidate` captures `planOrder` as the index within the validated proposals array, the planner can map each candidate back to its source proposal and, when that source is in `concernProposalSet`, set the candidate's `origin` to `"concern"`. When validation reports errors that carry proposal indexes, the planner removes exactly those proposals and tries again — a form of iterative refinement that strips only the offending entries. If validation fails with no proposal-level errors (meaning the entire payload was malformed or empty), the planner returns no candidates at all.
 
-The `TOPIC_GROUP_NAMES` constant underpins the shared vocabulary used by every other helper in this section:
-
-```
-export const TOPIC_GROUP_NAMES = ["contract", "state", "output", "failure"] as const;
-```
-
-It is the canonical, ordered list of the four evidence group names — `contract`, `state`, `output`, `failure` — that every proposal's `groups` object must contain, and every helper below keys its work against this order.
-
-`compareProposalPreference` implements a deterministic tie-breaker between two proposals of equal weight. Its signature is:
-
-```
-function compareProposalPreference(
-  left: TopicPlanProposal,
-  right: TopicPlanProposal,
-  moduleById: ReadonlyMap<string, TopicModuleEvidence>,
-): number
-```
-
-It first counts how many of the four `TOPIC_GROUP_NAMES` have at least one entry in each proposal's `groups`; the proposal with more populated groups wins. If both proposals cover the same number of groups, it counts how many of their `modules` are tagged with role `"product"` in `moduleById`; the proposal spanning more product modules wins. If both dimensions are still tied, it falls back to a `normalizeLabel(left.title).localeCompare(normalizeLabel(right.title))` so the resulting order is stable across runs.
-
-`parseProposal` is the strict shape-checker used by the validator, with the signature:
-
-```
-function parseProposal(value: unknown, index: number, errors: TopicPlanValidationError[]): TopicPlanProposal | null
-```
-
-It accepts an unknown value, the proposal's index in the parent array, and the shared error sink, and returns either a parsed `TopicPlanProposal` or `null` after recording each reason it rejected. The function rejects anything that is not a record, and rejects records that carry any field outside the allowed set `{ title, intent, modules, flows, groups }`. Then it verifies that `title` and `intent` are non-empty strings, and that `modules` and `flows` are string arrays and `groups` is a record. The `groups` record is checked twice: first to ensure every key is a member of `TOPIC_GROUP_NAMES`, then to ensure each value is a string array, building a fully populated `parsedGroups` object whose keys appear in the canonical order. The final returned `TopicPlanProposal` carries trimmed strings, copied arrays, and the normalized groups.
-
-`toCandidate` lifts a validated proposal into the candidate shape the rest of the system consumes, with the signature:
-
-```
-function toCandidate(proposal: TopicPlanProposal, planOrder: number): TopicCandidate
-```
-
-It calls `normalizeGroups` on the proposal's groups, then computes a deterministic `evidenceHash` as the first 12 hex characters of `sha256(JSON.stringify({ modules, flows, groups }))`. The candidate's display slug is built from `moduleSlug(proposal.title)` (falling back to `"topic"`) concatenated with the first 8 characters of `evidenceHash`, which guarantees equal plans collapse to equal slugs. `seedKeys` is the deduplicated, sorted union of every group entry across `TOPIC_GROUP_NAMES`, giving downstream code a stable seed set for further filtering. The returned candidate spreads the original `proposal`, attaches `planOrder`, and carries the normalized groups, the `evidenceHash`, the slug, and the `seedKeys`.
-
-## LLM-plan validation against the closed inventory
-<!-- lw:anchors packages/core/src/topics.ts#validateTopicPlan -->
-
-The planner’s raw output must be converted into a trustworthy batch of topic candidates. `validateTopicPlan` enforces that conversion from JSON response to validated inventory-scoped proposals, using the supplied module and flow inventory as the only source of truth. It returns either successful candidates with no errors, or an unsuccessful result containing no candidates and all validation errors found.
+`validateTopicPlan` is what gives the deterministic retry loop its power: it inspects an entire batch of proposals at once, not each in isolation.
 
 ```ts
 export function validateTopicPlan(
@@ -355,53 +222,131 @@ export function validateTopicPlan(
   opts: TopicPlanValidationOptions,
 ): TopicPlanValidationResult
 ```
+This function accepts the raw JSON text from the planner, the inventory against which references are checked, and the options that bound sizes and ratios, returning either success with candidate topics or failure with a list of errors.
 
-`validateTopicPlan` takes a planner response, the closed topic-planning inventory, and validation limits, then returns validated candidates or a structured failure.
+The first structural gate is parsing. `stripOuterJsonFence` handles planners that wrap output in markdown code fences before handing the string to `JSON.parse`; if parsing throws, the function returns early with a generic JSON error rather than proposal-specific codes.
 
-The first stage makes the response structurally usable. The function removes any outer JSON fence and parses the result with `JSON.parse`. A parsing failure immediately returns `topic_plan_invalid_json`, including the parser error in the message. Once parsed, the response must be either an array or an object whose `topics` value is an array. Object responses may contain only the `topics` property. The proposal list must also be nonempty and must not exceed `opts.maxTopics`; violations return `topic_plan_empty` or `topic_plan_too_many`, respectively.
+```ts
+function stripOuterJsonFence(raw: string): string {
+  const trimmed = raw.trim();
+  const match = trimmed.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
+  return match?.[1]?.trim() ?? trimmed;
+}
+```
+This helper removes a surrounding triple-backtick fence (with optional `json` language tag) and returns the inner content, or the original trimmed string if no fence pattern matches.
 
-For subsequent per-topic checks, the inventory is indexed for fast lookup. Module IDs map through `moduleById`, flow slugs map through `flowBySlug`, and all declared module and flow anchors are collected into `knownAnchors`. Each item is then passed to `parseProposal`, which fills the shared `errors` collection with proposal-specific issues. Parsable proposals are checked for title and intent budgets, including an 80-character title limit, a 160-character intent limit, and a prohibition on line breaks.
+Once `value` exists, the function normalizes the outer shape: a top-level array counts as the topic list, while an object must contain exactly one key, `topics`, whose value is an array. Any extra top-level keys trigger a shape error. Empty arrays and arrays exceeding `opts.maxTopics` both fail immediately and terminate validation.
 
-The mechanism then normalizes and scopes every proposal. `uniqueSorted` removes duplicate module IDs, flow slugs, and evidence-anchor keys while sorting the retained values. This also catches an anchor being assigned to more than one evidence group, because a repeated key would be reduced to a single entry. References that do not exist in the inventory produce `topic_plan_unknown_reference`, while a known anchor not belonging to any selected module or flow produces `topic_plan_unscoped_anchor`. The accepted proposal stores these normalized arrays and normalized groups for the overlap and candidate-conversion stages.
+The supportive lookups are prepared before the per-proposal loop: `moduleById` maps module IDs to their evidence, `flowBySlug` maps flow slugs, and `knownAnchors` is the union of every anchor declared across modules and flows. Each topic in the raw array goes through `parseProposal`, which is the structural validator for one candidate object.
 
-Module and flow composition is bounded by role and connectivity. A normal proposal must select two to six modules; the narrower alternative is one module paired with a flow spanning at least three modules. Otherwise the validation adds `topic_plan_module_budget`. The proposal must also contain at least two product-role modules unless it has such a wide accepted flow, it may cite at most two flows, and it must include at least one product module. Auxiliary modules cannot float independently: each must be directly connected to at least one selected product module through that module’s `importNeighbors`, or the function reports `topic_plan_auxiliary_disconnected`.
+```ts
+function parseProposal(value: unknown, index: number, errors: TopicPlanValidationError[]): TopicPlanProposal | null {
+```
+This function checks whether an unknown value is a well-formed proposal object, accumulating a shape error and returning `null` when it is not, otherwise returning the normalized proposal.
 
-Evidence must then be sufficient and appropriately weighted. Each accepted group in `TOPIC_GROUP_NAMES` must be nonempty, and every proposal must contain between five anchors and `opts.maxAnchors`. If `maxSourceChars` is configured, `estimateTopicSourceChars` measures the selected evidence and reports an over-budget proposal. The function also calculates the product-anchor ratio from `inventory.anchorRoles`; unless the default minimum of `0.75` is overridden by `opts.minimumProductAnchorRatio`, a lower ratio produces `topic_plan_insufficient_product_evidence`. These checks ensure that an apparently valid topic is not built from thin, irrelevant, or disconnected evidence.
+`parseProposal` first confirms the value is a non-null, non-array object via `isRecord`; then it rejects any keys beyond the allowed set of `title`, `intent`, `modules`, `flows`, and `groups`. Each required field is type-checked: `title` and `intent` must be non-empty strings, `modules` and `flows` must be string arrays per `isStringArray`, and `groups` must be a record. The group names themselves must match the fixed `TOPIC_GROUP_NAMES`, and each group's value must be a string array. Values are copied into fresh arrays, and title and intent are trimmed so that later comparisons see consistent text.
 
-After individual proposals pass, the validator looks for batch-level collisions. It normalizes titles and intents and uses `addDuplicateError` to report repeated labels as `topic_plan_duplicate_title` or `topic_plan_duplicate_intent`. It then compares every pair of parsed proposals by their combined evidence groups. The overlap ratio is the number of anchors shared by both topics divided by the smaller anchor count, so it measures how much of the smaller topic’s evidence is reused. When overlap exceeds `opts.maximumOverlapRatio`, the function uses `compareProposalPreference` to identify the less-preferred proposal and assigns the error to that proposal rather than either arbitrary member of the pair.
+```ts
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+```
+This type guard confirms a value is a plain object — not null and not an array.
 
-Only a completely error-free plan is accepted. If any errors were recorded, `validateTopicPlan` returns `{ ok: false, candidates: [], errors }`, ensuring that partially invalid output cannot leak into later topic-generation steps. Otherwise, `toCandidate` transforms every parsed proposal into its final candidate form and the function returns `{ ok: true, candidates, errors: [] }`.
+```ts
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string" && item.trim() !== "");
+}
+```
+This type guard confirms a value is an array of non-empty (after trimming) strings.
 
-## Mechanical source-budget repair for over-budget candidates
+Back in the loop over raw topics, each successfully parsed proposal undergoes a battery of budget and consistency checks. Text budget enforcement rejects titles over 80 characters or intents over 160, and also forbids newlines anywhere in either. Duplicate entries within the modules, flows, or grouped anchor lists are caught by comparing the lengths of the de-duplicated versions against the originals, since an anchor is allowed to appear in exactly one group. Reference integrity is the next gate: every module ID must exist in the inventory, every flow slug must correspond to a real flow, and every anchor key must be among the known anchors; violations collect in a single error listing all unknown references. Anchors that are known but not reachable from any selected module or flow are reported as unscoped, meaning the proposal cites evidence outside the chosen content. Module count rules enforce a broad band of two to six modules unless a single module partners with a flow spanning at least three modules. At least two product-role modules are required unless such a wide flow exists, and at least one product module is mandatory. Auxiliary modules must each be an import neighbor of some selected product module; otherwise they are disconnected from the topic's narrative.
+
+Anchor abundance drives successive checks: between 5 and `opts.maxAnchors` unique anchors are required, and the source characters estimated from those anchors must stay within `opts.maxSourceChars` when that option is set. Every named group must be non-empty, and the proportion of product-role anchors must reach `opts.minimumProductAnchorRatio` (defaulting to 0.75). If any check fails, `errorAt` constructs an error tagged with the proposal's index, which is what enables the retry loop to drop exactly the bad proposal.
+
+```ts
+function errorAt(code: TopicPlanValidationCode, proposalIndex: number, message: string): TopicPlanValidationError {
+  return { code, proposalIndex, message };
+}
+```
+This factory creates a validation error carrying a machine-readable code, the index of the offending proposal, and a human-readable message.
+
+Each proposal is pushed into the `parsed` array only after this gauntlet, and it is stored with de-duplicated modules, flows, and normalized groups. `normalizeGroups` applies `uniqueSorted` per group to produce deterministic orderings.
+
+```ts
+function normalizeGroups(groups: TopicKeyGroups): TopicKeyGroups {
+  return {
+    contract: uniqueSorted(groups.contract),
+    state: uniqueSorted(groups.state),
+    output: uniqueSorted(groups.output),
+    failure: uniqueSorted(groups.failure),
+  };
+}
+```
+This helper orders the anchors within each of the four evidence groups and removes duplicates, returning a fresh groups object.
+
+After the per-proposal loop, validation shifts to batch-level concerns that span multiple proposals. Duplicate titles and intents are detected across the whole batch using `normalizeLabel` as a canonical key so that minor punctuation or diacritic differences do not defeat the check. `addDuplicateError` records the first occurrence and reports each later duplicate against that earlier index.
+
+```ts
+function addDuplicateError(
+  seen: Map<string, number>,
+  value: string,
+  index: number,
+  code: "topic_plan_duplicate_title" | "topic_plan_duplicate_intent",
+  label: string,
+  errors: TopicPlanValidationError[],
+): void {
+```
+This function consults the map of already-seen normalized values, appends a duplicate error at the current index when the value was previously seen, and otherwise records the current index as the first occurrence.
+
+```ts
+function normalizeLabel(value: string): string {
+  return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+```
+This normalizer strips diacritics via NFKD decomposition, lowercases the result, collapses non-alphanumeric runs into single spaces, and trims the edges.
+
+Overlap between any pair of proposals is the final batch check. For each unordered pair, the function collects all anchors across every group into a set and computes the size of their intersection divided by the smaller set's size. When that ratio exceeds `opts.maximumOverlapRatio`, the proposal considered less valuable must be the one to fail. `compareProposalPreference` decides which of the pair is preferred by scoring first on the number of non-empty groups (more is better), then on the count of product modules (again, more is better), and finally by lexicographic order of the normalized titles.
+
+```ts
+function compareProposalPreference(
+  left: TopicPlanProposal,
+  right: TopicPlanProposal,
+  moduleById: ReadonlyMap<string, TopicModuleEvidence>,
+): number {
+```
+This comparator returns a negative value when the left proposal is preferred, a positive one when the right is preferred, and zero on a tie — using signal availability, product-module breadth, then title ordering to break ties.
+
+The loser's index gets the overlap error, and because that index is recorded, the planner retry loop can drop either the left or the right proposal based on this preference.
+
+A tally of any errors at all short-circuits validation with `{ ok: false }` and accumulates those errors. Otherwise each parsed proposal converts to a final candidate through `toCandidate`.
+
+```ts
+function toCandidate(proposal: TopicPlanProposal, planOrder: number): TopicCandidate {
+```
+This function widens a validated proposal into a full topic candidate by adding a content hash, a deterministic slug, and a flat list of seed keys.
+
+`toCandidate` re-normalizes the groups, then serializes modules, flows, and groups into a JSON string and takes the first 12 hex characters of its SHA-256 digest as `evidenceHash`. The slug derives from a module-style slug of the title, falling back to `"topic"`, and then appends the first 8 characters of the evidence hash so the slug uniquely identifies the exact evidence content while remaining readable. A flat `seedKeys` array collects every anchor from all groups in sorted, de-duplicated order, which downstream content-assembly steps can consume directly. `planOrder` records the candidate's index in the validated proposals array; that is exactly what `proposeTopicPlanDeterministically` uses to re-tag concern candidates.
+
+Finally, a separate exported helper assigns each seed key to a named documentation section so the page builder knows where each anchor's content belongs.
+
+```ts
+export function assignTopicKeySections(candidate: TopicCandidate): TopicKeySectionMap {
+```
+This helper takes a topic candidate and returns a map from anchor keys to the wiki section that should hold their content.
+
+`assignTopicKeySections` walks each of the four groups — `contract`, `state`, `failure`, `output`. The first anchor of the contract group becomes the page's purpose statement; the others are behavioral contract details. The first anchor of the state group sets when-to-use guidance; the remaining state anchors broaden the contract. The first failure anchor names the failure-and-recovery section while later ones remain in the contract. The first output anchor marks the change map with its siblings in the contract. Any seed key that never landed in the four groups — which should be rare given how `selectTopicAnchors` operates — receives a behavioral-contract home as a safety net, since even a stray key needs a deterministic place in the final page.
+
+## Mechanical Source-Budget Repair for Over-Sized Proposals
 <!-- lw:anchors packages/core/src/topics.ts#repairTopicPlanSourceBudgetMechanically -->
 
-The function `repairTopicPlanSourceBudgetMechanically(raw: string, errors: readonly TopicPlanValidationError[], inventory: TopicPlanningInventory, opts: TopicPlanValidationOptions): { content: string; result: TopicPlanValidationResult } | null` takes a raw topic-plan string, a list of validation errors, a planning inventory, and validation options, and returns either a repaired content/result pair or `null` if no repair is possible.
+`repairTopicPlanSourceBudgetMechanically` is the last-resort repair pass for a topic plan that failed validation because one or more proposals exceed the allowed source-budget. It runs only when `validateTopicPlan` has already reported errors, so its job is to bring a plan back under the character ceiling without touching anything that is already valid. The function takes the raw plan text, the list of validation errors, the topic-planning inventory, and the validation options, and it returns either a repaired document plus a fresh validation result, or `null` when no mechanical repair is possible.
 
-The first guard short-circuits any work that would be wasted: if there are no errors at all, or the caller never supplied a `maxSourceChars` cap, the function returns `null`. There is nothing to repair and no budget to enforce.
+Its first decisions are all guards: it bails out immediately if there were no errors, if `opts.maxSourceChars` is undefined (meaning there is no budget to enforce), or if the raw text cannot be parsed as JSON after `stripOuterJsonFence` removes any outer fence. When the parsed value is an object with a `topics` array — or the array itself — the function collects the proposals. From the errors it builds `flaggedIndexes`, a set of proposal indexes whose error code is `topic_plan_source_budget`; if none exist there is nothing to repair and it returns `null`. It also reads `minimumProductAnchorRatio` from options, defaulting to `0.75`, which will govern how many product anchors may be dropped.
 
-With those prerequisites met, the function attempts to recover the JSON document embedded in `raw`. It calls `stripOuterJsonFence(raw)` to peel off any Markdown code-fence wrapping the string might carry, then `JSON.parse` to turn the remainder into a value. If parsing throws, the function returns `null` — a malformed payload is not something to mutate; the caller will see the original error.
+For each flagged proposal, the function inspects the proposal’s `groups` record (returning `null` on malformed shapes) and walks every group name in `TOPIC_GROUP_NAMES`, collecting each anchor key into an `entries` array together with its character count from `inventory.anchorSourceChars` and a boolean marking product anchors. It then calls `estimateTopicSourceChars` over all those keys to get the current `totalChars`; if that already fits under `maxSourceChars`, the proposal needs no work and the loop moves on. Otherwise it enters the dropping logic, which is deliberately conservative: `canRemove` refuses to shrink a group below one remaining key, refuses to drop below five total keys, and — for product anchors — checks that the ratio of remaining product anchors to remaining keys stays at or above `minimumRatio`. The `dropPass` helper sorts a pool of entries by character count descending and removes the largest first, but critically it recomputes the exact estimate after each removal because the rationale block’s per-file-set cap makes marginal costs non-additive. The function runs `dropPass` over non-product entries first, then over product entries only if still over budget, and returns `null` if even that cannot fit — meaning the constraint is unsatisfiable without violating another rule.
 
-Once parsed, the function extracts the topic list. The accepted shapes mirror the validator's: either a top-level array, or an object with a `topics` array; anything else yields `null`. From this list it derives `flaggedIndexes`, the set of proposal indices whose errors carry the `topic_plan_source_budget` code. If no proposal is actually flagged as over-budget, the function returns `null` — repairing a payload that is not over-budget would only add noise.
-
-For each flagged proposal the function reads its `groups` object. If the proposal is missing or shaped unexpectedly, it bails with `null` rather than guessing. Otherwise, it walks the well-known group order declared by `TOPIC_GROUP_NAMES`, validating each group's value with `isStringArray`, and assembles a flat `entries` table where every row remembers its group, its anchor key, its source-character cost from `inventory.anchorSourceChars`, and whether the key plays a product role (`inventory.anchorRoles[key] === "product"`). This table is the working memory the rest of the function operates on.
-
-The function then asks `estimateTopicSourceChars` for the proposal's current total, passing the kept keys and the rationale cap from `opts.rationaleMaxChars`. If that total is already within `maxSourceChars`, the proposal is left alone and the loop moves on — the flag was either stale or measured differently.
-
-When the total is genuinely over budget, the function builds a `removed` set of entries marked for deletion and defines `canRemove(entry)` to encode three invariants the repair must not violate:
-
-1. **Coverage floor.** After removing the entry, the proposal must still retain at least five keys in total (`remainingKeys >= 5`); dropping below that would invalidate the proposal shape.
-2. **Per-group floor.** Each group must keep at least one key (`remainingInGroup > 1`, evaluated against the pre-removal count); a group left empty would also break the validator.
-3. **Product-anchor ratio.** If the entry being considered is a product anchor, removing it must not push the surviving product fraction below `opts.minimumProductAnchorRatio ?? 0.75`. The function compares the post-removal product count against the post-removal total and rejects the removal if the ratio would dip under the floor.
-
-If `canRemove` returns `true`, the entry is removable; otherwise it is pinned in place.
-
-Removal proceeds in two passes via `dropPass`. In each pass, the candidate pool is sorted by `chars` descending so the function attacks the largest contributors first. For each candidate, while the estimated total is still above `maxSourceChars`, the function asks `canRemove`; if allowed, it adds the entry to `removed` and immediately re-runs `estimateTopicSourceChars` against the trimmed key list. The recomputation matters: because the per-file-set rationale cap makes the marginal cost of each removal non-additive, only a fresh estimate after every drop yields a trustworthy total.
-
-The first `dropPass` runs over non-product entries only, protecting product anchors from being discarded before cheaper non-product anchors are exhausted. If the budget is still blown, a second pass runs over the product entries under the same rules. If even that second pass cannot bring `totalChars` under `maxSourceChars` without violating one of the invariants, the function returns `null`: this proposal simply cannot be fit within the budget while honoring the other rules, and the caller should fall back to a different repair strategy.
-
-When the loop finishes a proposal that did succeed, the function rewrites `groups` in place, mapping each `TOPIC_GROUP_NAMES` group to the keys of entries that belong to it and were not removed.
-
-After every flagged proposal has been visited, the function re-serializes the entire value with `JSON.stringify` and reruns the full validator via `validateTopicPlan(repairedRaw, inventory, opts)`. If that validation does not return `ok`, the function returns `null` — the mechanical edits may have fixed the source-budget error but introduced another, and the function refuses to ship a payload it cannot stand behind. Only when the revalidation succeeds does it return `{ content: repairedRaw, result }`, handing the caller the corrected raw text and its freshly computed `TopicPlanValidationResult`.
+After the drops for every flagged proposal, the function replaces each group’s key list with the surviving entries, serializes the whole structure back with `JSON.stringify`, and runs `validateTopicPlan` on the repaired text as a final sanity check. If that validation fails, the repair is considered a failure and `null` is returned; on success it returns both the repaired content string and the fresh validation result so the caller can use or present the corrected plan.
 
 ## Tests
 

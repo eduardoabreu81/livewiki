@@ -1,0 +1,21 @@
+flowchart LR
+    A["resolveWikiDocumentPath"]
+    B["readWikiDocument"]
+    C["writeWikiDocument"]
+    D["readExisting"]
+    E["assertHumanContentPreserved"]
+    F["manualBlockContents"]
+    G["safe-io.js"]
+    H["anchors.js"]
+    I["verify.js"]
+
+    A --> G
+    B --> A
+    B --> G
+    C --> A
+    C --> D
+    C --> E
+    C --> I
+    D --> G
+    E --> H
+    E --> F

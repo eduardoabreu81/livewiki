@@ -1,0 +1,7 @@
+flowchart LR
+    Caller[Server startup caller] --> readPackageVersion[readPackageVersion]
+    readPackageVersion --> FileSystem[(../package.json via readFileSync)]
+    FileSystem -->|JSON parsed| Extract[Return version field]
+    FileSystem -->|read/parse failure| Fallback[Return UNKNOWN_VERSION]
+    readPackageVersion --> Fallback
+    Fallback --> Result[Version string]

@@ -1,30 +1,33 @@
 ---
-title: Update metrics ledger
+title: Update Metrics Ledger Management
 owner: generated
 anchors:
-  - packages/core/src/update-metrics.ts#clearMetricsForTests
-  - packages/core/src/update-metrics.ts#listUpdateMetrics
-  - packages/core/src/update-metrics.ts#metricsPath
-  - packages/core/src/update-metrics.ts#readMetrics
-  - packages/core/src/update-metrics.ts#recordUpdateMetric
-  - packages/core/src/update-metrics.ts#snapshotMetrics
-  - packages/core/src/update-metrics.ts#writeMetrics
+- packages/core/src/update-metrics.ts#backupRelPath
+- packages/core/src/update-metrics.ts#clearMetricsForTests
+- packages/core/src/update-metrics.ts#listUpdateMetrics
+- packages/core/src/update-metrics.ts#metricsPath
+- packages/core/src/update-metrics.ts#preserveCorruptLedger
+- packages/core/src/update-metrics.ts#readMetrics
+- packages/core/src/update-metrics.ts#recordUpdateMetric
+- packages/core/src/update-metrics.ts#snapshotMetrics
+- packages/core/src/update-metrics.ts#warnCorruptOnRead
+- packages/core/src/update-metrics.ts#writeMetrics
 ---
 
-# Update metrics ledger
+# Update Metrics Ledger Management
 
-This page documents the incremental token accounting that backs livewiki's `update` workflow.
+This page describes the append-only JSON ledger that tracks token and work metrics during the `update` operation, ensuring accounting data is robustly persisted.
 
 ## When to use this page
 
-- **Append a metric** when a `package_emitted`, `write_received`, `debt_resolved`, or `batch_run` event happens during `update`.
-- **Read the aggregated snapshot** for `status --json` and other status surfaces that expose the product thesis (token efficiency ratio).
-- **Inspect the full ledger** when the Activity viewer (Phase 7) needs every entry instead of just the last 10.
-- **Reset the ledger** in test setup before exercising code paths that append metrics.
+- Understand how the `update` process records package emissions, agent write-backs, debt resolutions, and batch-run costs for incremental token accounting.
+- Learn how to safely read or write the metrics file while protecting against data loss from corruption or concurrent processes.
+- Discover how to obtain aggregated or full metrics for reporting and validation.
+- Find the production-safe mechanism for clearing metrics, which is available for test setup.
 
 ## How it fits
 
-`packages/core/src/update-metrics.ts` lives in `packages/core/src/` and is the single source of truth for the append-only ledger stored at `.livewiki/update_metrics.json` inside a repository's `.livewiki/` directory. It does not touch the SQLite schema (v4) — accounting is intentionally isolated from the wiki's persisted content because the metrics are derivable from the versioned markdown/manifest and may be lost without harming correctness. The module is consumed by `update`, by `loadWorkPackage` (which emits `package_emitted`), by the `document-as-you-go` skill and the post-edit CLI (which emit `write_received`), by debt-resolution surfaces (which emit `debt_resolved`), by `finalizeRun` (which mirrors per-batch totals as `batch_run`), and by the Phase 7 Activity viewer (which reads the full history).
+The file `packages/core/src/update-metrics.ts` implements the token-accounting ledger for the `update` pipeline. It stores an append-only list of `UpdateMetric` entries in `.livewiki/update_metrics.json`. This module is designed for low-power, incremental queries—aggregates and "last value" lookups—rather than relational queries. Specifically, it offers a write path (`recordUpdateMetric`) that is fire-and-forget, and two read paths for reports: a `snapshotMetrics` aggregate and the full `listUpdateMetrics` history. The module ensures that any ledger corruption is preserved to a backup file before a new file is written, and read-only operations never overwrite or silently discard unreadable data. The ledger is intentionally rebuildable from versioned markdown sources—if `.livewiki` is deleted, the next `update` restarts metrics from scratch.
 
 ## Diagram
 
@@ -32,106 +35,141 @@ This page documents the incremental token accounting that backs livewiki's `upda
 %% livewiki/diagrams/core-src-update-metrics.mmd
 ```
 
-## Storage layout and the path helper
+## Metrics Path Resolution
 
-<!-- lw:anchors
-packages/core/src/update-metrics.ts#metricsPath
--->
+<!-- lw:anchors packages/core/src/update-metrics.ts#metricsPath -->
 
-The ledger is a single JSON file at the relative path `.livewiki/update_metrics.json` inside the repository. Choosing a JSON file (rather than a SQLite table) keeps the schema untouched, lets the ledger be discarded at any time (the next `update` rebuilds it from scratch), and avoids schema migrations for an append-only log.
+This section explains how the module locates the ledger file, which is the first step for every read and write operation.
 
-`metricsPath` resolves the absolute location of the ledger, and is the only producer of the path that the rest of the module uses.
+The function `metricsPath` converts a repository root into the absolute path of the metrics file. It begins resolution with a fixed relative path and confirms it lies safely within the repository.
 
 ```ts
-async function metricsPath(repoRoot: string): Promise<string>
+async function metricsPath(repoRoot: string): Promise<string> {
 ```
 
-This takes a repository root (absolute or relative) and returns the absolute path of the metrics file, delegating bounds enforcement to `safeIo.resolveAndValidate` so the file cannot escape `.livewiki/`.
+It takes a repository root string and returns a promise of the absolute file path for `.livewiki/update_metrics.json`. It delegates to `safeIo.resolveAndValidate` to prevent path traversal outside the repo.
 
-## Reading and writing the ledger
+## Reading the Ledger
 
-<!-- lw:anchors
-packages/core/src/update-metrics.ts#readMetrics
-packages/core/src/update-metrics.ts#writeMetrics
--->
+<!-- lw:anchors packages/core/src/update-metrics.ts#readMetrics -->
 
-The read path separates "there is no history" from "the history cannot be read", because collapsing the two is what allowed the next append to erase the ledger.
+This section details the read operation, which distinguishes an absent file from a corrupt one—a distinction critical to preventing silent data loss.
+
+`readMetrics` fetches the ledger, treating a missing file as legitimate history (returning an empty ledger) while flagging any file that cannot be parsed as corruption.
 
 ```ts
-async function readMetrics(repoRoot: string): Promise<MetricsRead>
-async function writeMetrics(repoRoot: string, file: UpdateMetricsFile): Promise<void>
+async function readMetrics(repoRoot: string): Promise<MetricsRead> {
 ```
 
-`readMetrics` takes a repository root and returns `{ file, corruption }`. A missing file is not an error: it yields an empty `{ version: 1, entries: [] }` with `corruption: null`, because no file legitimately means no history. Anything else that stops the ledger from being interpreted — unreadable bytes, invalid JSON, a `version` other than 1, a non-array `entries` — still yields the empty file so callers keep working, but reports the reason alongside it and, when the bytes were readable, the raw content. `corruption.raw` is `null` only when even the read failed; that case can neither be preserved nor safely replaced.
+It takes a repo root and returns a `MetricsRead` object holding an `UpdateMetricsFile` and an optional `LedgerCorruption` descriptor. The function first assumes a valid empty ledger, then attempts to read the file. If the file does not exist (an `ENOENT` error), it returns that empty structure with no corruption. If the file exists but cannot be read, it reports a corruption with a null `raw` byte content, meaning nothing can be preserved. If reading succeeds but parsing fails or the structure is not version 1 with an entries array, it reports corruption carrying the raw text. This design ensures no write operation later unknowingly overwrites an unreadable file.
 
-`writeMetrics` takes a repository root and a full `UpdateMetricsFile` and persists it as pretty-printed JSON plus a trailing newline via `safeIo.writeTextAtomic`. The atomic primitive matters here specifically: a ledger torn by an interrupted write is the failure this module exists to avoid, and a plain `writeText` truncates before it writes.
+## Corruption Preservation and Warning
 
-## Append: `recordUpdateMetric`
+<!-- lw:anchors packages/core/src/update-metrics.ts#backupRelPath packages/core/src/update-metrics.ts#preserveCorruptLedger packages/core/src/update-metrics.ts#warnCorruptOnRead -->
 
-<!-- lw:anchors
-packages/core/src/update-metrics.ts#recordUpdateMetric
--->
+This section covers the safeguards that protect unreadable or corrupt ledger data before it can be replaced or silently ignored.
 
-The append entry point is the only function that mutates the file on disk.
+The module treats an earlier corrupt file as evidence that outranks newer data, and it ensures such evidence is never destroyed without a copy.
+
+First, `backupRelPath` generates a repo-relative backup candidate name.
+
+```ts
+function backupRelPath(suffix: string): string {
+```
+
+It takes a suffix string and returns the ledger’s relative path with that suffix plus a `.bak` extension appended. Its purpose is to support a bounded search for a name that does not already exist.
+
+Then `preserveCorruptLedger` writes the raw bytes of the corrupt file to a new backup before any overwrite.
+
+```ts
+async function preserveCorruptLedger(
+  repoRoot: string,
+  corruption: LedgerCorruption,
+): Promise<string> {
+```
+
+It takes a repository root and a corruption descriptor, and returns the relative path of the successfully written backup. The function immediately throws if the corruption holds no raw data, since replacing a file whose bytes could not be read is unsafe. Otherwise, it searches up to 100 candidate names: first a plain `.bak`, then a timestamped `.<epoch-ms>.bak`, then `.<epoch-ms>-<n>.bak`. Each candidate is opened with the `wx` flag, ensuring atomic exclusive creation; an existing name triggers a retry with the next candidate. On success it writes the bytes, logs a warning that history was preserved, and returns the path. On failure, it throws a descriptive error, and the caller must treat that as a signal not to write anything.
+
+Finally, `warnCorruptOnRead` issues a warning for read-only paths that never replace the file.
+
+```ts
+function warnCorruptOnRead(corruption: LedgerCorruption): void {
+```
+
+This takes a corruption descriptor and emits a standard console warning that explains the corruption reason and states the ledger is left untouched until a future write preserves it. It is used by the snapshot and list operations that never modify the file, so the corruption is observed without any destructive action.
+
+## Persisting the Ledger
+
+<!-- lw:anchors packages/core/src/update-metrics.ts#writeMetrics -->
+
+This section describes the low-level atomic write operation that prevents torn or partial ledger files.
+
+`writeMetrics` serializes the full metrics file and persists it in one atomic operation so readers never observe a half-written ledger.
+
+```ts
+async function writeMetrics(repoRoot: string, file: UpdateMetricsFile): Promise<void> {
+```
+
+It takes a repository root and the complete `UpdateMetricsFile` object, and returns a promise that resolves when the file is durably written. The function pretty-prints the JSON and calls `safeIo.writeTextAtomic` to replace the file atomically, which is central to the module’s robustness against failures.
+
+## Recording a Metric
+
+<!-- lw:anchors packages/core/src/update-metrics.ts#recordUpdateMetric -->
+
+This section explains the main write path that the update pipeline uses to log a single metric event. The operation is intentionally resilient so that accounting failures never interrupt the primary update operation.
+
+`recordUpdateMetric` appends one metric to an existing ledger, first preserving any corruption it encounters.
 
 ```ts
 export async function recordUpdateMetric(
   repoRoot: string,
   metric: UpdateMetric,
-): Promise<void>
+): Promise<void> {
 ```
 
-This takes a repository root and an `UpdateMetric` (one of the four `kind` variants) and returns nothing. On the happy path it reads the file, pushes the new entry, and writes the file back atomically. The body stays wrapped in a `try/catch` whose catch is empty, because accounting is best-effort and must not break the main `update` flow — the caller is documented as fire-and-forget.
+It takes a repository root and a single `UpdateMetric` event, and the function resolves when the metric is recorded or fails silently by design. The function reads the current ledger, and if corruption was detected, it tries to preserve the original file by moving it to a numbered backup. After a successful preservation (or when the ledger is valid), it appends the new metric to the in-memory entries and writes the whole file atomically. If any step fails—including the critical preservation step—the function catches the error and intentionally swallows it, because losing one metric is recoverable, but blocking the main update flow is not. This is a fail-open behavior for accounting that never invents entries from unreadable content while still reporting the corruption.
 
-What changed is what happens between the read and the write. When `readMetrics` reports corruption, the unreadable file is copied to a backup **before** anything replaces it, and only then does the new ledger get written. The new ledger contains just the incoming metric: nothing is reconstructed or guessed from the corrupt bytes.
+## Producing an Aggregated Snapshot
 
-The backup naming policy never destroys existing evidence. The first backup is `.livewiki/update_metrics.json.bak`; if that name is taken, the next is `.<epoch-ms>.bak`, then `.<epoch-ms>-<n>.bak`. Every candidate is created with the `wx` flag, so an existing backup survives — including against a concurrent writer racing for the same name. An older corruption outranks a newer one for the plain `.bak` name.
+<!-- lw:anchors packages/core/src/update-metrics.ts#snapshotMetrics -->
 
-If the backup cannot be written at all, `preserveCorruptLedger` throws and the empty catch swallows it, which means **nothing is written**. That ordering is the guarantee: losing a single metric is recoverable, losing the history is not, so the original stays on disk untouched whenever it could not be copied. The same holds when the final write fails after a successful backup — the history is then recoverable from the `.bak` and the original is still in place.
+This section details the read-only aggregation that exposes the key efficiency indicator of the entire accounting system. It is the primary report used by `status --json`.
 
-## Aggregating: `snapshotMetrics`
-
-<!-- lw:anchors
-packages/core/src/update-metrics.ts#snapshotMetrics
--->
-
-The aggregation entry point is what `status --json` and other status surfaces consume.
+`snapshotMetrics` scans the full ledger and computes a set of aggregate counters and recent entries, while warning about corruption without trying to recreate the file.
 
 ```ts
-export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSnapshot>
+export async function snapshotMetrics(repoRoot: string): Promise<UpdateMetricsSnapshot> {
 ```
 
-This takes a repository root and returns an `UpdateMetricsSnapshot`. It reads the ledger once — and when that read reports corruption, it emits a `[livewiki] update-metrics:` warning before continuing, so the zeros it is about to return are not mistaken for a repository that never ran. Being a read-only path it takes no backup and mutates nothing; the file is left exactly as found, and the next write is what preserves it. It then folds over every entry to compute totals: `packagesEmitted` and `totalPackageTokens` (from `package_emitted`), `writesReceived` and `totalWriteTokens` (from `write_received`), `debtResolvedTotal` (a sum of `count` across `debt_resolved`), and `batchRuns` / `batchInputTokens` / `batchOutputTokens` (from `batch_run`). It also remembers the last `package_emitted` and the last `write_received` for debugging, exposes the last 10 entries as `recent`, and finally computes `efficiencyRatio` as `totalWriteTokens / totalPackageTokens` — but only when `totalPackageTokens > 0`; otherwise it returns `null` rather than `Infinity` or `NaN`. The ratio is the proxy that backs the product thesis ("800 tokens instead of re-reading the repo").
+It takes a repository root string and returns a promise of an `UpdateMetricsSnapshot` containing totals, ratios, and the last few ledger entries. The function first reads the ledger and, if corruption was found, invokes `warnCorruptOnRead` because this read-only path does not write any backup. It then iterates through every entry, incrementing per-kind counters and capturing the last-seen metric of each major type. After the loop, it computes the `efficiencyRatio` as the total write-back tokens divided by the total package-emission tokens, or leaves it null when no packages have been emitted. The returned object includes the last ten entries (oldest first) so callers have a small recency window without loading the entire ledger.
 
-## Full history: `listUpdateMetrics`
+## Retrieving Full History
 
-<!-- lw:anchors
-packages/core/src/update-metrics.ts#listUpdateMetrics
--->
+<!-- lw:anchors packages/core/src/update-metrics.ts#listUpdateMetrics -->
 
-While the snapshot exposes aggregates plus a short tail, the Phase 7 Activity viewer needs every entry.
+This section explains the alternative read path that provides the complete ledger history for the reviewer’s Activity page, which requires every entry rather than aggregates.
+
+`listUpdateMetrics` returns the array of all recorded metrics in oldest-to-newest order.
 
 ```ts
-export async function listUpdateMetrics(repoRoot: string): Promise<UpdateMetric[]>
+export async function listUpdateMetrics(repoRoot: string): Promise<UpdateMetric[]> {
 ```
 
-This takes a repository root and returns the full `entries` array in insertion order (oldest first). It uses the same `readMetrics` path, so a corrupt ledger yields an empty list — but, as in `snapshotMetrics`, it warns first rather than passing off "unreadable" as "nothing happened". Like that path it is read-only: no backup, no mutation. The body stays wrapped in a `try/catch` that returns `[]` on any remaining failure, mirroring `recordUpdateMetric`'s "accounting never blocks the caller" posture — a path/realpath failure is treated as "no history" rather than an error.
+It takes a repository root string and resolves to the full list of `UpdateMetric` entries. The function reads the ledger, and if it detects corruption it emits `warnCorruptOnRead` before returning the existing (valid) entries or an empty array. It has the same best-effort posture as `recordUpdateMetric`: any path-resolution failure is caught and translated into an empty result, since a missing or unreachable ledger legitimately means there is no history. Unlike the snapshot, this function never aggregates and never truncates, giving the viewer the complete timeline of every recorded event.
 
-The warning goes to `console.warn` with the `[livewiki]` prefix, the same channel `indexer`, `walker`, and `anchor-ledger` already use for conditions that must reach the operator without interrupting the run. No parallel reporting API was introduced.
+## Test Cleanup Helper
 
-## Test reset: `clearMetricsForTests`
+<!-- lw:anchors packages/core/src/update-metrics.ts#clearMetricsForTests -->
 
-<!-- lw:anchors
-packages/core/src/update-metrics.ts#clearMetricsForTests
--->
+This section documents a destructive utility that is intended solely for test setup, never for production callers.
 
-The only destructive function in the module is explicitly reserved for tests.
+`clearMetricsForTests` resets the ledger to an empty state, which developers use to give each test a clean accounting baseline.
 
 ```ts
-export async function clearMetricsForTests(repoRoot: string): Promise<void>
+export async function clearMetricsForTests(repoRoot: string): Promise<void> {
 ```
 
-This takes a repository root and returns nothing. It `resolve`s the root to an absolute path, ensures the `.livewiki/` directory exists via `safeIo.mkdir`, and then writes an empty `{ version: 1, entries: [] }` ledger via `writeMetrics`. The module-level comment is emphatic: never call this from production code — it is a setup helper that wipes observable state.
+It takes a repository root string and returns a promise that resolves once the empty ledger is written. The function first ensures the `.livewiki` directory exists, then writes a new file with no entries using the same atomic write path. This helper is exposed only for test fixtures and is documented as destructive—any metrics accumulated before the call are permanently erased.
 
 ## Tests
 

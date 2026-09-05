@@ -5,7 +5,7 @@ owner: generated
 
 # packages/mcp
 
-This directory hosts the Model Context Protocol (MCP) package, the integration layer that lets external MCP-compatible clients expose livewiki's capabilities over a standardized tool-calling interface. It is laid out as a self-contained npm package with its own `package.json` manifest, `README.md` documentation, `tsconfig.json` for TypeScript compilation, and `vitest.config.ts` defining the test runner configuration, giving MCP consumers an isolated build, documentation, and verification surface distinct from the rest of the monorepo.
+The `packages/mcp` directory is currently a scaffold for the Model Context Protocol (MCP) server package within the livewiki monorepo. It contains only configuration files—`package.json`, `tsconfig.json`, `vitest.config.ts`, and a `README.md`—establishing the TypeScript build and test setup. At this stage, these files define the package metadata and tooling, but no implementation code has been written yet; the directory is reserved for future code that will expose livewiki functionality through the MCP standard.
 
 ## Files
 

@@ -5,15 +5,17 @@ owner: generated
 
 # packages/cli/src/commands
 
-This directory holds every `livewiki` subcommand registered on the root Commander program in the `@livewiki/cli` package. Each file is a thin adapter that wires one CLI verb into the program and delegates the real work to sibling modules in `@livewiki/core`: `init` provisions a repo and drives the indexing and LLM pipeline, `install` configures host agents and the MCP entry, `pointer` maintains an opt-in pointer block in agent markdown files, and `serve` exposes the same MCP server over stdio. Operational verbs — `index-cmd`, `update`, `batch`, `status`, `verify` — coordinate the indexing and documentation-generation workflows, while `export` and `view` turn the curated wiki into deliverable artifacts or a browsable static site.
+This directory contains the command-layer implementations of the livewiki CLI: each file registers one subcommand onto the shared Commander program in the `@livewiki/cli` package. Together these commands let users provision repositories (`init`), configure the LLM provider (`config`), maintain symbol documentation (`index-cmd`, `baseline`, `status`, `update`, `verify`), export wikis as artifacts or static sites (`export`, `view`), integrate coding agents through MCP servers and pointer files (`serve`, `install`, `pointer`), and run documentation batches (`batch`). Each command acts as a thin adapter that translates Commander options into service calls from `@livewiki/core`, separating report formatting from the underlying index and ledger operations.
 
 ## Files
 
-- [batch.ts](batch.md) — "livewiki batch command — run, resume, and inspect Phase 3 batches"
+- [baseline.ts](baseline.md) — Baseline Management Commands
+- [batch.ts](batch.md) — Batch command registration and human-readable reporting
+- [config.ts](config.md) — Interactive configuration and credential management for the LiveWiki CLI
 - [export.ts](export.md) — "Export command"
 - [index-cmd.ts](index-cmd.md) — Indexing and ledger command
 - [init.ts](init.md) — "`livewiki init` command"
-- [install.ts](install.md) — livewiki install command
+- [install.ts](install.md) — LiveWiki Install Command Orchestration
 - [pointer.ts](pointer.md) — Pointer command (`livewiki pointer`)
 - [serve.ts](serve.md) — livewiki serve command
 - [status.ts](status.md) — livewiki status command
@@ -21,16 +23,16 @@ This directory holds every `livewiki` subcommand registered on the root Commande
 - [verify.ts](verify.md) — livewiki verify command
 - [view.ts](view.md) — View command
 
-None of the 11 documented files in this folder has a test file named after it.
+None of the 13 documented files in this folder has a test file named after it.
 
 <!-- livewiki:navigate:start -->
 ## Navigate
 
-- Flow: [Turning a CLI command into an LLM call](../flows/cli-src-to-llm.md)
-- Topic: [Testing](../topics/testing-f41eeea7.md)
+- Flow: [From CLI Source to Core Source: How livewiki Commands Drive Core Operations](../flows/cli-src-to-core-src.md)
+- Topic: [CLI Commands and Core LLM Coordination](../topics/cli-commands-and-core-llm-coordination-2166f507.md)
 - [packages/core/src/llm](../llm/index.md) — used here
-- [packages/mcp/src](../mcp-src/index.md) — used here
 - [packages/core/src](../core-src/index.md) — used here
+- [packages/cli/src](../cli-src/index.md) — used both ways
 
-> Coverage note: this folder's source (13 files, ~100k chars) is too large to read in full; this page documents its main entry points.
+> Coverage note: this folder's source (13 files, ~101k chars) is too large to read in full; this page documents its main entry points.
 <!-- livewiki:navigate:end -->

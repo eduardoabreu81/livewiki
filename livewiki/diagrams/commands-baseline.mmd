@@ -1,0 +1,9 @@
+graph TD
+    A[baseline.ts Subcommands] --> B[status subcommand]
+    A --> C[other subcommands]
+    B --> D[handle function]
+    C --> D
+    D --> E[runStatus from @livewiki/core/status]
+    D --> F[baseline operations from @livewiki/core/baseline-operations]
+    D --> G[emit function]
+    D --> H[formatStatus function]

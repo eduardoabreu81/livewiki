@@ -1,0 +1,23 @@
+graph TD
+    A[baseline.ts] --> B[anchors.ts]
+    A --> C[safe-io.ts]
+    A --> D[node:path]
+    A --> E[node:fs/promises]
+    subgraph Baseline module
+        F[Constants and shape]
+        G[Field validation]
+        H[Parsing and loading]
+        I[Serialization and writing]
+        J[Inventory collection]
+        K[Evaluation]
+    end
+    A --> F
+    A --> G
+    A --> H
+    A --> I
+    A --> J
+    A --> K
+    B --> F
+    C --> H
+    C --> I
+    C --> J

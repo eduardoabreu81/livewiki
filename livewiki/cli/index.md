@@ -5,7 +5,7 @@ owner: generated
 
 # packages/cli
 
-The `packages/cli` directory hosts the command-line interface package for the project, bundling its manifest (`package.json`), documentation (`README.md`), TypeScript configuration (`tsconfig.json`), and Vitest test runner setup (`vitest.config.ts`) into a single installable unit that developers can run from a terminal to interact with the rest of the system.
+This directory is the command-line interface (CLI) package for the livewiki project. Its primary purpose is to provide the entry point for developers to interact with the product through a terminal, enabling them to run project-specific commands. The directory contains the configuration and metadata necessary to build, test, and document this tool. Specifically, it holds the package manifest (`package.json`), TypeScript configuration (`tsconfig.json`), testing setup (`vitest.config.ts`), and a `README.md` for developers. These files together support the CLI’s packaging and developer experience, though the actual command implementations are sourced from elsewhere in the project.
 
 ## Files
 
