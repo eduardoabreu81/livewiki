@@ -30,11 +30,15 @@ to npm since 2026-08-12.
   change, no migration), and **0.3.2** (2026-08-26 — distribution only: the
   published `@livewiki/mcp` carries the `mcpName` the official MCP Registry
   validates against, and a root `server.json` declares the server for it; no
-  code change, no schema change, no migration), and **0.3.3** (2026-09-05 —
+  code change, no schema change, no migration), and **0.3.4** (2026-09-05 —
   MCP wiki-write integrity: rejected updates restore the previous page,
   human-owned pages and manual blocks are protected, agent-facing paths are
   restricted to `livewiki/`, and equivalent path spellings share one
-  canonical verification identity; no schema change or migration).
+  canonical verification identity; no schema change or migration). The 0.3.3
+  attempt was superseded pre-publication: `npm publish` had shipped
+  `workspace:*` dependency protocols that made `@livewiki/cli@0.3.3` and
+  `@livewiki/mcp@0.3.3` uninstallable — the former was unpublished, the latter
+  deprecated, and the set republished as 0.3.4 via `pnpm publish -r`.
 - **#29 real page units** DONE (P0–P5, commit `6e5efdb`) — deterministic
   file+folder planner; one page per symbol-bearing product file plus one
   folder page per directory.

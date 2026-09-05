@@ -1,6 +1,6 @@
 {
   "name": "@livewiki/core",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": false,
   "type": "module",
   "description": "Deterministic structural index and batch documentation engine for livewiki.",

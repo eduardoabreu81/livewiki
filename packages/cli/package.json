@@ -1,6 +1,6 @@
 {
   "name": "@livewiki/cli",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": false,
   "type": "module",
   "description": "livewiki command-line interface — living documentation anchored to code, verifiable against hallucination.",

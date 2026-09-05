@@ -2,6 +2,12 @@
 
 A patch release that closes four integrity gaps in direct MCP document writes.
 
+> **Packaging note:** 0.3.4 supersedes an unpublished 0.3.3. The first publish
+> used `npm publish`, which does not rewrite pnpm `workspace:*` dependency
+> protocols, so `@livewiki/cli@0.3.3` and `@livewiki/mcp@0.3.3` could not be
+> installed. Those versions were unpublished/deprecated and this set is
+> published via `pnpm publish -r`, which rewrites the protocols correctly.
+
 - **Rejected updates preserve the previous page.** `livewiki_write_doc` now
   snapshots the existing page and restores it byte-for-byte when verification
   rejects the candidate or throws. A new page is removed only when that same
