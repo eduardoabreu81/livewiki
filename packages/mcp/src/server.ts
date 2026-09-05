@@ -16,7 +16,7 @@
  *   - livewiki_next_task   — hands out the next validated task from the MCP queue
  *
  * Architectural principle: writes go through core/safe-io (SPEC rule #1).
- * write_doc validates the path against the allowlist (livewiki/, .livewiki/) AND runs
+ * write_doc validates the path against the wiki-only allowlist (livewiki/) AND runs
  * `verify` on the content before accepting. A path outside livewiki/ is an error;
  * content with broken_anchor is rejected with detail.
  *
@@ -96,6 +96,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as safeIo from "@livewiki/core/safe-io";
+import { readWikiDocument, writeWikiDocument } from "@livewiki/core/wiki-document";
 import { run as runStatus } from "@livewiki/core/status";
 import { run as runVerify } from "@livewiki/core/verify";
 import { openIndexReadOnly } from "@livewiki/core/db";
@@ -112,7 +113,6 @@ import {
   submitAgentBootstrapTask,
 } from "@livewiki/core/agent-bootstrap";
 import * as nodePath from "node:path";
-import * as nodeFs from "node:fs/promises";
 import { watch, realpathSync, type FSWatcher } from "node:fs";
 import {
   openAndIndex,
@@ -305,14 +305,6 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
   function errorResult(message: string) {
     return { content: [{ type: "text" as const, text: `error: ${message}` }], isError: true };
   }
-  async function rollbackWrittenPage(path: string): Promise<boolean> {
-    try {
-      await nodeFs.unlink(await safeIo.resolveAndValidate(repoRoot, path));
-      return true;
-    } catch {
-      return false;
-    }
-  }
 
   // ─── livewiki_quickstart ───────────────────────────────────────────────
   // Returns livewiki/quickstart.md (low-token entry point for LLMs).
@@ -322,7 +314,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     {},
     async () => {
       try {
-        const text = await safeIo.readText(repoRoot, "livewiki/quickstart.md");
+        const text = await readWikiDocument(repoRoot, "livewiki/quickstart.md");
         return hintedTextResult("livewiki_quickstart", text);
       } catch (err) {
         return errorResult(
@@ -345,7 +337,7 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
     },
     async ({ path }) => {
       try {
-        const text = await safeIo.readText(repoRoot, path);
+        const text = await readWikiDocument(repoRoot, path);
         return hintedTextResult("livewiki_read", text);
       } catch (err) {
         // The message does NOT leak the absolute path or repo content (safe-io principle).
@@ -599,10 +591,13 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         }
       }
 
-      // 1) Allowlist — safe-io.validateDeclared already fails with PathOutsideAllowlistError.
-      //    writeText will call resolveAndValidate (with symlink check).
+      // Core owns path canonicalization, ownership, verification and rollback.
+      let written: Awaited<ReturnType<typeof writeWikiDocument>>;
       try {
-        await safeIo.writeText(repoRoot, path, content);
+        written = await writeWikiDocument({
+          repoRoot, path, content, verify,
+          ...(skipVerify === undefined ? {} : { skipVerify }),
+        });
       } catch (err) {
         // The safe-io message is already safe (leaks no content, leaks no absolute path).
         if (err instanceof safeIo.PathOutsideAllowlistError) {
@@ -621,43 +616,10 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
         return errorResult(err instanceof Error ? err.message : "write failed");
       }
 
-      // 2) Verify — runs on the repo and checks whether the freshly-written page broke something.
-      //    Only runs if skipVerify !== true.
-      if (!skipVerify) {
-        try {
-          const verifyResult = await verify(repoRoot);
-          // Fails if there is an error-level issue touching this page.
-          const issuesHere = verifyResult.issues.filter(
-            (i) => i.severity === "error" && (i.wikiPath === path || i.wikiPath === ""),
-          );
-          if (issuesHere.length > 0) {
-            // Rollback: remove the file we just wrote so we don't
-            // leave an inconsistent state (rule #3: the database is derived, but
-            // disk is the truth — don't leave junk).
-            await rollbackWrittenPage(path);
-            return errorResult(
-              `verify rejected the page (${issuesHere.length} error issue(s)). ` +
-                `First issue: ${issuesHere[0]?.code ?? "?"} — ${issuesHere[0]?.detail ?? "?"}. ` +
-                `Page NOT written.`,
-            );
-          }
-        } catch (err) {
-          const crashMessage = err instanceof Error ? err.message : String(err);
-          const rolledBack = await rollbackWrittenPage(path);
-          if (!rolledBack) {
-            return errorResult(
-              `verify crashed: ${crashMessage}. Rollback failed; the disk may hold an ` +
-                `UNVERIFIED page at ${JSON.stringify(path)}. Inspect that path before continuing.`,
-            );
-          }
-          return errorResult(
-            `verify crashed: ${crashMessage}. The page was NOT kept.`,
-          );
-        }
-      }
+      if (!written.ok) return errorResult(written.error);
 
       // 3) Update the FTS5 index incrementally (successful write).
-      indexPage(searchIdx, path, content);
+      indexPage(searchIdx, written.path, content);
 
       // 4) Roadmap item 14: record the write in the activity ledger.
       //    Awaited so the ledger is consistent when the tool returns (and
@@ -666,12 +628,15 @@ export async function createServer(opts: CreateServerOptions = {}): Promise<McpS
       await recordUpdateMetric(repoRoot, {
         kind: "write_received",
         timestamp: Date.now(),
-        wikiPath: path,
+        wikiPath: written.path,
         bytes: Buffer.byteLength(content, "utf8"),
         tokensEstimated: Math.ceil(content.length / CHARS_PER_TOKEN),
       });
 
-      return hintedTextResult("livewiki_write_doc", `wrote ${path} (verified)`);
+      return hintedTextResult(
+        "livewiki_write_doc",
+        `wrote ${written.path} (${written.verified ? "verified" : "verification skipped"})`,
+      );
     },
   );
 

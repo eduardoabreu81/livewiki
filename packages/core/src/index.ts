@@ -29,6 +29,7 @@ export * as manifest from "./manifest.js";
 export * as baseline from "./baseline.js";
 export * as baselineOperations from "./baseline-operations.js";
 export * as documentationCommit from "./documentation-commit.js";
+export * as wikiDocument from "./wiki-document.js";
 export * as batch from "./batch.js";
 export * as batchStatus from "./batch-status.js";
 export * as agentBootstrap from "./agent-bootstrap.js";

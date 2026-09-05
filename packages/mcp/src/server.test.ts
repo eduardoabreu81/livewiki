@@ -151,6 +151,83 @@ describe("MCP server — Phase 4", () => {
     }
   });
 
+  it("wiki tools reject internal cache paths, including normalized aliases", async () => {
+    const internal = nodePath.join(repoRoot, ".livewiki", "sentinel.txt");
+    await nodeFs.writeFile(internal, "original sentinel", "utf8");
+    const c = await connect();
+    try {
+      for (const path of [".livewiki/sentinel.txt", "livewiki/../.livewiki/sentinel.txt"]) {
+        const read = await c.client.callTool({ name: "livewiki_read", arguments: { path } });
+        expect(read.isError).toBe(true);
+        const write = await c.client.callTool({
+          name: "livewiki_write_doc", arguments: { path, content: "replacement", skipVerify: true },
+        }).catch(() => ({ isError: true }));
+        expect(write.isError).toBe(true);
+      }
+      expect(await nodeFs.readFile(internal, "utf8")).toBe("original sentinel");
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("wiki tools reject a directory link that resolves into the internal cache", async () => {
+    const internal = nodePath.join(repoRoot, ".livewiki", "linked-sentinel.txt");
+    const link = nodePath.join(repoRoot, "livewiki", "cache-link");
+    await nodeFs.writeFile(internal, "linked sentinel", "utf8");
+    await nodeFs.symlink(nodePath.join(repoRoot, ".livewiki"), link, "junction");
+    const c = await connect();
+    try {
+      const linkedPath = "livewiki/cache-link/linked-sentinel.txt";
+      const read = await c.client.callTool({ name: "livewiki_read", arguments: { path: linkedPath } });
+      expect(read.isError).toBe(true);
+      const write = await c.client.callTool({
+        name: "livewiki_write_doc",
+        arguments: { path: linkedPath, content: "replacement", skipVerify: true },
+      }).catch(() => ({ isError: true }));
+      expect(write.isError).toBe(true);
+      expect(await nodeFs.readFile(internal, "utf8")).toBe("linked sentinel");
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("write_doc preserves human pages and unindexed manual blocks even with skipVerify", async () => {
+    const human = "---\nowner: human\n---\n# Human\nOriginal text.\n";
+    const manual = "---\r\nowner: mixed\r\n---\r\n# Mixed\r\n<!-- lw:manual -->\r\nOriginal note.\r\n<!-- /lw:manual -->\r\n";
+    await nodeFs.writeFile(nodePath.join(repoRoot, "livewiki/human.md"), human);
+    await nodeFs.writeFile(nodePath.join(repoRoot, "livewiki/manual.md"), manual);
+    const c = await connect();
+    try {
+      for (const skipVerify of [false, true]) {
+        for (const [path, expected] of [["livewiki/human.md", human], ["livewiki/manual.md", manual]]) {
+          const result = await c.client.callTool({ name: "livewiki_write_doc", arguments: {
+            path, content: "---\nowner: mixed\n---\n# Replacement\n", skipVerify,
+          } });
+          expect(result.isError).toBe(true);
+          expect(await nodeFs.readFile(nodePath.join(repoRoot, path!), "utf8")).toBe(expected);
+        }
+      }
+    } finally {
+      await teardown(c);
+    }
+  });
+
+  it("write_doc rejects invalid anchors through equivalent wiki path spellings", async () => {
+    const c = await connect();
+    try {
+      for (const path of ["./livewiki/alias.md", "livewiki\\alias.md"]) {
+        const result = await c.client.callTool({ name: "livewiki_write_doc", arguments: {
+          path, content: "---\nowner: generated\nanchors: [src/missing.ts#missing]\n---\n# Invalid\n",
+        } });
+        expect(result.isError).toBe(true);
+        expect(extractText(result)).toContain("broken_anchor");
+        await expect(nodeFs.access(nodePath.join(repoRoot, "livewiki/alias.md"))).rejects.toThrow();
+      }
+    } finally {
+      await teardown(c);
+    }
+  });
+
   it("livewiki_search returns hits via FTS5", async () => {
     const c = await connect();
     try {
@@ -458,6 +535,8 @@ Content.
       });
       const text = extractText(r);
       expect(text).toMatch(/wrote livewiki\/skip\.md/);
+      expect(text).toContain("verification skipped");
+      expect(text).not.toContain("(verified)");
       const onDisk = await nodeFs.readFile(
         nodePath.join(repoRoot, "livewiki/skip.md"),
         "utf8",

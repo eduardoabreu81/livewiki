@@ -459,16 +459,10 @@ describe("E2E Phase 5 — end-to-end flow (hook → MCP → verify)", () => {
     }
     expect(brokenResult?.isError, "write_doc should reject a broken anchor").toBe(true);
 
-    // Rollback: the file should NOT exist (or be the previous good one if the write is atomic)
-    const fileExists = nodeFsSync.existsSync(nodePath.join(repoRoot, "livewiki", "auth.md"));
-    // After rejection + rollback, the file either doesn't exist OR is the previous good one
-    if (fileExists) {
-      const content = await nodeFs.readFile(
-        nodePath.join(repoRoot, "livewiki", "auth.md"),
-        "utf8",
-      );
-      expect(content).not.toContain("ghostSymbol");
-    }
+    // Rejecting an update must preserve the existing page, not merely remove
+    // the invalid candidate along with the user's previous documentation.
+    expect(await nodeFs.readFile(nodePath.join(repoRoot, "livewiki", "auth.md"), "utf8"))
+      .toBe(goodPage);
   }, 60_000);
 });
 

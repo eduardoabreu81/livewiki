@@ -134,6 +134,10 @@
       "types": "./dist/documentation-commit.d.ts",
       "import": "./dist/documentation-commit.js"
     },
+    "./wiki-document": {
+      "types": "./dist/wiki-document.d.ts",
+      "import": "./dist/wiki-document.js"
+    },
     "./gitignore": {
       "types": "./dist/gitignore.d.ts",
       "import": "./dist/gitignore.js"
