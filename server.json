@@ -3,7 +3,7 @@
   "name": "io.github.eduardoabreu81/livewiki",
   "title": "livewiki",
   "description": "A repository wiki of Markdown pages anchored to real code: read, search, and verified writes.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "repository": {
     "url": "https://github.com/eduardoabreu81/livewiki",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "@livewiki/mcp",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "transport": {
         "type": "stdio"
       },
